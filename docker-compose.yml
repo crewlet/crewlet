@@ -513,7 +513,7 @@ services:
     # stays 15: it's the version the fork's upstream compose pins (the
     # app's tested matrix), and a major bump strands existing plane-pgdata
     # volumes (pg_upgrade/dump-restore) for zero feature gain here.
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     profiles: [plane]
     command: postgres -c 'max_connections=1000'
     environment:
