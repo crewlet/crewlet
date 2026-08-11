@@ -1,0 +1,1027 @@
+"""Shared LLM tool-call loop for every phase of the turn engine.
+
+Every call into an LLM provider routes through this module: Plan,
+Execute, Review, and ephemeral sub-agents. Doing so in one place
+keeps the subtle budget / token-usage / observability / secret
+redaction / validator logic from drifting across phases.
+
+Public surface:
+
+- :func:`run_tool_loop` — drives a single LLM call + tool-call loop
+  against a ``ToolSurface``. Returns a :class:`LoopResult` with the
+  final assistant text, accumulated token counts, executed tools, and
+  whether the loop exited by completion or round-cap exhaustion.
+- :func:`execute_tool` — dispatch a named tool against a
+  ``ToolSurface`` (falling back to the tool registry for unknown
+  names). Centralises validation and secret redaction.
+- :func:`sanitize_tool_output` — strip control characters from tool
+  output before it returns to the LLM (no length truncation).
+- :func:`validate_tool_result` — reject binary / non-UTF-8 data,
+  redact secrets, run custom validators.
+
+Every phase of :class:`~crewlet.agent.turn.TurnEngine` -- Plan,
+Execute, Review, and sub-agents -- routes through these functions;
+they are the single implementation of the LLM + tool-call loop and
+the only call site for budget/token/redaction logic.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from crewlet._logging import get_logger
+from crewlet.agent.instance import AgentInstance
+from crewlet.events.types import (
+    AgentPhaseCompleted,
+    AgentPhaseStarted,
+    AgentTurnProgress,
+    BudgetExhausted,
+    Event,
+    PromptSize,
+)
+from crewlet.providers.llm.protocol import LLMProvider, Message
+from crewlet.queue.protocol import EventQueue
+from crewlet.tools.protocol import AgentContext, ToolResult, ToolResultValidator
+
+logger = get_logger("agent.llm_loop")
+
+# Patterns that indicate secrets/credentials in tool output.  Keeping
+# the list here (rather than per-phase) ensures every phase uses the
+# same redaction.
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"sk-proj-[A-Za-z0-9_-]{20,}"), "[REDACTED:api-key]"),
+    (re.compile(r"sk-[A-Za-z0-9_-]{20,}"), "[REDACTED:api-key]"),
+    (re.compile(r"xoxb-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
+    (re.compile(r"xoxp-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
+    (re.compile(r"xoxs-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
+    (re.compile(r"AKIA[A-Z0-9]{16}"), "[REDACTED:aws-key]"),
+    (re.compile(r"ghp_[A-Za-z0-9]{36,}"), "[REDACTED:github-token]"),
+    (re.compile(r"gho_[A-Za-z0-9]{36,}"), "[REDACTED:github-token]"),
+    (re.compile(r"glpat-[A-Za-z0-9_-]{20,}"), "[REDACTED:gitlab-token]"),
+    (re.compile(r"plane_api_[A-Za-z0-9_-]{20,}"), "[REDACTED:plane-token]"),
+    (re.compile(r"plane_wh_[A-Za-z0-9_-]{20,}"), "[REDACTED:plane-webhook-secret]"),
+    (
+        re.compile(
+            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+            r"[\s\S]*?"
+            r"-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+        ),
+        "[REDACTED:private-key]",
+    ),
+    (re.compile(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+"), "[REDACTED:password]"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Tool-output sanitization + validation
+# ---------------------------------------------------------------------------
+
+
+def redact_secrets(text: str) -> str:
+    """Replace known secret / credential patterns with redaction markers.
+
+    The single redaction implementation, shared by tool-result validation
+    and any other surface that ships free text to the dashboard / event
+    store (e.g. a sandbox coding-agent transcript, which can echo a cloned
+    repo URL's token or a printed key). Idempotent.
+    """
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def sanitize_tool_output(output: str) -> str:
+    """Sanitize tool output before it returns to the LLM.
+
+    Strips control characters (keeping newlines and tabs). The full
+    output is returned unmodified beyond that — tool results are never
+    length-truncated, because truncation silently hides content the
+    agent reasons over (e.g. the tail of a ``list_mcp_server_tools``
+    listing, where the tool the agent needs may sort past any cap).
+    Secret redaction and binary/UTF-8 rejection happen separately in
+    :func:`validate_tool_result`.
+    """
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", output)
+
+
+def validate_tool_result(
+    result: ToolResult,
+    *,
+    validators: list[ToolResultValidator] | None = None,
+) -> ToolResult:
+    """Validate and sanitize a tool result.
+
+    - Rejects non-UTF-8 / binary data.
+    - Redacts secrets.
+    - Runs custom ``validators`` (if any).
+    """
+    if not result.success:
+        return result
+
+    output = result.output
+
+    try:
+        output.encode("utf-8").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        logger.warning("tool_result_invalid_utf8")
+        return ToolResult(success=False, error="Tool output contained invalid data")
+
+    if "\x00" in output:
+        logger.warning("tool_result_binary_data")
+        return ToolResult(success=False, error="Tool output contained binary data")
+
+    redacted_output = redact_secrets(output)
+    if redacted_output != output:
+        logger.warning("tool_result_secrets_redacted")
+        output = redacted_output
+
+    for validator in validators or []:
+        try:
+            output = validator.validate(output)
+        except ValueError as exc:
+            logger.warning(
+                "tool_result_validator_rejected",
+                validator_name=validator.name,
+                error=str(exc),
+            )
+            return ToolResult(success=False, error=f"Validation failed: {exc}")
+
+    # Preserve the suspend signal through validation (the loop reads it to
+    # defer the tool call); validation only touches ``output``.
+    return ToolResult(
+        success=True,
+        output=output,
+        suspend=result.suspend,
+        suspend_payload=result.suspend_payload,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool dispatch
+# ---------------------------------------------------------------------------
+
+
+async def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    context: AgentContext,
+    *,
+    surface: Any,
+    validators: list[ToolResultValidator] | None = None,
+) -> ToolResult:
+    """Dispatch a tool call by name against ``surface``.
+
+    ``surface`` is a ``ToolSurface``; callers wanting the full
+    "registry + per-role MCP" lookup should pass a surface built from
+    :meth:`ToolSurface.for_execute` with the full tool list.
+
+    A call to a name not in the surface returns an unknown-tool error
+    immediately -- the executor cannot see schemas it wasn't given.
+
+    When the surface carries a required-skill guard
+    (``surface.skill_guard`` -- see :mod:`crewlet.agent.skills.guard`),
+    calls to tools covered by a ``required: true`` tool skill are
+    rejected until the LLM has loaded that skill via
+    ``load_tool_skill`` in the current session; successful loads are
+    recorded on the guard here, at the same layer that enforces them.
+    """
+    logger.debug(
+        "tool_executing",
+        tool_name=name,
+        args=arguments,
+        agent_id=context.agent_id,
+        phase=getattr(surface, "phase", ""),
+    )
+    tool = surface.lookup(name)
+    if tool is None:
+        phase = getattr(surface, "phase", "")
+        logger.warning(
+            "tool_unknown",
+            tool_name=name,
+            agent_id=context.agent_id,
+            phase=phase,
+        )
+        return ToolResult(success=False, error=_unknown_tool_error(name, surface))
+    guard = getattr(surface, "skill_guard", None)
+    if guard is not None:
+        blocked = await guard.check_tool(tool)
+        if blocked is not None:
+            return blocked
+    result = await tool.execute(arguments, context)
+    result = validate_tool_result(result, validators=validators)
+    if guard is not None:
+        # Deliberately the POST-validation success: a load_tool_skill
+        # body a validator rejected never reached the LLM's context, so
+        # recording it as loaded would satisfy the guard while the
+        # practices are absent — the exact failure the guard exists to
+        # prevent. The LLM must retry until the body actually lands.
+        guard.observe(name, arguments, result.success)
+    if result.success:
+        logger.debug("tool_result", tool_name=name, success=True)
+    else:
+        # Errors from MCP discovery / activation / execute are the
+        # single most useful signal for diagnosing "why did the agent
+        # not respond?" in production -- INFO instead of DEBUG keeps
+        # them visible in the default stdout stream without flooding it.
+        logger.info(
+            "tool_result",
+            tool_name=name,
+            success=False,
+            error=result.error or "",
+        )
+    return result
+
+
+def _unknown_tool_error(name: str, surface: Any) -> str:
+    """Phase-aware error for an unknown-tool call.
+
+    Plan and Execute both keep MCP tool schemas out of ``tools=[...]``
+    by default so the per-phase LLM payload stays small; activation is
+    opt-in via ``activate_tool(name)``.  A direct call to a catalogue
+    name that hasn't been activated yet fails here with a message
+    pointing the LLM at the activation path -- after activation the
+    tool's schema lands in ``tools=[...]`` on the next round and the
+    LLM can invoke it normally.
+    """
+    phase = getattr(surface, "phase", "")
+    if phase in ("plan", "execute", "onboarding"):
+        catalogue = getattr(surface, "catalogue_names", lambda: [])()
+        has_activate = getattr(surface, "has", lambda _n: False)("activate_tool")
+        # Grace / rescue surfaces are built without the discovery
+        # meta-tools (``expose_catalogue=False`` + no ``meta_tools``).
+        # Telling that LLM to call ``activate_tool`` /
+        # ``list_mcp_server_tools`` would direct it at tools it doesn't
+        # have. Fall back to the bare error in that case.
+        if not has_activate:
+            return f"Unknown tool: {name}"
+        if name in catalogue:
+            return (
+                f"To use {name!r}, call `activate_tool(name={name!r})`.  "
+                "That promotes the tool into your tools=[...] so you "
+                "can call it on the next round.  No need to re-activate "
+                "once active."
+            )
+        phase_label = phase.upper()
+        return (
+            f"Unknown tool: {name!r}. Not in the {phase_label}-phase "
+            "catalogue -- check the `## Available tools` block in your "
+            "system prompt, and use `list_mcp_server_tools(server=...)` "
+            "to discover MCP tool names."
+        )
+    return f"Unknown tool: {name}"
+
+
+# ---------------------------------------------------------------------------
+# Budget consumption (shared across phases)
+# ---------------------------------------------------------------------------
+
+
+async def consume_budget(
+    total: int,
+    *,
+    agent: AgentInstance,
+    budget_manager: Any,
+    event_queue: EventQueue,
+) -> None:
+    """Check and consume token budget. Raises ``RuntimeError`` on exhaustion.
+
+    Budget-type disambiguation (org vs. agent): if
+    ``BudgetManager.consume`` returns False, figure out which budget
+    would reject and publish a ``BudgetExhausted`` event naming it
+    before raising.
+    """
+    if budget_manager is None or total <= 0:
+        return
+    budget_ok = await budget_manager.consume(agent.id_str, total)
+    if budget_ok:
+        return
+
+    org_b = budget_manager.org_budget
+    agent_budget = budget_manager.get_agent_budget(agent.id_str)
+    org_would_reject = (
+        org_b.max_tokens > 0 and org_b.used_tokens + total > org_b.max_tokens
+    )
+    if org_would_reject:
+        budget_type = "org"
+        used = org_b.used_tokens
+        limit = org_b.max_tokens
+    elif agent_budget is not None:
+        budget_type = "agent"
+        used = agent_budget.used_tokens
+        limit = agent_budget.max_tokens
+    else:
+        budget_type = "org"
+        used = org_b.used_tokens
+        limit = org_b.max_tokens
+
+    logger.warning(
+        "budget_exhausted",
+        agent_id=agent.id_str,
+        budget_type=budget_type,
+        used=used,
+        limit=limit,
+    )
+    event = BudgetExhausted(
+        source=agent.role_name,
+        agent_id=agent.id_str,
+        role=agent.role_name,
+        budget_type=budget_type,
+        used_tokens=used,
+        max_tokens=limit,
+    )
+    await event_queue.publish(f"crewlet.events.{event.type}", event)
+    raise RuntimeError(
+        f"Token budget exhausted for agent {agent.id_str} "
+        f"({budget_type} budget: {used}/{limit})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool-call loop
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LoopResult:
+    """Outcome of a single :func:`run_tool_loop` invocation."""
+
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_executions: list[dict[str, Any]] = field(default_factory=list)
+    rounds_used: int = 0
+    exhausted_rounds: bool = False
+    model: str = ""
+    messages: list[Message] = field(default_factory=list)
+
+    # Suspend/resume: set when a tool returned
+    # ``suspend=True`` in an ``allow_suspend`` loop. The loop left
+    # ``pending_tool_call_id`` unanswered and ``messages`` is the partial
+    # conversation; the engine persists it, ends the turn, and resumes the
+    # loop later by appending that call's real result.
+    suspended: bool = False
+    pending_tool_call_id: str = ""
+    pending_tool_name: str = ""
+    suspend_payload: dict[str, Any] | None = None
+
+
+ProgressCallback = Callable[[AgentTurnProgress], Awaitable[None]]
+
+# Max corrective re-prompts when ``tool_choice="required"`` but the model
+# returns prose with no tool call. Bounded so a model that can never
+# emit the call doesn't burn an unbounded slice of the round budget; the
+# caller's ``max_rounds`` is the harder bound (rescue/judge use 2).
+_MAX_FORCED_TOOL_RETRIES = 2
+
+
+async def run_tool_loop(
+    *,
+    provider: LLMProvider,
+    messages: list[Message],
+    surface: Any,
+    context: AgentContext,
+    agent: AgentInstance,
+    max_rounds: int,
+    event_queue: EventQueue,
+    budget_manager: Any = None,
+    observability: Any = None,
+    token_usage_repo: Any = None,
+    validators: list[ToolResultValidator] | None = None,
+    on_progress: ProgressCallback | None = None,
+    a2a_context: dict[str, Any] | None = None,
+    provider_key: str = "",
+    terminate_after: list[str] | None = None,
+    tool_choice: str | None = None,
+    turn_id: str = "",
+    iteration: int = 0,
+    trigger: dict[str, Any] | None = None,
+    allow_suspend: bool = False,
+) -> LoopResult:
+    """Drive the LLM + tool-call loop for one phase.
+
+    Mutates ``messages`` in place by appending assistant and tool
+    messages. Stops when the LLM returns no tool calls, or the
+    ``max_rounds`` cap is hit.
+
+    ``provider_key`` is the name used when ``provider.model`` is
+    unset -- e.g. ``"plan"`` when the caller wants the trace event to
+    record which phase ran.
+
+    ``turn_id`` / ``iteration`` stamp the per-round
+    :class:`AgentTurnProgress` events with the same turn coordinates
+    the phase events carry, so live consumers (the dashboard's agent
+    page) can place in-flight rounds inside the right turn/phase
+    grouping.  The phase itself comes from ``surface.phase`` (falling
+    back to ``provider_key``), matching the ``prompt.size`` event.
+
+    ``allow_suspend`` lets a tool suspend the loop: when a tool returns
+    ``ToolResult(suspend=True)`` the loop leaves that call unanswered and
+    returns ``LoopResult(suspended=True, ...)`` carrying the partial
+    ``messages`` for the engine to persist + resume later (the detached
+    sandbox tool). Only the Execute phase passes
+    ``allow_suspend=True``; Plan / Review never persist a partial
+    conversation, so a suspend result there is logged and ignored.
+    """
+    turn_input_tokens = 0
+    turn_output_tokens = 0
+    executions: list[dict[str, Any]] = []
+    accumulated = ""
+    model = ""
+    initial_prompt = ""
+    prompt_messages: list[dict[str, str]] = []
+    if messages:
+        prompt_messages = [
+            {"role": m.role, "content": m.content} for m in messages if m.content
+        ]
+        if prompt_messages:
+            initial_prompt = prompt_messages[0].get("content", "")[:200]
+
+    phase_name = getattr(surface, "phase", "") or provider_key
+
+    # Emit a prompt.size trace event for the initial messages of this
+    # phase so the dashboard can track slimming progress over time.
+    try:
+        system_chars = sum(len(m.content or "") for m in messages if m.role == "system")
+        user_chars = sum(len(m.content or "") for m in messages if m.role == "user")
+        approx_tokens = (system_chars + user_chars) // 4
+        event = PromptSize(
+            source=agent.role_name,
+            agent_id=agent.id_str,
+            role=agent.role_name,
+            phase=phase_name,
+            approximate_tokens=approx_tokens,
+            system_chars=system_chars,
+            user_chars=user_chars,
+        )
+        await event_queue.publish(f"crewlet.events.{event.type}", event)
+    except Exception:
+        logger.exception("prompt_size_publish_failed")
+
+    rounds_used = 0
+    exhausted = False
+    terminate_names = set(terminate_after or [])
+    # Suspend/resume state. Only an ``allow_suspend``
+    # loop (Execute) can suspend; Plan / Review never persist a partial
+    # conversation, so a suspend result there is logged and ignored.
+    suspended = False
+    pending_tool_call_id = ""
+    pending_tool_name = ""
+    suspend_payload: dict[str, Any] | None = None
+    # Forced-tool-call enforcement. When the caller passed
+    # ``tool_choice="required"`` (the Plan/Review rescue, the extension judge)
+    # a round that returns prose with NO tool call must not be accepted as a
+    # clean finish: some endpoints ignore ``tool_choice`` and some models
+    # "think then stop" without emitting the call, which silently defeats the
+    # forced round. We re-prompt with an explicit corrective and retry within
+    # the round budget. Counter so a pathological model can't burn the whole
+    # budget on reprompts beyond a small cap.
+    forced_retries = 0
+    for round_num in range(max_rounds):
+        rounds_used = round_num + 1
+        # Refresh tool defs at the top of every round so any in-loop
+        # surface mutation is visible to the provider on this call,
+        # not the one after.
+        tool_defs = surface.to_tool_defs()
+        logger.debug(
+            "tool_round_starting",
+            round=rounds_used,
+            max_rounds=max_rounds,
+            agent_id=agent.id_str,
+            phase=getattr(surface, "phase", ""),
+            tool_count=len(tool_defs),
+        )
+        # Default ``tool_choice``: when the surface has tools we let
+        # the LLM decide; callers that need to force a call (e.g. the
+        # Plan / Review rescue paths) pass
+        # ``tool_choice="required"`` to make the LLM call SOME tool
+        # this round. The Anthropic adapter maps "required" →
+        # ``{"type": "any"}`` so the surface's sole tool is the only
+        # possible choice.
+        effective_tool_choice = (
+            tool_choice if tool_choice is not None else "auto" if tool_defs else None
+        )
+        completion = await provider.complete(
+            messages=messages,
+            tools=tool_defs if tool_defs else None,
+            tool_choice=effective_tool_choice,
+        )
+        if not model:
+            model = getattr(provider, "model", "") or provider_key
+
+        total = completion.tokens_used or (
+            completion.input_tokens + completion.output_tokens
+        )
+        if completion.input_tokens or completion.output_tokens:
+            effective_input = completion.input_tokens
+            effective_output = completion.output_tokens
+        else:
+            effective_input = total
+            effective_output = 0
+        turn_input_tokens += effective_input
+        turn_output_tokens += effective_output
+
+        if total > 0:
+            agent.input_tokens += effective_input
+            agent.output_tokens += effective_output
+            await consume_budget(
+                total,
+                agent=agent,
+                budget_manager=budget_manager,
+                event_queue=event_queue,
+            )
+            if observability is not None:
+                observability.track_tokens(
+                    agent_id=agent.id_str,
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                    total_tokens=total,
+                )
+            if token_usage_repo is not None and agent.handle:
+                try:
+                    await token_usage_repo.increment(agent.handle, total)
+                except Exception:
+                    logger.exception(
+                        "token_usage_persist_failed",
+                        agent_id=agent.id_str,
+                        handle=agent.handle,
+                        tokens=total,
+                    )
+
+        if completion.content:
+            if accumulated:
+                accumulated += "\n\n"
+            accumulated += completion.content
+
+        if not completion.tool_calls:
+            # Keep the assistant message in the trace regardless of what we do
+            # next, so downstream fallback parsers (parse_plan_from_messages,
+            # parse_review_from_messages) and debuggers see what the model said.
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=completion.content,
+                    reasoning_content=completion.reasoning_content,
+                    thinking_blocks=completion.thinking_blocks,
+                    tool_calls=[],
+                )
+            )
+            # Forced round: the caller demanded a tool call but the model
+            # returned prose. Re-prompt and retry within budget instead of
+            # accepting it as terminal — this is what makes the plan rescue and
+            # the extension judge actually force their structured-output call.
+            if (
+                tool_choice == "required"
+                and forced_retries < _MAX_FORCED_TOOL_RETRIES
+                and round_num < max_rounds - 1
+            ):
+                forced_retries += 1
+                want = (
+                    " or ".join(f"`{n}`" for n in sorted(terminate_names))
+                    if terminate_names
+                    else "the required tool"
+                )
+                messages.append(
+                    Message(
+                        role="user",
+                        content=(
+                            "Your last response made no tool call. You MUST "
+                            f"respond by calling {want} now — return only that "
+                            "tool call, not prose or reasoning."
+                        ),
+                    )
+                )
+                logger.warning(
+                    "forced_tool_call_retry",
+                    round=rounds_used,
+                    attempt=forced_retries,
+                    agent_id=agent.id_str,
+                    phase=getattr(surface, "phase", ""),
+                )
+                continue
+            exhausted = False
+            break
+
+        messages.append(
+            Message(
+                role="assistant",
+                content=completion.content,
+                reasoning_content=completion.reasoning_content,
+                thinking_blocks=completion.thinking_blocks,
+                tool_calls=completion.tool_calls,
+            )
+        )
+        terminated_by_tool = False
+        for tool_call in completion.tool_calls:
+            tool_result = await execute_tool(
+                tool_call.name,
+                tool_call.arguments,
+                context,
+                surface=surface,
+                validators=validators,
+            )
+            # Suspend: the tool kicked off detached work whose result lands
+            # later (the sandbox tool). Leave THIS call unanswered — the
+            # engine appends the real result on resume — and defer only it;
+            # sibling calls in the same assistant turn are still resolved
+            # inline so the persisted conversation has exactly one dangling
+            # tool_use. Only the first suspend is honored (one detached job
+            # per turn); the conversation must end with a single hole.
+            if allow_suspend and tool_result.suspend and not suspended:
+                suspended = True
+                pending_tool_call_id = tool_call.id
+                pending_tool_name = tool_call.name
+                suspend_payload = tool_result.suspend_payload or {}
+                executions.append(
+                    {
+                        "name": tool_call.name,
+                        "arguments": json.dumps(tool_call.arguments),
+                        "result": "(detached work launched; awaiting result)",
+                        "success": True,
+                    }
+                )
+                continue
+            if tool_result.suspend and not allow_suspend:
+                logger.warning(
+                    "tool_suspend_ignored_outside_execute",
+                    tool=tool_call.name,
+                    phase=phase_name,
+                )
+            if tool_result.success:
+                content = tool_result.output
+            else:
+                content = (
+                    tool_result.error or tool_result.output or "Tool execution failed"
+                )
+            content = sanitize_tool_output(content)
+            messages.append(
+                Message(
+                    role="tool",
+                    content=content,
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                )
+            )
+            executions.append(
+                {
+                    "name": tool_call.name,
+                    "arguments": json.dumps(tool_call.arguments),
+                    "result": content,
+                    "success": tool_result.success,
+                }
+            )
+            if tool_call.name in terminate_names and tool_result.success:
+                terminated_by_tool = True
+
+        progress = AgentTurnProgress(
+            source=agent.role_name,
+            agent_id=agent.id_str,
+            role=agent.role_name,
+            turn_id=turn_id,
+            phase=phase_name,
+            iteration=iteration,
+            model=model,
+            trigger=trigger or {},
+            prompt=initial_prompt,
+            prompt_messages=prompt_messages,
+            response=accumulated,
+            input_tokens=turn_input_tokens,
+            output_tokens=turn_output_tokens,
+            total_tokens=turn_input_tokens + turn_output_tokens,
+            round_num=round_num,
+            tool_executions=list(executions),
+            a2a_context=a2a_context,
+        )
+        if on_progress is not None:
+            await on_progress(progress)
+        else:
+            await event_queue.publish(
+                f"crewlet.events.{progress.type}",
+                progress,
+            )
+        if terminated_by_tool or suspended:
+            exhausted = False
+            break
+    else:
+        exhausted = True
+        logger.debug(
+            "max_tool_rounds_exhausted",
+            max_rounds=max_rounds,
+            agent_id=agent.id_str,
+            phase=getattr(surface, "phase", ""),
+        )
+
+    return LoopResult(
+        text=accumulated,
+        input_tokens=turn_input_tokens,
+        output_tokens=turn_output_tokens,
+        tool_executions=executions,
+        rounds_used=rounds_used,
+        exhausted_rounds=exhausted,
+        model=model,
+        messages=messages,
+        suspended=suspended,
+        pending_tool_call_id=pending_tool_call_id,
+        pending_tool_name=pending_tool_name,
+        suspend_payload=suspend_payload,
+    )
+
+
+# Phase-completed telemetry ships the full system / user / response
+# text to the dashboard and event store -- no length caps.  Operators
+# must be able to audit exactly what each phase saw and produced; a
+# truncated prompt is what hid the tool an agent needed in the first
+# place (see ``sanitize_tool_output``).
+
+
+def _first_system_message(messages: list[Message]) -> str:
+    for msg in messages:
+        if msg.role == "system":
+            return msg.content or ""
+    return ""
+
+
+def _first_user_message(messages: list[Message]) -> str:
+    for msg in messages:
+        if msg.role == "user":
+            return msg.content or ""
+    return ""
+
+
+def _assistant_text_with_reasoning(messages: list[Message]) -> str:
+    """Concatenate assistant content with reasoning wrapped in ``<think>``.
+
+    The dashboard's ``renderLLMResponse`` already knows how to render
+    ``<think>...</think>`` blocks inline, so by wrapping each round's
+    ``reasoning_content`` in those tags (immediately before the
+    round's visible content) we surface the model's thinking on the
+    phase-detail view without adding a new field.
+    """
+    parts: list[str] = []
+    for msg in messages:
+        if msg.role != "assistant":
+            continue
+        if msg.reasoning_content:
+            parts.append(f"<think>{msg.reasoning_content}</think>")
+        if msg.content:
+            parts.append(msg.content)
+    return "\n\n".join(parts)
+
+
+async def publish_phase_started(
+    *,
+    event_queue: EventQueue,
+    agent: AgentInstance,
+    turn_id: str,
+    iteration: int,
+    phase: str,
+    trigger: dict[str, Any] | None = None,
+) -> None:
+    """Emit :class:`AgentPhaseStarted` for live-state dashboards.
+
+    Called from each main phase runner (``run_plan_phase``,
+    ``run_execute_phase``, ``run_review_phase``) right before the LLM
+    loop opens.  Pair with :func:`publish_phase_completed` so the
+    agent-state projection can flip ``current_phase`` on start and
+    keep it across the (gap-free) handoff to the next phase, clearing
+    only on ``TaskCompleted`` / ``TaskFailed``.
+
+    Publish failures are logged but never abort a turn -- telemetry
+    must not break the LLM loop.
+    """
+    event = AgentPhaseStarted(
+        source=agent.role_name,
+        agent_id=agent.id_str,
+        role=agent.role_name,
+        turn_id=turn_id,
+        iteration=iteration,
+        phase=phase,
+        trigger=trigger or {},
+    )
+    try:
+        await event_queue.publish(f"crewlet.events.{event.type}", event)
+    except Exception:
+        logger.exception("phase_started_publish_failed", phase=phase)
+
+
+async def publish_phase_completed(
+    *,
+    event_queue: EventQueue,
+    agent: AgentInstance,
+    turn_id: str,
+    iteration: int,
+    phase: str,
+    provider_key: str,
+    loop: LoopResult,
+    decision: str = "",
+    notes: str = "",
+    tools_available: list[str] | None = None,
+    tool_catalogue: list[str] | None = None,
+    rescue_fired: bool = False,
+    rescue_loop: LoopResult | None = None,
+    host_phase: str = "",
+    host_iteration: int = 0,
+    trigger: dict[str, Any] | None = None,
+    tag_span: bool = True,
+    response_messages: list[Message] | None = None,
+) -> None:
+    """Emit :class:`AgentPhaseCompleted` and tag the current OTel span.
+
+    Called from each phase runner (``run_plan_phase``, ``run_execute_phase``,
+    ``run_review_phase``, ``spawn_subagent``) right after the LLM loop
+    returns.  Fans detail out to two sinks:
+
+    1. **Event**: full (truncated) system prompt, user prompt, response,
+       tool executions, tokens, decision -- one row per phase per turn
+       iteration.  Dashboards that query the events table by ``turn_id``
+       can now render an accurate per-phase timeline without having to
+       reconstruct it from ``AgentTurnProgress`` round-events.
+
+    2. **Span attributes**: lightweight gen_ai.* attributes on the
+       currently-open phase span (created by ``TurnEngine._child_phase``
+       or ``spawn_subagent``) so OTel trace viewers show per-phase
+       token counts, model, and decision at a glance.  Full text lives
+       on the event; spans only carry identity + counts.
+
+    ``rescue_loop``: when the phase's main loop exhausted its
+    rounds without producing the structured artifact, the runner fires
+    a constrained rescue / grace call (``_rescue_submit_plan`` /
+    ``_rescue_submit_review`` / ``_grace_summarize_execute``). That
+    second loop is a *continuation* of the same phase -- so its tool
+    executions, tokens, and rounds are merged into this one event, and
+    the ``response`` is taken from the rescue (its ``submit_*`` call /
+    wrap-up is the real artifact). Without the merge the event would
+    show only the exhausted main loop and the rescue's work -- the
+    actual ``submit_plan`` call, its tokens -- would be invisible in
+    the per-phase telemetry while still counted at the turn level.
+
+    Errors in either sink are logged but do not propagate -- telemetry
+    must never abort a turn.
+    """
+    system_prompt = _first_system_message(loop.messages)
+    user_prompt = _first_user_message(loop.messages)
+    # Include the model's reasoning content as ``<think>...</think>``
+    # blocks so the dashboard's existing think-block renderer shows
+    # extended-thinking output.  Falls back to plain ``loop.text``
+    # when no reasoning was emitted.  When a rescue loop ran, its
+    # messages carry the real artifact (the ``submit_*`` call / the
+    # wrap-up summary) -- prefer them for the response.
+    response_source = rescue_loop if rescue_loop is not None else loop
+    # On a RESUMED phase the runner passes ``response_messages`` — only the
+    # post-resume slice of the conversation — so the event shows just the
+    # continuation, not a replay of the pre-suspend segment (which was already
+    # published as its own checkpoint). A rescue loop carries
+    # its own messages and ignores the slice.
+    src_messages = (
+        response_messages
+        if (rescue_loop is None and response_messages is not None)
+        else response_source.messages
+    )
+    response = _assistant_text_with_reasoning(src_messages) or response_source.text
+
+    # Merge main + rescue loop counters so the per-phase event reflects
+    # everything the phase did. ``exhausted_rounds`` keeps the *main*
+    # loop's signal: paired with ``rescue_fired`` it reads as "main
+    # loop exhausted, rescue recovered it".
+    tool_executions = list(loop.tool_executions)
+    input_tokens = loop.input_tokens
+    output_tokens = loop.output_tokens
+    rounds_used = loop.rounds_used
+    if rescue_loop is not None:
+        tool_executions += list(rescue_loop.tool_executions)
+        input_tokens += rescue_loop.input_tokens
+        output_tokens += rescue_loop.output_tokens
+        rounds_used += rescue_loop.rounds_used
+    total_tokens = input_tokens + output_tokens
+    model = loop.model or provider_key
+
+    event = AgentPhaseCompleted(
+        source=agent.role_name,
+        agent_id=agent.id_str,
+        role=agent.role_name,
+        turn_id=turn_id,
+        iteration=iteration,
+        phase=phase,
+        host_phase=host_phase,
+        host_iteration=host_iteration,
+        model=model,
+        provider_key=provider_key,
+        trigger=trigger or {},
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response=response,
+        tool_executions=tool_executions,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        rounds_used=rounds_used,
+        exhausted_rounds=loop.exhausted_rounds,
+        decision=decision,
+        rescue_fired=rescue_fired,
+        notes=notes,
+        tools_available=list(tools_available or []),
+        tool_catalogue=list(tool_catalogue or []),
+    )
+    try:
+        await event_queue.publish(f"crewlet.events.{event.type}", event)
+    except Exception:
+        logger.exception("phase_completed_publish_failed", phase=phase)
+
+    if tag_span:
+        tag_phase_span(
+            phase=phase,
+            iteration=iteration,
+            turn_id=turn_id,
+            rounds_used=rounds_used,
+            exhausted_rounds=loop.exhausted_rounds,
+            rescue_fired=rescue_fired,
+            tool_executions_count=len(tool_executions),
+            decision=decision,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            tools_available=tools_available,
+            tool_catalogue=tool_catalogue,
+        )
+
+
+def tag_phase_span(
+    *,
+    phase: str,
+    iteration: int,
+    turn_id: str,
+    rounds_used: int,
+    exhausted_rounds: bool,
+    rescue_fired: bool,
+    tool_executions_count: int,
+    decision: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    tools_available: list[str] | None = None,
+    tool_catalogue: list[str] | None = None,
+) -> None:
+    """Tag the currently-active OTel span with phase attributes.
+
+    Separated from :func:`publish_phase_completed` so callers that
+    DEFER event publication (the extension judge -- its event fires
+    after the host phase event so chronological dashboards stay
+    ordered) can tag their span eagerly while it's still the current
+    span.  Without this split the deferred publish would call
+    ``get_current_span()`` after its own span has closed and end up
+    tagging the host phase's span instead, clobbering the host's
+    attributes.
+
+    Phase events that publish synchronously route through
+    ``publish_phase_completed(tag_span=True)`` and never call this
+    helper directly.
+    """
+    try:
+        from opentelemetry import trace as _otel_trace
+
+        span = _otel_trace.get_current_span()
+        if span is None or not span.is_recording():
+            return
+        span.set_attribute("phase.name", phase)
+        span.set_attribute("phase.iteration", iteration)
+        span.set_attribute("phase.turn_id", turn_id)
+        span.set_attribute("phase.rounds_used", rounds_used)
+        span.set_attribute("phase.exhausted_rounds", exhausted_rounds)
+        span.set_attribute("phase.rescue_fired", rescue_fired)
+        span.set_attribute("phase.tool_executions_count", tool_executions_count)
+        if decision:
+            span.set_attribute("phase.decision", decision)
+        if model:
+            span.set_attribute("gen_ai.request.model", model)
+        span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+        span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+        if tools_available:
+            span.set_attribute("phase.tools_available_count", len(tools_available))
+            # OTel recommends sending array attributes as tuples of
+            # strings; comma-joined fallback keeps exporters that
+            # stringify attributes (e.g. the console exporter)
+            # readable.
+            span.set_attribute("phase.tools_available", ",".join(tools_available[:50]))
+        if tool_catalogue:
+            span.set_attribute("phase.tool_catalogue_count", len(tool_catalogue))
+            span.set_attribute("phase.tool_catalogue", ",".join(tool_catalogue[:50]))
+    except Exception:
+        logger.exception("phase_span_attr_failed", phase=phase)
+
+
+__all__ = [
+    "LoopResult",
+    "Event",  # re-exported for convenience
+    "consume_budget",
+    "execute_tool",
+    "publish_phase_completed",
+    "publish_phase_started",
+    "redact_secrets",
+    "run_tool_loop",
+    "sanitize_tool_output",
+    "tag_phase_span",
+    "validate_tool_result",
+]

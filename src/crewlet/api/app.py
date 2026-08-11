@@ -1,0 +1,244 @@
+"""Standalone Starlette application factory for the Crewlet API.
+
+No Engine dependency — only an EventQueue is required for webhook
+ingestion.  Agent state is derived from the EventStore (TimescaleDB
+or in-memory fallback), not from queue subscriptions.
+
+The ``/config/*`` routes (versioned company-config CRUD) are mounted
+when a ``CompanyConfigStore`` is supplied and gated by
+:class:`ApiAuthMiddleware`.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from typing import Any
+
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import ClientDisconnect, Request
+from starlette.responses import Response
+
+from crewlet._logging import get_logger
+from crewlet.api.auth import ApiAuthMiddleware, load_tokens
+from crewlet.api.config_audit import build_config_audit_routes
+from crewlet.api.config_entity_routes import build_config_entity_routes
+from crewlet.api.config_refresh import (
+    prime_api_state_from_active,
+    subscribe_config_refresh,
+)
+from crewlet.api.config_routes import build_config_routes
+from crewlet.api.routes import build_routes
+from crewlet.api.streaming import StreamService, build_health_envelope
+
+logger = get_logger("api.app")
+
+
+async def _client_disconnected(request: Request, exc: Exception) -> Response:
+    """Handle ``ClientDisconnect`` raised while reading a request body.
+
+    Webhook senders enforce delivery deadlines and abort requests that
+    take too long; the abort surfaces as ``ClientDisconnect`` at the
+    handler's first body read.  The sender is gone, so the 204 is never
+    delivered — it only satisfies the exception-handler contract.
+    Without this handler the disconnect escapes the app and uvicorn
+    logs it as an unhandled ERROR traceback.
+    """
+    logger.warning(
+        "client_disconnected",
+        method=request.method,
+        path=request.url.path,
+        remote=request.client.host if request.client else "",
+    )
+    return Response(status_code=204)
+
+
+def create_app(
+    event_queue: Any,
+    *,
+    event_store: Any = None,
+    agent_roles: list[dict[str, Any]] | None = None,
+    org_data: dict[str, Any] | None = None,
+    schedules_data: list[dict[str, Any]] | None = None,
+    tools_data: list[dict[str, Any]] | None = None,
+    database: Any = None,
+    github_webhook_secret: str | None = None,
+    gitlab_signing_secret: str | None = None,
+    plane_webhook_secret: str | None = None,
+    sandbox_otel_receiver: Any = None,
+    forge_app_id: str = "",
+    bootstrap: Any = None,
+    company_config_store: Any = None,
+    engine: Any = None,
+    stream: StreamService | None = None,
+) -> Starlette:
+    """Build a Starlette ASGI application.
+
+    Parameters
+    ----------
+    event_queue:
+        An ``EventQueue`` instance for publishing webhook notifications.
+    event_store:
+        An ``EventStore`` instance for persistent event storage and
+        agent state queries.  When ``None``, events/agents endpoints
+        return empty results.
+    agent_roles:
+        Pre-loaded role list from YAML config (served by GET /agents).
+    org_data:
+        Serialized organization hierarchy (served by GET /org).
+    schedules_data:
+        Resolved role/unit schedule descriptors (served by GET
+        /schedules, enriched per-request with next-run + run history).
+    tools_data:
+        List of tool descriptions (served by GET /tools).
+    database:
+        Optional ``Database`` pool for learning-store reads
+        (episodes, counterparty profiles, synthesized skills) used by
+        ``/agents/{id}/memory``.  When ``None`` those sections of the
+        memory endpoint return empty lists.
+    github_webhook_secret:
+        HMAC key for ``POST /webhooks/github`` signature verification
+        (``X-Hub-Signature-256``).  ``None`` → the endpoint returns 500.
+    gitlab_signing_secret:
+        GitLab 19.1+ Standard-Webhooks signing token for
+        ``POST /webhooks/gitlab``.  ``None`` → the endpoint returns 500.
+    plane_webhook_secret:
+        HMAC key for ``POST /webhooks/plane`` signature verification
+        (``X-Plane-Signature``).  ``None`` → the endpoint returns 500.
+    bootstrap:
+        Optional :class:`BootstrapConfig` (Tier A).  When supplied,
+        auth tokens are loaded from ``bootstrap.api.auth`` and
+        ``ApiAuthMiddleware`` is mounted in front of ``/config/*``.
+    company_config_store:
+        Optional :class:`CompanyConfigStore`.  Required to mount the
+        ``/config/*`` routes.
+    engine:
+        Optional ``Engine`` reference for live runtime metrics
+        (``in_flight_count``).  Only available on the embedded-API
+        path where engine and API share a process; the standalone
+        API process leaves this ``None`` and live-runtime fields are
+        omitted from ``/health``.
+    stream:
+        Optional pre-wired :class:`~crewlet.api.streaming.StreamService`.
+        The engine constructs one and wires it into the event flow (so
+        the same instance owns the live-state projection and the client
+        fan-out); when omitted a fresh service is created so the
+        ``/ws/stream`` endpoint, snapshot, and ``/agents`` live state
+        still work (they just see no engine events until one is wired
+        in).
+    """
+    middleware: list[Middleware] = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        ),
+    ]
+
+    if stream is None:
+        stream = StreamService()
+
+    routes = list(build_routes())
+
+    auth_tokens: dict[str, str] = {}
+    auth_disabled = False
+    if company_config_store is not None:
+        routes.extend(build_config_routes())
+        routes.extend(build_config_entity_routes())
+        routes.extend(build_config_audit_routes())
+        if bootstrap is not None:
+            auth_tokens = load_tokens(bootstrap)
+            auth_disabled = bootstrap.api.auth.disabled
+            middleware.append(Middleware(ApiAuthMiddleware))
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(app: Starlette) -> Any:
+        # One shared health tick fans the engine's drain/in-flight state
+        # out to every connected dashboard.
+        stream.start_health_tick(lambda: build_health_envelope(app))
+        # Seed the live-state projection from the store so the first
+        # snapshot reflects history accrued before this process started.
+        role_names = [
+            r.get("role", "") for r in (app.state.agent_roles or []) if r.get("role")
+        ]
+        try:
+            await stream.hydrate(app.state.event_store, role_names)
+        except Exception:
+            logger.exception("stream_hydrate_failed")
+        try:
+            yield
+        finally:
+            await stream.stop_health_tick()
+
+    app = Starlette(
+        routes=routes,
+        middleware=middleware,
+        exception_handlers={ClientDisconnect: _client_disconnected},
+        lifespan=_lifespan,
+    )
+    app.state.event_queue = event_queue
+    app.state.agent_roles = agent_roles or []
+    app.state.org_data = org_data or {}
+    app.state.schedules_data = schedules_data or []
+    app.state.tools_data = tools_data or []
+    app.state.event_store = event_store
+    app.state.database = database
+    app.state.github_webhook_secret = github_webhook_secret
+    app.state.gitlab_signing_secret = gitlab_signing_secret
+    app.state.plane_webhook_secret = plane_webhook_secret
+    app.state.sandbox_otel_receiver = sandbox_otel_receiver
+    app.state.forge_app_id = forge_app_id
+    app.state.bootstrap = bootstrap
+    app.state.company_config_store = company_config_store
+    # Secret-encryption keyring (Tier A ``secrets``).  Encrypts the whole
+    # config document on ``PUT /config`` writes and decrypts it when
+    # refreshing app.state.  ``None`` when encryption is disabled.
+    from crewlet.secrets import KeyringCipher
+
+    app.state.secret_cipher = (
+        KeyringCipher.from_config(bootstrap.secrets) if bootstrap is not None else None
+    )
+    app.state.auth_tokens = auth_tokens
+    app.state.auth_disabled = auth_disabled
+    app.state.engine = engine
+    app.state.stream = stream
+    # ``configured`` semantics:
+    # - With a ``company_config_store`` wired (Tier B path): starts
+    #   False, flipped to True by ``attach_config_refresh`` once the
+    #   active revision is primed (or by a later
+    #   ``revision_activated`` event).
+    # - Without a store (test apps / embedded APIs constructed
+    #   without a Tier B config store): always True so /health stays sensible and the
+    #   webhook unconfigured early-out doesn't spuriously fire on
+    #   apps that have no Tier B model at all.
+    app.state.configured = company_config_store is None
+
+    return app
+
+
+async def attach_config_refresh(app: Starlette) -> None:
+    """Subscribe ``app`` to ``revision_activated`` and prime its
+    cached state from the active revision if one exists.
+
+    Called once after the API process starts the event_queue and
+    connects to the DB.  Idempotent — safe to call multiple times.
+    """
+    await subscribe_config_refresh(
+        app,
+        store=app.state.company_config_store,
+        event_queue=app.state.event_queue,
+    )
+    await prime_api_state_from_active(app, app.state.company_config_store)
+
+    # Roles are now populated (the standalone API learns them from the
+    # active revision) — hydrate the live-state projection's baseline so
+    # ``/agents`` and the snapshot reflect prior sessions immediately.
+    stream = getattr(app.state, "stream", None)
+    if stream is not None:
+        role_names = [
+            r.get("role", "") for r in (app.state.agent_roles or []) if r.get("role")
+        ]
+        with contextlib.suppress(Exception):
+            await stream.hydrate(app.state.event_store, role_names)

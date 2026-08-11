@@ -1,0 +1,1123 @@
+"""Inbound webhook endpoints (Jira/Slack/GitHub/GitLab/Plane/Confluence/Forge).
+
+These are the API's external contract — webhook senders POST here on a
+fixed retry schedule.  Each handler verifies the relevant signature,
+persists the event for the dashboard, surfaces it on the live stream,
+and republishes a ``raw_webhook`` event onto the EventQueue for the
+engine's transport pipeline.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import html
+import json
+import re
+from datetime import UTC, datetime
+from typing import Any
+
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+
+from crewlet._logging import get_logger
+from crewlet.events.types import Event
+from crewlet.telemetry import tracer
+
+logger = get_logger("api.routes")
+
+INBOUND_TOPIC = "crewlet.notifications.inbound"
+
+_SENSITIVE_HEADERS = frozenset({"authorization", "cookie"})
+
+
+def _event_queue(request: Request) -> Any:
+    return request.app.state.event_queue
+
+
+def _parse_json_object(body_raw: bytes) -> dict[str, Any] | None:
+    """Parse a webhook body, accepting only a JSON *object*.
+
+    ``json.loads`` happily returns lists and scalars, and every handler
+    immediately calls ``.get`` on the result — a correctly signed list
+    body must produce a 400, not an ``AttributeError`` 500.
+    """
+    try:
+        body = json.loads(body_raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _safe_headers(request: Request) -> dict[str, str]:
+    """Return request headers with sensitive values redacted."""
+    return {
+        k: ("REDACTED" if k in _SENSITIVE_HEADERS else v)
+        for k, v in request.headers.items()
+    }
+
+
+async def _log_event(
+    request: Request,
+    event_type: str,
+    source: str,
+    payload: dict[str, Any] | None = None,
+    summary: str = "",
+) -> None:
+    """Persist a webhook event via the EventStore + surface it on the stream."""
+    from uuid import uuid4
+
+    from crewlet.telemetry import (
+        current_parent_span_id,
+        current_span_id,
+        current_trace_id,
+    )
+
+    store = request.app.state.event_store
+
+    trace_id = current_trace_id()
+    span_id = current_span_id()
+    parent_span_id = current_parent_span_id()
+
+    enriched_payload = dict(payload or {})
+    if trace_id:
+        enriched_payload["trace_id"] = trace_id
+    if span_id:
+        enriched_payload["span_id"] = span_id
+    if parent_span_id:
+        enriched_payload["parent_span_id"] = parent_span_id
+
+    event_id = str(uuid4())
+    timestamp = datetime.now(UTC)
+    final_summary = summary or f"Webhook from {source}: {event_type}"
+
+    if store is not None:
+        try:
+            await store.write_event(
+                event_id=event_id,
+                event_type=event_type,
+                source=source,
+                timestamp=timestamp,
+                category="webhook",
+                payload=enriched_payload,
+                summary=final_summary,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+            )
+        except Exception as exc:
+            logger.exception(
+                "event_store_write_failed", event_type=event_type, error=str(exc)
+            )
+
+    # Surface the webhook on the live stream so the dashboard's activity
+    # feed reflects it in real time (the engine never publishes these on
+    # ``crewlet.events.*``, so the stream service would otherwise miss
+    # them).
+    stream = getattr(request.app.state, "stream", None)
+    if stream is not None:
+        envelope_data = {
+            "id": event_id,
+            "type": event_type,
+            "timestamp": timestamp.isoformat(),
+            "source": source,
+            "actor": source,
+            "summary": final_summary,
+            "category": "webhook",
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": parent_span_id,
+            "topic": f"crewlet.webhooks.{source}",
+            "payload": enriched_payload,
+        }
+        try:
+            await stream.emit_event(envelope_data)
+        except Exception as exc:
+            logger.exception(
+                "stream_broadcast_failed", event_type=event_type, error=str(exc)
+            )
+
+
+def _webhook_unconfigured_response(
+    request: Request, *, source: str, event_type: str = ""
+) -> JSONResponse | None:
+    """Return a 200 OK + WARNING log when the engine is unconfigured.
+
+    Webhook providers hammer their endpoints on a fixed retry schedule.
+    When the engine has no active company config there's nobody to
+    deliver to — but a non-2xx triggers retry storms, so we drop with a
+    200 (the signature check has already run in the caller).
+    """
+    if getattr(request.app.state, "configured", False):
+        return None
+    logger.warning(
+        "webhook_dropped_unconfigured",
+        source=source,
+        event_type=event_type,
+        remote=request.client.host if request.client else "",
+    )
+    return JSONResponse({"status": "dropped", "reason": "unconfigured"})
+
+
+# ---------------------------------------------------------------------------
+# Summary builders
+# ---------------------------------------------------------------------------
+
+
+def _build_slack_summary(handle: str, body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a Slack webhook."""
+    event = body.get("event", {})
+    event_type = event.get("type", body.get("type", ""))
+    user = event.get("user", "")
+    channel = event.get("channel", "")
+    text = event.get("text", "")
+
+    parts = [f"Slack → {handle}"]
+    if event_type == "message":
+        sender = user or "someone"
+        if text:
+            preview = text[:80] + ("..." if len(text) > 80 else "")
+            parts.append(f'{sender} said "{preview}"')
+        else:
+            parts.append(f"{sender} sent a message")
+        if channel:
+            parts.append(f"in #{channel}")
+    elif event_type == "app_mention":
+        parts.append(f"mentioned by {user}" if user else "app mentioned")
+    elif event_type == "reaction_added":
+        reaction = event.get("reaction", "")
+        parts.append(f":{reaction}: by {user}" if reaction else "reaction added")
+    elif event_type:
+        parts.append(event_type.replace("_", " "))
+
+    return " ".join(parts)
+
+
+def _build_jira_summary(body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a Jira webhook."""
+    webhook_event = body.get("webhookEvent", "")
+    issue = body.get("issue", {})
+    issue_key = issue.get("key", "")
+    summary = issue.get("fields", {}).get("summary", "")
+    user = body.get("user", {}).get("displayName", "")
+
+    action = webhook_event.replace("jira:", "").replace("_", " ")
+    parts = ["Jira"]
+    if user:
+        parts.append(user)
+    parts.append(action)
+    if issue_key:
+        parts.append(issue_key)
+    if summary:
+        preview = summary[:60] + ("..." if len(summary) > 60 else "")
+        parts.append(f'"{preview}"')
+
+    return " ".join(parts)
+
+
+def _build_github_summary(gh_event: str, body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a GitHub webhook."""
+    action = body.get("action", "")
+    sender = body.get("sender", {}).get("login", "")
+    repo = body.get("repository", {}).get("full_name", "")
+
+    parts = ["GitHub"]
+    if sender:
+        parts.append(sender)
+
+    if gh_event == "push":
+        ref = body.get("ref", "").replace("refs/heads/", "")
+        commits = body.get("commits", [])
+        parts.append(f"pushed {len(commits)} commit(s) to {ref}")
+    elif gh_event == "pull_request":
+        pr = body.get("pull_request", {})
+        title = pr.get("title", "")
+        number = pr.get("number", "")
+        parts.append(f"{action} PR #{number}")
+        if title:
+            parts.append(f'"{title[:60]}"')
+    elif gh_event == "issues":
+        issue = body.get("issue", {})
+        title = issue.get("title", "")
+        number = issue.get("number", "")
+        parts.append(f"{action} issue #{number}")
+        if title:
+            parts.append(f'"{title[:60]}"')
+    else:
+        desc = f"{gh_event}"
+        if action:
+            desc += f" {action}"
+        parts.append(desc)
+
+    if repo:
+        parts.append(f"on {repo}")
+
+    return " ".join(parts)
+
+
+def _build_gitlab_summary(gl_event: str, body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a GitLab webhook."""
+    attrs = body.get("object_attributes", {}) or {}
+    actor = (body.get("user", {}) or {}).get("username", "")
+    project = body.get("project", {}) or {}
+    path = project.get("path_with_namespace", "")
+    kind = body.get("object_kind", gl_event or "event")
+    action = attrs.get("action", "")
+
+    parts = ["GitLab"]
+    if actor:
+        parts.append(actor)
+
+    if kind == "merge_request":
+        parts.append(f"{action or 'updated'} MR !{attrs.get('iid', '')}")
+        title = attrs.get("title", "")
+        if title:
+            parts.append(f'"{title[:60]}"')
+    elif kind == "issue":
+        parts.append(f"{action or 'updated'} issue #{attrs.get('iid', '')}")
+        title = attrs.get("title", "")
+        if title:
+            parts.append(f'"{title[:60]}"')
+    elif kind == "note":
+        parts.append(f"commented on {attrs.get('noteable_type', 'item')}")
+    elif kind == "pipeline":
+        parts.append(f"pipeline {attrs.get('status', '')}")
+    else:
+        parts.append(f"{kind} {action}".strip())
+
+    if path:
+        parts.append(f"on {path}")
+
+    return " ".join(p for p in parts if p)
+
+
+def _build_plane_summary(body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a Plane webhook."""
+    event = body.get("event", "")
+    action = body.get("action", "")
+    data = body.get("data") or {}
+    name = data.get("name", "") if isinstance(data, dict) else ""
+
+    activity = body.get("activity") or {}
+    actor = activity.get("actor") if isinstance(activity, dict) else None
+    if isinstance(actor, dict):
+        actor_name = (
+            actor.get("display_name") or actor.get("first_name") or actor.get("id", "")
+        )
+    elif isinstance(actor, str):
+        actor_name = actor
+    else:
+        actor_name = ""
+
+    parts = ["Plane"]
+    if actor_name:
+        parts.append(str(actor_name))
+    if event:
+        parts.append(str(event))
+    if action:
+        parts.append(str(action))
+    if name:
+        preview = name[:60] + ("..." if len(name) > 60 else "")
+        parts.append(f'"{preview}"')
+
+    return " ".join(parts)
+
+
+def _build_confluence_summary(body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a Confluence webhook."""
+    event_type = (
+        body.get("event") or body.get("webhookEvent") or body.get("eventType", "")
+    )
+    page = body.get("page") or body.get("content") or {}
+    page_title = page.get("title", "")
+    space = page.get("space") or body.get("space") or {}
+    space_key = space.get("key", "")
+
+    user_data = body.get("userAccountId") or body.get("user") or {}
+    if isinstance(user_data, dict):
+        user = user_data.get("displayName") or user_data.get("name", "")
+    else:
+        user = ""
+
+    action = event_type.replace("_", " ")
+    parts = ["Confluence"]
+    if user:
+        parts.append(user)
+    parts.append(action)
+    if space_key:
+        parts.append(f"[{space_key}]")
+    if page_title:
+        preview = page_title[:60] + ("..." if len(page_title) > 60 else "")
+        parts.append(f'"{preview}"')
+
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Native webhook handlers
+# ---------------------------------------------------------------------------
+
+
+async def jira_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/jira — publish to EventQueue."""
+    body_raw = await request.body()
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    dropped = _webhook_unconfigured_response(
+        request, source="jira", event_type=body_data.get("webhookEvent", "")
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.jira", attributes={"webhook.source": "jira"}
+    ):
+        logger.info(
+            "jira_webhook_received",
+            webhook_event=body_data.get("webhookEvent", ""),
+            issue_key=body_data.get("issue", {}).get("key", ""),
+        )
+        jira_summary = _build_jira_summary(body_data)
+        await _log_event(
+            request,
+            f"webhook:{body_data.get('webhookEvent', 'unknown')}",
+            "jira",
+            payload=body_data,
+            summary=jira_summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="jira",
+                payload={
+                    "body": body_data,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})
+
+
+async def slack_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/slack/{handle} — publish to EventQueue."""
+    handle = request.path_params["handle"]
+    body_raw = await request.body()
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    # Slack URL verification challenge — always answer (no engine needed).
+    if body_data.get("type") == "url_verification":
+        return JSONResponse({"challenge": body_data.get("challenge", "")})
+
+    dropped = _webhook_unconfigured_response(
+        request, source="slack", event_type=body_data.get("type", "")
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.slack",
+        attributes={"webhook.source": "slack", "webhook.handle": handle},
+    ):
+        logger.info(
+            "slack_webhook_received",
+            handle=handle,
+            event_type=body_data.get("type", "unknown"),
+        )
+        slack_summary = _build_slack_summary(handle, body_data)
+        await _log_event(
+            request,
+            f"webhook:{body_data.get('type', 'unknown')}",
+            "slack",
+            payload=body_data,
+            summary=slack_summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="slack",
+                payload={
+                    "body": body_data,
+                    "handle": handle,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"ok": True})
+
+
+_SLACK_OAUTH_PAGE = """<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Crewlet — Slack app install</title>
+    <style>
+      body {{ font-family: system-ui, sans-serif; max-width: 40rem;
+             margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }}
+      code {{ background: rgba(127, 127, 127, .15); padding: .35rem .6rem;
+             border-radius: .35rem; font-size: 1.05rem;
+             word-break: break-all; display: inline-block; }}
+      .muted {{ opacity: .7; font-size: .9rem; }}
+    </style>
+  </head>
+  <body>
+    <h1>Slack app install {heading}</h1>
+    {body}
+    <p class="muted">This page is served by the Crewlet API for
+    <code>crewlet slack provision</code>. The code expires after 10
+    minutes and is useless without the app's client secret.</p>
+  </body>
+</html>
+"""
+
+
+async def slack_oauth_landing(request: Request) -> HTMLResponse:
+    """GET /webhooks/slack-oauth — OAuth install landing page.
+
+    Every provisioned Slack app has this as its OAuth redirect URL.
+    After the operator clicks Allow, Slack redirects here with a
+    temporary ``code`` (and ``state`` carrying the agent handle); the
+    page displays the code for pasting back into the waiting
+    ``crewlet slack provision`` prompt.  No engine, auth, or queue
+    involved — the code alone grants nothing without the client secret,
+    which only the provisioning CLI holds.
+    """
+    error = request.query_params.get("error", "")
+    code = request.query_params.get("code", "")
+    handle = request.query_params.get("state", "")
+    if error:
+        body = (
+            f"<p>Slack reported an error: <code>{html.escape(error)}</code></p>"
+            "<p>Close this tab and re-run the install from the CLI.</p>"
+        )
+        return HTMLResponse(
+            _SLACK_OAUTH_PAGE.format(heading="failed", body=body), status_code=400
+        )
+    if not code:
+        body = (
+            "<p>No <code>code</code> query parameter — open this page via the "
+            "authorize URL printed by <code>crewlet slack provision</code>.</p>"
+        )
+        return HTMLResponse(
+            _SLACK_OAUTH_PAGE.format(heading="", body=body), status_code=400
+        )
+    agent = f" for agent <strong>@{html.escape(handle)}</strong>" if handle else ""
+    body = (
+        f"<p>Approved{agent}. Paste this code into the waiting "
+        "<code>crewlet slack provision</code> prompt:</p>"
+        f"<p><code>{html.escape(code)}</code></p>"
+    )
+    logger.info("slack_oauth_code_displayed", handle=handle)
+    return HTMLResponse(_SLACK_OAUTH_PAGE.format(heading="approved", body=body))
+
+
+def _verify_github_signature(
+    body_raw: bytes, secret: str, signature_header: str
+) -> bool:
+    """Verify an HMAC-SHA256 ``sha256=<hex>`` signature header."""
+    if not signature_header.startswith("sha256="):
+        return False
+    expected = (
+        "sha256="
+        + hmac.new(secret.encode("utf-8"), body_raw, hashlib.sha256).hexdigest()
+    )
+    return hmac.compare_digest(expected, signature_header)
+
+
+_OTLP_SIGNALS = frozenset({"traces", "metrics", "logs"})
+
+
+async def sandbox_otel(request: Request) -> JSONResponse:
+    """POST /otlp/{token}/v1/{signal} — engine-fronted OTLP receiver.
+
+    The in-sandbox coding agent exports here (token in the path, no auth
+    header). We validate the per-run token and forward the payload to the
+    real backend with upstream auth added engine-side, so the backend
+    credential never enters the sandbox.
+    """
+    receiver = getattr(request.app.state, "sandbox_otel_receiver", None)
+    if receiver is None:
+        return JSONResponse({"error": "otel receiver not configured"}, status_code=503)
+
+    signal = request.path_params.get("signal", "")
+    if signal not in _OTLP_SIGNALS:
+        return JSONResponse({"error": "unknown signal"}, status_code=404)
+
+    token = request.path_params.get("token", "")
+    if receiver.tokens.validate(token) is None:
+        logger.warning("sandbox_otel_token_invalid", signal=signal)
+        return JSONResponse({"error": "invalid or expired token"}, status_code=401)
+
+    body = await request.body()
+    await receiver.forward(signal, body, request.headers.get("content-type", ""))
+    return JSONResponse({"status": "ok"})
+
+
+async def github_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/github — publish to EventQueue."""
+    body_raw = await request.body()
+
+    webhook_secret: str | None = getattr(
+        request.app.state, "github_webhook_secret", None
+    )
+    if not webhook_secret:
+        logger.error("github_webhook_no_secret_configured")
+        return JSONResponse(
+            {"error": "webhook signature verification not configured"},
+            status_code=500,
+        )
+    signature = request.headers.get("x-hub-signature-256", "")
+    if not signature or not _verify_github_signature(
+        body_raw, webhook_secret, signature
+    ):
+        logger.warning("github_webhook_signature_invalid")
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    gh_event = request.headers.get("x-github-event", "unknown")
+
+    dropped = _webhook_unconfigured_response(
+        request, source="github", event_type=gh_event
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.github",
+        attributes={"webhook.source": "github", "github.event": gh_event},
+    ):
+        logger.info("github_webhook_received", github_event=gh_event)
+        github_summary = _build_github_summary(gh_event, body_data)
+        await _log_event(
+            request,
+            f"webhook:{gh_event}",
+            "github",
+            payload=body_data,
+            summary=github_summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="github",
+                payload={
+                    "body": body_data,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})
+
+
+_GITLAB_SIGNATURE_TOLERANCE_SECONDS = 300
+
+
+def _verify_gitlab_signature(
+    body_raw: bytes,
+    signing_secret: str,
+    webhook_id: str,
+    webhook_timestamp: str,
+    signature_header: str,
+) -> bool:
+    """Verify a GitLab 19.1+ Standard-Webhooks signature.
+
+    GitLab signs ``{webhook-id}.{webhook-timestamp}.{body}`` with
+    HMAC-SHA256 keyed on the base64 payload of a ``whsec_…`` secret and
+    sends the base64 signature(s) in the ``webhook-signature`` header as
+    space-separated ``v1,<sig>`` tokens. The timestamp is checked against
+    a ±5 min window to bound replay.
+    """
+    if not (webhook_id and webhook_timestamp and signature_header):
+        return False
+    try:
+        ts = int(webhook_timestamp)
+    except (TypeError, ValueError):
+        return False
+    now = int(datetime.now(UTC).timestamp())
+    if abs(now - ts) > _GITLAB_SIGNATURE_TOLERANCE_SECONDS:
+        logger.warning("gitlab_webhook_timestamp_out_of_window", timestamp=ts)
+        return False
+
+    key = signing_secret
+    if key.startswith("whsec_"):
+        try:
+            key_bytes = base64.b64decode(key[len("whsec_") :])
+        except (ValueError, TypeError):
+            key_bytes = key.encode("utf-8")
+    else:
+        key_bytes = key.encode("utf-8")
+
+    signed = f"{webhook_id}.{webhook_timestamp}.".encode() + body_raw
+    expected = base64.b64encode(
+        hmac.new(key_bytes, signed, hashlib.sha256).digest()
+    ).decode()
+    for token in signature_header.split():
+        _, _, sig = token.partition(",")
+        if sig and hmac.compare_digest(sig, expected):
+            return True
+    return False
+
+
+async def gitlab_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/gitlab — verify then publish to EventQueue.
+
+    Verification is the GitLab 19.1+ signing token only: the
+    ``webhook-signature`` HMAC over ``{webhook-id}.{webhook-timestamp}.
+    {body}`` must match the configured ``signing_secret``.
+    """
+    body_raw = await request.body()
+
+    signing_secret: str | None = getattr(
+        request.app.state, "gitlab_signing_secret", None
+    )
+    if not signing_secret:
+        logger.error("gitlab_webhook_no_secret_configured")
+        return JSONResponse(
+            {"error": "webhook verification not configured"},
+            status_code=500,
+        )
+
+    verified = _verify_gitlab_signature(
+        body_raw,
+        signing_secret,
+        request.headers.get("webhook-id", ""),
+        request.headers.get("webhook-timestamp", ""),
+        request.headers.get("webhook-signature", ""),
+    )
+    if not verified:
+        logger.warning("gitlab_webhook_verification_failed")
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    gl_event = request.headers.get("x-gitlab-event", "unknown")
+
+    dropped = _webhook_unconfigured_response(
+        request, source="gitlab", event_type=gl_event
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.gitlab",
+        attributes={"webhook.source": "gitlab", "gitlab.event": gl_event},
+    ):
+        logger.info("gitlab_webhook_received", gitlab_event=gl_event)
+        gitlab_summary = _build_gitlab_summary(gl_event, body_data)
+        await _log_event(
+            request,
+            f"webhook:{gl_event}",
+            "gitlab",
+            payload=body_data,
+            summary=gitlab_summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="gitlab",
+                payload={
+                    "body": body_data,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})
+
+
+# Plane's scheme is a fixed 64-char SHA-256 hexdigest — anything else
+# is a forgery by shape.
+_PLANE_SIGNATURE_RE = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _verify_plane_signature(
+    body_raw: bytes, webhook_secret: str, signature: str
+) -> bool:
+    """X-Plane-Signature = HMAC-SHA256 hexdigest of the raw body keyed
+    with the webhook secret (CE ``bgtasks/webhook_task.py`` scheme).
+
+    The shape prefilter keeps the function total: ``hmac.compare_digest``
+    raises ``TypeError`` on non-ASCII ``str`` operands, and Starlette
+    decodes raw header bytes with latin-1 — without the prefilter a
+    single ``0xFF`` byte in the header would turn an unauthenticated
+    request into a 500 instead of a 401.
+    """
+    if _PLANE_SIGNATURE_RE.fullmatch(signature) is None:
+        return False
+    expected = hmac.new(
+        webhook_secret.encode("utf-8"), body_raw, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+async def plane_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/plane — verify then publish to EventQueue.
+
+    Verification is the CE webhook scheme: the ``X-Plane-Signature``
+    header carries the HMAC-SHA256 hexdigest of the raw body keyed with
+    the configured webhook secret.  The unconfigured drop runs AFTER
+    verification so forgeries never earn a 200 while Plane's five-retry
+    auto-disable counter is still protected for genuine deliveries.
+    """
+    body_raw = await request.body()
+
+    webhook_secret: str | None = getattr(
+        request.app.state, "plane_webhook_secret", None
+    )
+    if not webhook_secret:
+        logger.error("plane_webhook_no_secret_configured")
+        return JSONResponse(
+            {"error": "webhook verification not configured"},
+            status_code=500,
+        )
+    signature = request.headers.get("x-plane-signature", "")
+    if not signature or not _verify_plane_signature(
+        body_raw, webhook_secret, signature
+    ):
+        logger.warning("plane_webhook_signature_invalid")
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    pl_event = request.headers.get("x-plane-event", "") or body_data.get(
+        "event", "unknown"
+    )
+
+    dropped = _webhook_unconfigured_response(
+        request, source="plane", event_type=str(pl_event)
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.plane",
+        attributes={"webhook.source": "plane", "plane.event": pl_event},
+    ):
+        logger.info("plane_webhook_received", plane_event=pl_event)
+        plane_summary = _build_plane_summary(body_data)
+        # The dashboard event type carries the action so create / update /
+        # delete stay distinguishable in the feed filter.
+        action = body_data.get("action", "")
+        event_label = (
+            f"webhook:{pl_event}.{action}" if action else f"webhook:{pl_event}"
+        )
+        await _log_event(
+            request,
+            event_label,
+            "plane",
+            payload=body_data,
+            summary=plane_summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="plane",
+                payload={
+                    "body": body_data,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})
+
+
+async def confluence_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/confluence — publish to EventQueue."""
+    body_raw = await request.body()
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    event_type = (
+        body_data.get("event")
+        or body_data.get("webhookEvent")
+        or body_data.get("eventType", "unknown")
+    )
+
+    dropped = _webhook_unconfigured_response(
+        request, source="confluence", event_type=str(event_type)
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.confluence", attributes={"webhook.source": "confluence"}
+    ):
+        logger.info(
+            "confluence_webhook_received",
+            webhook_event=event_type,
+            page_title=body_data.get("page", {}).get("title", ""),
+        )
+        confluence_summary = _build_confluence_summary(body_data)
+        await _log_event(
+            request,
+            f"webhook:{event_type}",
+            "confluence",
+            payload=body_data,
+            summary=confluence_summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="confluence",
+                payload={
+                    "body": body_data,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Forge Remote webhook (Cloud)
+# ---------------------------------------------------------------------------
+
+# Map Forge event names → (source, legacy_event_type).
+_FORGE_EVENT_MAP: dict[str, tuple[str, str]] = {
+    "avi:jira:created:issue": ("jira", "jira:issue_created"),
+    "avi:jira:updated:issue": ("jira", "jira:issue_updated"),
+    "avi:jira:deleted:issue": ("jira", "jira:issue_deleted"),
+    "avi:jira:commented:issue": ("jira", "comment_created"),
+    "avi:jira:deleted:comment": ("jira", "comment_deleted"),
+    "avi:confluence:created:page": ("confluence", "page_created"),
+    "avi:confluence:updated:page": ("confluence", "page_updated"),
+    "avi:confluence:trashed:page": ("confluence", "page_trashed"),
+    "avi:confluence:deleted:page": ("confluence", "page_removed"),
+    "avi:confluence:created:comment": ("confluence", "comment_created"),
+    "avi:confluence:updated:comment": ("confluence", "comment_updated"),
+    "avi:confluence:created:blogpost": ("confluence", "blog_created"),
+    "avi:confluence:updated:blogpost": ("confluence", "blog_updated"),
+}
+
+
+def _transform_forge_payload(
+    forge_event: str, raw_payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Transform a Forge event payload into the format our transports expect.
+
+    Confluence event data lives in ``content``; Jira event data lives at
+    the top level.  We normalize into the body format the existing native
+    transports parse.
+    """
+    source, legacy_event = _FORGE_EVENT_MAP.get(forge_event, ("", ""))
+    atlassian_id = raw_payload.get("atlassianId", "")
+
+    if source == "confluence":
+        content = raw_payload.get("content", {})
+        body: dict[str, Any] = {}
+        content_type = content.get("type", "")
+        if content_type == "comment":
+            body["comment"] = content
+            container = content.get("container", {})
+            if container:
+                body["page"] = container
+            space = content.get("space") or container.get("space")
+            if space and "page" in body and "space" not in body["page"]:
+                body["page"]["space"] = space
+        else:
+            body["page"] = content
+        body["event"] = legacy_event
+    elif source == "jira":
+        body = {
+            k: v
+            for k, v in raw_payload.items()
+            if k
+            not in (
+                "eventType",
+                "atlassianId",
+                "selfGenerated",
+                "suppressNotifications",
+                "encryptedData",
+                "permissions",
+                "eventCreatedDate",
+            )
+        }
+        body["webhookEvent"] = legacy_event
+    else:
+        body = {}
+
+    if "userAccountId" not in body and atlassian_id:
+        body["userAccountId"] = atlassian_id
+    if source == "jira" and atlassian_id:
+        if not isinstance(body.get("user"), dict):
+            body["user"] = {"accountId": atlassian_id}
+        else:
+            body["user"].setdefault("accountId", atlassian_id)
+        comment = body.get("comment")
+        if isinstance(comment, dict):
+            author = comment.get("author")
+            if not isinstance(author, dict):
+                comment["author"] = {"accountId": atlassian_id}
+            else:
+                author.setdefault("accountId", atlassian_id)
+
+    if "timestamp" not in body:
+        event_date = raw_payload.get("eventCreatedDate", "")
+        if event_date:
+            try:
+                dt = datetime.fromisoformat(event_date.replace("Z", "+00:00"))
+                body["timestamp"] = int(dt.timestamp() * 1000)
+            except (ValueError, AttributeError):
+                pass
+        if "timestamp" not in body:
+            body["timestamp"] = int(datetime.now(UTC).timestamp() * 1000)
+
+    return body
+
+
+def _build_forge_summary(source: str, legacy_event: str, body: dict[str, Any]) -> str:
+    """Build a human-readable summary for a Forge webhook event."""
+    parts = ["Forge"]
+    if source == "confluence":
+        page = body.get("page", {})
+        comment = body.get("comment", {})
+        space_key = page.get("space", {}).get("key", "")
+        title = page.get("title", "")
+        if space_key:
+            parts.append(f"[{space_key}]")
+        parts.append(legacy_event.replace("_", " "))
+        if comment:
+            parts.append(f'on "{title[:50]}"' if title else "")
+        elif title:
+            parts.append(f'"{title[:50]}"')
+    elif source == "jira":
+        issue = body.get("issue", {})
+        issue_key = issue.get("key", "")
+        summary = issue.get("fields", {}).get("summary", "")
+        parts.append(legacy_event.replace("jira:", "").replace("_", " "))
+        if issue_key:
+            parts.append(issue_key)
+        if summary:
+            parts.append(f'"{summary[:50]}"')
+    else:
+        parts.append(legacy_event)
+    return " ".join(p for p in parts if p)
+
+
+async def forge_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/forge — receive FIT-verified events from the Forge app."""
+    # Read the body before FIT verification: verify_fit can block on a
+    # network JWKS fetch while the sender's delivery deadline runs out,
+    # and an aborted sender surfaces as ClientDisconnect at the first
+    # body read — drain the socket while the sender is still connected.
+    body_raw = await request.body()
+
+    forge_app_id = getattr(request.app.state, "forge_app_id", "")
+    if not forge_app_id:
+        return JSONResponse({"error": "forge_app_id not configured"}, status_code=500)
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    from crewlet.api.forge_fit import verify_fit
+
+    try:
+        fit_payload = await verify_fit(auth[7:], forge_app_id)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    if fit_payload is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    forge_event = body_data.get("eventType", "")
+    atlassian_id = body_data.get("atlassianId", "")
+    self_generated = body_data.get("selfGenerated", False)
+
+    if self_generated:
+        logger.debug("forge_self_generated_skipped", forge_event=forge_event)
+        return JSONResponse({"status": "ignored", "reason": "selfGenerated"})
+
+    dropped = _webhook_unconfigured_response(
+        request, source="forge", event_type=forge_event
+    )
+    if dropped is not None:
+        return dropped
+
+    mapping = _FORGE_EVENT_MAP.get(forge_event)
+    if not mapping:
+        logger.warning(
+            "forge_unknown_event",
+            forge_event=forge_event,
+            payload_keys=list(body_data.keys()),
+        )
+        return JSONResponse({"status": "ignored", "event": forge_event})
+
+    source, legacy_event = mapping
+
+    with tracer.start_as_current_span(
+        "webhook.forge",
+        attributes={
+            "webhook.source": source,
+            "forge.event": forge_event,
+            "forge.atlassian_id": atlassian_id,
+        },
+    ):
+        logger.info(
+            "forge_webhook_received",
+            forge_event=forge_event,
+            source=source,
+            atlassian_id=atlassian_id,
+        )
+
+        transformed = _transform_forge_payload(forge_event, body_data)
+        summary = _build_forge_summary(source, legacy_event, transformed)
+        await _log_event(
+            request,
+            f"forge:{forge_event}",
+            source,
+            payload=body_data,
+            summary=summary,
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source=source,
+                payload={
+                    "body": transformed,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                    "forge_atlassian_id": atlassian_id,
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})

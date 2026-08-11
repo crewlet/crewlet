@@ -1,0 +1,190 @@
+/*
+ * Design tokens — the crewlet.io panel language, applied to the dashboard.
+ *
+ * The surface ramp, borders, text ramp, glass, shadows, radii, easings and
+ * type stack are the same values the marketing site ships (its `landing-card`
+ * / `glass-btn` recipes and the `:root` / `[data-theme=dark]` token blocks),
+ * so a panel here reads as the same object as a panel there: a near-page-tone
+ * fill, a hairline border doing the separation work, a 1px settle shadow, and
+ * a 2px lift on hover.
+ *
+ * Themed via `[data-theme]` on <html>.  Every component reads these variables,
+ * so a theme is just a different set of values here.
+ *
+ * ---------------------------------------------------------------------------
+ * Categorical hues
+ * ---------------------------------------------------------------------------
+ * The hue *families* (angle + chroma) come from the site's brand tokens —
+ * `--ok`, `--warn`, `--tg-db`, `--tg-eng`, `--tg-growth`, `--tg-sup` and two
+ * derived neighbours.  Only lightness is re-stepped per theme, because the
+ * site's own steps are tuned for occasional accent use on a marketing page,
+ * not for a dense operational surface where a phase bar stacks six of them
+ * edge to edge and every badge sets the hue as text.
+ *
+ * The steps below are the ones that pass all of:
+ *   - normal-vision separation, worst adjacent pair ΔE 17.9 light / 17.8 dark
+ *     (gate: 15) — measured on the two orders the dashboard actually renders
+ *     side by side: the canonical phase order (`PHASE_ORDER` in state.js) and
+ *     the event-category order (`EVENT_CATEGORIES`);
+ *   - protan/deutan separation, worst adjacent pair ΔE 15.8 / 15.6 (gate: 8);
+ *   - mark contrast vs the surface, min 3.29:1 / 3.70:1 (gate: 3:1).
+ *
+ * Each family ships two steps:
+ *   --<hue>       the MARK step  — bars, dots, stack segments, heat fills
+ *   --<hue>-ink   the TEXT step  — badge labels, links, tinted type (≥5:1)
+ * Soft fills are derived at use site with `color-mix(… 10%, transparent)`,
+ * matching the site's 8%-tint status chips.
+ *
+ * `--red` is a reserved STATUS hue (failed / error / destructive) and is not
+ * part of the categorical set — the site leaves its own `--err` slot unused,
+ * and an ops dashboard needs red to keep meaning "this broke".
+ */
+
+:root {
+  /* ---- Typography ---- */
+  --font-sans: "Instrument Sans", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue",
+    sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  /* ---- Geometry ---- */
+  --radius: 13px; /* panels — the site's landing-card radius */
+  --radius-sm: 8px; /* nested blocks inside a panel */
+  --radius-ctl: 12px; /* buttons + glass controls */
+  --radius-lg: 16px;
+  --sidebar-w: 264px;
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snappy: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur: 0.15s;
+  --dur-slow: 0.2s;
+
+  /* ---- Z layers ---- */
+  --z-header: 20;
+  --z-toast: 80;
+}
+
+/* ---- Dark (default) ---- */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #0b0b0b;
+  --bg-sidebar: #101010;
+  --bg-card: #1d1d1d;
+  --bg-card-2: #242424;
+  --bg-hover: #242424;
+  --bg-active: #2b2b2b;
+  --bg-inset: #151515;
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.084);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Text */
+  --text: rgba(255, 255, 255, 0.87);
+  --text-secondary: rgba(255, 255, 255, 0.57);
+  --text-muted: rgba(255, 255, 255, 0.4);
+  --text-dim: rgba(255, 255, 255, 0.26);
+  --heading: #f2f2f2;
+  --on-accent: #0b0b0b;
+
+  /* Accent — a pale fill plus its readable ink partner */
+  --accent: #91b7ff;
+  --accent-hover: #6b9cfb;
+  --accent-soft: rgba(145, 183, 255, 0.15);
+  --accent-ink: #acd3f2;
+
+  /* Glass (topbar, icon buttons, segmented controls) */
+  --glass: rgba(95, 95, 95, 0.3);
+  --glass-hover: rgba(95, 95, 95, 0.45);
+
+  /* Elevation */
+  --panel-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  --card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  --lift-shadow: 0 4px 16px rgba(0, 0, 0, 0.32);
+
+  /* Categorical hues — mark step / text step */
+  --green: #4da41a;
+  --green-ink: #66be3c;
+  --blue: #4e82e7;
+  --blue-ink: #72a3ff;
+  --amber: #c18700;
+  --amber-ink: #d79700;
+  --purple: #815ff4;
+  --purple-ink: #a392ff;
+  --cyan: #4795c5;
+  --cyan-ink: #61aedf;
+  --orange: #cd6a2d;
+  --orange-ink: #ec864b;
+  --pink: #ba4e94;
+  --pink-ink: #e877be;
+  --brown: #c3814f;
+  --brown-ink: #d79361;
+
+  /* Reserved status hue */
+  --red: #de4d4c;
+  --red-ink: #ff716c;
+}
+
+/* ---- Light ---- */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f1f1f1;
+  --bg-sidebar: #ededed;
+  --bg-card: #f4f4f4;
+  --bg-card-2: #fafafa;
+  --bg-hover: #eaeaea;
+  --bg-active: #e3e3e3;
+  --bg-inset: #e9e9e9;
+
+  --border-subtle: rgba(0, 0, 0, 0.05);
+  --border: rgba(0, 0, 0, 0.07);
+  --border-strong: rgba(0, 0, 0, 0.14);
+
+  --text: rgba(0, 0, 0, 0.8);
+  --text-secondary: rgba(0, 0, 0, 0.57);
+  --text-muted: rgba(0, 0, 0, 0.4);
+  --text-dim: rgba(0, 0, 0, 0.26);
+  --heading: #030213;
+  --on-accent: #ffffff;
+
+  --accent: #c4e5ff;
+  --accent-hover: #7ec8ff;
+  --accent-soft: rgba(196, 229, 255, 0.35);
+  --accent-ink: #003155;
+
+  --glass: rgba(207, 207, 207, 0.3);
+  --glass-hover: rgba(207, 207, 207, 0.45);
+
+  --panel-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  --card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.02), 0 1px 2px rgba(0, 0, 0, 0.02),
+    0 4px 12px rgba(0, 0, 0, 0.03);
+  --lift-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+
+  --green: #419700;
+  --green-ink: #307600;
+  --blue: #4072d6;
+  --blue-ink: #2d5dbe;
+  --amber: #a87500;
+  --amber-ink: #835a00;
+  --purple: #7955ea;
+  --purple-ink: #663dd1;
+  --cyan: #2f7fae;
+  --cyan-ink: #136a98;
+  --orange: #bc5b19;
+  --orange-ink: #9e4600;
+  --pink: #ae4389;
+  --pink-ink: #9d337a;
+  --brown: #a96937;
+  --brown-ink: #8f511d;
+
+  --red: #c9383a;
+  --red-ink: #b42029;
+}

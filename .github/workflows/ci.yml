@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    # Deliberately NOT matrixed over interpreters. Ruff is a self-contained
+    # binary that reads the Python it targets from `tool.ruff.target-version`
+    # in pyproject.toml, not from the interpreter running it, so a second job
+    # would re-run the same analysis and reach the same answer.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Ruff check
+        run: ruff check src/ tests/
+      - name: Ruff format check
+        run: ruff format --check src/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every interpreter the package advertises a classifier for. Adding one
+        # here and to the classifiers in pyproject.toml is the same change.
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: pip install -e ".[dev,all]"
+      - name: Run tests
+        run: python -m pytest
+
+  package:
+    # The same build the release workflow runs, on every pull request. Packaging
+    # breaks are otherwise invisible until the tag that publishes them, and a
+    # bad upload to PyPI cannot be replaced — only yanked.
+    #
+    # Built once, on one interpreter, and handed to `package-install` as an
+    # artifact. The wheel is `py3-none-any`, so rebuilding it per interpreter
+    # would produce the same bytes — and would mean each install check verified
+    # a *different* build instead of the one artifact a release would ship.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+      - name: Build sdist and wheel
+        # Builds the wheel from the sdist, so anything missing from the sdist
+        # fails here rather than shipping a wheel nobody can rebuild.
+        run: python -m build
+      - name: Check distribution metadata
+        run: python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-distributions
+          path: dist/
+          if-no-files-found: error
+
+  package-install:
+    # Install the built wheel on every interpreter the package claims to
+    # support. The `test` job covers an editable install of `[dev,all]` from the
+    # source tree; this covers what people actually get from PyPI — the wheel,
+    # with core dependencies only — resolved fresh on each interpreter.
+    needs: package
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Kept identical to the `test` job's matrix and to the Python
+        # classifiers in pyproject.toml; tests/test_packaging fails the build
+        # if the three ever disagree.
+        python-version: ["3.12", "3.13"]
+    steps:
+      # No checkout on purpose: nothing here may resolve against the source
+      # tree, or `import crewlet` could pass without the wheel providing it.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-distributions
+          path: dist/
+      - name: Install the wheel into a clean environment and smoke-test it
+        # Proves the console script runs and the non-Python package data
+        # (dashboard assets, SQL migrations, py.typed) shipped — the test suite
+        # runs against the source tree and cannot catch either.
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --upgrade pip
+          /tmp/smoke/bin/python -m pip install dist/*.whl
+          /tmp/smoke/bin/crewlet --version
+          /tmp/smoke/bin/python - <<'PY'
+          import pathlib
+
+          import crewlet
+
+          root = pathlib.Path(crewlet.__file__).parent
+          missing = [
+              str(p)
+              for p in ("static/dashboard/index.html", "py.typed")
+              if not (root / p).exists()
+          ]
+          if not list((root / "db/migrations").glob("*.sql")):
+              missing.append("db/migrations/*.sql")
+          if missing:
+              raise SystemExit(f"Wheel is missing package data: {missing}")
+          print("Wheel package data is complete.")
+          PY

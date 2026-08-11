@@ -1,0 +1,29 @@
+# Shapes the release notes GitHub generates for a tag.
+#
+# `.github/workflows/release.yml` runs `gh release create --generate-notes`, so
+# the body of every GitHub Release is the list of pull requests merged since the
+# previous tag. Without this file that list is flat and — because Dependabot
+# opens most of the pull requests in a quiet week — dominated by dependency
+# bumps. The categories below sort it into something a reader can skim.
+#
+# Labels are matched against the pull request's labels, and each pull request
+# lands in the first category that matches it. `dependencies` is applied by
+# Dependabot itself, so that category needs no convention maintained by hand.
+# The catch-all `*` collects everything else, which means a pull request with no
+# labels is never silently dropped from the notes; it excludes `dependencies` so
+# that the substantive changes come first and the bumps sort to the bottom.
+#
+# These generated notes are the only record of what a release contains, which
+# is why a pull request title has to read as a release note — see
+# CONTRIBUTING.md and RELEASING.md.
+changelog:
+  categories:
+    - title: What's Changed
+      labels:
+        - "*"
+      exclude:
+        labels:
+          - dependencies
+    - title: Dependencies
+      labels:
+        - dependencies

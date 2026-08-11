@@ -1,0 +1,209 @@
+name: Release
+
+# Publishes crewlet to PyPI, then creates the GitHub Release.
+#
+# A release is one command: `git tag v0.2.0 && git push origin v0.2.0`.
+# The tag is the trigger, but `src/crewlet/__init__.py` is the source of truth —
+# the `verify` step below refuses to build when the two disagree, so a mistyped
+# tag fails before anything is uploaded rather than after.
+#
+# Pushing the tag is the whole release: the `github-release` job then publishes
+# a GitHub Release for it automatically, with GitHub's own generated notes and
+# the sdist + wheel attached. It runs after the PyPI upload on purpose, so a
+# Release never points at a version the index never accepted.
+#
+# `workflow_dispatch` runs the same build and checks and publishes to TestPyPI
+# instead. Use it to rehearse a release, or after changing anything in this file
+# or in the packaging config, since most of what can go wrong here (a rejected
+# classifier, a broken long description, a missing trusted publisher) only shows
+# up at upload time.
+#
+# Authentication is PyPI Trusted Publishing (OpenID Connect): no API token
+# exists anywhere in this repository. PyPI is configured to trust
+# `crewlet/crewlet` + this workflow filename + the named environment, and mints
+# a short-lived token per run. That binding is why the `environment:` keys below
+# must not be renamed casually — see RELEASING.md for the one-time setup,
+# including how to register it before the project exists on PyPI.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Least privilege by default; the two publish jobs and the release job opt into
+# exactly the one extra permission each needs.
+permissions:
+  contents: read
+
+# Never let two releases race to the same index.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify distributions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # These two steps shell out to scripts/release_metadata.py rather than
+      # inlining the logic, so tests/test_packaging exercises it on every pull
+      # request instead of it running for the first time on the tag that
+      # publishes.
+      - name: Read the package version
+        id: version
+        # Emits `version=` and `prerelease=` for the jobs below.
+        run: python scripts/release_metadata.py version >> "$GITHUB_OUTPUT"
+
+      - name: Verify the tag agrees with the package version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: python scripts/release_metadata.py verify --tag "${TAG}"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: Build sdist and wheel
+        # `build` builds the sdist, then builds the wheel *from that sdist*, so
+        # a file missing from the sdist fails here instead of shipping a wheel
+        # nobody can rebuild.
+        run: python -m build
+
+      - name: Check distribution metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Install the wheel into a clean environment and smoke-test it
+        # The wheel is what almost everyone installs, so prove the console
+        # script runs and the non-Python package data (dashboard assets, SQL
+        # migrations, py.typed) actually shipped — none of that is covered by
+        # the test suite, which runs against the source tree.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --upgrade pip
+          /tmp/smoke/bin/python -m pip install "dist/crewlet-${VERSION}-py3-none-any.whl"
+          REPORTED=$(/tmp/smoke/bin/crewlet --version)
+          if [ "${REPORTED}" != "crewlet ${VERSION}" ]; then
+            echo "Installed CLI reports '${REPORTED}', expected 'crewlet ${VERSION}'" >&2
+            exit 1
+          fi
+          /tmp/smoke/bin/python - <<'PY'
+          import pathlib
+
+          import crewlet
+
+          root = pathlib.Path(crewlet.__file__).parent
+          missing = [
+              str(p)
+              for p in ("static/dashboard/index.html", "py.typed")
+              if not (root / p).exists()
+          ]
+          if not list((root / "db/migrations").glob("*.sql")):
+              missing.append("db/migrations/*.sql")
+          if missing:
+              raise SystemExit(f"Wheel is missing package data: {missing}")
+          print("Wheel package data is complete.")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI (rehearsal)
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/crewlet
+    permissions:
+      # The only credential in play: an OIDC token minted for this run.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+      # Pinned to a release tag, not the action's `release/v1` branch.
+      # Dependabot can only offer an update for a ref it can read a version
+      # out of, so a branch pointer gets no pull requests at all — and this is
+      # the one action here that is handed an OIDC token good for publishing
+      # to PyPI. Pinned, its updates arrive as reviewable pull requests
+      # instead of moving under the workflow unannounced.
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI keeps old rehearsals around and a version can only be
+          # uploaded once; re-running a dry run should not fail the workflow.
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/crewlet
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+      # Same pin as the rehearsal above, for the same reason.
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        # No `skip-existing` here on purpose: re-publishing an existing version
+        # is a mistake worth failing on, not one worth swallowing.
+
+  github-release:
+    name: Create the GitHub Release
+    if: github.event_name == 'push'
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # No checkout: the body comes from GitHub, and the files come from the
+      # build job's artifact, so this job needs nothing from the source tree.
+      # `gh` therefore cannot infer the repository from a git remote — GH_REPO
+      # below is what tells it.
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          # A pre-release (v0.2.0rc1) or dev tag must be flagged, or GitHub
+          # calls whichever release is newest "Latest" — pointing the Releases
+          # page and the /releases/latest redirect at a version pip itself
+          # would not resolve without --pre.
+          flags=()
+          if [ "${PRERELEASE}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          # --generate-notes: GitHub writes the body from the pull requests
+          # merged since the previous tag, grouped by .github/release.yml.
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "v${VERSION}" \
+            --generate-notes \
+            --verify-tag "${flags[@]}"

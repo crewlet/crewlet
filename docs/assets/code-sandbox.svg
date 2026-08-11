@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+  <defs>
+    <linearGradient id="sandboxGrad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="80" y2="80">
+      <stop offset="0%" style="stop-color:#6a5cff"/>
+      <stop offset="100%" style="stop-color:#a055ff"/>
+    </linearGradient>
+  </defs>
+  <circle cx="40" cy="40" r="40" fill="#111"/>
+  <!-- Isolation boundary -->
+  <rect x="15" y="19" width="50" height="42" rx="9" stroke="url(#sandboxGrad)" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.4"/>
+  <!-- Terminal window -->
+  <rect x="23" y="27" width="34" height="26" rx="4" stroke="url(#sandboxGrad)" stroke-width="2"/>
+  <line x1="23" y1="34" x2="57" y2="34" stroke="url(#sandboxGrad)" stroke-width="1.5" opacity="0.6"/>
+  <circle cx="27.5" cy="30.5" r="1.2" fill="url(#sandboxGrad)" opacity="0.7"/>
+  <circle cx="32" cy="30.5" r="1.2" fill="url(#sandboxGrad)" opacity="0.5"/>
+  <!-- Shell prompt + cursor -->
+  <path d="M29 41L33 44.5L29 48" stroke="url(#sandboxGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="37" y1="48" x2="49" y2="48" stroke="url(#sandboxGrad)" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+</svg>

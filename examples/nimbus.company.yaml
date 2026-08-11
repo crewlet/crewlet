@@ -1,0 +1,1001 @@
+# yaml-language-server: $schema=../schema/company.schema.json
+# Nimbus — Cloud-native infrastructure control plane + open AI framework
+name: "Nimbus"
+mission: "Turn any hardware into cloud-native infrastructure — and give AI teams one open framework to build on top of it"
+vision: >
+  Phase 1 (shipped): a cloud-native control plane that turns bare metal, on-prem, cloud, and edge
+  hardware into seamless Kubernetes clusters ready to serve AI/ML pipelines and applications at
+  enterprise scale.
+  Phase 2 (in progress): an open, Python-first framework — analogous in spirit to Ray — that runs
+  on Nimbus clusters and unifies how teams develop, schedule, and serve distributed AI workloads
+  (training, fine-tuning, batch inference, online serving). The framework owns the developer surface
+  (SDK, CLI, examples, docs); the control plane (nimbuscore) owns the cluster surface (provisioning,
+  multi-region, GPU scheduling primitives). The two are designed together.
+
+policies:
+  - "Communicate decisions in writing"
+  - "Capture personal-context facts you need to recall later (delegation context, stakeholder preferences, ongoing operational state) via `reflect_and_persist` — pass `ttl_days` for facts that age out naturally (e.g. delegation context lasts the MR lifetime)"
+  - "Document team-shared knowledge (decisions, conventions, runbooks) as Plane pages so other agents can read it — `reflect_and_persist` writes are personal-only"
+  - "Use Plane work items to manage all product backlog items — never track tasks only in memory"
+  - "Use Plane pages to document architecture decisions, runbooks, and meeting notes — search before creating new docs"
+  - "Each engineering role owns specific projects (see the `Repo Ownership` page in the LEAD Plane project); do not push to projects you do not own without an explicit handoff from their owner"
+  - "The Phase-2 AI framework is developed in a dedicated project owned by AI Systems Engineering; the control plane (nimbuscore, nimbusk0s) stays focused on cluster-level primitives that the framework depends on"
+
+# Company-wide token budget — a single hard cap on total LLM tokens across
+# EVERY agent (CEO, CTO, PM, DevRel, the three engineers, their sub-agents,
+# and the learning/aux passes).  The engine's BudgetManager charges this
+# org budget on every LLM completion BEFORE the per-agent budget; the first
+# completion that would push the running total past the cap stops that turn
+# immediately and emits a ``BudgetExhausted`` event (budget_type="org").
+# 0 (or omitting the field) means unlimited.  No per-agent ``token_budget``
+# is set below, so this 10M ceiling is the only budget in force and the
+# whole company shares it.
+#
+# NOTE: the counter lives in memory and is NOT rehydrated from the
+# ``token_usage`` ledger on boot — it resets to 0 every time the engine
+# restarts.  So this is a per-engine-run ceiling, not a cumulative
+# lifetime-of-the-company total.  See docs/guides/deployment.md § Token
+# Budgets and docs/getting-started/quickstart.md § Token Budgets.
+token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
+
+# Skill variables — generic name->value facts substituted into tool-skill
+# text wherever a skill writes ${name}.  The bundled platform-mentions
+# skill references these so agents share human-clickable links of the
+# shape ${plane_base_url}/${plane_workspace_slug}/projects/{project-uuid}/…
+# — note the project segment is the project UUID the Plane tools return,
+# never the `ENG`-style identifier.  Values support ${ENV}.
+# See docs/concepts/tool-skills.md#skill-variables.
+# ${PLANE_URL} everywhere a site references the instance: the local
+# bootstrap writes it to .env.plane (a remote host sets it to
+# PLANE_PUBLIC_URL, e.g. http://<server-ip>:8091), so this one env var
+# points the whole config — no copy-and-sed step.
+skill_variables:
+  plane_base_url: "${PLANE_URL}"
+  plane_workspace_slug: "nimbus"
+
+providers:
+  llm:
+    # Any OpenAI-compatible endpoint works here: OpenAI itself, OpenRouter,
+    # Together, a local vLLM or LiteLLM gateway, … — set LLM_BASE_URL to the
+    # provider's /v1/ endpoint and LLM_MODEL to the model name it serves.
+    #
+    # Prefer Anthropic?  Swap the default for:
+    #   default:
+    #     type: anthropic
+    #     model: claude-sonnet-5
+    #     api_keys:
+    #       - "${ANTHROPIC_API_KEY}"
+    default:
+      type: openai-compatible
+      model: "${LLM_MODEL}"
+      base_url: "${LLM_BASE_URL}"
+      timeout_seconds: 300          # large-model turns can be slow — raise the per-call HTTP timeout (default 120)
+      api_keys:
+        - "${LLM_API_KEY}"
+  embeddings:
+    type: openai
+    model: text-embedding-3-small
+    api_key: "${OPENAI_API_KEY}"
+    dimensions: 1536
+  # Code-runtime sandbox — lets a sandbox-enabled role run its Execute
+  # phase as a coding agent (Claude Code / OpenCode) inside an isolated
+  # E2B sandbox that implements the work and opens a merge request under
+  # the agent's OWN GitLab identity (the service-account PAT each seat
+  # declares as GITLAB_TOKEN in role.sandbox.env below — same PAT as its
+  # mcp_env.gitlab GITLAB_TOKEN).  The per-role gate is
+  # role.sandbox (enabled on the three Engineering seats below); this
+  # block is the engine-wide provider.  See
+  # docs/concepts/code-sandbox.md and docs/integrations/gitlab.md.
+  #
+  # default_coding_agent: opencode is deliberate.  Nimbus's only LLM
+  # provider is the openai-compatible entry above, and OpenCode is
+  # provider-agnostic — it drives the coding agent with that SAME
+  # ${LLM_API_KEY} provider, so the sandbox needs NO extra secret.  Claude
+  # Code only speaks the Anthropic API, so choosing it here would require
+  # adding an 'anthropic' providers.llm entry and pointing each engineer's
+  # role.llm_sandbox at it (otherwise the sandbox run fails credential
+  # validation — SandboxCredentialError — at launch).
+  sandbox:
+    # Needs the e2b SDK: `pip install 'crewlet[sandbox]'` (or, from a
+    # checkout, `uv sync --extra sandbox`). Don't want sandboxing? Set
+    # ``type: none`` here and the engineers fall back to native Execute.
+    #
+    # Running on E2B cloud: export E2B_API_KEY (from https://e2b.dev/dashboard)
+    # — the SDK sends it as an X-API-KEY header on every call. With no
+    # ``domain`` set, the SDK talks to e2b.dev cloud; make sure E2B_DOMAIN is
+    # NOT exported in the environment (the SDK reads it directly, so a leftover
+    # value would route to a self-hosted cluster instead of cloud). To run
+    # against self-hosted / local E2B instead, add ``domain: "${E2B_DOMAIN}"``
+    # below — that cluster still needs its own E2B_API_KEY. (``type: fake`` is
+    # in-process stubs for tests — it does NOT run real MCP/coding.)
+    type: e2b                                    # e2b | fake | none (omit = disabled)
+    api_key: "${E2B_API_KEY}"                    # REQUIRED — from e2b.dev (sent as X-API-KEY header)
+    default_coding_agent: opencode               # provider-agnostic → reuses the openai-compatible LLM above
+    default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
+    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); E2B holds a paused box forever and bills for the snapshot, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed.
+    # NB: vCPU / RAM / disk are NOT set here — they belong to the sandbox
+    # TEMPLATE, fixed when it is built (`e2b template build --cpu-count N
+    # --memory-mb M`); the sandbox-create API takes no resource arguments.
+    # For bigger boxes, build your own template and name it in `template:`.
+    # ENGINE-WIDE setup steps — applied to every sandbox-enabled seat's box
+    # before each role's own role.sandbox.setup extras.  Put anything shared
+    # by ALL seats here exactly once; keep stack-specific provisioning
+    # (Go/Node/Python below) on the owning role.  The engine ships NO steps
+    # of its own — provisioning is entirely this config.
+    setup:
+      # git-auth: make the seat's own GitLab PAT (declared per seat as
+      # GITLAB_TOKEN in role.sandbox.env below, so MRs land under the
+      # agent's identity) work for HEADLESS git.  Without this a bare
+      # `git clone https://gitlab.com/...` dies with "could not read
+      # Username" — git has no way to supply the token on its own.  The
+      # helper is SCOPED to gitlab.com at both layers (the credential
+      # config key AND a host check in the script) so the PAT can never be
+      # offered to a foreign host, e.g. a malicious submodule URL; without
+      # a token it stays silent so public clones fall through to anonymous.
+      # For PAT basic-auth GitLab ignores the username, so `oauth2` is just
+      # a conventional placeholder.  The `brief` below is what tells the
+      # coding agent about all of this.
+      - name: git-auth
+        # Expects $GITLAB_TOKEN in the run env — each seat declares it in
+        # role.sandbox.env below, pointing at its OWN PAT (so MRs land
+        # under the agent's identity). Setup commands also see the run env,
+        # which is how the identity lines below read the engine-provided
+        # $CREWLET_AGENT_HANDLE / $CREWLET_AGENT_EMAIL facts.
+        files:
+          /usr/local/bin/git-credential-crewlet: |
+            #!/bin/sh
+            # Supply this seat's GitLab token for gitlab.com credential
+            # requests ONLY. Reads $GITLAB_TOKEN from the environment
+            # (never persisted to disk).
+            [ "$1" = "get" ] || exit 0
+            [ -n "$GITLAB_TOKEN" ] || exit 0
+            ok=""
+            while IFS= read -r line; do
+                [ -z "$line" ] && break
+                [ "$line" = "host=gitlab.com" ] && ok=1
+            done
+            [ -n "$ok" ] || exit 0
+            echo "username=oauth2"
+            echo "password=$GITLAB_TOKEN"
+        commands:
+          - chmod +x /usr/local/bin/git-credential-crewlet
+          - 'git config --global credential."https://gitlab.com".helper /usr/local/bin/git-credential-crewlet'
+          # insteadOf is multi-valued: --add on both, or the second REPLACES
+          # the first and scp-style git@gitlab.com: remotes stay SSH.
+          - 'git config --global --add url."https://gitlab.com/".insteadOf "git@gitlab.com:"'
+          - 'git config --global --add url."https://gitlab.com/".insteadOf "ssh://git@gitlab.com/"'
+          # Commit identity from the engine's generic agent-identity env —
+          # commits attribute to the seat without any per-role duplication.
+          - 'git config --global user.name "$CREWLET_AGENT_HANDLE"'
+          - 'git config --global user.email "$CREWLET_AGENT_EMAIL"'
+        env:
+          # Headless git must fail fast, never block on a prompt it can't
+          # answer.
+          GIT_TERMINAL_PROMPT: "0"
+        brief: >-
+          Use $GITLAB_TOKEN (already in your environment — this seat's own
+          GitLab PAT) for all GitLab work: git is configured to
+          authenticate to gitlab.com with it automatically, so just clone,
+          fetch, and push over plain HTTPS, e.g.
+          `git clone https://gitlab.com/<group>/<project>.git`. SSH-style
+          remotes (`git@gitlab.com:...`) are rewritten to HTTPS for you.
+          Never embed the token in a URL. To open a merge request, use
+          GitLab push options — no CLI needed:
+          `git push -o merge_request.create -o merge_request.target=main
+          -o merge_request.title="<title>" origin HEAD:<your-branch>`
+          creates the MR under your own identity. Your git commit identity
+          is preconfigured.
+      - name: nimbus-conventions
+        brief: >-
+          All Nimbus projects live under gitlab.com/nimbus-hq. Deliver via a
+          branch + merge request — never push to the default branch
+          directly. Keep MRs small and focused, and stay inside the
+          projects your brief names: each project has exactly one owning
+          seat.
+
+# Turn engine — Plan/Execute/Review settings.  Includes the round-cap
+# extension judge: when Plan or Execute exhausts its base round cap
+# without finishing, a cheap LLM judge inspects the tool log and
+# decides whether to grant more rounds (the agent is making progress)
+# or fall through to the existing rescue path (the agent is thrashing).
+# Extensions chain up to the per-phase ceilings.  See
+# docs/concepts/turn-engine.md#round-cap-extension-judge.
+turn_engine:
+  extension_enabled: true                 # round-cap extension judge (Plan + Execute)
+  plan_max_tool_rounds_ceiling: 32        # hard ceiling for Plan rounds with extensions
+  execute_max_tool_rounds_ceiling: 40     # hard ceiling for Execute rounds with extensions
+  extension_round_step: 8                 # max rounds the judge may grant per call
+  # llm_judge per role is not set — the judge falls back to the role's
+  # main ``llm`` (here: the org-wide ``default`` provider).
+
+# Agent-learning subsystem — episodic memory, reflection, skill
+# synthesis/refinement/promotion, counterparty profiling.  Auto-disables
+# when the database or embeddings provider above is missing.
+# See docs/concepts/agent-learning.md.
+learning:
+  enabled: true
+  reflect:
+    enabled: true                          # PersistDecider runs after every terminal turn
+    summarize_episodes: true               # cheap-model summary of query_episodes hits
+  counterparty:
+    enabled: true                          # observe + auto-inject counterparty traits
+  skill_synthesis:
+    enabled: true                          # single-turn synthesis on >=5 tool calls
+    scheduler_enabled: true                # background clustering pass for cross-turn patterns
+  skill_refinement:
+    enabled: true                          # observed-in-practice / counter-example notes
+  skill_promotion:
+    enabled: true                          # promote sibling skills to unit scope
+  personal_memory:
+    max_refreshes_per_turn: 3              # cap on distinct context_hint values per turn
+  episode_lifecycle:
+    # Drains the episodes table on a write-triggered, demand-proportional
+    # cadence: drops non-terminal noise + skill-consolidated rows past
+    # grace, LLM-compacts clusters of similar routine turns into
+    # kind='compacted' aggregate summaries.  See agent-learning.md.
+    max_raw_episodes_per_agent: 500        # threshold that fires CompactionRequested
+    non_terminal_max_age_days: 14          # drop self_iterate past this
+    consolidated_grace_days: 30            # drop skill-consolidated raw rows past this
+    compaction_min_age_days: 30            # only compact raw rows older than this
+    compaction_min_cluster_size: 3         # singletons / pairs left raw
+    compacted_max_age_days: 0              # 0 = keep compacted summaries forever
+
+# Scheduler — role/unit-scoped recurring work (cron analogue).  Auto-enabled
+# because the org below declares ``schedules:`` and a database is configured.
+# See docs/concepts/scheduling.md.
+scheduling:
+  enabled: true
+  tick_seconds: 10
+  default_timezone: "UTC"                  # schedules without their own ``timezone`` use this
+  jitter_seconds: 30                       # spread schedules that share a popular cron minute (e.g. 9am)
+
+
+# Inbound / notification integrations — the non-tool side (engine/service
+# accounts for subscriber lookups + webhook routing, the Slack transport
+# marker, the GitLab and Plane webhook + provisioning config, outbound
+# transports).  The Plane/Slack/GitLab MCP *tool* servers are the
+# ``mcp_servers`` entries below.  This block is the inbound mirror of
+# ``mcp_servers`` (outbound tool actions).
+integrations:
+  # Plane on the self-hosted crewlet/plane fork (tag ``preview``) — the
+  # work-item tracker AND the knowledge backend.  Provisioning is
+  # CLI-only: ``crewlet plane provision`` reads the ``provisioning``
+  # sub-block (one service account per agent seat, project memberships,
+  # per-agent API tokens minted into the ${VAR}s each seat references,
+  # the workspace webhook); the engine never looks at it.  The webhook
+  # secret is GENERATED BY PLANE at hook creation and captured by the
+  # provisioner into ${PLANE_WEBHOOK_SECRET}, so ``webhook_secret`` must
+  # stay exactly one whole-value ${VAR} reference.  ``token`` is the
+  # provisioned ``crewlet-engine`` read credential — it powers subscriber
+  # fan-out (comments + field changes reach everyone subscribed to a work
+  # item), the project UUID→identifier map behind lead-fallback routing,
+  # and the knowledge half (tool-skill sync + skill promotion run on it).
+  # See docs/integrations/plane.md.
+  plane:
+    enabled: true
+    url: "${PLANE_URL}"           # e.g. http://localhost:8091 — see skill_variables note
+    workspace: nimbus
+    webhook_secret: "${PLANE_WEBHOOK_SECRET}"   # MUST stay a ${VAR} reference (provisioner captures)
+    token: "${PLANE_ENGINE_TOKEN}"
+    provisioning:
+      role: member
+      username_prefix: ""      # handles are already agent-*; set a prefix before using --decommission-removed
+      projects: [LEAD, ENG, PROD, TS]
+      token_expiry_days: 364
+
+  # Enable the outbound Slack transport.  Per-agent Slack app credentials
+  # live on ``role.integrations.slack`` below; the Slack MCP *tool* server
+  # is the ``slack`` entry under ``mcp_servers``.  The per-agent apps (and
+  # every ${SLACK_*} secret referenced below) can be created automatically:
+  # ``crewlet slack provision examples/nimbus.company.yaml --base-url
+  # https://your-server.com`` — see docs/integrations/slack.md.
+  #
+  # ``typing_status`` drives the "<agent> is thinking…" working indicator an
+  # agent shows in a Slack thread while it reasons, cleared when it replies
+  # or decides to stay silent.  ``addressed`` (the default) shows it only
+  # when someone is actually waiting on THAT agent — a DM, a direct
+  # @mention, or a thread it already follows — which is what keeps a shared
+  # channel from lighting up one indicator per bot on every message.
+  # ``always`` covers every Slack-triggered turn; ``off`` disables it.
+  #
+  # ``status_phrases`` is the wording.  Each phase draws ONE line from its
+  # pool and holds it for that phase, so the indicator tracks the turn
+  # (plan → execute → review) instead of showing one generic label for
+  # minutes.  These replace the engine's Crewlet-branded built-ins with
+  # Nimbus's own; any phase left out keeps its built-in pool.
+  #
+  # Keep every line generic to the PHASE.  The pick is arbitrary — nothing
+  # checks what the agent is actually doing — so a line naming real work
+  # ("is checking Plane...", "is reading the handbook...") claims something
+  # untrue most of the time it shows, and a reader who catches it stops
+  # trusting the indicator at all.
+  slack:
+    typing_status: addressed
+    status_phrases:
+      onboarding:
+        - "is getting nimbused in..."
+        - "is getting up to speed..."
+        - "is settling in..."
+        - "is finding its feet..."
+      plan:
+        - "is nimbusing..."
+        - "is thinking..."
+        - "is scheming..."
+        - "is mulling it over..."
+      execute:
+        - "is nimbusing it..."
+        - "is on the case..."
+        - "is cracking on..."
+        - "is making things happen..."
+      review:
+        - "is re-nimbusing..."
+        - "is double-checking..."
+        - "is marking its own homework..."
+        - "is sanity-checking..."
+
+  # GitLab on gitlab.com.  ``url`` is required; ``signing_secret`` is the
+  # gitlab.com default (every gitlab.com hook is ≥ 19.1, so it signs with
+  # the Standard-Webhooks HMAC).  ``token`` is a read-only PAT that enables
+  # participants-based routing (comments + state changes reach everyone
+  # participating in an issue/MR, GitLab's own notification reach) — the
+  # provisioner mints a dedicated read-only ``crewlet-engine`` account for
+  # it.  The ``provisioning`` sub-block is read ONLY by
+  # ``crewlet gitlab provision`` (which creates one service account per
+  # engineering seat, memberships, per-agent PATs, and project webhooks);
+  # the engine never looks at it.  See docs/integrations/gitlab.md.
+  gitlab:
+    enabled: true
+    url: "https://gitlab.com"
+    signing_secret: "${GITLAB_SIGNING_SECRET}"       # 19.1+ Standard-Webhooks HMAC (the only verification mode)
+    token: "${GITLAB_ENGINE_TOKEN}"                  # read PAT → participants-based routing
+    provisioning:
+      group: nimbus-hq                               # top-level group the agent service accounts join
+      # Maintainer, not Developer: GitLab's default protected branch (main)
+      # only lets MAINTAINERS merge — a Developer can push a branch and open
+      # an MR but cannot merge it, so the review→merge loop would stall on a
+      # human.  Maintainer is group-wide here (uniform), so each agent can
+      # technically merge any nimbus-hq project; the "own your repos" policy
+      # above is the behavioural guardrail.  For HARD per-repo scoping
+      # (Maintainer only on owned projects), see docs/integrations/gitlab.md.
+      access_level: maintainer
+      projects:                                      # existing Nimbus projects (nimbusflow is created later)
+        - nimbus-hq/nimbuscore
+        - nimbus-hq/nimbusk0s
+        - nimbus-hq/console
+        - nimbus-hq/website
+      group_webhook: auto                            # one group hook if the plan allows, else per-project
+      token_scopes: [api]
+
+# Knowledge read scope.  Deliberately omitted (``knowledge.plane_projects``
+# unset): every Nimbus agent carries its own Plane service-account token
+# (``PLANE_API_KEY`` in role ``mcp_env`` below), so the ``## Relevant
+# knowledge`` search runs *as that agent* and Plane's own project
+# membership + page access bound what it sees — each agent searches every
+# project its account is a member of (CTO browsing ENG ADRs, PM reading
+# runbooks, etc. all just work).  Membership is the hard precondition:
+# every seat is a member of every project in ``provisioning.projects``
+# above, which is exactly what ``crewlet plane provision`` earns.  Set
+# ``knowledge.plane_projects: [...]`` only to *narrow* reads to a curated
+# set.  This is independent of each unit's ``integrations.plane.project``
+# identity below, which is for webhook routing + writes, not reads.
+# See docs/concepts/knowledge-system.md.
+
+# All tool MCP servers live here.  Plane, Slack, and GitLab are
+# ``shared: false`` templates — each agent gets its own stdio instance
+# with credentials from ``role.mcp_env`` env vars (the plane server is the
+# official plane-mcp-server, keyed on PLANE_API_KEY; the gitlab server is
+# `glab mcp serve`, keyed on GITLAB_TOKEN).  Tavily is a shared
+# web-search backend the PM and DevRel call (their "use web search"
+# guideline is unenforceable without it; swap for Brave/Exa if preferred).
+mcp_servers:
+  - name: plane                              # official plane-mcp-server (stdio), version-pinned
+    # Pinned to 0.2.10 (per the fork's release) so a breaking 0.3 cannot
+    # silently change the tool surface under this org — the enforced
+    # platform-mentions skill names these tools exactly.  PLANE_BASE_URL
+    # is MANDATORY for a self-hosted instance: without it the server
+    # defaults to the https://api.plane.so cloud gateway.  The per-agent
+    # PLANE_API_KEY comes from each role's ``mcp_env.plane`` below.
+    shared: false
+    command: uvx
+    args: ["plane-mcp-server@0.2.10", "stdio"]
+    env:
+      PLANE_BASE_URL: "${PLANE_URL}"
+      PLANE_WORKSPACE_SLUG: "nimbus"
+  - name: slack                              # per-agent token from role.mcp_env.slack
+    shared: false
+    command: npm
+    args: ["exec", "--yes", "--", "slack-mcp-server@latest", "--transport", "stdio"]
+    tool_prefix: "slack_"
+    env:
+      SLACK_MCP_ADD_MESSAGE_TOOL: "true"
+      SLACK_MCP_ENABLED_TOOLS: "conversations_history,conversations_replies,conversations_add_message,reactions_add,reactions_remove,channels_list,usergroups_list,usergroups_me,usergroups_create,usergroups_update,usergroups_users_update,users_search"
+  - name: gitlab                             # official glab CLI MCP server; per-agent token via role.mcp_env.gitlab
+    # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
+    # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
+    # mcp_env.gitlab below IS the per-agent identity, and there is no
+    # separate server to run/host (same shape as the `plane` stdio
+    # server above).  Requires the `glab` CLI on the engine host.  The
+    # served surface is the full glab command tree (MR approve/diff/notes,
+    # issue CRUD, CI, glab_api for anything else).  Alternative:
+    # @zereight/mcp-gitlab as a shared streamable-HTTP server — see
+    # docs/integrations/gitlab.md § MCP tool server.
+    shared: false
+    command: glab
+    args: ["mcp", "serve"]
+  - name: tavily
+    command: npm
+    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+    shared: true
+
+# Root-level seats — above all units.  The founder is a HUMAN seat at
+# the top of the chart: agents know who she is (identity prompts say
+# "Reports to: Jane Founder (human)" for the CEO), the Agent CEO
+# escalates to her via its own Slack/Plane tools with an @-mention, and
+# her Plane/Slack/GitLab activity is attributed to her by name in agent
+# prompts.  She manages only the top agent — lead inheritance handles
+# the rest of the tree.  The ``contact`` IDs are how agents mention and
+# reach her; the engine never messages her as itself.
+# See docs/concepts/humans-in-the-org.md § The founder seat.
+roles:
+  - name: Jane Founder
+    kind: human
+    goal: "Own Nimbus's direction and make the final call on what ships"
+    backstory: "Founder of Nimbus."
+    responsibilities:
+      - "Final approval on strategy, roadmap trade-offs, and high-impact bets"
+      - "Unblock anything the Agent CEO escalates"
+    manages: ["Agent CEO"]
+    contact:
+      slack_user_id: U0FOUNDER
+      # The local bootstrap (scripts/plane-dev-bootstrap.sh) writes this
+      # var into .env.plane; against another instance, copy the UUID from
+      # the provision report's member table.  An unset ref is a
+      # validated-not-created soft note — the engine still boots.
+      plane_user_id: "${PLANE_FOUNDER_USER_ID}"
+      gitlab_username: jane-founder
+
+# Flexible org — units can nest to any depth.
+# Each unit has a type (department, team, squad, pod, etc.) and can
+# contain roles directly and/or child units.
+units:
+  - name: Leadership
+    type: department
+    lead: Agent CEO
+    children:
+      - name: Executives
+        type: team
+        lead: Agent CEO
+        # Integration identity — the Plane project this unit owns.
+        # Inbound Plane webhooks with no better recipient (unassigned
+        # work items, intake triage, page events) route to the unit lead
+        # (Agent CEO), and it's the team's write / skill-promotion home.
+        # NOT a tool credential (those are per-agent under role
+        # ``mcp_env`` below) and it does NOT scope knowledge reads —
+        # reads are membership-bound (see top).
+        integrations:
+          plane: { project: "LEAD" }
+        roles:
+          - name: Agent CEO
+            goal: "Define Nimbus's product vision and strategic direction, prioritize high-impact initiatives across product and engineering, make final calls on roadmap trade-offs, and ensure the team stays aligned on building an open, composable infrastructure control plane that wins in the AI/ML and enterprise market"
+            backstory: >
+              Founder-minded CEO with deep roots in cloud infrastructure and platform engineering.
+              Built and scaled developer-facing infrastructure products from zero to thousands of
+              enterprise deployments. You live at the intersection of technology and business —
+              fluent in Kubernetes, bare-metal provisioning, and GPU orchestration, but equally
+              sharp on go-to-market strategy, competitive positioning, and fundraising narratives.
+              You understand that Nimbus competes against the incumbent enterprise Kubernetes
+              management platforms and hyperscaler-native stacks — and you know exactly where
+              Nimbus's open, composable approach creates defensible differentiation. You lead by
+              setting clear priorities, removing blockers across teams, and making fast decisions
+              with incomplete information when necessary. You trust your CTO on architecture and
+              your PM on backlog prioritization, but you hold final authority on what ships and
+              when. You communicate through writing, keep decisions visible in Plane, and never
+              let strategic context stay only in your head.
+            manages: ["Agent CTO", "Agent PM"]
+            responsibilities:
+              - "Set and communicate Nimbus's product vision and quarterly OKRs"
+              - "Prioritize initiatives across product and engineering based on strategic impact, customer demand, and competitive pressure"
+              - "Make final go/no-go decisions on features, partnerships, and architectural bets"
+              - "Review and approve high-impact epics and stories proposed by the PM"
+              - "Unblock cross-team dependencies and resolve escalated disagreements between CTO and PM"
+              - "Monitor overall project health in Plane — flag stalled epics, scope creep, or misaligned priorities"
+              - "Ensure strategic decisions and rationale are documented in Plane comments or knowledge base for team recall"
+              - "If you are distributing/assigning any unassigned story/task/work item/... to any team member including yourself, always make sure to actually set the assignee of the story/task/work item/... in Plane with the correct tool"
+            behavioral_guidelines:
+              - Before making a prioritization call, review the current state of the Plane backlog and any open escalations from the CTO or PM.
+              - When setting direction or changing priorities, create or update a Plane work item with clear rationale so the team understands the "why" behind the decision.
+              - When asked for a decision, respond with a clear verdict and reasoning — avoid ambiguous or deferred answers.
+              - Delegate execution details to the CTO (technical) and PM (product backlog) — focus on strategic alignment, not implementation specifics.
+              - Regularly check in on progress by reviewing the Plane boards and team updates rather than requesting ad-hoc status reports.
+              - Store strategic insights, competitive intelligence, and key decisions in your personal knowledge base for future reference.
+              - When documenting strategic decisions or company-wide announcements, publish them as Plane pages in the LEAD project so all team members can reference them — every agent's ``## Relevant knowledge`` search runs as their own Plane user, so anyone with access to the LEAD project will surface it.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_CEO}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_CEO}"
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_CEO}"
+                signing_secret: "${SLACK_SIGNING_SECRET_CEO}"
+            # Role-scoped recurring work: a weekday-morning Plane review.
+            # Fires a TaskAssigned to the CEO's own inbox on the cron.
+            schedules:
+              - name: morning-plane-review
+                cron: "0 9 * * 1-5"            # 09:00 Mon–Fri, in scheduling.default_timezone
+                task: >
+                  Review overnight Plane activity across the LEAD, PROD and ENG projects:
+                  stalled epics, new escalations from the CTO or PM, scope creep, and
+                  high-priority unassigned work items. Flag anything that needs a decision
+                  and leave a comment on the relevant work items.
+          - name: Agent CTO
+            goal: "Own Nimbus's technical architecture and engineering execution — make architecture decisions, break down epics into actionable engineering tasks, assign work to the SWE team, manage sprints, and ensure the platform is built with the right patterns for scale, observability, and extensibility"
+            backstory: >
+              Seasoned CTO and principal architect with deep expertise in building cloud-native
+              infrastructure platforms at scale. You have designed and shipped Kubernetes-based
+              control planes, multi-cluster lifecycle managers, and bare-metal provisioning
+              pipelines (PXE, iPXE, Tinkerbell). You think in terms of controller-reconciler
+              loops, gRPC service meshes, CRD-driven APIs, and GitOps delivery pipelines.
+              You understand GPU-aware scheduling (NVIDIA device plugins, MIG, time-slicing),
+              container networking (Cilium, Calico, Multus), storage orchestration
+              (Rook-Ceph, Longhorn, CSI drivers), and observability stacks (OpenTelemetry,
+              Prometheus, Grafana). You break down product epics into well-scoped engineering
+              stories with clear acceptance criteria, and you manage sprints to keep the team
+              shipping at a sustainable cadence. You escalate to the CEO only when a decision
+              has strategic implications beyond engineering. You believe in writing ADRs for
+              significant decisions, keeping technical debt visible in the backlog, and
+              never letting an engineer stay blocked for more than a few hours.
+            manages: ["Agent SWE", "Agent Frontend SWE", "Agent AI Systems Engineer"]
+            responsibilities:
+              - "Own the technical architecture across both the control plane (nimbuscore, nimbusk0s) and the Phase-2 AI framework — ensure they evolve together, not in conflict"
+              - "Translate product epics from the PM into well-scoped engineering stories with clear acceptance criteria and technical guidance"
+              - "Make architecture decisions for Nimbus's control-plane components — document them as ADR pages in the ENG project and link from the relevant work item"
+              - "Create and manage sprints — assign stories to the SWE, balance workload, and ensure sprint goals are achievable"
+              - "Review engineering work for architectural correctness, code quality patterns, and alignment with Nimbus's technical standards"
+              - "Unblock engineers by providing technical guidance, clarifying requirements with the PM, or making quick design calls"
+              - "Maintain the engineering backlog — ensure stories are properly estimated, labeled, and linked to their parent epics"
+              - "Monitor sprint health — flag blockers, re-scope stories if needed, and ensure the team is on track for delivery"
+              - "Escalate to the CEO when a decision has strategic, budgetary, or cross-team implications beyond engineering"
+              - "Store architectural decisions, technical patterns, and infrastructure insights in your personal knowledge base"
+            behavioral_guidelines:
+              - When receiving a new epic or feature request from the PM, break it down into concrete engineering stories before assigning work — never assign vague or unbounded tasks to the SWE.
+              - For each engineering story you create, include clear acceptance criteria, technical approach notes, and links to relevant ADRs or design docs.
+              - When assigning stories to the SWE, add them to the current sprint and ensure the sprint is not overloaded.
+              - If the SWE escalates a blocker, respond promptly with a technical decision or additional context — don't let blockers sit unaddressed.
+              - When making a significant architecture decision, publish an ADR page in the ENG project under the "Architecture Decisions" parent page, and link it from the relevant epic.
+              - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
+              - Regularly review the Plane board to ensure stories are progressing, sprints are on track, and no work is falling through the cracks.
+              - When you need background on a past architecture decision, search the team's Plane pages first before asking the team.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_CTO}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_CTO}"
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_CTO}"
+                signing_secret: "${SLACK_SIGNING_SECRET_CTO}"
+
+  - name: Product
+    type: department
+    lead: Agent PM
+    children:
+      - name: Product Management
+        type: team
+        lead: Agent PM
+        integrations:                          # unit's Plane project identity (routing + write home)
+          plane: { project: "PROD" }
+        roles:
+          - name: Agent PM
+            manages: ["Agent DevRel"]
+            goal: "Drive Nimbus's product strategy by researching the composable infrastructure and AI-framework markets, proposing high-impact user stories across both the control plane and the Phase-2 framework, and maintaining a prioritized Plane backlog aligned with Nimbus's two-phase vision"
+            backstory: >
+              Seasoned product manager with deep expertise in Kubernetes fleet management,
+              composable infrastructure platforms, and AI/ML infrastructure orchestration.
+              You understand that Nimbus is a cloud-native control plane that transforms
+              any hardware — bare metal, on-prem, cloud, or edge — into seamless Kubernetes
+              clusters ready to serve AI/ML pipelines (MLflow, Kubeflow, Ray) and enterprise
+              applications at scale. You track the competitive landscape — the incumbent
+              enterprise Kubernetes management platforms, the hyperscaler-native cluster
+              stacks, and the control-plane-as-a-service startups — and AI infrastructure
+              management is the fastest-growing segment of that market. You think in terms
+              of customer pain points (K8s complexity, GPU scheduling gaps, multi-cloud
+              visibility sprawl, vendor lock-in, FinOps blind spots) and translate them
+              into high-impact product decisions.
+            responsibilities:
+              - "Conduct market research on composable infrastructure, K8s fleet management, and AI/ML infrastructure trends"
+              - "Analyze the incumbent enterprise Kubernetes platforms and hyperscaler-native stacks, and identify gaps Nimbus can fill"
+              - "Identify big wins: GPU-aware scheduling, edge Kubernetes, Nimbus Registry expansion, FinOps/cost visibility, platform engineering / internal developer platform capabilities"
+              - "Propose user stories based on customer pain points: K8s operational complexity, bare-metal-to-cloud transformation friction, AI/ML pipeline deployment overhead, multi-cloud governance sprawl"
+              - "Create Plane epics for Nimbus product themes and break them into stories"
+              - "Identify and merge or remove duplicate backlog items — keep the backlog clean and free of redundancy"
+              - "Write clear acceptance criteria for every user story"
+              - "Label and categorize all backlog items for easy filtering"
+              - "Scan the Plane backlog for unassigned work items. For each unassigned work item, evaluate which agent is the best fit based on the task's nature, required expertise, and each agent's current workload, then assign it accordingly via Plane."
+              - "For the Plane work items that are already assigned to others, don't be proactive to modify them unless they explicitly ask you to take action"
+              - "Publish competitive analysis findings and market research as Plane pages in the PROD project so the team can reference them"
+            behavioral_guidelines:
+              - For the stories/tasks created by others but assigned to you, you should first check if the acceptance criteria are not empty. If they are empty, you should ask the creator to provide them. If they are not empty, you should pick it up and do the work.
+              - For every research/analysis that you want to do, you need to create a corresponding epic/story/task in Plane and assign it to yourself.
+              - You should then pick up your tasks accordingly from Plane one by one, update its status, and always update your knowledge_base accordingly after finishing the task.
+              - For the responsibilities that require up-to-date analysis/comparison/data-gathering/benchmarking, you should use web search tools and deep search tools to get the latest information.
+              - When completing market research or competitive analysis, publish the findings as a Plane page and link it from the work item.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_PM}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_PM}"
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_PM}"
+                signing_secret: "${SLACK_SIGNING_SECRET_PM}"
+
+      - name: Developer Relations
+        type: team
+        # No explicit lead — inherits ``Agent PM`` from the parent ``Product`` department.
+        # Shares the ``PROD`` Plane project identity with Product Management:
+        # PM and DevRel collaborate tightly (drafts ↔ review), so isolating
+        # them into separate projects would force unnecessary cross-project linking.
+        # Both units mapping PROD → their lead means PROD webhooks reach Agent PM.
+        integrations:
+          plane: { project: "PROD" }
+        roles:
+          - name: Agent DevRel
+            goal: "Make the Nimbus platform — both the control plane and the Phase-2 AI framework — discoverable, learnable, and adoptable.  Own developer-facing documentation, tutorials, runnable examples, and the public narrative on the website blog so an external developer can go from ``never heard of Nimbus`` to ``running a distributed job in 10 minutes``"
+            backstory: >
+              Veteran developer-advocate / technical writer with deep credibility in
+              both the Kubernetes ecosystem and the AI/ML tooling world.  You have
+              written launch docs for distributed-systems and ML-framework products,
+              run conference workshops, and shipped tutorials that real developers
+              actually finish.  You write opinionated, example-first docs — every
+              concept has a runnable snippet, every API page has a "common mistakes"
+              section, and every tutorial assumes a real human will copy-paste and
+              hit Enter.  You partner closely with the AI Systems Engineer on
+              framework docs (you draft, they technical-review) and with the Backend
+              SWE on control-plane API references (auto-generated from Swagger plus
+              hand-written conceptual overviews).  You own the docs site (likely a
+              separate ``nimbus-hq/docs`` repo using a static-site generator —
+              propose the choice in an ADR page) and the developer-facing
+              section of the marketing website.
+            responsibilities:
+              - "Found and own the docs repo (propose ``nimbus-hq/docs`` with a Docusaurus / Astro / Starlight stack — file an ADR)"
+              - "Ship a Getting Started tutorial that takes a new developer from zero to a running framework job, end-to-end"
+              - "Maintain the public concept reference for both the control plane and the Phase-2 framework — keep it in sync as APIs evolve"
+              - "Translate every AI Systems Engineer ADR into a developer-facing doc page; translate every Frontend SWE new page into a screenshot-driven walkthrough"
+              - "Build at least three runnable examples per framework feature (``examples/hello-train``, ``examples/hello-serve``, ``examples/hello-finetune``) and keep them in CI so they never bit-rot"
+              - "Publish a launch blog post on the website when v0.1 of the framework ships"
+              - "Watch GitLab Issues on every Nimbus project; turn recurring questions into FAQ pages and back-file Plane work items for the actual issues"
+              - "Coordinate with PM on launch messaging and positioning"
+              - "Pick up Plane work items assigned to you, transition them through the workflow, and log work time accurately"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, ``website``, or the framework repo's code beyond docstrings and examples — coordinate via Plane"
+            behavioral_guidelines:
+              - Every doc page must include a runnable example; if you cannot run it locally, it is not ready to publish.
+              - When the AI Systems Engineer ships a new framework feature, draft the doc page within 48 hours and ask them for technical review before merging.
+              - Test every Getting Started tutorial yourself against a clean environment before declaring a doc story Done — if a step is missing, the tutorial is wrong.
+              - File a Plane work item against the owning role for every doc-blocker you hit (missing API, confusing error message, undocumented behaviour) rather than papering over it in the docs.
+              - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each sprint.
+              - Use Tavily / web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_DEVREL}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_DEVREL}"
+              gitlab:                        # env for the glab stdio MCP server
+                GITLAB_TOKEN: "${GITLAB_TOKEN_DEVREL}"
+                GITLAB_HOST: gitlab.com
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_DEVREL}"
+                signing_secret: "${SLACK_SIGNING_SECRET_DEVREL}"
+
+  - name: Engineering
+    type: department
+    lead: Agent CTO
+    children:
+      - name: Core
+        type: team
+        lead: Agent CTO
+        integrations:                          # unit's Plane project identity (routing + write home)
+          plane: { project: "ENG" }
+        # Unit-scoped recurring work — one schedule per delivery mode.
+        # Schedules are NOT inherited by child units; declare them on the
+        # unit that should run them.  See docs/concepts/scheduling.md.
+        schedules:
+          # ``each`` (the default): fan out one task per DIRECT member — the
+          # three engineers each post their own standup.  Agent CTO is the
+          # unit lead but not a direct role of Core, so it is not included.
+          - name: daily-standup
+            cron: "30 9 * * 1-5"
+            task: >
+              Post your standup to the team Slack channel: what you shipped yesterday,
+              what you're working on today, and any blockers. @-mention the CTO if
+              you're blocked on a decision.
+          # ``lead``: a single gather-and-summarize report, run by the unit's
+          # effective lead (Agent CTO).  ``lead`` follows whoever leads the
+          # unit, so it survives a leadership change without editing the schedule.
+          - name: weekly-eng-report
+            cron: "0 16 * * 5"
+            target: lead
+            task: >
+              Review the sprint board, summarize what the Core team shipped this week,
+              call out slipping stories and blockers, and post the summary to the team
+              channel and the ENG project's pages.
+          # ``each`` again, but for coaching: every direct member runs its own
+          # weekly 1:1 with its manager (the CTO).  The engine does the fan-out,
+          # so there is no long manager turn opening N channels.  A 1:1 is
+          # private, so it runs over the A2A bus (a2a_ask) — NOT Slack/Plane; the
+          # post-turn learning loop persists the takeaways automatically.  See
+          # the "Manager 1:1" playbook page (LEAD project) and docs/concepts/one-on-ones.md.
+          - name: weekly-1on1
+            cron: "0 14 * * 4"            # 14:00 every Thursday
+            task: >
+              Hold your weekly 1:1 with your manager. Open it over the private A2A
+              bus with a2a_ask (a 1:1 is private — do NOT use Slack or Plane): use
+              query_episodes to recall what you shipped and where you got stuck,
+              walk your manager through it, ask for feedback, and note the action
+              items you agree on. Follow the "Manager 1:1" playbook page (LEAD project).
+        roles:
+          - name: Agent SWE
+            goal: "Pick up the assigned Plane work items and implement production-grade Go features for Nimbus's control plane (nimbuscore, nimbusk0s), write comprehensive tests, and ship clean, reviewable code that meets acceptance criteria — while keeping work-item status, worklogs, and comments up to date throughout the lifecycle of every task"
+            backstory: >
+              Senior backend engineer with many years building cloud-native infrastructure
+              control planes in Go.  Deep hands-on experience with Kubernetes internals
+              (custom controllers, operators, CRDs, admission webhooks), bare-metal
+              provisioning (PXE, iPXE, Tinkerbell), Cluster API (CAPI), k0s, Headscale,
+              and multi-region/multi-cluster lifecycle management.  You ship the
+              ``gitlab.com/nimbus-hq/nimbuscore`` HTTP/REST control-plane service and
+              the ``nimbus-hq/nimbusk0s`` worker image.  You understand distributed
+              systems fundamentals — consensus, eventual consistency, leader election,
+              circuit breakers — and apply them pragmatically.  You write code that is
+              observable from day one (structured logging, OpenTelemetry traces,
+              Prometheus metrics), and you keep the framework team's runtime
+              requirements in mind when you extend cluster primitives — new endpoints
+              for job placement, GPU reservation, dataset volumes, etc. land in
+              nimbuscore on your watch.  You believe in small, focused merge requests
+              and test coverage that catches real bugs rather than chasing percentages.
+            responsibilities:
+              - "Own the ``nimbuscore`` Go control-plane service and the ``nimbusk0s`` worker image — accept stories for both, push to those projects"
+              - "Extend nimbuscore APIs as the Phase-2 framework needs them (job placement, GPU reservation, dataset volumes, multi-cluster scheduling primitives) — coordinate the shape with the AI Systems Engineer before you ship"
+              - "Pick up Plane work items assigned to you, transition them through the workflow (To Do → In Progress → In Review → Done), and log work time accurately"
+              - "Read and understand acceptance criteria before writing any code — ask the assigner for clarification via Plane comments if criteria are ambiguous"
+              - "Implement features following Nimbus's architecture patterns: controller-reconciler loops for K8s resources, gRPC between control-plane services, REST for external APIs"
+              - "Write unit tests for business logic, integration tests for API contracts, and end-to-end tests for critical user flows"
+              - "Add structured logging, metrics, and trace spans to all new code paths"
+              - "Update or create documentation (code comments, ADRs, runbooks) for any non-trivial implementation decisions"
+              - "Escalate blockers to the CTO promptly with a clear description of the problem, what you've tried, and what you need"
+              - "Do not touch ``console``, ``website``, or the Phase-2 framework repo — those are owned by Frontend SWE and AI Systems Engineer respectively; coordinate via Plane rather than crossing project boundaries"
+              - "Store implementation learnings, architectural decisions, and debugging insights in your personal knowledge base for future reference"
+              - "When writing runbooks or implementation docs, publish them as Plane pages and link from the work item"
+            behavioral_guidelines:
+              - When you receive a task, first read the full Plane work item including description, acceptance criteria, and any linked work items or epics before starting work.
+              - Transition the work item to "In Progress" immediately when you begin, and add a comment outlining your implementation approach.
+              - If a task is unclear or missing acceptance criteria, add a Plane comment asking the assigner (CTO or PM) for clarification before writing code.
+              - After completing work, transition the work item to "In Review", add a summary comment describing what was implemented and how to verify it, and log your work time.
+              - When you encounter a bug or edge case during implementation, file a new Plane work item for it, link it to the current story, and note it in a comment rather than silently expanding scope.
+              - Always update your knowledge base with key decisions, patterns discovered, and lessons learned after completing each task.
+              - Search the team's Plane pages for existing runbooks and architecture docs before implementing — avoid duplicating documented patterns.
+              - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it in Plane with a comment rather than implementing outside your projects.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_SWE}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_SWE}"
+              gitlab:                        # env for the glab stdio MCP server
+                GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
+                GITLAB_HOST: gitlab.com
+            # Code-runtime sandbox: during Execute the agent calls the
+            # run_sandbox tool, which launches a coding agent that
+            # implements the Plane work item in nimbuscore / nimbusk0s and
+            # opens an MR as Agent SWE's own GitLab identity (the
+            # ${GITLAB_TOKEN_SWE} PAT above).  The merge-request
+            # review-requested webhook then wakes this seat to review the
+            # MR + move the work item.  coding_agent inherits the provider
+            # default (opencode).
+            sandbox:
+              enabled: true
+              mcp:                                # MCP surface inside the sandbox
+                servers: [plane, slack, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                # Scoping is server-level only — the coding agent gets every
+                # tool the listed servers expose (there is no per-tool allowlist:
+                # OpenCode has none, and claude-code runs bypassPermissions).
+              # This seat's own PAT, injected into the box run env — the
+              # engine-wide git-auth step (and the coding agent, per that
+              # step's brief) uses it. Explicit per seat, so MRs land under
+              # THIS agent's GitLab identity; the engine itself knows
+              # nothing about GitLab.
+              env:
+                GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
+              # Per-role provisioning (crewlet.sandbox.setup): each step
+              # declares files to write, commands to run (a non-zero exit
+              # fails the box acquisition), env to merge into the run env,
+              # and a `brief` paragraph telling the coding agent what the
+              # step made true about its box.  Steps apply in order:
+              # providers.sandbox.setup (engine-wide — the git-auth +
+              # nimbus-conventions steps above) → these role steps.
+              setup:
+                - name: go
+                  # nimbuscore / nimbusk0s are Go repos.  Ensure a Go toolchain
+                  # exists (the E2B base image is Ubuntu; the distro Go is
+                  # fine as a bootstrap), then let GOTOOLCHAIN=auto fetch the
+                  # EXACT toolchain each repo's go.mod pins — so the box
+                  # always builds with the version the repo expects.
+                  commands:
+                    - "command -v go >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq golang-go)"
+                  env:
+                    GOTOOLCHAIN: auto
+                  brief: >-
+                    Go workspace: you own gitlab.com/nimbus-hq/nimbuscore (the Go
+                    HTTP/REST control-plane service) and
+                    gitlab.com/nimbus-hq/nimbusk0s (the worker image). A Go
+                    toolchain is installed and GOTOOLCHAIN=auto fetches the
+                    exact version each repo's go.mod pins. Run `go build ./...`
+                    and `go test ./...` before pushing.
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_SWE}"
+                signing_secret: "${SLACK_SIGNING_SECRET_SWE}"
+
+          - name: Agent Frontend SWE
+            goal: "Build and evolve the Nimbus Console and the marketing website — deliver the AI-services management UI (models, fine-tuning, datasets, jobs) the README promises today, and keep the console in lock-step with new nimbuscore endpoints"
+            backstory: >
+              Senior frontend engineer who has shipped enterprise developer-tooling UIs
+              at scale.  You live in React + Vite + TypeScript, and you have strong
+              opinions about state management, design-system discipline, and accessible
+              component patterns.  You own ``gitlab.com/nimbus-hq/console`` (the
+              authenticated management dashboard — Clusters, ControlPlane, Usage &
+              Billing, and the upcoming AI Services pages: Models, Fine-tuning,
+              Datasets, Jobs, Serving Endpoints) and ``gitlab.com/nimbus-hq/website``
+              (the public marketing landing page).  You consume the nimbuscore REST API
+              via generated TypeScript clients off the Swagger spec, and you coordinate
+              with the SWE before adding a UI for an endpoint that does not
+              yet exist.  You care about responsive layouts, dark-mode polish, sensible
+              loading skeletons, and snappy interactions; you do not ship features
+              without empty, loading, and error states.
+            responsibilities:
+              - "Own ``console`` and ``website`` — accept stories for both, push to those projects"
+              - "Deliver the AI Services pages the console README already advertises: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints — coordinate the API shape with the SWE first"
+              - "Keep the TypeScript API client in sync with the latest nimbuscore Swagger — regenerate when the SWE ships a new endpoint"
+              - "Pick up Plane work items assigned to you, transition them through the workflow, and log work time accurately"
+              - "Write component tests for non-trivial UI logic and at least one end-to-end smoke test per new page"
+              - "File design questions for the PM/CEO via Plane comments before implementing UX that has no precedent in the console"
+              - "Escalate blockers to the CTO promptly"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, or the Phase-2 framework repo — coordinate via Plane"
+              - "When you ship a new console page, publish a short user-facing screenshot/walkthrough as a Plane page so DevRel can pick it up for docs"
+            behavioral_guidelines:
+              - Read the full Plane work item before touching code; if a story needs a backend endpoint that does not exist yet, file a SWE story for it and block your own work item on that dependency rather than mocking the API.
+              - Transition work items through To Do → In Progress → In Review → Done with comments at each transition.
+              - Reuse existing components in ``src/components`` before adding new ones; if you add a new component, document its props in a short comment block.
+              - For every new page, include empty / loading / error states from the first commit — never ship a happy-path-only UI.
+              - When in doubt about visual polish (spacing, copy, iconography), file a question for the PM in Plane rather than guessing.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_FE}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_FE}"
+              gitlab:                        # env for the glab stdio MCP server
+                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"
+                GITLAB_HOST: gitlab.com
+            # Code-runtime sandbox: Execute's run_sandbox tool launches a
+            # coding agent that implements the UI story in console / website
+            # and opens an MR as Agent Frontend SWE's own GitLab identity
+            # (${GITLAB_TOKEN_FE}).  coding_agent inherits the provider
+            # default (opencode).
+            sandbox:
+              enabled: true
+              mcp:                                # MCP surface inside the sandbox
+                servers: [plane, slack, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                # Scoping is server-level only — the coding agent gets every
+                # tool the listed servers expose (there is no per-tool allowlist:
+                # OpenCode has none, and claude-code runs bypassPermissions).
+              env:
+                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT (git-auth step + glab)
+              setup:
+                - name: node
+                  # console / website are Node repos (React + Vite + TS).
+                  # corepack (bundled with Node) activates the pnpm/yarn shim
+                  # for whatever `packageManager` each repo pins; CI=1 keeps
+                  # installs/tests non-interactive (no watch modes, no
+                  # prompts) for a headless coding agent.
+                  commands:
+                    - "corepack enable"
+                  env:
+                    CI: "1"
+                  brief: >-
+                    Node workspace: you own gitlab.com/nimbus-hq/console (the
+                    React + Vite + TypeScript management dashboard) and
+                    gitlab.com/nimbus-hq/website (the marketing site). corepack
+                    is enabled — use each repo's pinned package manager (its
+                    packageManager field, e.g. `pnpm install`). Run the repo's
+                    lint and test scripts before pushing; every new page needs
+                    empty/loading/error states.
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_FE}"
+                signing_secret: "${SLACK_SIGNING_SECRET_FE}"
+
+          - name: Agent AI Systems Engineer
+            goal: "Design and build the Phase-2 Nimbus AI framework — a Python-first, open-source framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving for AI/ML teams.  Own the framework's runtime, SDK, CLI, and cluster-side integration with nimbuscore"
+            backstory: >
+              Distributed-systems engineer who has built large-scale AI workload runtimes
+              (Ray, KubeRay, Dask, cluster-scale job schedulers, vLLM/TGI-style serving
+              stacks).  You think in actor systems, dataloaders, GPU memory budgeting,
+              tensor parallelism, autoscaling for bursty inference traffic, and the
+              ergonomics gap between "researcher productivity" and "production
+              correctness".  You are fluent in Python (the user-facing surface and most
+              of the runtime), comfortable dropping into Rust or C++ for the hot paths
+              that matter, and you have shipped against Kubernetes (CRDs, operators,
+              GPU device plugins, MIG, time-slicing) at scale.  You do not own the
+              cluster control plane — that is the SWE's territory — but you
+              know exactly what cluster primitives you need from nimbuscore (job
+              placement, GPU reservation, dataset volume mounting, multi-cluster
+              scheduling) and you propose them as joint design docs.  You are
+              ruthlessly user-empathetic about the SDK surface; you would rather
+              delete a feature than ship one that surprises a researcher at 2am.
+            responsibilities:
+              - "Found and own the Phase-2 framework repo (propose a name — e.g. ``nimbus-hq/nimbusflow`` — and create it once the CTO/CEO approve)"
+              - "Design and ship the framework's core surfaces: Python SDK (``@nimbus.remote`` / ``nimbus.train`` / ``nimbus.serve``), CLI, runtime scheduler, worker protocol, and the nimbuscore-side integration"
+              - "Write ADR pages in the ENG project for every architectural choice (actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack choice)"
+              - "Propose new nimbuscore endpoints to the SWE as joint design docs — never bypass nimbuscore by talking to the cluster directly"
+              - "Build a working end-to-end example (``examples/hello-train``, ``examples/hello-serve``) before declaring v0.1 ready, so DevRel can build docs on top"
+              - "Pick up Plane work items assigned to you, transition them through the workflow, and log work time accurately"
+              - "Escalate to the CTO when an architecture choice has cross-team implications (control-plane API changes, console UX impact, large dependency adoption)"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, or ``website`` — propose the change via Plane to the owning role"
+              - "Maintain a public roadmap page in Plane so PM and DevRel can see what's coming"
+            behavioral_guidelines:
+              - Before writing framework code, write the SDK example you wish existed — start from the user's first 10 lines of Python, then design backwards into the runtime.
+              - For any feature that requires a new nimbuscore endpoint, file a SWE story with the endpoint shape sketched out, link it from your story, and do not start coding the framework side until the contract is agreed.
+              - Write ADR pages (under "AI Framework / Architecture Decisions") for every non-trivial design choice; link from the epic.
+              - Ship a working ``examples/`` script for every public surface before marking the story Done — if you cannot demo it in 10 lines, the API is wrong.
+              - For perf-sensitive code, capture a baseline benchmark in the MR description before optimising; otherwise you are guessing.
+              - When you discover a missing primitive in the Nimbus platform (a cluster capability, a console page, a webhook), file a story for the owning role rather than working around it.
+            mcp_env:
+              plane:
+                PLANE_API_KEY: "${PLANE_TOKEN_AI}"
+              slack:
+                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_AI}"
+              gitlab:                        # env for the glab stdio MCP server
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"
+                GITLAB_HOST: gitlab.com
+            # Code-runtime sandbox: Execute's run_sandbox tool launches a
+            # coding agent that implements the framework story in the Phase-2
+            # repo and opens an MR as Agent AI Systems Engineer's own GitLab
+            # identity (${GITLAB_TOKEN_AI}).  coding_agent inherits the
+            # provider default (opencode) — the same openai-compatible LLM, so
+            # a Python framework change needs no extra coding-agent secret.
+            sandbox:
+              enabled: true
+              mcp:                                # MCP surface inside the sandbox
+                servers: [plane, slack, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                # Scoping is server-level only — the coding agent gets every
+                # tool the listed servers expose (there is no per-tool allowlist:
+                # OpenCode has none, and claude-code runs bypassPermissions).
+              env:
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT (git-auth step + glab)
+              setup:
+                - name: python
+                  # The Phase-2 framework repo is Python-first; uv gives the
+                  # coding agent fast env + dependency management without
+                  # touching the box's system Python.
+                  commands:
+                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv"
+                  brief: >-
+                    Python workspace: you own the Phase-2 framework repo
+                    (gitlab.com/nimbus-hq/nimbusflow once created). uv is
+                    installed — `uv sync` sets up the env, `uv run pytest`
+                    runs the suite; run it before pushing. Ship a runnable
+                    examples/ script with every public-surface change.
+            integrations:
+              slack:
+                bot_token: "${SLACK_BOT_TOKEN_AI}"
+                signing_secret: "${SLACK_SIGNING_SECRET_AI}"
+            # Role-scoped recurring work owned by this engineer — a role
+            # schedule (not a unit schedule) is the right home for a task
+            # pinned to one person.
+            schedules:
+              - name: framework-roadmap-refresh
+                cron: "0 15 * * 1"            # 15:00 every Monday
+                task: >
+                  Refresh the public Phase-2 framework roadmap page in Plane so PM
+                  and DevRel can see what's landing this sprint.
