@@ -1,0 +1,38 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.db
+.env
+# Minted-credential env files the provisioning CLIs write from the repo
+# root (.env.plane, .env.gitlab, any operator variant) — never committable.
+.env.*
+# ...except the committed template.
+!.env.example
+# Slack provisioning ledger (per-app credentials) — see docs/integrations/slack.md
+slack-apps.json
+# Pulsar JWT signing key + tokens the deployment guide's auth recipe lands
+# in the repo root — see docs/guides/deployment.md "Authentication". Key
+# material never belongs in git, hence the blanket *.key / *.pem too.
+pulsar-keys/
+*.key
+*.pem
+# Locally-pointed copies of the example company config that the integration
+# guides' local-testing recipes create (and that operators then personalize
+# with real contact IDs) — see docs/integrations/gitlab.md.
+*.local.company.yaml
+.venv/
+.idea/
+.vscode/
+.DS_Store
+# Library package: consumers resolve their own dependency versions, so the
+# lockfile stays local (CI installs from pyproject ranges on purpose).
+uv.lock

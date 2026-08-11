@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none">
+  <defs>
+    <linearGradient id="turnGrad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="80" y2="80">
+      <stop offset="0%" style="stop-color:#6a5cff"/>
+      <stop offset="100%" style="stop-color:#e24a90"/>
+    </linearGradient>
+  </defs>
+  <circle cx="40" cy="40" r="40" fill="#111"/>
+  <!-- The cycle: Plan -> Execute -> Review -> (self_iterate) -->
+  <circle cx="40" cy="40" r="22" stroke="url(#turnGrad)" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.45"/>
+  <!-- Direction arrowhead: sits on the ring's left, pointing along the tangent -->
+  <path d="M14.6 38.6L18.2 34L21.8 38.6" stroke="url(#turnGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>
+  <!-- Plan -->
+  <circle cx="40" cy="18" r="6" fill="url(#turnGrad)"/>
+  <!-- Execute -->
+  <circle cx="59" cy="51" r="6" fill="url(#turnGrad)" opacity="0.8"/>
+  <!-- Review -->
+  <circle cx="21" cy="51" r="6" fill="url(#turnGrad)" opacity="0.6"/>
+</svg>

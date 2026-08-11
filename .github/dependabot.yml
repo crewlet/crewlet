@@ -1,0 +1,33 @@
+# Automated dependency updates — one entry per dependency surface:
+#
+#   .github/workflows/*.yml   the actions CI and releases run on
+#   pyproject.toml            the package's own requirements
+#   docker-compose.yml        the images the local dev stack runs
+#
+# A new surface needs its entry here in the same change. Nothing reports the
+# omission: a manifest with no entry never produces a pull request, which
+# looks exactly like a manifest with nothing to update.
+#
+# Security updates are separate — they come from published advisories, are
+# switched on in the repository settings rather than here, and are not held
+# back by this schedule.
+
+version: 2
+
+updates:
+  # "/" is the whole repository for this ecosystem: Dependabot reads every
+  # workflow under .github/workflows whatever directory it is given.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly

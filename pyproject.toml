@@ -1,0 +1,179 @@
+[build-system]
+# hatch-fancy-pypi-readme rewrites README.md's repo-relative links into
+# absolute ones for the PyPI long description — see the substitutions at the
+# bottom of this file for why.
+requires = ["hatchling", "hatch-fancy-pypi-readme>=24.1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crewlet"
+description = "Open-source engine for orchestrating hierarchically organized AI agent companies"
+# version  — single-sourced from src/crewlet/__init__.py (see [tool.hatch.version]).
+#            `crewlet --version` and the wheel metadata cannot drift apart.
+# readme   — built from README.md by hatch-fancy-pypi-readme, with relative
+#            links absolutised (PyPI does not resolve them).
+dynamic = ["version", "readme"]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Crewlet Contributors" }]
+keywords = ["ai", "agents", "orchestration", "hierarchy", "llm"]
+# No "License :: OSI Approved :: MIT License" here on purpose: `license = "MIT"`
+# is an SPDX expression, so the metadata carries `License-Expression: MIT`, and
+# PEP 639 requires PyPI to reject a distribution that also ships a license
+# classifier. Classifiers list only the Python versions CI actually runs
+# (see .github/workflows/ci.yml); `requires-python` stays open-ended so newer
+# interpreters are installable without a release.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "openai>=1.0",
+    "anthropic>=0.40",
+    # <3: the 1.x→2.0 major renamed client entry points out from under a
+    # floating pin and broke CI; cap each major so the next one is a
+    # deliberate migration, not a resolver decision.
+    "mcp>=2,<3",
+    # Imported directly (mcp/http_client.py) for the transport's client;
+    # floor matches the mcp SDK's own requirement.
+    "httpx2>=2.5",
+    "pulsar-client>=3.5",
+    "python-dotenv>=1.0",
+    "structlog>=24.0",
+    "cryptography>=42.0",
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
+    "markdown>=3.5",
+    "beautifulsoup4>=4.12",
+]
+
+[project.scripts]
+crewlet = "crewlet.cli:_entry_point"
+
+[project.urls]
+Homepage = "https://github.com/crewlet/crewlet"
+Documentation = "https://docs.crewlet.ai"
+Repository = "https://github.com/crewlet/crewlet"
+Issues = "https://github.com/crewlet/crewlet/issues"
+Changelog = "https://github.com/crewlet/crewlet/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+postgresql = ["asyncpg>=0.29"]
+api = ["uvicorn>=0.30", "starlette>=0.37"]
+forge = ["pyjwt[crypto]>=2.8"]
+# There is no `observability` extra: the OpenTelemetry SDK and OTLP exporter
+# are core dependencies (the engine always builds spans), so the extra existed
+# only as an empty `Provides-Extra` advertising nothing installable.
+# Sandboxed code-runtime backend (providers.sandbox.type: e2b). Opt-in:
+# the e2b SDK is imported lazily, so the engine runs without it until a
+# role actually launches a sandbox. Self-hosted/local E2B uses the same
+# SDK (providers.sandbox.domain). See docs/concepts/code-sandbox.md.
+sandbox = ["e2b>=2.0"]
+# The union of every runtime extra above. tests/test_packaging asserts it stays
+# that way, so adding an extra without adding it here fails the build.
+all = [
+    "asyncpg>=0.29",
+    "uvicorn>=0.30",
+    "starlette>=0.37",
+    "pyjwt[crypto]>=2.8",
+    "e2b>=2.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "starlette>=0.37",
+    "httpx>=0.27",
+    # Asserts the generated schema/ documents are valid JSON Schema and
+    # that the shipped examples pass under a real validator — the whole
+    # point of `crewlet schema` is editor / CI / agent consumption, so
+    # "Pydantic emitted something" is not a sufficient guarantee.
+    "jsonschema>=4.20",
+    # The distribution build + checks CI and the release workflow run, so they
+    # are reproducible locally instead of only on the tag that publishes.
+    "build>=1.2",
+    "twine>=6.1",
+]
+
+[tool.hatch.version]
+# ONE source of truth for the version, read by the build backend. Bumping
+# `__version__` is the whole version bump — pyproject, the wheel metadata and
+# `crewlet --version` all follow. The release workflow refuses to publish when
+# the git tag disagrees with it.
+path = "src/crewlet/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crewlet"]
+
+[tool.hatch.build.targets.sdist]
+# Everything else in the repo ships: src/, tests/, docs/, examples/, schema/,
+# scripts/ and .github/ make the sdist a source release you can build, test and
+# read offline — which is what distro packagers and `pip install --no-binary`
+# users need. Only the agent-harness config is dropped: it configures the tools
+# that write this repo, not the software in it.
+exclude = [
+    ".claude",
+    "CLAUDE.md",
+]
+
+# PyPI renders the long description with no notion of the repository it came
+# from, so every repo-relative link and image in README.md would 404 there
+# (GitHub and docs.crewlet.ai resolve them fine, which is why the file keeps
+# them). These substitutions absolutise them at build time — the README stays
+# relative on disk, and only the published metadata is rewritten.
+# tests/test_packaging asserts no relative reference survives.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# Markdown images first — they must resolve to raw content, not to the blob
+# page a plain link gets. (None today; the rule keeps a future one correct.)
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '!\[([^\]]*)\]\((?!https?://|#|mailto:)([^)]+)\)'
+replacement = '![\1](https://raw.githubusercontent.com/crewlet/crewlet/main/\2)'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|mailto:)([^)]+)\)'
+replacement = '](https://github.com/crewlet/crewlet/blob/main/\1)'
+
+# The README's hero, feature grid and mascot are raw HTML, so they need the
+# attribute forms too.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'src="(?!https?://|data:)([^"]+)"'
+replacement = 'src="https://raw.githubusercontent.com/crewlet/crewlet/main/\1"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'href="(?!https?://|#|mailto:)([^"]+)"'
+replacement = 'href="https://github.com/crewlet/crewlet/blob/main/\1"'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "examples", "."]
+asyncio_mode = "auto"
+markers = [
+    "integration: end-to-end integration tests (may need external services)",
+]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

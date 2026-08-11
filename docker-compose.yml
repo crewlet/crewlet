@@ -1,0 +1,635 @@
+# ---------------------------------------------------------------------------
+# Anchors for the Plane stack (profile `plane`, services further down).
+# YAML anchors must be defined before use, hence this block sits above
+# `services:`.
+#
+# PLANE_PUBLIC_URL is the address BROWSERS use to reach Plane. It feeds
+# WEB_URL and CORS_ALLOWED_ORIGINS, which is where Plane's redirects and
+# emailed/shared links come from — leave it unset for a laptop loop
+# (localhost), set it to the server's public address
+# (e.g. http://203.0.113.7:8091) when the stack runs on a remote host,
+# and keep it in lock-step with the company config's ${PLANE_URL}.
+# ---------------------------------------------------------------------------
+
+# The api and the live server authenticate to EACH OTHER with this shared
+# secret — one anchor, referenced from both env maps below, so the two
+# copies can never drift (drift silently breaks collaborative page editing
+# and page-content persistence). Dev-only literal (upstream ships a
+# change-me).
+x-plane-live-secret: &plane-live-secret crewlet-plane-dev-live-secret-key
+
+# Shared env for the four backend services (api / worker / beat / migrator).
+x-plane-app-env: &plane-app-env
+  WEB_URL: ${PLANE_PUBLIC_URL:-http://localhost:${PLANE_LISTEN_PORT:-8091}}
+  DEBUG: "0"
+  # Same origin as WEB_URL — the browser reaches everything via the proxy.
+  CORS_ALLOWED_ORIGINS: ${PLANE_PUBLIC_URL:-http://localhost:${PLANE_LISTEN_PORT:-8091}}
+  # Dev-only literal (upstream ships "change-this-key-on-deployment").
+  SECRET_KEY: crewlet-plane-dev-secret-key
+  LIVE_SERVER_SECRET_KEY: *plane-live-secret
+  DATABASE_URL: postgresql://plane:plane@plane-db/plane
+  AMQP_URL: amqp://plane:plane@plane-mq:5672/plane
+  # "Self-hosted S3-compatible store behind the proxy" — despite the name,
+  # the flag just keeps Plane's upload-URL rewriting active; the actual
+  # store is whatever serves AWS_S3_ENDPOINT_URL (RustFS here).
+  USE_MINIO: "1"
+  # Upstream's own default, kept deliberately — one gunicorn worker is
+  # right for a single-operator dev loop.
+  GUNICORN_WORKERS: "1"
+  # Per-API-key throttle. The stock 60/minute is too tight for the paved
+  # path: one `crewlet plane provision` run of the 7-seat Nimbus example
+  # makes ~50-60 API-key calls well inside a minute (preflight probes +
+  # member walk + 7×(create + 4 memberships + token) + engine account +
+  # webhook), and the crewlet client deliberately has no 429 retry — so the
+  # stock ceiling makes the very first bootstrap run flaky. 300/minute
+  # keeps ~5x headroom without disabling the throttle.
+  API_KEY_RATE_LIMIT: 300/minute
+  FILE_SIZE_LIMIT: "5242880"
+  # Fork capability: allow webhook targets that resolve to private
+  # addresses — the engine's /webhooks/plane lives at host.docker.internal,
+  # which the stock SSRF guard rejects at create AND delivery time. The api
+  # enforces it on create/update, the WORKER at Celery delivery time — this
+  # anchor covers both (and beat).
+  WEBHOOK_ALLOW_PRIVATE_URLS: "1"
+
+x-plane-db-env: &plane-db-env
+  PGHOST: plane-db
+  PGDATABASE: plane
+  POSTGRES_USER: plane
+  POSTGRES_PASSWORD: plane
+  POSTGRES_DB: plane
+  POSTGRES_PORT: "5432"
+  PGDATA: /var/lib/postgresql/data
+
+x-plane-redis-env: &plane-redis-env
+  REDIS_HOST: plane-redis
+  REDIS_PORT: "6379"
+  REDIS_URL: redis://plane-redis:6379/
+
+x-plane-mq-env: &plane-mq-env
+  RABBITMQ_DEFAULT_USER: plane
+  RABBITMQ_DEFAULT_PASS: plane
+  RABBITMQ_DEFAULT_VHOST: plane
+
+x-plane-aws-env: &plane-aws-env
+  AWS_REGION: ""
+  AWS_ACCESS_KEY_ID: access-key
+  AWS_SECRET_ACCESS_KEY: secret-key
+  # `plane-minio` is plane-storage's network alias — the name the proxy's
+  # baked Caddyfile expects (see plane-storage below).
+  AWS_S3_ENDPOINT_URL: http://plane-minio:9000
+  AWS_S3_BUCKET_NAME: uploads
+
+x-plane-live-env: &plane-live-env
+  # `api` is plane-api's network alias (the Caddyfile's upstream name).
+  API_BASE_URL: http://api:8000
+  LIVE_SERVER_SECRET_KEY: *plane-live-secret
+
+services:
+  # ---------------------------------------------------------------------------
+  # Core infrastructure
+  # ---------------------------------------------------------------------------
+  pulsar:
+    image: apachepulsar/pulsar:latest
+    # Standalone runs broker + metadata + BookKeeper in one container.
+    # Functions worker and stream storage are unused by crewlet, so disable
+    # them to keep startup fast and the footprint lean.  ``apply-config-from-env``
+    # folds the PULSAR_PREFIX_* settings below into standalone.conf first.
+    command:
+      - bash
+      - -c
+      - "bin/apply-config-from-env.py conf/standalone.conf && exec bin/pulsar standalone --no-functions-worker --no-stream-storage"
+    environment:
+      # CAP THE JVM -- this is the setting that matters.  The image default
+      # ("-Xms2g -Xmx2g -XX:MaxDirectMemorySize=4g") commits 2 GB of heap at
+      # startup and can grow direct memory to 4 GB (~6 GB total); on a
+      # constrained host that exhausts RAM and the box swaps -> a sustained
+      # disk-read storm + high load at startup that can take the host down
+      # (no disk/retention setting fixes a memory problem).  Hold it to
+      # ~1.5 GB; ~800 MB idle in practice.
+      PULSAR_MEM: "-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m"
+      # Reap subscriptions left behind by an unclean shutdown (e.g. the
+      # dashboard's per-tab broadcast consumers) after 30 min of inactivity
+      # so a crash can't leak durable subscriptions that pin events on disk
+      # indefinitely.  Non-lossy for live work: the engine's own
+      # subscriptions have a connected consumer the whole time it runs.
+      PULSAR_PREFIX_subscriptionExpirationTimeMinutes: "30"
+      # Token auth (off by default for local dev). Uncomment to require
+      # JWTs and confine the engine to its own namespace via grants --
+      # full recipe (key/token generation, grants, engine + Dekaf config,
+      # authed healthcheck) in docs/guides/deployment.md "Authentication".
+      # PULSAR_PREFIX_authenticationEnabled: "true"
+      # PULSAR_PREFIX_authenticationProviders: "org.apache.pulsar.broker.authentication.AuthenticationProviderToken"
+      # PULSAR_PREFIX_authorizationEnabled: "true"
+      # PULSAR_PREFIX_superUserRoles: "admin"
+      # PULSAR_PREFIX_tokenSecretKey: "file:///pulsar/keys/secret.key"
+      # PULSAR_PREFIX_brokerClientAuthenticationPlugin: "org.apache.pulsar.client.impl.auth.AuthenticationToken"
+      # PULSAR_PREFIX_brokerClientAuthenticationParameters: "token:${PULSAR_ADMIN_TOKEN}"
+    # Hard ceiling so the container can never swap the host even if the JVM
+    # cap above is somehow exceeded -- it gets OOM-killed (and restarted)
+    # instead.  Sits comfortably above the ~1.5 GB JVM total.
+    mem_limit: 2g
+    ports:
+      - "6650:6650"   # broker (binary protocol — the engine connects here)
+      - "8080:8080"   # admin / REST (pulsar-admin, metrics)
+    volumes:
+      - pulsar-data:/pulsar/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bin/pulsar-admin brokers healthcheck || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  postgres:
+    # `latest-pg18` floats within PostgreSQL 18, so TimescaleDB patches arrive
+    # on `docker compose pull`.  The pg MAJOR is the pinned half, and
+    # Dependabot proposes that one as its own pull request (see
+    # .github/dependabot.yml) -- take it deliberately: an existing pg-data
+    # volume will not open under a newer major without a pg_upgrade or a
+    # dump/restore, and discarding it takes the company config and every
+    # agent's diary with it.
+    image: timescale/timescaledb:latest-pg18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crewlet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crewlet}
+      POSTGRES_DB: ${POSTGRES_DB:-crewlet}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crewlet"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Admin UIs
+  # ---------------------------------------------------------------------------
+  # Pulsar web UI (topics, subscriptions, backlog, message browse).  Dekaf
+  # is the UI recommended by the Pulsar docs -- Apache-2.0, no account or
+  # license needed.  Reaches the broker by service name (binary + admin).
+  # Open http://localhost:8090.  (CLI alternative:
+  #   docker compose exec pulsar bin/pulsar-admin topics list public/default)
+  dekaf:
+    # Dekaf publishes no ``:latest`` tag, so this is an explicit pin --
+    # every other service outside the `plane` profile tracks a floating one.
+    # Dependabot opens the bump as a pull request when a newer version ships
+    # (see .github/dependabot.yml), so noticing the release is not a job.
+    image: visortelle/dekaf:1.2.1
+    depends_on:
+      pulsar:
+        condition: service_healthy
+    environment:
+      DEKAF_PULSAR_BROKER_URL: "pulsar://pulsar:6650"
+      DEKAF_PULSAR_WEB_URL: "http://pulsar:8080"
+      # The address the BROWSER uses to reach Dekaf -- it sets the SPA's
+      # <base href>, so the UI's own API calls go here.  Defaults to
+      # localhost for local dev.  When Dekaf runs on a remote server, set
+      # DEKAF_PUBLIC_BASE_URL (e.g. in .env) to the address you open in the
+      # browser -- http://<server-ip-or-host>:8090 -- otherwise the UI
+      # tries to reach the browser machine's own localhost and fails with
+      # an Envoy "upstream connect error ... 111".
+      DEKAF_PUBLIC_BASE_URL: "${DEKAF_PUBLIC_BASE_URL:-http://localhost:8090}"
+    ports:
+      - "8090:8090"   # web UI
+    volumes:
+      - dekaf-library:/dekaf/data/library
+    restart: unless-stopped
+    # Dekaf fronts its gRPC/HTTP backends with Envoy on 8090; that backend
+    # takes a few seconds after the container starts.  Hitting the UI
+    # before it's up yields Envoy's "upstream connect error ... 111".  The
+    # healthcheck makes `docker compose ps` / `up --wait` report readiness
+    # so you don't open it too early, and flags the backend if it later
+    # dies (e.g. starved on a RAM-pressured host).
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8090/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  pgweb:
+    image: sosedoff/pgweb:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGWEB_DATABASE_URL: postgres://${POSTGRES_USER:-crewlet}:${POSTGRES_PASSWORD:-crewlet}@postgres:5432/${POSTGRES_DB:-crewlet}?sslmode=disable
+    ports:
+      - "8150:8081"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # GitLab — local instance for integration-testing the GitLab integration.
+  #
+  # Profile-gated: `docker compose up` leaves it OUT (GitLab is heavy).
+  # Bring it up with `docker compose --profile gitlab up -d` and then run
+  # `scripts/gitlab-dev-bootstrap.sh` to mint a root token, open the SSRF
+  # allowlist, seed a group, and provision the Nimbus agents.
+  #
+  # WHY gitlab-EE (not gitlab-ce): service accounts are a FREE-*TIER* feature
+  # but live in EE-*EDITION* code — the FOSS gitlab-ce image 404s on the
+  # /service_accounts API, which is exactly what we're here to test. An
+  # UNLICENSED gitlab-ee image runs as Free tier and serves the API.
+  # ---------------------------------------------------------------------------
+  gitlab:
+    image: gitlab/gitlab-ee:latest          # multi-arch incl. arm64 since 18.1
+    profiles: [gitlab]
+    hostname: gitlab.local
+    shm_size: "256m"                         # image default 64 MB is too small
+    environment:
+      # First boot only (initial DB seed); min length 8.
+      GITLAB_ROOT_PASSWORD: "${GITLAB_ROOT_PASSWORD:-crewlet-dev-password}"
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.local:8929'
+        # Lean recipe from GitLab's memory-constrained docs (~1.9 GiB used):
+        puma['worker_processes'] = 0
+        sidekiq['concurrency'] = 10
+        prometheus_monitoring['enable'] = false
+        registry['enable'] = false
+        gitlab_kas['enable'] = false
+        gitlab_pages['enable'] = false
+        gitlab_rails['gitlab_shell_ssh_port'] = 2424
+    ports:
+      - "8929:8929"     # external_url port == published port (nginx listens on it)
+      - "2424:22"       # git-over-SSH (optional; HTTPS+PAT is the primary path)
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    # Lean config settles around ~1.9 GiB; this ceiling OOM-kills (and
+    # restarts) rather than letting the box swap the host — same guard the
+    # pulsar service uses.
+    mem_limit: 4g
+    restart: unless-stopped
+    healthcheck:
+      # The image's built-in healthcheck has NO start_period; define our own
+      # so `up --wait` doesn't fail during the 3-6 min first-boot reconfigure.
+      test: ["CMD", "curl", "-f", "http://localhost:8929/-/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 8m
+
+  # NOTE: there is deliberately NO gitlab-mcp sidecar. The GitLab tool
+  # surface is the official `glab mcp serve` (stdio), which the engine's
+  # MCP bridge spawns per-role from `mcp_servers` — no separate server to
+  # host. (If you prefer one shared server, @zereight/mcp-gitlab in
+  # streamable-HTTP mode is the documented alternative; run it yourself
+  # and point mcp_servers.gitlab at its URL. See
+  # docs/integrations/gitlab.md § MCP tool server.)
+
+  # ---------------------------------------------------------------------------
+  # Plane — self-hosted crewlet/plane fork for the Plane integration.
+  #
+  # Profile-gated like gitlab (one compose file for everything):
+  #     docker compose --profile plane up -d
+  # Do NOT add `--wait`: plane-migrator is a one-shot job (restart:
+  # on-failure — it retries a FAILED migration but never restarts a clean
+  # exit) that exits after migrating, which `--wait` treats as a failure.
+  # The bootstrap script polls the API itself instead. After `up -d`, run
+  # scripts/plane-dev-bootstrap.sh (instance admin + founder token +
+  # workspace + demo-project archive + provision + import) — full
+  # walkthrough in docs/integrations/plane.md § Local testing.
+  #
+  # Images are the crewlet Plane fork — service accounts, public pages CRUD +
+  # search, page webhooks, @-mentionable bots, WEBHOOK_ALLOW_PRIVATE_URLS —
+  # pinned to the `preview` tag on ghcr.io/crewlet/plane-*. The UI lands on
+  # http://localhost:${PLANE_LISTEN_PORT:-8091} (80/8080/8090/8150/8929 are
+  # all taken in this repo's dev story); on a remote host set
+  # PLANE_PUBLIC_URL so redirects/links carry the server's address (see the
+  # anchor block at the top of this file).
+  #
+  # Third-party infra tracks the newest stable line that stays compatible
+  # with the fork; per-image rationale sits on each service. Note the
+  # fork's own tested matrix (upstream compose) pins postgres 15 — the DB
+  # major deliberately stays there.
+  #
+  # RAM: ~2-2.5 GB for the whole stack (largest single service ~300 MB).
+  # Deliberately NO per-service mem_limit: pulsar and gitlab above are each
+  # a single multi-GB process that can swap the host; none of these
+  # thirteen small services has that pathology, and thirteen invented caps
+  # would be thirteen unanchored guesses (upstream ships none).
+  #
+  # The proxy's Caddyfile (baked into ghcr.io/crewlet/plane-proxy) hardcodes
+  # its upstream HOSTNAMES — api:8000, web:3000, space:3000, admin:3000,
+  # live:3000, plane-minio:9000 — so the plane-prefixed app services carry
+  # network ALIASES with exactly those names (plane-storage carries
+  # plane-minio for the same reason).
+  # ---------------------------------------------------------------------------
+
+  # ── Backend ───────────────────────────────────────────────────────────
+  plane-api:
+    image: ghcr.io/crewlet/plane-backend:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    command: ./bin/docker-entrypoint-api.sh
+    environment:
+      <<: [*plane-app-env, *plane-db-env, *plane-redis-env, *plane-aws-env]
+    volumes:
+      - plane-logs-api:/code/plane/logs
+    # Webhook create/update validation resolves the engine's
+    # host.docker.internal target here. Docker Desktop provides the name
+    # natively; `host-gateway` covers Linux hosts.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        aliases: [api]
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+      plane-mq:
+        condition: service_started
+      # The entrypoint's `manage.py create_bucket` needs the S3 store
+      # answering, not merely started.
+      plane-storage:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # /api/instances/ is public (AllowAny) and only answers once the api
+      # is serving — and the entrypoint gates that on the FULL cold-boot
+      # sequence: wait_for_migrations (the one-shot plane-migrator's whole
+      # first-boot migration set) AND collectstatic's whitenoise compress
+      # pass, both racing 12 other containers for one laptop.  Budget:
+      # 300 s start_period + 30×10 s retries ≈ 10 min before docker calls
+      # it unhealthy — generous because five services gate on
+      # service_healthy here and `up -d` ABORTS them if the budget is
+      # blown, while a success during start_period flips healthy
+      # immediately (a long budget costs a fast boot nothing).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/instances/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  plane-worker:
+    image: ghcr.io/crewlet/plane-backend:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    command: ./bin/docker-entrypoint-worker.sh
+    environment:
+      <<: [*plane-app-env, *plane-db-env, *plane-redis-env, *plane-aws-env]
+    volumes:
+      - plane-logs-worker:/code/plane/logs
+    # Webhook DELIVERY is a Celery task — it runs here, not in the api, so
+    # the worker needs the host mapping as much as the api does.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+      plane-mq:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-beat:
+    image: ghcr.io/crewlet/plane-backend:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    command: ./bin/docker-entrypoint-beat.sh
+    environment:
+      <<: [*plane-app-env, *plane-db-env, *plane-redis-env, *plane-aws-env]
+    volumes:
+      - plane-logs-beat:/code/plane/logs
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+      plane-mq:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-migrator:
+    image: ghcr.io/crewlet/plane-backend:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    command: ./bin/docker-entrypoint-migrator.sh
+    environment:
+      <<: [*plane-app-env, *plane-db-env, *plane-redis-env, *plane-aws-env]
+    volumes:
+      - plane-logs-migrator:/code/plane/logs
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_started
+    # One-shot: migrates and exits. Nothing depends_on it — the api's own
+    # entrypoint waits via wait_for_migrations — and `up --wait` must not
+    # be used (it would treat the clean exit as a failure).  on-failure
+    # matches upstream CE: a transiently failed migration retries (up to
+    # 3×) instead of silently wedging the whole stack, while a CLEAN exit
+    # never restarts — so the one-shot shape and the no---wait rule hold.
+    restart: on-failure:3
+
+  # ── Frontends ─────────────────────────────────────────────────────────
+  plane-web:
+    image: ghcr.io/crewlet/plane-frontend:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    networks:
+      default:
+        aliases: [web]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  plane-space:
+    image: ghcr.io/crewlet/plane-space:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    networks:
+      default:
+        aliases: [space]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-web:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-admin:
+    image: ghcr.io/crewlet/plane-admin:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    networks:
+      default:
+        aliases: [admin]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-web:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-live:
+    image: ghcr.io/crewlet/plane-live:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    environment:
+      <<: [*plane-live-env, *plane-redis-env]
+    networks:
+      default:
+        aliases: [live]
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-web:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-proxy:
+    image: ghcr.io/crewlet/plane-proxy:${PLANE_APP_RELEASE:-preview}
+    profiles: [plane]
+    environment:
+      SITE_ADDRESS: ":80"
+      BUCKET_NAME: uploads
+      FILE_SIZE_LIMIT: "5242880"
+    ports:
+      - "${PLANE_LISTEN_PORT:-8091}:80"
+    depends_on:
+      plane-api:
+        condition: service_healthy
+      plane-web:
+        condition: service_started
+      plane-space:
+        condition: service_started
+      plane-admin:
+        condition: service_started
+      plane-live:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Infrastructure ────────────────────────────────────────────────────
+  plane-db:
+    # Latest 15.x patch via the floating minor tag. The MAJOR deliberately
+    # stays 15: it's the version the fork's upstream compose pins (the
+    # app's tested matrix), and a major bump strands existing plane-pgdata
+    # volumes (pg_upgrade/dump-restore) for zero feature gain here.
+    image: postgres:15-alpine
+    profiles: [plane]
+    command: postgres -c 'max_connections=1000'
+    environment:
+      <<: *plane-db-env
+    volumes:
+      - plane-pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plane"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  plane-redis:
+    # Newest stable line (RESP-compatible; Plane uses plain cache/session
+    # ops). Upstream pins 7.2.x — nothing in the fork needs 7-specific
+    # behavior.
+    image: valkey/valkey:9-alpine
+    profiles: [plane]
+    volumes:
+      - plane-redisdata:/data
+    restart: unless-stopped
+
+  plane-mq:
+    # Newest stable line; Celery speaks AMQP 0-9-1 unchanged. An EXISTING
+    # plane-mq-data volume from the 3.13 era cannot upgrade in place
+    # (RabbitMQ 3→4 requires a blue/green or feature-flag path) — for this
+    # dev stack, `docker compose --profile plane down -v` and re-bootstrap.
+    image: rabbitmq:4.3-management-alpine
+    profiles: [plane]
+    environment:
+      <<: *plane-mq-env
+    configs:
+      # REQUIRED on 4.x — see the config's content below: without the
+      # permit, the plane worker's Celery consumer crash-loops on
+      # Queue.declare 541 and webhook deliveries (Celery tasks) never run.
+      - source: plane-mq-permits
+        target: /etc/rabbitmq/conf.d/20-crewlet-permits.conf
+    volumes:
+      - plane-mq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  # One-shot permission fixer: the RustFS image runs as uid/gid
+  # 10001:10001, and a fresh named volume is root-owned — chown once so
+  # the server can write (mirrors RustFS's own compose helper).
+  plane-storage-perms:
+    image: alpine:latest
+    profiles: [plane]
+    command: sh -c "chown -R 10001:10001 /data"
+    volumes:
+      - plane-uploads:/data
+    restart: "no"
+
+  plane-storage:
+    # S3-compatible store: RustFS (Apache-2.0) replaces minio/minio —
+    # MinIO gutted its community image (console stripped, maintenance
+    # moved behind AIStor), so `minio/minio:latest` is a dead end. RustFS
+    # is S3-API drop-in for what Plane needs (create_bucket at api boot,
+    # presigned POST/GET); still 1.0-beta upstream, acceptable for this
+    # dev stack. Keeps the `plane-minio` ALIAS because the proxy's baked
+    # Caddyfile hardcodes plane-minio:9000 as the uploads upstream.
+    image: rustfs/rustfs:latest
+    profiles: [plane]
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      # Same dev-only credentials the AWS_* anchor presents to Plane.
+      RUSTFS_ACCESS_KEY: access-key
+      RUSTFS_SECRET_KEY: secret-key
+      RUSTFS_CONSOLE_ENABLE: "false"
+    volumes:
+      - plane-uploads:/data
+    networks:
+      default:
+        aliases: [plane-minio]
+    depends_on:
+      plane-storage-perms:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+
+configs:
+  plane-mq-permits:
+    # Celery/kombu's control plane (pidbox replies, mingle, celeryev)
+    # declares TRANSIENT non-exclusive queues; RabbitMQ 4.x deprecates
+    # the feature and FORBIDS it by default, so the plane worker's
+    # consumer bootstep dies with `Queue.declare: (541) INTERNAL_ERROR -
+    # Feature 'transient_nonexcl_queues' is deprecated` and crash-loops —
+    # no Celery task (webhook delivery included) ever runs. Permitting
+    # the deprecated feature is RabbitMQ's supported bridge until
+    # celery/kombu stop declaring such queues; revisit when the worker
+    # image ships a kombu that does.
+    content: |
+      deprecated_features.permit.transient_nonexcl_queues = true
+
+volumes:
+  pulsar-data:
+  pg-data:
+  dekaf-library:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+  plane-pgdata:
+  plane-redisdata:
+  plane-uploads:
+  plane-mq-data:
+  plane-logs-api:
+  plane-logs-worker:
+  plane-logs-beat:
+  plane-logs-migrator:
+  # No plane-proxy volumes: upstream persists Caddy's /config + /data for
+  # ACME certificate state, but this proxy serves plain HTTP on :80 —
+  # Caddy is stateless here, so there is nothing worth persisting.

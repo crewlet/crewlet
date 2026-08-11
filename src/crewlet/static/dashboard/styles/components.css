@@ -1,0 +1,929 @@
+/* Reusable components: panels, badges, rows, tables, trees, skeletons. */
+
+/* ---------------------------------------------------------------------------
+ * The panel
+ * ---------------------------------------------------------------------------
+ * The site's `landing-card`: a fill just off the page tone, a hairline border
+ * doing the separation work, a 1px settle shadow, and — when the panel is
+ * actionable — a 2px lift with a soft drop on hover.  Everything that is a
+ * "surface" in the dashboard is this object.
+ */
+.panel,
+.card,
+.list,
+.widget,
+.stat,
+.tool-card,
+.turn,
+.mem-card {
+  position: relative;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--panel-shadow);
+  transition: transform var(--dur-slow) var(--ease-snappy),
+    box-shadow var(--dur-slow) var(--ease-snappy),
+    border-color var(--dur-slow) var(--ease-snappy);
+}
+
+.list,
+.turn,
+.mem-card {
+  overflow: hidden;
+}
+
+.widget.clickable:hover {
+  box-shadow: var(--lift-shadow);
+  transform: translateY(-2px);
+}
+
+/* The site's decorative accent dots — used sparingly, on the overview's
+   lead panel only, exactly as the marketing panels use it. */
+.dot-texture::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0.12;
+  background:
+    radial-gradient(
+      circle at 16px 16px,
+      color-mix(in srgb, var(--accent) 55%, transparent) 0 1.5px,
+      transparent 1.5px
+    ),
+    radial-gradient(
+      circle at calc(100% - 24px) 24px,
+      color-mix(in srgb, var(--accent) 28%, transparent) 0 1px,
+      transparent 1px
+    );
+  background-size: 72px 72px, 108px 108px;
+}
+
+/* ---- Section headers ---- */
+.sec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 30px 0 12px;
+}
+.sec:first-child {
+  margin-top: 4px;
+}
+.sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.16em;
+}
+.sec-title .ic {
+  color: var(--text-dim);
+}
+.sec-count {
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+.sec-link {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--dur);
+}
+.sec-link:hover {
+  color: var(--text);
+}
+
+/* ---- Widgets (overview top row) ---- */
+.widgets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+@media (max-width: 1000px) {
+  .widgets {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 620px) {
+  .widgets {
+    grid-template-columns: 1fr;
+  }
+}
+.widget {
+  padding: 16px 18px;
+  overflow: hidden;
+}
+.widget.clickable {
+  cursor: pointer;
+}
+
+/* The site's numbered step marker: a soft-tinted rounded square holding the
+   icon, then a mono uppercase eyebrow. */
+.widget-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+}
+.widget-head .ic {
+  color: var(--accent-ink);
+  width: 22px;
+  height: 22px;
+  padding: 4px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  box-sizing: content-box;
+}
+.widget.green .ic {
+  color: var(--green-ink);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+.widget.blue .ic {
+  color: var(--blue-ink);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+}
+.widget.purple .ic {
+  color: var(--purple-ink);
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+}
+.widget.pink .ic {
+  color: var(--pink-ink);
+  background: color-mix(in srgb, var(--pink) 12%, transparent);
+}
+.widget.amber .ic {
+  color: var(--amber-ink);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+}
+.widget-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.widget-big {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  color: var(--heading);
+  margin-top: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.widget-foot {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.mini-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 46px;
+  margin-top: 12px;
+}
+.mini-bar {
+  flex: 1;
+  min-width: 3px;
+  /* 4px rounded data-end, anchored to the baseline. */
+  border-radius: 4px 4px 0 0;
+  background: var(--text-dim);
+  transition: height var(--dur);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+/* ---------------------------------------------------------------------------
+ * Seat cards
+ * ---------------------------------------------------------------------------
+ * One card per seat — agent or human — carrying the avatar, the name in the
+ * seat's identity hue, the surfaces it can act on, and a sentence of what it
+ * is doing right now.  The overview scrolls them in a row; the Agents index
+ * lays the same card out in a grid.
+ */
+.seat-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scroll-snap-type: x proximity;
+}
+.seat-row > .seat-card {
+  flex: 0 0 208px;
+  scroll-snap-align: start;
+}
+.seat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  gap: 12px;
+}
+
+.seat-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 7px;
+  padding: 18px 14px 16px;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--panel-shadow);
+  transition: transform var(--dur-slow) var(--ease-snappy),
+    box-shadow var(--dur-slow) var(--ease-snappy),
+    border-color var(--dur-slow) var(--ease-snappy);
+}
+.seat-card.clickable {
+  cursor: pointer;
+}
+.seat-card.clickable:hover {
+  box-shadow: var(--lift-shadow);
+  transform: translateY(-2px);
+}
+/* The seat being looked at, or the one the operator pinned. */
+.seat-card.selected {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    var(--lift-shadow);
+}
+.seat-card .avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+.seat-card .avatar .ic {
+  width: 20px;
+  height: 20px;
+}
+.seat-state {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+.seat-state.human {
+  background: var(--purple);
+}
+.seat-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+}
+.seat-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+.seat-badges:empty {
+  display: none;
+}
+/* Pushed to the bottom so status lines align across a row whose cards carry
+   different numbers of integration chips. */
+.seat-status {
+  margin-top: auto;
+  padding-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  text-wrap: pretty;
+}
+
+/* ---------------------------------------------------------------------------
+ * Engine activity feed
+ * ---------------------------------------------------------------------------
+ * time · actor (in its identity hue) · the surface it landed on · what
+ * happened.  A fixed leading time column keeps the actors aligned so the feed
+ * scans vertically.
+ */
+.act-list .act-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--dur);
+}
+.act-list .act-row:last-child {
+  border-bottom: none;
+}
+.act-row.clickable {
+  cursor: pointer;
+}
+.act-row.clickable:hover {
+  background: var(--bg-hover);
+}
+.act-time {
+  flex: 0 0 auto;
+  width: 48px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.act-actor {
+  flex: 0 0 auto;
+  max-width: 180px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-surface {
+  flex: 0 0 auto;
+}
+.act-surface .int-badge {
+  margin-right: 0;
+}
+.act-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .act-list .act-row {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+  .act-text {
+    flex: 1 0 100%;
+  }
+}
+
+/* ---- Rows ---- */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--dur);
+}
+.row:last-child {
+  border-bottom: none;
+}
+.row.clickable {
+  cursor: pointer;
+}
+.row.clickable:hover {
+  background: var(--bg-hover);
+}
+.row-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.row-body {
+  min-width: 0;
+  flex: 1;
+}
+.row-title {
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--heading);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.row-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.row-ts {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Soft-tinted identity tile — the hue reads as ink on its own wash, which is
+   how the site renders every icon chip. */
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--avatar-color, var(--text-secondary));
+  background: color-mix(in srgb, var(--avatar-color, var(--text-muted)) 13%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--avatar-color, var(--text-muted)) 24%, transparent);
+}
+
+/* ---- Badges & pills ---- */
+/* Status chips read as the site's DONE / RUNNING / QUEUED pills: mono,
+   uppercase, an 8–12% wash of the hue, and the hue's ink step for the label
+   so the text clears contrast on both themes. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--bg-card-2);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.badge i.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.badge.live {
+  color: var(--amber-ink);
+  border-color: color-mix(in srgb, var(--amber) 26%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+}
+.badge.warn {
+  color: var(--orange-ink);
+  border-color: color-mix(in srgb, var(--orange) 26%, transparent);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+}
+.badge.done,
+.badge.idle {
+  color: var(--green-ink);
+  border-color: color-mix(in srgb, var(--green) 26%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+.badge.failed {
+  color: var(--red-ink);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+.badge.afk {
+  color: var(--orange-ink);
+  border-color: color-mix(in srgb, var(--orange) 26%, transparent);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+}
+.badge.pending {
+  color: var(--text-muted);
+}
+.badge.info {
+  color: var(--blue-ink);
+  border-color: color-mix(in srgb, var(--blue) 26%, transparent);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+}
+.badge.purple {
+  color: var(--purple-ink);
+  border-color: color-mix(in srgb, var(--purple) 26%, transparent);
+  background: color-mix(in srgb, var(--purple) 10%, transparent);
+}
+/* A task title is prose, not a status code — keep it sentence-cased. */
+.badge.text {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+.afk-quip {
+  font-size: 12px;
+  color: var(--orange-ink);
+}
+.tok-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tok-chip .in {
+  color: var(--text-secondary);
+}
+.tok-chip .out {
+  color: var(--text-secondary);
+}
+.tok-chip .tot {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ---- Generic state dot ---- */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.dot.working {
+  background: var(--amber);
+}
+.dot.idle {
+  background: var(--green);
+}
+.dot.afk {
+  background: var(--orange);
+}
+.dot.offline,
+.dot.terminated {
+  background: var(--text-dim);
+}
+
+/* ---- Empty states ---- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 52px 20px;
+  color: var(--text-muted);
+}
+/* Direct child only: this styles the empty state's own illustration. A
+   descendant selector also captured icons inside buttons rendered in the
+   empty state (the config view's "Set API token"), blowing them up to 30px
+   and repainting them dim — it outranks `.ic.sm` on source order. */
+.empty > .ic {
+  width: 30px;
+  height: 30px;
+  color: var(--text-dim);
+}
+.empty .empty-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 360px;
+}
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--border);
+  background: var(--glass);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  transition: all var(--dur) var(--ease-snappy);
+}
+.btn:hover {
+  background: var(--glass-hover);
+  color: var(--text);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+/* The site's primary CTA: solid near-black on light, inverted on dark. */
+.btn.primary {
+  background: var(--heading);
+  color: var(--bg);
+  border-color: transparent;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 4px rgba(0, 0, 0, 0.05),
+    0 4px 8px rgba(0, 0, 0, 0.05);
+}
+.btn.primary:hover {
+  background: color-mix(in srgb, var(--heading) 88%, var(--bg));
+  color: var(--bg);
+  transform: translateY(-1px);
+}
+.btn.danger:hover {
+  color: var(--red-ink);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+}
+.btn.sm {
+  padding: 4px 10px;
+  font-size: 11.5px;
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-bottom: 16px;
+  cursor: pointer;
+  transition: color var(--dur);
+}
+.back-link:hover {
+  color: var(--text);
+}
+
+/* ---- Filters ---- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease-snappy);
+}
+.pill:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.pill:active {
+  transform: scale(0.97);
+}
+.pill.active {
+  color: var(--text);
+  background: var(--bg-active);
+  border-color: var(--border-strong);
+}
+.pill .ct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.pill i.dot {
+  width: 7px;
+  height: 7px;
+}
+.pill.sort {
+  margin-left: auto;
+}
+
+/* Event-category identity hues. Validated as a categorical set against the
+   order EVENT_CATEGORIES renders (see tokens.css); every use is paired with
+   the category's name, so identity is never carried by colour alone. */
+.cat-lifecycle {
+  color: var(--blue-ink);
+}
+.cat-task {
+  color: var(--green-ink);
+}
+.cat-communication {
+  color: var(--purple-ink);
+}
+.cat-decision {
+  color: var(--amber-ink);
+}
+.cat-knowledge {
+  color: var(--pink-ink);
+}
+.cat-learning {
+  color: var(--purple-ink);
+}
+.cat-a2a {
+  color: var(--orange-ink);
+}
+.cat-notification {
+  color: var(--cyan-ink);
+}
+.cat-webhook {
+  color: var(--brown-ink);
+}
+.cat-system {
+  color: var(--text-muted);
+}
+
+/* ---- Trace tree (events view) ---- */
+.trace {
+  border-bottom: 1px solid var(--border);
+}
+.trace:last-child {
+  border-bottom: none;
+}
+.trace-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  cursor: default;
+}
+.trace-head.expandable {
+  cursor: pointer;
+}
+.trace-head.expandable:hover {
+  background: var(--bg-hover);
+}
+.chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: transform var(--dur) var(--ease-snappy);
+}
+.trace.open > .trace-head .chevron {
+  transform: rotate(90deg);
+}
+.node-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.trace-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.trace-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.trace-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-inset);
+}
+.trace-kids {
+  display: none;
+  padding: 2px 0 8px 0;
+  background: var(--bg-inset);
+}
+.trace.open > .trace-kids {
+  display: block;
+}
+.trace-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px 7px 40px;
+  font-size: 13px;
+}
+.trace-child.clickable {
+  cursor: pointer;
+}
+.trace-child.clickable:hover {
+  background: var(--bg-hover);
+}
+.trace-child.skipped {
+  color: var(--text-muted);
+}
+.inspect {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--dur);
+}
+.trace-child:hover .inspect,
+.trace-head:hover .inspect {
+  opacity: 1;
+}
+.evt-cat {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 11%, transparent);
+}
+.flash {
+  animation: flash 2.2s var(--ease);
+}
+@keyframes flash {
+  0%,
+  20% {
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
+
+/* ---- Tables ---- */
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.tbl th {
+  text-align: left;
+  font-size: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+}
+.tbl td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.tbl tr:last-child td {
+  border-bottom: none;
+}
+.tbl tr.clickable {
+  cursor: pointer;
+}
+.tbl tr.clickable:hover td {
+  background: var(--bg-hover);
+}
+.tbl .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.tbl-wrap {
+  overflow-x: auto;
+}
+.zero {
+  color: var(--text-dim);
+}
+
+/* ---- Skeletons ---- */
+@keyframes shimmer {
+  to {
+    background-position-x: -200%;
+  }
+}
+.skel {
+  background: linear-gradient(
+    100deg,
+    var(--bg-card) 30%,
+    var(--bg-hover) 50%,
+    var(--bg-card) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.3s linear infinite;
+  border-radius: var(--radius-sm);
+}
+.skel-row {
+  height: 14px;
+  margin: 14px 16px;
+}
+.skel-card {
+  height: 96px;
+  border-radius: var(--radius);
+}
+.skel-line {
+  height: 10px;
+  border-radius: 5px;
+  margin: 8px 0;
+}

@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../schema/bootstrap.schema.json
+# Tier A bootstrap config for the Nimbus example company.
+#
+# Pairs with examples/nimbus.company.yaml (Tier B).  Run the pair
+# end-to-end with:
+#
+#     export CREWLET_DATABASE_DSN="postgresql://crewlet:crewlet@localhost:5432/crewlet"
+#     export CREWLET_PULSAR_URL="pulsar://localhost:6650"
+#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+#     export LLM_BASE_URL="https://api.your-llm-provider.example/v1/"  # any OpenAI-compatible endpoint
+#     export LLM_MODEL="your-provider/model-id"
+#     export LLM_API_KEY="<your-llm-provider-key>"
+#     export OPENAI_API_KEY="<for-embeddings>"
+#     # optional — only if you enable the `secrets:` keyring below.
+#     # `crewlet secrets keygen --key-id 2026-01` prints the export line + snippet:
+#     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
+#
+#     crewlet run examples/nimbus.config.yaml \
+#         --import-company examples/nimbus.company.yaml
+#
+# Restart-only Tier A fields only:
+#   - providers.queue   : Pulsar connection
+#   - providers.database: PostgreSQL connection
+#   - providers.knowledge: pgvector | memory
+#   - api               : host / port / bearer-auth tokens
+#   - secrets           : optional encryption keyring — encrypts the whole
+#                         Tier B company config at rest (see below)
+#   - debug             : verbose logging
+#
+# Everything else (roles, LLMs, MCP servers, integrations, policies,
+# budgets) lives in the Tier B company YAML — versioned in
+# ``company_config`` and live-editable via the ``/config/*`` REST API.
+
+debug: false
+
+providers:
+  queue:
+    type: pulsar
+    url: "${CREWLET_PULSAR_URL}"
+    # tenant: public                  # optional — must already exist; the engine
+    # namespace: default              #   never creates tenants/namespaces itself
+  database:
+    dsn: "${CREWLET_DATABASE_DSN}"
+  knowledge:
+    type: pgvector
+
+api:
+  host: "0.0.0.0"
+  # 80 = the walkthrough topology: dashboard + webhooks on the plain
+  # http port, no :port suffix in URLs.  A port > 0 makes `crewlet run`
+  # start the EMBEDDED API inside the engine process, and that embedded
+  # server IS the webhook target the integrations register against a
+  # local engine (http://host.docker.internal:80/webhooks/plane) — one
+  # process serves engine + dashboard + webhooks.  Two things to know
+  # about 80 specifically: (a) on Linux a non-root process needs
+  # privileged-port access — `sudo sysctl net.ipv4.ip_unprivileged_port_start=80`
+  # (persist in /etc/sysctl.d/) or grant CAP_NET_BIND_SERVICE; (b) the
+  # host's port 80 must be free — keep Plane's PLANE_LISTEN_PORT at its
+  # 8091 default.  Do NOT also start the standalone `crewlet run api`
+  # with this file: that command binds the same port and the two
+  # processes would fight over it.  The standalone API is for SPLIT
+  # deployments only — set this to 0 there so the engine's embedded
+  # server stays off (see docs/guides/deployment.md).  (8080 is Pulsar's
+  # admin port in this repo's compose — never use that one.)
+  port: 80
+  auth:
+    tokens:
+      - id: founder
+        token: "${CREWLET_API_TOKEN_FOUNDER}"
+
+# ── Secret encryption at rest (OPTIONAL) ──────────────────────────────
+#
+# Uncomment to encrypt the ENTIRE Tier B company config at rest. With a
+# keyring configured, the whole `company_config` payload is stored as one
+# opaque AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org chart,
+# policies, model choices, and every secret are ciphertext in the DB. The
+# keyring below is the sole root of trust: it lives here in Tier A / the
+# environment, never in the database.
+#
+# Without this block (the default), Tier B is stored verbatim — secrets are
+# `${VAR}` references resolved from the environment at construction time.
+#
+# Enable it:
+#   1. Mint a key + snippet:   crewlet secrets keygen --key-id 2026-01
+#   2. Export the printed key:  export CREWLET_SECRET_KEY_2026_01=<base64>
+#   3. Uncomment the block, then encrypt the active revision once:
+#        crewlet config seal
+#   Afterwards only this key is needed to read the config.
+#
+# Rotate the master key with `crewlet config rekey` (keep the old key in
+# `keys` until it succeeds). See docs/concepts/configuration.md#secrets.
+#
+# secrets:
+#   active_key_id: "2026-01"          # which key seals NEW writes
+#   keys:
+#     - id: "2026-01"                 # colon-free id; stamped into every envelope
+#       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes)
+#     # During a rotation, keep the previous key here so its ciphertext
+#     # still decrypts, then drop it once `crewlet config rekey` completes:
+#     # - id: "2025-07"
+#     #   material: "${CREWLET_SECRET_KEY_2025_07}"

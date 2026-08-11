@@ -1,0 +1,7 @@
+name: "Minimal Corp"
+units:
+  - name: Core
+    type: team
+    lead: Engineer
+    roles:
+      - name: Engineer

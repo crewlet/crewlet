@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.crewlet.ai/schema/bootstrap.schema.json",
+  "$defs": {
+    "ApiAuthConfig": {
+      "additionalProperties": false,
+      "description": "Bearer-token auth policy for ``/config/*`` routes.",
+      "properties": {
+        "tokens": {
+          "items": {
+            "$ref": "#/$defs/ApiAuthTokenConfig"
+          },
+          "title": "Tokens",
+          "type": "array"
+        },
+        "disabled": {
+          "default": false,
+          "title": "Disabled",
+          "type": "boolean"
+        }
+      },
+      "title": "ApiAuthConfig",
+      "type": "object"
+    },
+    "ApiAuthTokenConfig": {
+      "additionalProperties": false,
+      "description": "One bearer token gating ``/config/*`` access.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "token": {
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "token"
+      ],
+      "title": "ApiAuthTokenConfig",
+      "type": "object"
+    },
+    "ApiConfig": {
+      "additionalProperties": false,
+      "description": "Tier A API process settings \u2014 host, port, auth.",
+      "properties": {
+        "host": {
+          "default": "0.0.0.0",
+          "title": "Host",
+          "type": "string"
+        },
+        "port": {
+          "default": 0,
+          "title": "Port",
+          "type": "integer"
+        },
+        "auth": {
+          "$ref": "#/$defs/ApiAuthConfig",
+          "default": {
+            "tokens": [],
+            "disabled": false
+          }
+        }
+      },
+      "title": "ApiConfig",
+      "type": "object"
+    },
+    "BootstrapProvidersConfig": {
+      "additionalProperties": false,
+      "description": "Tier A provider settings \u2014 queue, database, knowledge.\n\nEverything the engine needs to talk to its own infrastructure\nbefore reading the founder-owned Tier B config from the DB.",
+      "properties": {
+        "queue": {
+          "$ref": "#/$defs/QueueConfig",
+          "default": {
+            "type": "pulsar",
+            "url": "pulsar://localhost:6650",
+            "tenant": "public",
+            "namespace": "default",
+            "auth_token": "",
+            "tls_trust_certs_path": ""
+          }
+        },
+        "database": {
+          "$ref": "#/$defs/DatabaseConfig",
+          "default": {
+            "dsn": ""
+          }
+        },
+        "knowledge": {
+          "$ref": "#/$defs/KnowledgeStoreConfig",
+          "default": {
+            "type": "pgvector"
+          }
+        }
+      },
+      "title": "BootstrapProvidersConfig",
+      "type": "object"
+    },
+    "DatabaseConfig": {
+      "additionalProperties": false,
+      "description": "Configuration for the PostgreSQL database.",
+      "properties": {
+        "dsn": {
+          "default": "",
+          "title": "Dsn",
+          "type": "string"
+        }
+      },
+      "title": "DatabaseConfig",
+      "type": "object"
+    },
+    "KnowledgeStoreConfig": {
+      "additionalProperties": false,
+      "description": "Configuration for the knowledge store backend (Tier A \u2014 bound to DB).",
+      "properties": {
+        "type": {
+          "default": "pgvector",
+          "enum": [
+            "pgvector",
+            "memory"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "KnowledgeStoreConfig",
+      "type": "object"
+    },
+    "QueueConfig": {
+      "additionalProperties": false,
+      "description": "Configuration for the event queue backend.",
+      "properties": {
+        "type": {
+          "const": "pulsar",
+          "default": "pulsar",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "default": "pulsar://localhost:6650",
+          "title": "Url",
+          "type": "string"
+        },
+        "tenant": {
+          "default": "public",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Tenant",
+          "type": "string"
+        },
+        "namespace": {
+          "default": "default",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Namespace",
+          "type": "string"
+        },
+        "auth_token": {
+          "default": "",
+          "title": "Auth Token",
+          "type": "string"
+        },
+        "tls_trust_certs_path": {
+          "default": "",
+          "title": "Tls Trust Certs Path",
+          "type": "string"
+        }
+      },
+      "title": "QueueConfig",
+      "type": "object"
+    },
+    "SecretKeyConfig": {
+      "additionalProperties": false,
+      "description": "One key in the Tier A encryption keyring.\n\n``material`` is a base64-encoded 32-byte key (or a ``${VAR}``\nreference, resolved from the environment at bootstrap load time like\nevery Tier A value). Generate one with ``crewlet secrets keygen``.\nSee ``docs/concepts/configuration.md`` \u00a7 Secrets.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "material": {
+          "title": "Material",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "material"
+      ],
+      "title": "SecretKeyConfig",
+      "type": "object"
+    },
+    "SecretsConfig": {
+      "additionalProperties": false,
+      "description": "Tier A encryption keyring for company-config secrets at rest.\n\nThe keyring is the sole root of trust: the database holds only\nciphertext, and the key material lives here (on disk / in env),\nnever in the DB. Empty (the default) means secret encryption is\ndisabled \u2014 the engine then fails closed only if the active revision\nactually contains sealed values.\n\nSee ``docs/concepts/configuration.md`` \u00a7 Secrets.",
+      "properties": {
+        "active_key_id": {
+          "default": "",
+          "title": "Active Key Id",
+          "type": "string"
+        },
+        "keys": {
+          "items": {
+            "$ref": "#/$defs/SecretKeyConfig"
+          },
+          "title": "Keys",
+          "type": "array"
+        }
+      },
+      "title": "SecretsConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Tier A \u2014 ops-owned, on-disk, restart-only.\n\nCarries only the keys the engine needs to bring up its\ninfrastructure (DB, Pulsar, API socket, auth, logging) plus the\nsecret-encryption keyring (the root of trust for Tier B secrets at\nrest).  Everything else lives in the versioned ``company_config``\ntable and is delivered to the engine via :meth:`Engine.apply_config`.\n\nSee ``docs/concepts/configuration.md``.",
+  "properties": {
+    "providers": {
+      "$ref": "#/$defs/BootstrapProvidersConfig",
+      "default": {
+        "queue": {
+          "auth_token": "",
+          "namespace": "default",
+          "tenant": "public",
+          "tls_trust_certs_path": "",
+          "type": "pulsar",
+          "url": "pulsar://localhost:6650"
+        },
+        "database": {
+          "dsn": ""
+        },
+        "knowledge": {
+          "type": "pgvector"
+        }
+      }
+    },
+    "api": {
+      "$ref": "#/$defs/ApiConfig",
+      "default": {
+        "host": "0.0.0.0",
+        "port": 0,
+        "auth": {
+          "disabled": false,
+          "tokens": []
+        }
+      }
+    },
+    "secrets": {
+      "$ref": "#/$defs/SecretsConfig",
+      "default": {
+        "active_key_id": "",
+        "keys": []
+      }
+    },
+    "debug": {
+      "default": false,
+      "title": "Debug",
+      "type": "boolean"
+    }
+  },
+  "title": "BootstrapConfig",
+  "type": "object"
+}

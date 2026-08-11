@@ -1,0 +1,66 @@
+name: Publish docs
+
+# The documentation site (docs.crewlet.ai) renders this repository's docs/ tree.
+# The renderer is a separate repository that pulls from here on a schedule; this
+# workflow just tells it not to wait, so a docs change is live in a minute
+# instead of within the hour.
+#
+# Both the target repository and the token are secrets, so this file names
+# neither. Secrets are not exposed to pull requests from forks, and the trigger
+# is a push to main, so only a real merge can fire it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-docs
+  cancel-in-progress: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the docs site to rebuild
+        env:
+          # Both are secrets, including the repository name. It is not a
+          # credential, but this repository is public: Actions logs are public
+          # with it, and a repository *variable* is echoed into them verbatim,
+          # which would tell every reader that the docs site exists and where it
+          # lives. A secret is masked to *** instead. That is the whole reason
+          # this workflow never names its target.
+          #
+          # Both are deliberately named the same as the env vars below, because
+          # those names are the only ones a run log shows — a mismatch sends
+          # whoever is configuring this to create them under the wrong names.
+          DOCS_REPO: ${{ secrets.DOCS_REPO }}
+          DOCS_TOKEN: ${{ secrets.DOCS_TOKEN }}
+        run: |
+          # Report presence, never the value — echoing a secret would only print
+          # ***, and printing the target is exactly what this must not do.
+          if [ -z "${DOCS_REPO}" ] || [ -z "${DOCS_TOKEN}" ]; then
+            echo "Docs publish hook not configured — skipping."
+            echo "  DOCS_REPO   $([ -n "${DOCS_REPO}" ]  && echo set || echo MISSING)"
+            echo "  DOCS_TOKEN  $([ -n "${DOCS_TOKEN}" ] && echo set || echo MISSING)"
+            echo
+            echo "Both are repository secrets, under Settings → Secrets and variables → Actions."
+            echo "DOCS_REPO is the docs site repository as owner/name; DOCS_TOKEN needs"
+            echo "Contents: read and write on it (repository_dispatch lives under Contents)."
+            echo "Without them the docs site still picks the change up on its hourly poll."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${DOCS_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${DOCS_REPO}/dispatches" \
+            -d '{"event_type":"upstream-docs-updated"}'
+          echo "Requested a docs site rebuild."

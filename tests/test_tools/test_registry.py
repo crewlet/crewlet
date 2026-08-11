@@ -1,0 +1,172 @@
+"""Tests for the tool registry."""
+
+from typing import Any
+
+import pytest
+
+from crewlet.tools.protocol import AgentContext, CheckContext, ToolResult
+from crewlet.tools.registry import SimpleTool, ToolRegistry, build_availability_set
+
+
+def make_tool(name: str) -> SimpleTool:
+    async def fn(params: dict[str, Any], context: AgentContext) -> ToolResult:
+        return ToolResult(output=f"{name} executed")
+
+    return SimpleTool(
+        name=name,
+        description=f"Test tool {name}",
+        parameters={"type": "object"},
+        fn=fn,
+    )
+
+
+def test_register_and_get():
+    registry = ToolRegistry()
+    tool = make_tool("test")
+    registry.register(tool)
+    assert registry.get("test") is not None
+    assert registry.get("test").name == "test"
+
+
+def test_get_nonexistent():
+    registry = ToolRegistry()
+    assert registry.get("nonexistent") is None
+
+
+def test_list_tools():
+    registry = ToolRegistry()
+    registry.register(make_tool("a"))
+    registry.register(make_tool("b"))
+    tools = registry.list_tools()
+    names = [t.name for t in tools]
+    assert "a" in names
+    assert "b" in names
+
+
+def test_to_tool_defs():
+    registry = ToolRegistry()
+    registry.register(make_tool("test"))
+    defs = registry.to_tool_defs()
+    assert len(defs) == 1
+    assert defs[0]["name"] == "test"
+    assert "description" in defs[0]
+    assert "parameters" in defs[0]
+
+
+@pytest.mark.asyncio
+async def test_simple_tool_execute():
+    tool = make_tool("test")
+    context = AgentContext(agent_id="a1", role="Engineer")
+    result = await tool.execute({}, context)
+    assert result.success
+    assert result.output == "test executed"
+
+
+# per-tool check_fn -------------------------------------------------------
+
+
+def test_register_with_check_fn_attaches_check():
+    """``register(tool, check_fn=...)`` stores the check_fn under the
+    tool's name so ``check_fn_for`` can retrieve it later."""
+    registry = ToolRegistry()
+
+    def fn(_ctx):
+        return True
+
+    registry.register(make_tool("with_check"), check_fn=fn)
+    assert registry.check_fn_for("with_check") is fn
+
+
+def test_register_without_check_fn_returns_none():
+    """A tool registered without a ``check_fn`` is treated as always
+    available — ``check_fn_for`` returns ``None``."""
+    registry = ToolRegistry()
+    registry.register(make_tool("no_check"))
+    assert registry.check_fn_for("no_check") is None
+
+
+def test_register_check_attaches_after_registration():
+    """``register_check`` lets infrastructure code (MCP wrapper,
+    colleague-tool registrar) attach a ``check_fn`` to a tool that
+    was registered earlier."""
+    registry = ToolRegistry()
+    registry.register(make_tool("colleague"))
+    registry.register_check("colleague", lambda ctx: bool(ctx.mcp_env.get("slack")))
+    fn = registry.check_fn_for("colleague")
+    assert fn is not None
+    assert fn(CheckContext(mcp_env={"slack": {"token": "x"}})) is True
+    assert fn(CheckContext(mcp_env={})) is False
+
+
+def test_build_availability_set_no_check_fns_means_all_available():
+    """A registry with zero check_fns returns every name as
+    available — the default-allow rule."""
+    registry = ToolRegistry()
+    registry.register(make_tool("a"))
+    registry.register(make_tool("b"))
+    ctx = CheckContext()
+    result = build_availability_set(registry, ctx, ["a", "b"])
+    assert result == {"a", "b"}
+
+
+def test_build_availability_set_filters_unavailable():
+    """A tool whose ``check_fn`` returns ``False`` is excluded; one
+    that returns ``True`` is included; one with no check is always
+    included."""
+    registry = ToolRegistry()
+    registry.register(make_tool("always"))
+    registry.register(make_tool("yes"), check_fn=lambda _ctx: True)
+    registry.register(make_tool("no"), check_fn=lambda _ctx: False)
+    ctx = CheckContext()
+    result = build_availability_set(registry, ctx, ["always", "yes", "no"])
+    assert result == {"always", "yes"}
+
+
+def test_build_availability_set_gates_on_sandbox_enabled():
+    """A check_fn can gate a tool on ``CheckContext.sandbox_enabled`` —
+    how the ``run_sandbox`` builtin is shown only to roles allowed to use
+    the detached sandbox."""
+    registry = ToolRegistry()
+    registry.register(make_tool("run_sandbox"), check_fn=lambda c: c.sandbox_enabled)
+    off = build_availability_set(registry, CheckContext(), ["run_sandbox"])
+    assert off == set()
+    on = build_availability_set(
+        registry, CheckContext(sandbox_enabled=True), ["run_sandbox"]
+    )
+    assert on == {"run_sandbox"}
+
+
+def test_build_availability_set_exception_treated_as_unavailable():
+    """A ``check_fn`` that raises is fail-safe: the tool is treated
+    as unavailable. The exception class is logged (verified by no
+    propagation here) but exception args are not logged so secrets
+    in error messages don't leak."""
+
+    def _raises(_ctx: CheckContext) -> bool:
+        raise RuntimeError("password=abc123 is invalid")
+
+    registry = ToolRegistry()
+    registry.register(make_tool("flaky"), check_fn=_raises)
+    ctx = CheckContext()
+    result = build_availability_set(registry, ctx, ["flaky"])
+    assert result == set()
+
+
+def test_build_availability_set_only_resolves_requested_names():
+    """``tool_names`` filters which check_fns run. A registered tool
+    not in the names list is not resolved (and its check_fn is not
+    invoked, even if registered)."""
+    calls: list[str] = []
+
+    def _track(name: str):
+        def _fn(_ctx: CheckContext) -> bool:
+            calls.append(name)
+            return True
+
+        return _fn
+
+    registry = ToolRegistry()
+    registry.register(make_tool("a"), check_fn=_track("a"))
+    registry.register(make_tool("b"), check_fn=_track("b"))
+    build_availability_set(registry, CheckContext(), ["a"])
+    assert calls == ["a"]
