@@ -9,5 +9,6 @@
 - [ ] `pytest` passes
 - [ ] Tests added/updated for the change
 - [ ] Docs updated (`docs/`) — config, CLI, or behavior changes are reflected
-- [ ] The PR title reads as a release note — it is what appears in the
-      generated release notes
+- [ ] Commit subjects are `type(scope): summary` (see CONTRIBUTING.md)
+- [ ] The PR title takes the same form, and the summary after the prefix reads
+      as a release note — it is what appears in the generated release notes
