@@ -6,8 +6,9 @@ name: Publish docs
 # instead of within the hour.
 #
 # Both the target repository and the token are secrets, so this file names
-# neither. Secrets are not exposed to pull requests from forks, and the trigger
-# is a push to main, so only a real merge can fire it.
+# neither. Secrets are not exposed to pull requests from forks, and neither
+# trigger below can be reached from one: a push to main is a real merge, and
+# Release only ever runs on a tag push or a manual dispatch.
 
 on:
   push:
@@ -15,6 +16,26 @@ on:
     paths:
       - "docs/**"
       - "README.md"
+
+  # A release changes which versions the site publishes, not just the content of
+  # one: the newest tag takes the bare URLs and the line it replaces moves to
+  # /vX.Y/. Nothing above notices that happening, and the two obvious ways to
+  # catch it do not work:
+  #
+  #   - `tags: ["v*"]` here would be ANDed with the `paths` filter above, and a
+  #     tag pointing at a commit already on main changes no files at all — so
+  #     the filter that makes this workflow cheap would also make it never fire.
+  #   - `release: [published]` never fires either. Release creates the release
+  #     with the built-in GITHUB_TOKEN, and GitHub deliberately does not start
+  #     workflow runs from events that token authored, to stop workflows
+  #     triggering each other in a loop.
+  #
+  # Watching the Release workflow itself sidesteps both. Without it a new
+  # version waits for the docs site's hourly poll.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
   workflow_dispatch:
 
 permissions:
@@ -27,6 +48,13 @@ concurrency:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    # Only a Release run that actually released something is worth a rebuild: a
+    # failed one published no version, and a `workflow_dispatch` rehearsal only
+    # uploads to TestPyPI and creates no tag. Every other trigger passes through.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     steps:
       - name: Ask the docs site to rebuild
         env:
