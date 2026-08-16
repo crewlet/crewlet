@@ -363,6 +363,55 @@ def build_plan_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Prior-work ledger (Plan + Execute user messages)
+# ---------------------------------------------------------------------------
+
+
+PRIOR_WORK_HEADER = (
+    "## Already done earlier in this turn"
+    "\nAn earlier round of this same turn ran and was sent back for another"
+    " pass. Every call below marked `→ success` ALREADY RAN. How to treat"
+    " each one:"
+    "\n- **`(read)`** — it only fetched data, and those results are NOT"
+    " carried into this round. Re-run it whenever you need the data again;"
+    " never invent data you no longer have."
+    "\n- **everything else** — assume it changed something outside the"
+    " engine (a post, a comment, a status change, a code run). Do NOT issue"
+    " it again: a human sees the second one as a duplicate."
+    "\n- **`→ error`** — it did NOT take effect. Retry it, fixed."
+    "\nPlan and deliver only what is still missing. If the gap is a follow-up"
+    " to something already delivered, ADD to it — reply in the existing"
+    " thread, edit the existing item — rather than re-sending the original."
+    " Doing that follow-up is expected and is not a duplicate."
+)
+
+
+def build_phase_user_message(
+    *,
+    task_description: str,
+    prior_work: str = "",
+) -> str:
+    """User message shared by the Plan and Execute phases.
+
+    ``prior_work`` is the rendered
+    :func:`crewlet.agent.iteration_log.render_iteration_ledger` block —
+    empty on the first iteration of every turn, which is the common
+    case, so the message stays byte-identical to the pre-ledger form
+    until a ``self_iterate`` actually happens.
+
+    It rides the USER message, never the system prompt: the Plan
+    system prompt is deliberately frozen at turn start
+    (``TurnContext.plan_prefetch``) so its prefix stays byte-stable for
+    provider prefix caching, and a block that grows each iteration
+    would invalidate that cache on every loop.
+    """
+    task = task_description or "(no description)"
+    if not prior_work:
+        return f"Task:\n{task}"
+    return f"Task:\n{task}\n\n{PRIOR_WORK_HEADER}\n{prior_work}"
+
+
+# ---------------------------------------------------------------------------
 # Execute phase
 # ---------------------------------------------------------------------------
 
@@ -508,9 +557,13 @@ REVIEW_HEADER = (
     "absence of `git`/`shell`/`pytest`/`file` calls is NOT fabrication — "
     "that work happens inside the sandbox, never as tool calls here. Judge "
     "the report on its merits."
-    "\n**Duplicate-delivery rule:** if both phases successfully called "
-    "the same delivery tool, the side effect fired twice — choose "
-    "`self_iterate`."
+    "\n**Duplicate-delivery rule:** judge by target and content, not tool "
+    "name. The same thing sent twice to the same place — across both "
+    "phases, or again after `## Earlier iterations` — is a duplicate: "
+    "choose `self_iterate`. A follow-up that ADDS to an earlier delivery "
+    "(threaded reply, edit) is correct."
+    "\n**On `self_iterate`, set `completed_work`:** one sentence on what "
+    "ALREADY landed, so the next round adds to it instead of re-firing it."
     "\n**Missing-tool rule:** if Execute narrates that it lacks a "
     "tool (e.g. \"I don't have access to the tool needed to deliver "
     'this"), choose `self_iterate` '
@@ -536,6 +589,7 @@ def build_review_prompt(
     execute_summary: str = "",
     execute_tool_log: str = "",
     plan_tool_log: str = "",
+    earlier_iterations: str = "",
     skill_registry: PromptSkillRegistry | None = None,
 ) -> str:
     """Review-phase system prompt.
@@ -552,6 +606,15 @@ def build_review_prompt(
     No domain tools, no catalogue, no policies / roster / backstory —
     all correctness constraints that matter at Review time are
     encoded in the plan's ``success_criteria``.
+
+    ``earlier_iterations`` is the rendered prior-work ledger (see
+    :mod:`crewlet.agent.iteration_log`), empty on the first iteration.
+    Both per-phase tool logs are reset each iteration — deliberately,
+    so the engine's delivery gate can't read iter-1 calls as iter-2
+    delivery — which left the reviewer unable to see a repeat across
+    iterations.  This section restores exactly that view, so the
+    duplicate-delivery rule holds turn-wide rather than only inside one
+    iteration.
 
     Review-phase tool skills are operator-scoped: a skill that lists
     the Review phase in its ``phases`` set surfaces here, keyed on the
@@ -571,11 +634,20 @@ def build_review_prompt(
         available_tools=set(),
         mcp_servers=set(definition.role.mcp_env.keys()),
     )
-    # Always include both tool-log sections — REVIEW_HEADER references
-    # them as the primary evidence to judge against, so leaving them
-    # out would make the header instructions point at nothing.  Plan
-    # comes first because chronologically the planner ran first; the
-    # reviewer reads top-to-bottom as a timeline.
+    # Evidence sections run oldest-first so the reviewer reads the turn
+    # top-to-bottom as one timeline: earlier rounds, then this round's
+    # Plan, then its Execute.
+    #
+    # The two tool logs are ALWAYS rendered, as ``(none)`` when empty —
+    # REVIEW_HEADER points at them as the primary evidence, so omitting
+    # one would make those instructions point at nothing, and a missing
+    # section reads as "log unavailable" rather than "no calls".
+    # ``## Earlier iterations`` is the deliberate exception: its absence
+    # is unambiguous (it can only mean "this is iteration 1"), so it is
+    # dropped instead, and REVIEW_HEADER refers to it conditionally.
+    if earlier_iterations:
+        parts.append("\n## Earlier iterations (already delivered)")
+        parts.append(earlier_iterations)
     parts.append("\n## What Plan did")
     parts.append(plan_tool_log or "(none)")
     parts.append("\n## What Execute did")

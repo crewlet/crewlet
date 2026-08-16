@@ -59,6 +59,15 @@ class _PhaseScriptedProvider:
         self._execute = list(execute)
         self._review = list(review)
         self.model = model
+        # Every prompt this provider was handed, in order, so tests can
+        # assert on what a phase actually saw (the prior-work ledger
+        # rides the USER message; Review's earlier-iterations block
+        # rides its system prompt).
+        self.seen: list[dict[str, str]] = []
+
+    def prompts_for(self, phase: str) -> list[dict[str, str]]:
+        """All prompts seen by ``phase`` ("plan" / "execute" / "review")."""
+        return [p for p in self.seen if p["phase"] == phase]
 
     async def complete(
         self, messages, tools=None, temperature=0.7, max_tokens=None, tool_choice=None
@@ -67,6 +76,21 @@ class _PhaseScriptedProvider:
         for m in messages:
             if m.role == "system":
                 sys_text = m.content
+                break
+        user_text = ""
+        for m in messages:
+            if m.role == "user":
+                user_text = m.content
+                break
+        for marker, label in (
+            ("PLAN phase", "plan"),
+            ("EXECUTE phase", "execute"),
+            ("REVIEW phase", "review"),
+        ):
+            if marker in sys_text:
+                self.seen.append(
+                    {"phase": label, "system": sys_text, "user": user_text}
+                )
                 break
         if "PLAN phase" in sys_text:
             return self._plan.pop(0) if self._plan else Completion(content="plan done")
@@ -1940,3 +1964,252 @@ async def test_running_turn_finishes_despite_begin_shutdown() -> None:
 
     result = await asyncio.wait_for(turn_task, timeout=5.0)
     assert result == "Final: slow"
+
+
+# ---------------------------------------------------------------------------
+# Prior-work ledger across self_iterate loops
+# ---------------------------------------------------------------------------
+
+
+async def test_self_iterate_feeds_prior_work_ledger_to_next_plan():
+    """A ``self_iterate`` round must tell the next Plan what already ran.
+
+    Every phase rebuilds its LLM conversation from scratch each
+    iteration, so without the ledger iter-2's planner is blind to
+    iter-1's delivery and re-plans the same side effect — the
+    double-post failure mode.
+    """
+    agent = _mk_agent()
+    provider = _PhaseScriptedProvider(
+        plan=_flat(_plan_submission(["search"]), _plan_submission(["search"])),
+        execute=[
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="e1", name="search", arguments={"q": "infra"})],
+            ),
+            Completion(content="iter-1 draft", tool_calls=[]),
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="e2", name="search", arguments={"q": "infra"})],
+            ),
+            Completion(content="iter-2 draft", tool_calls=[]),
+        ],
+        review=_flat(
+            _review_submission(
+                "self_iterate",
+                notes="Add the month-by-month breakdown.",
+                completed_work="The summary already went out; follow up in-thread.",
+            ),
+            _review_submission("done", final_artifact="Final"),
+        ),
+    )
+    engine = TurnEngine(
+        llm_providers={"default": provider},
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+    )
+    await engine.run_turn(
+        agent, task_description="post the summary", org=agent.definition.org
+    )
+
+    plans = provider.prompts_for("plan")
+    assert len(plans) == 2
+    # Iteration 1 sees the bare ask — no ledger, so the byte-stable
+    # prefix of a normal single-pass turn is untouched.
+    assert "Already done earlier in this turn" not in plans[0]["user"]
+    # Iteration 2 sees the engine-recorded calls AND the reviewer's gloss.
+    second = plans[1]["user"]
+    assert "Already done earlier in this turn" in second
+    assert "### Iteration 1" in second
+    assert "search(" in second
+    assert "The summary already went out; follow up in-thread." in second
+    assert "Add the month-by-month breakdown." in second
+
+
+async def test_self_iterate_ledger_reaches_execute_and_review():
+    """Execute fires the side effects, and Review judges duplicates —
+    both need the same cross-iteration view."""
+    agent = _mk_agent()
+    provider = _PhaseScriptedProvider(
+        plan=_flat(_plan_submission(["search"]), _plan_submission(["search"])),
+        execute=[
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="e1", name="search", arguments={"q": "x"})],
+            ),
+            Completion(content="iter-1 draft", tool_calls=[]),
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="e2", name="search", arguments={"q": "x"})],
+            ),
+            Completion(content="iter-2 draft", tool_calls=[]),
+        ],
+        review=_flat(
+            _review_submission("self_iterate", notes="not enough detail"),
+            _review_submission("done", final_artifact="Final"),
+        ),
+    )
+    engine = TurnEngine(
+        llm_providers={"default": provider},
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+    )
+    await engine.run_turn(
+        agent, task_description="do the thing", org=agent.definition.org
+    )
+
+    # Execute runs several tool-loop rounds per iteration and every round
+    # carries the same opening user message, so compare first vs last.
+    executes = provider.prompts_for("execute")
+    reviews = provider.prompts_for("review")
+    assert "Already done earlier in this turn" not in executes[0]["user"]
+    assert "Already done earlier in this turn" in executes[-1]["user"]
+    # Review's duplicate-delivery rule can only work turn-wide if the
+    # reviewer sees earlier iterations; its per-iteration logs are reset.
+    # Match the rendered heading, not REVIEW_HEADER's in-text reference
+    # to the section name.
+    heading = "## Earlier iterations (already delivered)"
+    assert heading not in reviews[0]["system"]
+    assert heading in reviews[1]["system"]
+    assert "search(" in reviews[1]["system"]
+
+
+async def test_engine_override_self_iterate_still_records_ledger():
+    """The engine's ``done`` → ``self_iterate`` override is the path
+    where the reviewer wrote NO ``completed_work`` — it decided ``done``.
+
+    That is exactly why the tool-call ledger is engine-recorded rather
+    than left to reviewer prose: on this path prose alone would carry
+    nothing forward.
+    """
+    agent = _mk_agent()
+    provider = _PhaseScriptedProvider(
+        plan=_flat(_plan_submission(["search"]), _plan_submission(["search"])),
+        execute=[
+            # Never calls ``search`` — text only, so the delivery gate
+            # flips Review's ``done`` to ``self_iterate``.
+            Completion(content="iter-1 text only", tool_calls=[]),
+            Completion(content="iter-2 text only", tool_calls=[]),
+        ],
+        review=_flat(
+            _review_submission("done", final_artifact="looks fine"),
+            _review_submission("done", final_artifact="still fine"),
+        ),
+    )
+    engine = TurnEngine(
+        llm_providers={"default": provider},
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+    )
+    engine._settings.set(
+        engine._settings.get().model_copy(update={"max_iterations": 2})
+    )
+    await engine.run_turn(agent, task_description="reply", org=agent.definition.org)
+
+    plans = provider.prompts_for("plan")
+    assert len(plans) == 2
+    second = plans[1]["user"]
+    assert "### Iteration 1" in second
+    # The engine authored the correction; the reviewer contributed none.
+    assert "did not call the required delivery tool" in second
+    assert "Reviewer, on what already landed" not in second
+
+
+async def test_self_iterate_does_not_mutate_task_description():
+    """Review notes ride the ledger, never the ask itself.
+
+    Appending them to ``task_description`` leaked "Review notes: …" into
+    the knowledge-search queries, the sandbox brief, and the episode
+    publisher — all of which want the user's actual request.
+    """
+    agent = _mk_agent()
+    provider = _PhaseScriptedProvider(
+        plan=_flat(_plan_submission(["search"]), _plan_submission(["search"])),
+        execute=[
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="e1", name="search", arguments={"q": "x"})],
+            ),
+            Completion(content="draft", tool_calls=[]),
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="e2", name="search", arguments={"q": "x"})],
+            ),
+            Completion(content="draft 2", tool_calls=[]),
+        ],
+        review=_flat(
+            _review_submission("self_iterate", notes="needs more"),
+            _review_submission("done", final_artifact="Final"),
+        ),
+    )
+    engine = TurnEngine(
+        llm_providers={"default": provider},
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+    )
+    await engine.run_turn(
+        agent, task_description="summarise Q3 spend", org=agent.definition.org
+    )
+
+    for prompt in provider.prompts_for("plan") + provider.prompts_for("execute"):
+        assert "Review notes:" not in prompt["user"]
+        assert prompt["user"].startswith("Task:\nsummarise Q3 spend")
+
+
+async def test_resume_turn_rehydrates_the_prior_work_ledger():
+    """A detached sandbox run ends the turn; the completion is a NEW
+    ``run_turn`` with a fresh ``TurnContext``.
+
+    Without rehydrating ``iteration_history`` from the persisted
+    ``execute_state``, the resumed turn forgets every round that closed
+    before the suspend — so a post-resume ``self_iterate`` hands the next
+    Plan a ledger missing those deliveries and re-fires them. That is the
+    exact double-post this feature prevents, on the one path where a
+    single turn spans two ``run_turn`` calls.
+    """
+    agent = _mk_agent()
+    provider = _PhaseScriptedProvider(
+        plan=_plan_submission(["search"]),
+        execute=[Completion(content="resumed output", tool_calls=[])],
+        review=_review_submission("done", final_artifact="Final"),
+    )
+    engine = TurnEngine(
+        llm_providers={"default": provider},
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+    )
+    resume = ExecuteResumeState(
+        plan=ExecutionPlan(decision="plan", tools_needed=["search"]),
+        result_content="sandbox done",
+        messages=[{"role": "system", "content": "EXECUTE phase"}],
+        pending_tool_call_id="c1",
+        pending_tool_name="run_sandbox",
+        iteration_history=[
+            {
+                "iteration": 1,
+                "execute_tool_calls": [
+                    {
+                        "name": "slack_post",
+                        "arguments": '{"channel": "#eng"}',
+                        "success": True,
+                    }
+                ],
+                "completed_work": "The summary post already landed.",
+            }
+        ],
+    )
+    await engine.run_turn(
+        agent,
+        task_description="post the summary",
+        org=agent.definition.org,
+        turn_id="t-resume",
+        start_iteration=1,
+        resume_state=resume,
+    )
+
+    reviews = provider.prompts_for("review")
+    assert reviews, "Review should run on the resumed turn"
+    system = reviews[0]["system"]
+    assert "## Earlier iterations (already delivered)" in system
+    assert "slack_post(" in system
+    assert "The summary post already landed." in system

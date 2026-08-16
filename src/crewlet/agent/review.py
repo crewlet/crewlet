@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from crewlet._logging import get_logger
 from crewlet.agent.execute import ExecuteResult
-from crewlet.agent.iteration_log import format_tool_calls
+from crewlet.agent.iteration_log import format_tool_calls, render_iteration_ledger
 from crewlet.agent.llm_loop import (
     publish_phase_completed,
     publish_phase_started,
@@ -57,6 +57,18 @@ class ReviewOutcome(BaseModel):
     colleague, the note tells Plan to add the outreach step so Execute
     reaches them directly with its own colleague-surface tools."""
 
+    completed_work: str = ""
+    """What already landed this turn and must not be repeated, in the
+    reviewer's own words -- the semantic layer over the engine-built
+    tool-call ledger (see :mod:`crewlet.agent.iteration_log`).
+
+    The ledger records that ``slack_conversations_add_message`` fired;
+    only the reviewer can say "the post landed and reads fine, it just
+    omits the breakdown -- follow up in that thread rather than
+    re-posting". Empty on ``done`` (nothing loops back) and empty
+    whenever Review never chose ``self_iterate`` itself, which is why
+    the ledger and not this field carries the guarantee."""
+
     final_artifact: str = ""
     """The artifact Review wants to return when decision is ``done``.
     If empty, the engine returns Execute's text."""
@@ -82,7 +94,11 @@ def _build_review_meta_tools() -> list[SimpleTool]:
                 "  in `final_artifact` (or leave empty to reuse "
                 "  Execute's output).\n"
                 "- `self_iterate`: not done -- loop back to Plan with "
-                "  an actionable correction in `notes`.\n\n"
+                "  an actionable correction in `notes`, and set "
+                "  `completed_work` to what ALREADY landed this turn "
+                "  (especially external side effects: posts, comments, "
+                "  status changes) so the next round adds to it instead "
+                "  of firing it a second time.\n\n"
                 "Choose `self_iterate` whenever the artifact is wrong "
                 "or incomplete, a required `tools_needed` action tool "
                 "was not actually called, or Execute narrated that it "
@@ -115,9 +131,10 @@ def _format_execute_tool_log(executions: list[dict[str, Any]]) -> str:
     an absent section.
 
     Thin wrapper over :func:`~crewlet.agent.iteration_log.format_tool_calls`
-    at its no-truncation defaults, so any other consumer of a tool log
-    renders identically instead of growing a second formatter that
-    drifts from this one.
+    at its no-truncation defaults.  The cross-iteration ledger shares
+    that renderer with elision budgets applied; this single-iteration
+    evidence log deliberately does not -- it is what Review judges
+    delivery against, so it must stay verbatim.
     """
     return format_tool_calls(executions)
 
@@ -294,6 +311,9 @@ async def run_review_phase(
         execute_summary=(execute_result.text or "(empty)")[:2000],
         execute_tool_log=_format_execute_tool_log(execute_result.tool_executions),
         plan_tool_log=_format_plan_tool_log(turn.plan_tool_executions),
+        earlier_iterations=render_iteration_ledger(
+            turn.iteration_history, skip_names=PLAN_META_TOOL_NAMES
+        ),
         skill_registry=prompt_skill_registry,
     )
     user = "Judge whether this turn is done, or what should happen next."

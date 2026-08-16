@@ -36,6 +36,7 @@ from crewlet.agent.guards import (
     check_delegation_depth,
 )
 from crewlet.agent.instance import AgentInstance, AgentState
+from crewlet.agent.iteration_log import IterationRecord
 from crewlet.agent.phase_model import resolve_phase_chain, resolve_phase_provider
 from crewlet.agent.plan import (
     PLAN_META_TOOL_NAMES,
@@ -709,6 +710,16 @@ class TurnEngine:
             turn.turn_id = turn_id
         turn.start_iteration = start_iteration
         turn.resume_state = resume_state
+        # A detached sandbox run ends the turn, and the completion arrives as
+        # a NEW ``run_turn`` with a fresh ``TurnContext`` — so rounds that
+        # closed before the suspend must be rehydrated here or the resumed
+        # turn's ledger is empty and a post-resume ``self_iterate`` re-plans
+        # deliveries those rounds already made.
+        if resume_state is not None:
+            turn.iteration_history = [
+                IterationRecord.from_dict(rec)
+                for rec in getattr(resume_state, "iteration_history", []) or []
+            ]
 
         with tracer.start_as_current_span(
             "agent.turn",
@@ -1291,11 +1302,12 @@ class TurnEngine:
             real_tools_needed = {t for t in plan.tools_needed if t in exe_catalogue}
 
             # Tools that never count as a delivery (always-on + meta).
-            non_delivery_tools = (
-                set(self._always_on)
-                | set(PLAN_META_TOOL_NAMES)
-                | {"list_mcp_server_tools"}
-            )
+            # ``list_mcp_server_tools`` used to be unioned in by hand here
+            # because it was missing from ``PLAN_META_TOOL_NAMES``; it now
+            # lives in that set, so every consumer (this gate, Review's
+            # ``## What Plan did`` log, the prior-work ledger) filters it
+            # from one source of truth.
+            non_delivery_tools = set(self._always_on) | set(PLAN_META_TOOL_NAMES)
             # The planner INTENDED a delivery if it named any non-meta
             # tool in ``tools_needed`` — phantom guesses INCLUDED.  Keying
             # intent off the raw ``tools_needed`` (not the
@@ -1486,11 +1498,42 @@ class TurnEngine:
                 )
                 decision = "failed"
                 break
-            # Attach the review notes so the next Plan round can see them.
-            turn.task_description = (
-                f"{turn.task_description}\n\nReview notes: {plan_notes}"
-                if plan_notes
-                else turn.task_description
+            # Record this closed round so the next Plan / Execute pass —
+            # each of which rebuilds its LLM conversation from scratch —
+            # can see what already ran and plan only the gap.  Two
+            # layers, deliberately:
+            #
+            # - the tool-call lists are ENGINE-recorded, so they cannot
+            #   be forgotten.  That matters most on the ``done`` ->
+            #   ``self_iterate`` override just above: Review decided
+            #   ``done`` there and wrote no ``completed_work`` at all,
+            #   yet it is exactly the path where a partial delivery may
+            #   already have landed;
+            # - ``completed_work`` is the reviewer's prose gloss, which
+            #   the mechanical log cannot express ("the post landed and
+            #   reads fine, follow up in-thread rather than re-posting").
+            #
+            # This replaces appending the notes to ``task_description``:
+            # that mutation also leaked "Review notes: …" into the
+            # knowledge-search queries, the sandbox brief, and the
+            # episode publisher, all of which want the user's actual ask.
+            # ``known_read_names`` rides along so the ledger can mark reads.
+            # Tool RESULTS are deliberately not carried across iterations, so
+            # the next round must be free to re-run a fetch — telling it "do
+            # not repeat" a ``jira_get_issue`` would push it to invent the
+            # data instead.  The set is the same annotation-derived one the
+            # delivery gate above already resolved.
+            turn.iteration_history.append(
+                IterationRecord(
+                    iteration=turn.iteration,
+                    plan_summary=plan.summary(),
+                    plan_tool_calls=tuple(turn.plan_tool_executions),
+                    execute_tool_calls=tuple(execute_result.tool_executions),
+                    read_only_names=tuple(sorted(known_read_names)),
+                    execute_text=execute_result.text or "",
+                    review_notes=plan_notes,
+                    completed_work=review.completed_work,
+                )
             )
         else:
             # Max iterations exhausted; terminate turn as failed.
