@@ -178,7 +178,7 @@ per-task wall-clock timeout.
 providers:
   llm:
     default:                            # named provider (referenced by roles via `llm: default`)
-      type: openai                      # openai | anthropic | openai-compatible
+      type: openai                      # openai | anthropic | openai-compatible | cli-agent
       model: gpt-4o
       api_keys:                         # one or more keys; multiple enables rate-limit rotation
         - "${LLM_API_KEY}"              # supports ${ENV_VAR} references
@@ -192,6 +192,7 @@ providers:
                                         #   repeated auth failures on one key back off exponentially)
       base_url: "..."                   # optional — custom endpoint (required for openai-compatible)
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
+                                        #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
       reasoning_effort: medium          # optional — OpenAI reasoning effort: low | medium | high (default: medium)
       reasoning_budget_tokens: 10000    # optional — Anthropic thinking budget in tokens (default: 10000)
@@ -200,6 +201,42 @@ providers:
       model: gpt-4o-mini
       api_keys:
         - "${OPENAI_API_KEY}"
+
+    subscription:                       # a coding CLI you already subscribe to,
+                                        # driven headless — NO API key.
+                                        # See concepts/subscription-llm-backends.md
+      type: cli-agent
+      model: sonnet                     # whatever the CLI's --model accepts
+      cli:
+        agent: claude-code              # claude-code | codex | gemini-cli | qwen-code
+                                        #   | opencode | cursor-agent | copilot | grok
+                                        #   | custom
+        state_dir: ""                   # optional — credential dir + per-seat CLI homes.
+                                        #   Empty: $CREWLET_LLM_CLI_HOME/<key>, else
+                                        #   ~/.crewlet/llm-cli/<key>. Use a persistent
+                                        #   volume in an ephemeral container.
+        timeout_seconds: 300            # optional — one CLI invocation, wall clock.
+                                        #   Separate from the entry's HTTP
+                                        #   timeout_seconds: this covers process
+                                        #   launch + the model call + the CLI's retries
+        max_concurrent: 4               # optional — CLI processes at once. Each is a
+                                        #   200-400 MB runtime, and subscription plans
+                                        #   throttle concurrency hard
+        env: {}                         # optional — extra child env, ${ENV_VAR}-resolved.
+                                        #   The child gets an ALLOWLISTED environment,
+                                        #   never the engine's, so declare anything else
+                                        #   the CLI needs here
+        auth:
+          mode: subscription            # subscription | api-key | inherit-env
+          token: ""                     # optional — ${VAR} holding a headless
+                                        #   subscription token; empty falls back to the
+                                        #   profile's own var (CLAUDE_CODE_OAUTH_TOKEN)
+          credential_bundle: ""         # optional — ${VAR} holding a `crewlet llm export`
+                                        #   blob; empty falls back to
+                                        #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
+        overrides: {}                   # optional — replace any profile field when a
+                                        #   vendor renames a flag (validated here, so a
+                                        #   typo fails `crewlet validate`)
 
   embeddings:                           # required for the agent-learning subsystem
                                         # (agent_diary vector candidate selection AND episodes vector recall)

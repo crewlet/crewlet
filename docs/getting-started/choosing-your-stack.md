@@ -27,10 +27,22 @@ A useful mental model: for each integration there is usually
 | **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Required if you want Claude Code as the sandbox coding agent. |
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
 | **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
+| **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives `claude` / `codex` / `gemini` / `opencode` / `cursor-agent` / `copilot` on the operator's own subscription. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
 
 You can configure several named providers and pick per role (`role.llm`), plus
 a cheap auxiliary model per role (`role.llm_auxiliary`) for reflection and
-summarisation work. See [Quickstart § LLM options](quickstart.md#llm-options).
+summarisation work. `role.llm` also accepts a **list**, which is how a
+subscription and a metered key compose: `llm: [subscription, default]` runs
+on the flat-rate CLI and falls through to the API key when the subscription
+window is spent. See [Quickstart § LLM options](quickstart.md#llm-options).
+
+**Which to pick.** A metered key is the default answer for a fleet that has
+to be fast and always available. A subscription CLI is the better answer when
+you are developing, evaluating, or running a small company yourself and want
+predictable cost — check your plan's terms, which are generally written for
+interactive use by the subscriber. Note that a subscription backend cannot
+authenticate the [code sandbox](../concepts/code-sandbox.md): the login lives
+on the engine host, and the sandbox is a different machine.
 
 **Embeddings** (`providers.embeddings`) power the agent-learning subsystem
 (personal diary + episode recall). Any OpenAI-compatible embeddings endpoint

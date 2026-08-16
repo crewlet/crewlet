@@ -659,6 +659,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Report which secrets would re-encrypt; no DB write.",
     )
 
+    # --- llm (subscription CLI backends) ---
+    from crewlet.cli_llm import add_llm_parser
+
+    add_llm_parser(sub)
+
     # --- secrets ---
     secrets_p = sub.add_parser(
         "secrets",
@@ -1741,6 +1746,15 @@ def main(argv: list[str] | None = None) -> int:
             "rekey": cmd_config_rekey,
         }
         return config_commands[subcmd](args)
+
+    if args.command == "llm":
+        from crewlet.cli_llm import LLM_COMMANDS
+
+        subcmd = getattr(args, "llm_command", None)
+        if subcmd is None:
+            parser.print_help()
+            return 0
+        return LLM_COMMANDS[subcmd](args)
 
     if args.command == "secrets":
         from crewlet.cli_config_handlers import (

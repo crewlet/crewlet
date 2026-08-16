@@ -25,6 +25,7 @@ from crewlet.org.models import (
     RoleSandboxConfig,
     Schedule,
 )
+from crewlet.providers.llm.cli_profiles import CLIAgentName
 from crewlet.sandbox.setup import SandboxSetupStep
 from crewlet.secrets.resolver import lookup_secret, resolve_env
 from crewlet.tools.capabilities import ToolAnnotations
@@ -37,7 +38,13 @@ ReasoningEffort = Literal["low", "medium", "high", "max"]
 #: Built-in LLM provider implementations.  Kept in lockstep with the
 #: dispatch in :func:`create_llm_providers` — see the test that asserts
 #: every member constructs.
-LLMProviderType = Literal["openai", "anthropic", "openai-compatible"]
+#:
+#: ``cli-agent`` is the odd one out: instead of an HTTP endpoint it
+#: drives a locally installed coding CLI (``claude``, ``codex``,
+#: ``gemini``, …) authenticated by the operator's **subscription**
+#: rather than a metered API key.  See
+#: ``docs/concepts/subscription-llm-backends.md``.
+LLMProviderType = Literal["openai", "anthropic", "openai-compatible", "cli-agent"]
 
 #: Built-in embedding implementations (both served by the OpenAI client;
 #: point at any OpenAI-compatible endpoint with ``base_url``).
@@ -109,6 +116,136 @@ class CredentialCooldownConfig(BaseModel):
         return self
 
 
+class CLIAgentAuthConfig(BaseModel):
+    """How a ``cli-agent`` provider authenticates.
+
+    See ``docs/concepts/subscription-llm-backends.md``; the login itself
+    is performed by ``crewlet llm login``, not by the engine.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["subscription", "api-key", "inherit-env"] = "subscription"
+    """``subscription`` (the default and the point of this backend) uses
+    the operator's own CLI login — a token in the secret store, or the
+    credential files ``crewlet llm login`` wrote.  ``api-key`` puts
+    ``api_keys[0]`` into the CLI's key variable, billing the metered
+    account.  ``inherit-env`` forwards whichever of the two variables
+    the engine's own environment has — an escape hatch for an unusual
+    CLI, and the only mode that lets a host credential reach the child.
+
+    The default is deliberately *not* ``inherit-env``: a subscription
+    backend that silently picked up a stray ``ANTHROPIC_API_KEY`` would
+    bill the metered account while the operator believed they were on a
+    flat-rate plan."""
+
+    token: str = ""
+    """``${VAR}`` reference to a long-lived subscription token (for
+    Claude Code, what ``claude setup-token`` mints into
+    ``CLAUDE_CODE_OAUTH_TOKEN``).  Empty falls back to the profile's own
+    token variable in the secret store / environment.  This is the best
+    headless path where a CLI offers one: no credential files to sync,
+    no refresh-token rotation, and it survives an ephemeral container."""
+
+    credential_bundle: str = ""
+    """``${VAR}`` reference to a bundle exported by ``crewlet llm
+    export`` — the CLI's credential files as one blob.  Restored into
+    the provider's credential directory at boot when that directory is
+    empty, so a fresh container comes up already logged in.  Empty falls
+    back to the conventional name
+    ``CREWLET_LLM_CLI_<KEY>_CREDENTIALS``."""
+
+
+class CLIAgentConfig(BaseModel):
+    """The ``cli-agent`` block of a ``providers.llm`` entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: CLIAgentName = "claude-code"
+    """Which CLI to drive.  ``custom`` ships no defaults at all — supply
+    everything under :attr:`overrides`."""
+
+    state_dir: str = ""
+    """Where this provider keeps its credential directory and its
+    per-seat homes.  Empty uses ``$CREWLET_LLM_CLI_HOME/<key>``, falling
+    back to ``~/.crewlet/llm-cli/<key>``.  Point it at a persistent
+    volume when the engine runs in an ephemeral container, or the login
+    is lost on every restart."""
+
+    timeout_seconds: float = 300.0
+    """Wall-clock cap on one CLI invocation.
+
+    Separate from :attr:`LLMProviderConfig.timeout_seconds` because the
+    transports are not comparable: that one is an HTTP client timeout,
+    while this covers a process launch (a Node runtime costs seconds
+    before the first byte), the model call, and the CLI's own internal
+    retry/backoff.  120 s — right for HTTP — cuts off legitimate long
+    reasoning turns here, so the default is 2.5x that.  On breach the
+    process group is terminated and the call is reported as
+    ``TIMEOUT``, which the role's fallback chain retries."""
+
+    max_concurrent: int = 4
+    """How many CLI processes this provider runs at once.
+
+    Each is a full Node/Rust runtime at roughly 200-400 MB resident, so
+    an unbounded fleet of seats entering Plan together can exhaust the
+    engine host; 4 keeps peak usage near 1.5 GB, which fits the smallest
+    realistic host while still overlapping the calls' long I/O waits.
+    Subscription plans also throttle concurrency well below what an API
+    key allows, so a higher number mostly buys rate-limit errors.
+    Raise it on a large host with a plan that permits it."""
+
+    env: dict[str, str] = Field(default_factory=dict)
+    """Extra environment for every invocation, ``${VAR}``-resolved.
+
+    The child process gets an **allowlisted** environment, not the
+    engine's — so anything the CLI needs beyond PATH / locale / TLS /
+    proxy (a vendor region variable, a self-hosted gateway URL) is
+    declared here."""
+
+    auth: CLIAgentAuthConfig = Field(default_factory=CLIAgentAuthConfig)
+
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    """Field-wise overrides of the built-in profile
+    (:class:`crewlet.providers.llm.cli_profiles.CLIAgentProfile`).
+
+    CLI flags drift between releases, and a vendor renaming
+    ``--output-format`` must be a config edit rather than a Crewlet
+    release — so every profile field is replaceable here.  Lists replace
+    wholesale (position matters in an argv), and validation runs against
+    the profile model, so a typo fails at config-validation time."""
+
+    @model_validator(mode="after")
+    def _validate(self) -> CLIAgentConfig:
+        if self.timeout_seconds <= 0:
+            raise ValueError(
+                f"cli.timeout_seconds must be positive (got {self.timeout_seconds})"
+            )
+        if self.max_concurrent < 1:
+            raise ValueError(
+                f"cli.max_concurrent must be at least 1 (got {self.max_concurrent})"
+            )
+        if self.overrides:
+            # Validate the merge here rather than at engine boot: a
+            # rejected override should fail `crewlet validate`, not the
+            # first turn of the first agent.
+            from crewlet.providers.llm.cli_profiles import resolve_profile
+
+            try:
+                resolve_profile(self.agent, self.overrides)
+            except Exception as exc:
+                raise ValueError(
+                    f"cli.overrides are not a valid profile: {exc}"
+                ) from exc
+        return self
+
+    def profile(self) -> Any:
+        """The built-in profile with :attr:`overrides` applied."""
+        from crewlet.providers.llm.cli_profiles import resolve_profile
+
+        return resolve_profile(self.agent, self.overrides)
+
+
 class LLMProviderConfig(BaseModel):
     """Configuration for an LLM provider."""
 
@@ -153,7 +290,13 @@ class LLMProviderConfig(BaseModel):
     -- the HTTP client timeout passed to the provider SDK. Raise it for
     slow / large-output (e.g. reasoning) models that can otherwise time
     out mid-generation; lower it to fail fast. Applies to ``openai`` /
-    ``openai-compatible`` / ``anthropic`` providers."""
+    ``openai-compatible`` / ``anthropic`` providers; the ``cli-agent``
+    backend drives a subprocess rather than an HTTP client and has its
+    own :attr:`CLIAgentConfig.timeout_seconds`."""
+    cli: CLIAgentConfig | None = None
+    """The ``cli-agent`` block: which coding CLI to drive, where its
+    per-seat state lives, and how it authenticates.  Required when
+    ``type`` is ``cli-agent`` and rejected otherwise."""
 
     @model_validator(mode="after")
     def _validate_reasoning(self) -> LLMProviderConfig:
@@ -163,6 +306,36 @@ class LLMProviderConfig(BaseModel):
             raise ValueError(
                 "reasoning is not supported for openai-compatible providers. "
                 "Use type 'openai' or 'anthropic' instead."
+            )
+        if self.type == "cli-agent":
+            raise ValueError(
+                "reasoning is not a Crewlet setting for cli-agent providers: "
+                "the CLI's plan carries its own reasoning configuration and "
+                "exposes no per-call switch. Drop `reasoning`, or pick the "
+                "CLI's reasoning model via `model`."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cli_block(self) -> LLMProviderConfig:
+        """Keep ``type`` and the ``cli`` block in agreement.
+
+        Both halves matter.  A ``cli-agent`` entry with no ``cli`` block
+        would silently construct the default Claude Code profile, which
+        may be the wrong CLI entirely; a ``cli`` block on an HTTP
+        provider would be read by nobody and quietly ignored — the
+        classic "I configured it and nothing happened" bug.
+        """
+        if self.type == "cli-agent":
+            if self.cli is None:
+                raise ValueError(
+                    "an LLM provider of type 'cli-agent' needs a `cli:` block "
+                    "naming the CLI to drive, e.g. `cli: {agent: claude-code}`."
+                )
+        elif self.cli is not None:
+            raise ValueError(
+                f"`cli:` only applies to type 'cli-agent' (this entry is "
+                f"type {self.type!r}). Remove the block, or change the type."
             )
         return self
 
@@ -2846,6 +3019,14 @@ def create_llm_providers(
         resolved_keys = [
             str(k) for k in (_resolve_env_value(k) for k in cfg.resolved_keys()) if k
         ]
+        if cfg.type == "cli-agent":
+            # No API key by construction: this backend authenticates
+            # with the operator's CLI subscription, so the key check
+            # below would reject exactly the configuration the feature
+            # exists to support.  Its own credential validation lives in
+            # ``_create_cli_agent_provider`` / ``crewlet llm doctor``.
+            result[key] = _create_cli_agent_provider(key, cfg, resolved_keys)
+            continue
         if not resolved_keys:
             env_var = _conventional_env.get(cfg.type, "")
             # Same two sources the provider constructor will use, so this
@@ -2915,9 +3096,69 @@ def create_llm_providers(
             raise ValueError(
                 f"Unsupported LLM provider type: {cfg.type!r} (provider "
                 f"{key!r}). Supported types: 'openai', 'anthropic', "
-                "'openai-compatible'."
+                "'openai-compatible', 'cli-agent'."
             )
     return result
+
+
+def _create_cli_agent_provider(
+    key: str, cfg: LLMProviderConfig, resolved_keys: list[str]
+) -> Any:
+    """Build one ``cli-agent`` provider, restoring its login if needed.
+
+    Split out of :func:`create_llm_providers` because it has a real
+    side effect the other branches do not: when the provider's
+    credential directory is empty and a bundle is reachable, the login
+    is materialised onto disk here.  That is what lets an engine in an
+    ephemeral container come up already authenticated instead of every
+    seat failing its first turn with "not logged in".
+    """
+    from crewlet.providers.llm.cli_agent import CLIAgentProvider
+    from crewlet.providers.llm.cli_login import bundle_env_name, restore_from_secret
+
+    assert cfg.cli is not None  # guaranteed by LLMProviderConfig validation
+    cli = cfg.cli
+    profile = cli.profile()
+
+    # The subscription token: the explicit ``${VAR}`` reference if the
+    # operator wrote one, else the profile's own conventional variable
+    # (``CLAUDE_CODE_OAUTH_TOKEN``) from the secret store / environment
+    # — same shape as the API-key providers' conventional fallback.
+    token = str(_resolve_env_value(cli.auth.token)) if cli.auth.token else ""
+    if not token and profile.token_env:
+        token = resolve_env(profile.token_env)
+
+    provider = CLIAgentProvider(
+        provider_key=key,
+        profile=profile,
+        model=cfg.model,
+        state_dir=str(_resolve_env_value(cli.state_dir)) if cli.state_dir else "",
+        timeout=cli.timeout_seconds,
+        max_concurrent=cli.max_concurrent,
+        auth_mode=cli.auth.mode,
+        api_key=resolved_keys[0] if resolved_keys else "",
+        subscription_token=token,
+        env={k: str(_resolve_env_value(v)) for k, v in cli.env.items()},
+    )
+
+    bundle = (
+        str(_resolve_env_value(cli.auth.credential_bundle))
+        if cli.auth.credential_bundle
+        else resolve_env(bundle_env_name(key))
+    )
+    if bundle:
+        restore_from_secret(provider.workspace, profile, bundle)
+
+    logger.debug(
+        "cli_agent_provider_created",
+        key=key,
+        agent=profile.name,
+        model=cfg.model,
+        auth_mode=cli.auth.mode,
+        state_dir=str(provider.workspace.state_dir),
+        logged_in=provider.workspace.has_credentials() or bool(token),
+    )
+    return provider
 
 
 def create_embedding_provider(

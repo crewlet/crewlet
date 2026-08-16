@@ -1,6 +1,7 @@
 """Tests for config loading."""
 
 from pathlib import Path
+from typing import get_args
 from unittest.mock import patch
 
 import pytest
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 from crewlet.config import (
     CompanyConfig,
     JiraConfig,
+    LLMProviderType,
     build_plane_project_lead_map,
     build_space_key_lead_map,
     config_to_organization,
@@ -1676,15 +1678,35 @@ class TestProviderTypeIsClosed:
         err = exc.value.errors()[0]
         assert err["loc"] == ("providers", "llm", "default", "type")
 
-    @pytest.mark.parametrize("kind", ["openai", "anthropic", "openai-compatible"])
-    def test_every_declared_type_constructs(self, kind, monkeypatch):
+    @pytest.mark.parametrize("kind", get_args(LLMProviderType))
+    def test_every_declared_type_constructs(self, kind, monkeypatch, tmp_path):
         """The Literal and the factory dispatch must stay in lockstep —
         a value the config accepts but the factory cannot build would
-        reintroduce the silent-drop bug from the other direction."""
+        reintroduce the silent-drop bug from the other direction.
+
+        Parametrised off the ``Literal`` itself rather than a hand-kept
+        list, so adding a provider type without a construction path
+        fails here instead of at some operator's first turn.
+        """
         from crewlet.config import create_llm_providers
 
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        extra: dict = {}
+        if kind == "openai-compatible":
+            extra["base_url"] = "https://x/v1/"
+        if kind == "cli-agent":
+            # The backend drives a real local executable, so give it one.
+            fake = tmp_path / "bin"
+            fake.mkdir()
+            (fake / "fakecli").write_text("#!/bin/sh\nexit 0\n")
+            (fake / "fakecli").chmod(0o755)
+            monkeypatch.setenv("PATH", str(fake))
+            extra["cli"] = {
+                "agent": "custom",
+                "state_dir": str(tmp_path / "state"),
+                "overrides": {"binary": "fakecli", "complete_args": ["--json"]},
+            }
         cfg = CompanyConfig.model_validate(
             {
                 "name": "A",
@@ -1694,11 +1716,7 @@ class TestProviderTypeIsClosed:
                             "type": kind,
                             "model": "m",
                             "api_keys": ["sk-x"],
-                            **(
-                                {"base_url": "https://x/v1/"}
-                                if "compat" in kind
-                                else {}
-                            ),
+                            **extra,
                         }
                     }
                 },
@@ -1724,3 +1742,179 @@ class TestProviderTypeIsClosed:
         )
         with pytest.raises(ValueError, match="Unsupported LLM provider type"):
             create_llm_providers(providers)
+
+
+class TestCLIAgentProviderConfig:
+    """``providers.llm[*]`` of type ``cli-agent`` — the subscription
+    backend that drives a locally installed coding CLI.
+
+    See ``docs/concepts/subscription-llm-backends.md``.
+    """
+
+    @staticmethod
+    def _cfg(**cli) -> dict:
+        return {
+            "name": "A",
+            "providers": {
+                "llm": {
+                    "default": {
+                        "type": "cli-agent",
+                        "model": "sonnet",
+                        "cli": cli or {"agent": "claude-code"},
+                    }
+                }
+            },
+        }
+
+    def test_minimal_block_validates(self):
+        cfg = CompanyConfig.model_validate(self._cfg(agent="codex"))
+        cli = cfg.providers.llm["default"].cli
+        assert cli is not None
+        assert cli.agent == "codex"
+        assert cli.profile().binary == "codex"
+
+    def test_type_requires_the_block(self):
+        """Without it the entry would silently construct the default
+        Claude Code profile, which may be an entirely different CLI."""
+        with pytest.raises(ValidationError, match="needs a `cli:` block"):
+            CompanyConfig.model_validate(
+                {
+                    "name": "A",
+                    "providers": {"llm": {"default": {"type": "cli-agent"}}},
+                }
+            )
+
+    def test_block_on_an_http_provider_is_rejected(self):
+        """A `cli:` block nobody reads is the classic 'I configured it
+        and nothing happened' bug."""
+        with pytest.raises(ValidationError, match="only applies to type"):
+            CompanyConfig.model_validate(
+                {
+                    "name": "A",
+                    "providers": {
+                        "llm": {
+                            "default": {
+                                "type": "anthropic",
+                                "api_keys": ["k"],
+                                "cli": {"agent": "codex"},
+                            }
+                        }
+                    },
+                }
+            )
+
+    def test_unknown_agent_is_rejected_with_the_valid_names(self):
+        with pytest.raises(ValidationError) as exc:
+            CompanyConfig.model_validate(self._cfg(agent="claude-kode"))
+        assert exc.value.errors()[0]["loc"][:5] == (
+            "providers",
+            "llm",
+            "default",
+            "cli",
+            "agent",
+        )
+
+    def test_reasoning_is_rejected(self):
+        with pytest.raises(ValidationError, match="not a Crewlet setting"):
+            CompanyConfig.model_validate(
+                {
+                    "name": "A",
+                    "providers": {
+                        "llm": {
+                            "default": {
+                                "type": "cli-agent",
+                                "reasoning": True,
+                                "cli": {"agent": "codex"},
+                            }
+                        }
+                    },
+                }
+            )
+
+    def test_bad_override_fails_validation_not_boot(self):
+        """`crewlet validate` must catch a broken override — discovering
+        it at the first turn of the first agent is far too late."""
+        with pytest.raises(ValidationError, match="not a valid profile"):
+            CompanyConfig.model_validate(
+                self._cfg(agent="codex", overrides={"no_such_field": 1})
+            )
+
+    def test_overrides_reach_the_resolved_profile(self):
+        cfg = CompanyConfig.model_validate(
+            self._cfg(agent="codex", overrides={"binary": "/opt/codex"})
+        )
+        assert cfg.providers.llm["default"].cli.profile().binary == "/opt/codex"
+
+    @pytest.mark.parametrize(
+        "field,value", [("timeout_seconds", 0), ("max_concurrent", 0)]
+    )
+    def test_nonsensical_knobs_are_rejected(self, field, value):
+        with pytest.raises(ValidationError):
+            CompanyConfig.model_validate(self._cfg(agent="codex", **{field: value}))
+
+    def test_no_api_key_required(self, tmp_path, monkeypatch):
+        """The whole point: this backend authenticates with the
+        operator's subscription, so the missing-key guard that protects
+        the HTTP providers must not fire."""
+        from crewlet.config import create_llm_providers
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        fake = tmp_path / "bin"
+        fake.mkdir()
+        (fake / "codex").write_text("#!/bin/sh\nexit 0\n")
+        (fake / "codex").chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake))
+        cfg = CompanyConfig.model_validate(
+            self._cfg(agent="codex", state_dir=str(tmp_path / "state"))
+        )
+        providers = create_llm_providers(cfg.providers)
+        assert providers["default"].model == "sonnet"
+
+    def test_state_dir_and_env_resolve_env_references(self, tmp_path, monkeypatch):
+        from crewlet.config import create_llm_providers
+
+        fake = tmp_path / "bin"
+        fake.mkdir()
+        (fake / "codex").write_text("#!/bin/sh\nexit 0\n")
+        (fake / "codex").chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake))
+        monkeypatch.setenv("CLI_STATE", str(tmp_path / "resolved"))
+        cfg = CompanyConfig.model_validate(
+            self._cfg(agent="codex", state_dir="${CLI_STATE}")
+        )
+        provider = create_llm_providers(cfg.providers)["default"]
+        assert provider.workspace.state_dir == tmp_path / "resolved"
+
+    def test_credential_bundle_is_restored_at_construction(self, tmp_path, monkeypatch):
+        """An engine in a fresh container must come up already logged
+        in, or every seat fails its first turn."""
+        import base64
+        import io
+        import tarfile
+
+        from crewlet.config import create_llm_providers
+
+        fake = tmp_path / "bin"
+        fake.mkdir()
+        (fake / "codex").write_text("#!/bin/sh\nexit 0\n")
+        (fake / "codex").chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake))
+
+        raw = io.BytesIO()
+        payload = b'{"token": "from-bundle"}'
+        with tarfile.open(fileobj=raw, mode="w:gz") as tar:
+            info = tarfile.TarInfo(".codex/auth.json")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        monkeypatch.setenv(
+            "CREWLET_LLM_CLI_DEFAULT_CREDENTIALS",
+            base64.b64encode(raw.getvalue()).decode("ascii"),
+        )
+
+        cfg = CompanyConfig.model_validate(
+            self._cfg(agent="codex", state_dir=str(tmp_path / "state"))
+        )
+        provider = create_llm_providers(cfg.providers)["default"]
+        restored = provider.workspace.credential_dir / ".codex" / "auth.json"
+        assert restored.read_bytes() == payload

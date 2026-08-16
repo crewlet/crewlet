@@ -2,6 +2,88 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.crewlet.ai/schema/company.schema.json",
   "$defs": {
+    "CLIAgentAuthConfig": {
+      "additionalProperties": false,
+      "description": "How a ``cli-agent`` provider authenticates.\n\nSee ``docs/concepts/subscription-llm-backends.md``; the login itself\nis performed by ``crewlet llm login``, not by the engine.",
+      "properties": {
+        "mode": {
+          "default": "subscription",
+          "enum": [
+            "subscription",
+            "api-key",
+            "inherit-env"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "token": {
+          "default": "",
+          "title": "Token",
+          "type": "string"
+        },
+        "credential_bundle": {
+          "default": "",
+          "title": "Credential Bundle",
+          "type": "string"
+        }
+      },
+      "title": "CLIAgentAuthConfig",
+      "type": "object"
+    },
+    "CLIAgentConfig": {
+      "additionalProperties": false,
+      "description": "The ``cli-agent`` block of a ``providers.llm`` entry.",
+      "properties": {
+        "agent": {
+          "default": "claude-code",
+          "enum": [
+            "claude-code",
+            "codex",
+            "gemini-cli",
+            "qwen-code",
+            "opencode",
+            "cursor-agent",
+            "copilot",
+            "grok",
+            "custom"
+          ],
+          "title": "Agent",
+          "type": "string"
+        },
+        "state_dir": {
+          "default": "",
+          "title": "State Dir",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 300.0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "max_concurrent": {
+          "default": 4,
+          "title": "Max Concurrent",
+          "type": "integer"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Env",
+          "type": "object"
+        },
+        "auth": {
+          "$ref": "#/$defs/CLIAgentAuthConfig"
+        },
+        "overrides": {
+          "additionalProperties": true,
+          "title": "Overrides",
+          "type": "object"
+        }
+      },
+      "title": "CLIAgentConfig",
+      "type": "object"
+    },
     "ConfluenceConfig": {
       "additionalProperties": false,
       "description": "Organisation-level Confluence configuration.\n\nDefines the admin / service account used for org-wide Confluence\nAPI access.  Individual agents authenticate via their own\n``mcp_env`` credentials.\n\nCloud webhooks are handled by the Forge app.  Data Center\nwebhooks use ``webhook_secret`` for HMAC-SHA256 verification.\n\nProvide **either** ``url`` (direct instance URL) **or**\n``cloud_id`` (Atlassian Cloud ID).  Providing both or neither\nis an error.\n\nThis section is **non-tool config only** \u2014 admin credentials for\norg-level REST calls and the inbound webhook secret.  It lives under\nthe top-level ``integrations`` block.  Org-wide knowledge spaces are\nconfigured in ``knowledge.confluence_spaces``, and the Confluence MCP\n*tool* server is declared in ``mcp_servers`` (name it ``atlassian``,\nshared with Jira); see ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      confluence:\n        url: \"https://mycompany.atlassian.net/wiki\"\n        token: \"${CONFLUENCE_ADMIN_TOKEN}\"\n        email: \"${CONFLUENCE_ADMIN_EMAIL}\"\n\n    knowledge:\n      confluence_spaces: [\"HANDBOOK\"]\n\n    mcp_servers:\n      - name: atlassian\n        shared: false\n        command: uvx\n        args: [\"mcp-atlassian\"]\n        env: { CONFLUENCE_URL: \"https://mycompany.atlassian.net/wiki\" }",
@@ -515,7 +597,8 @@
           "enum": [
             "openai",
             "anthropic",
-            "openai-compatible"
+            "openai-compatible",
+            "cli-agent"
           ],
           "title": "Type",
           "type": "string"
@@ -565,6 +648,17 @@
           "default": 120.0,
           "title": "Timeout Seconds",
           "type": "number"
+        },
+        "cli": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CLIAgentConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "LLMProviderConfig",

@@ -144,12 +144,26 @@ def build_sandbox_env(
     if coding_agent == "claude-code" and not any(
         resolved.get(k) for k in _CLAUDE_AUTH_KEYS
     ):
+        extra = ""
+        if llm_config.type == "cli-agent":
+            # A cli-agent provider authenticates a CLI *on the engine
+            # host*; the sandbox is a different machine entirely, so
+            # there is no credential to thread and no amount of
+            # role.llm_sandbox tuning fixes it. Say so, rather than
+            # sending the operator to look for a key that was never
+            # meant to exist.
+            extra = (
+                " A 'cli-agent' provider holds a subscription login on the "
+                "ENGINE host, which a remote sandbox cannot reach — give the "
+                "sandbox its own credential in role.sandbox.env, or point "
+                "role.llm_sandbox at an API-key provider."
+            )
         raise SandboxCredentialError(
             "coding_agent 'claude-code' needs an Anthropic-compatible "
             f"provider (the resolved sandbox provider is type "
             f"{llm_config.type!r}). Point role.llm_sandbox at an 'anthropic' "
             "providers.llm entry, or set ANTHROPIC_API_KEY in role.sandbox.env. "
-            "A ${VAR} reference that resolves to nothing counts as missing."
+            "A ${VAR} reference that resolves to nothing counts as missing." + extra
         )
     return resolved
 

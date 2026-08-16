@@ -177,13 +177,37 @@ providers:
       base_url: "https://api.your-llm-provider.example/v1/"
       timeout_seconds: 300            # large models can be slow; default 120
       api_keys: ["${LLM_API_KEY}"]
+
+    # A coding CLI you already subscribe to (Claude Pro/Max, ChatGPT
+    # Plus/Pro, Google AI Pro, a Copilot or Cursor seat) — no API key.
+    # The CLI must be installed on the machine running `crewlet run`.
+    subscription:
+      type: cli-agent
+      model: sonnet                   # whatever the CLI's --model accepts
+      cli:
+        agent: claude-code            # or codex | gemini-cli | opencode | ...
 ```
+
+A `cli-agent` entry is authenticated once, on the engine host, and then
+verified:
+
+```bash
+crewlet llm login subscription --capture-token   # or plain `login` for the
+                                                 # vendor's browser flow
+crewlet llm doctor subscription
+```
+
+Each seat gets its own isolated CLI home, so agents never inherit one
+another's sessions or memory — that and the auth options are covered in
+[Subscription LLM Backends](../concepts/subscription-llm-backends.md).
 
 Useful knobs on every entry: `api_keys` accepts **multiple** keys (the
 provider rotates on rate-limit/auth errors), `reasoning: true` enables
 extended thinking / reasoning where the model supports it, and different
 roles can use different entries (e.g. executives on a frontier model, junior
-agents on a cheaper one). Embeddings (`providers.embeddings`) power the
+agents on a cheaper one). A role's `llm` also accepts a **list** — 
+`llm: [subscription, default]` runs on the flat-rate CLI and falls through
+to the metered key when the subscription window is spent. Embeddings (`providers.embeddings`) power the
 agent-learning subsystem and accept any OpenAI-compatible embeddings endpoint
 via `base_url`.
 

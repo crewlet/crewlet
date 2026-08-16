@@ -63,6 +63,7 @@ from crewlet.learning.episode_store import EpisodeStoreProtocol
 from crewlet.learning.models import Episode
 from crewlet.providers.fallback import FallbackLLMProvider, LLMChainExhausted
 from crewlet.providers.llm.protocol import LLMProvider
+from crewlet.providers.llm.scope import bind_llm_scope
 from crewlet.queue.protocol import EventQueue
 from crewlet.telemetry import restore_context, set_span_error, tracer
 from crewlet.tools.capabilities import resolve_annotations
@@ -721,16 +722,27 @@ class TurnEngine:
                 for rec in getattr(resume_state, "iteration_history", []) or []
             ]
 
-        with tracer.start_as_current_span(
-            "agent.turn",
-            context=otel_context,
-            attributes={
-                "agent.id": agent.id_str,
-                "agent.role": agent.role_name,
-                "task.id": task_id,
-                "turn.id": turn.turn_id,
-                "turn.delegation_depth": delegation_depth,
-            },
+        # Bind the seat for every LLM call this turn makes, including
+        # the ones made from child tasks (batched sub-agents inherit the
+        # context). Stateful backends -- the CLI-agent provider, which
+        # keeps a coding CLI's home on disk -- read this to pick an
+        # isolated workspace; without it a shared provider instance
+        # would let one seat's CLI session leak into another's. Bound
+        # here alongside the OTel span, which is the same kind of
+        # ambient turn context.
+        with (
+            bind_llm_scope(agent.handle or agent.role_name),
+            tracer.start_as_current_span(
+                "agent.turn",
+                context=otel_context,
+                attributes={
+                    "agent.id": agent.id_str,
+                    "agent.role": agent.role_name,
+                    "task.id": task_id,
+                    "turn.id": turn.turn_id,
+                    "turn.delegation_depth": delegation_depth,
+                },
+            ),
         ):
             return await self._run_turn_inner(turn)
 

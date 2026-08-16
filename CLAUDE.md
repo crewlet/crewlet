@@ -134,6 +134,13 @@ src/crewlet/          # Main package
   engine.py           # Engine class — central entry point
   config.py           # YAML config → Pydantic models
   cli.py              # CLI commands (run, validate, api)
+  cli_llm.py          # `crewlet llm` — operate the subscription CLI LLM
+                      #   backends: list / login (broker the vendor OAuth,
+                      #   --capture-token, --username/--password-stdin) /
+                      #   logout / status / doctor (binary + version + login
+                      #   + a REAL smoke completion, since a profile can look
+                      #   right and still not emit a parseable tool call) /
+                      #   export / import
   _env.py             # Shared .env loader for CLI entry points (run, api,
                       #   confluence/plane import + resync, gitlab/plane
                       #   provision) — load_env_file
@@ -302,7 +309,31 @@ src/crewlet/          # Main package
                       #   + the consumer-owned PromotionPageWriter Protocol
                       #   — backends in confluence/promotion.py +
                       #   plane/promotion.py; SkillPromoted.container_key)
-  providers/          # LLM + Embeddings protocols and implementations
+  providers/          # LLM + Embeddings protocols and implementations.
+                      #   llm/cli_agent.py — the `cli-agent` provider type:
+                      #   a locally installed coding CLI (claude / codex /
+                      #   gemini / opencode / cursor-agent / copilot / grok)
+                      #   driven headless on the operator's SUBSCRIPTION, no
+                      #   API key. Pieces: cli_profiles.py (declarative
+                      #   per-CLI data — argv, output paths, which files are
+                      #   credentials vs memory, login commands; every field
+                      #   overridable from YAML so flag drift is a config
+                      #   edit, and `custom` needs no engine change),
+                      #   cli_workspace.py (THE isolation boundary —
+                      #   per-seat HOME/XDG/vendor dirs, allowlisted child
+                      #   env (never os.environ), volatile-path prune per
+                      #   generation, shared-credential seed + refresh
+                      #   write-back), cli_protocol.py (messages+tools → one
+                      #   prompt; JSON envelope → tool_calls — the CLI's own
+                      #   tools are never used), cli_login.py (broker the
+                      #   vendor's OAuth, capture a headless token, drive a
+                      #   stdin credential login where one exists, export/
+                      #   import the credential bundle), scope.py
+                      #   (bind_llm_scope — the turn-scoped contextvar the
+                      #   shared provider instance reads to pick a seat's
+                      #   workspace). Operator surface: `crewlet llm`
+                      #   (cli_llm.py). See
+                      #   docs/concepts/subscription-llm-backends.md
   sandbox/            # Sandbox-as-a-tool code runtime: code work is the
                       #   run_sandbox Execute tool (tools/run_sandbox_tool.py)
                       #   — the executor calls it, the Execute loop SUSPENDS,
@@ -652,7 +683,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL or Plane page search, one backend per org) + per-agent `agent_diary` (pgvector)
 7. **Communication** — external channels (Slack) + ephemeral A2A Bus
 8. **Notification Service** — EventQueue-based, outbound-only transports
-9. **Provider Layer** — pluggable LLM, embeddings
+9. **Provider Layer** — pluggable LLM, embeddings. Includes the `cli-agent` LLM type: a locally installed coding CLI driven on the operator's subscription instead of an API key, with per-seat filesystem isolation and an in-prompt tool-call envelope (see `docs/concepts/subscription-llm-backends.md`)
 10. **Database** — PostgreSQL (token_usage, agent_diary + episodes via pgvector)
 11. **Tool Registry** — builtins + MCP tools + A2A tools
 12. **Tool Skills** — knowledge-base-sourced prompt fragments injected per-phase based on the active tool / MCP surface (`agent.skills`; see `docs/concepts/tool-skills.md`)

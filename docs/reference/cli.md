@@ -25,6 +25,13 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
 | `crewlet secrets get <NAME> --reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [--dry-run]` | Re-encrypt stored secrets under the active keyring key |
+| `crewlet llm list` | List the [`cli-agent`](../concepts/subscription-llm-backends.md) LLM providers in a company config and whether each looks logged in |
+| `crewlet llm login <provider>` | Authenticate a subscription CLI backend: broker the vendor's own login, mint a headless token, or drive a credential login |
+| `crewlet llm doctor [provider]` | Verify a CLI backend end to end — binary, version, login, token accounting, and a real smoke completion |
+| `crewlet llm status <provider>` | Ask the CLI who it is logged in as |
+| `crewlet llm logout <provider>` | Run the CLI's logout and delete its stored credentials |
+| `crewlet llm export <provider>` | Pack the provider's credential files into one portable blob (stdout, or the [secret store](../concepts/secret-store.md)) |
+| `crewlet llm import <provider>` | Restore a credential bundle onto this host |
 | `crewlet confluence import <company.yaml> [PATH]` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into Confluence (`trigger:` ⇒ skill; otherwise ⇒ doc in its parent-directory space) |
 | `crewlet confluence resync <company.yaml>` | Re-fetch the Tool Skills space and print loaded keys |
 | `crewlet plane import <company.yaml> [PATH]` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) (`trigger:` ⇒ skill in the Tool Skills project; otherwise ⇒ doc in its parent-directory project) |
@@ -192,6 +199,111 @@ crewlet secrets rekey [--dry-run] [--bootstrap PATH] [--dsn DSN]
 ```
 
 Re-encrypts every stored secret not already sealed under `secrets.active_key_id`. The per-row counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or rows still sealed under it become unreadable. Each row's envelope names its sealing key, so mixed-key states decrypt correctly throughout. `--dry-run` lists what would re-encrypt without writing.
+
+---
+
+## `crewlet llm`
+
+Operate the [subscription-authenticated CLI
+backends](../concepts/subscription-llm-backends.md) — `providers.llm`
+entries of type `cli-agent`, which drive a locally installed coding CLI
+(`claude`, `codex`, `gemini`, `opencode`, …) on the operator's
+subscription instead of a metered API key.
+
+Every subcommand reads the Tier B company YAML for the provider's `cli`
+block (`--company`, default `./company.yaml`). The ones that write or
+read a secret also take `--bootstrap` (default `./config.yaml`) or
+`--dsn`, exactly like [`crewlet secrets`](#crewlet-secrets).
+
+### `crewlet llm list`
+
+```
+crewlet llm list [--company PATH]
+```
+
+One row per `cli-agent` provider: key, CLI profile, model, and whether a
+login is reachable (credential files on disk, or a subscription token in
+the [secret store](../concepts/secret-store.md)).
+
+### `crewlet llm login`
+
+```
+crewlet llm login <provider> [--company PATH] [--bootstrap PATH] [--dsn DSN]
+                             [--capture-token] [--token-stdin]
+                             [--username USER] [--password-stdin]
+                             [--print-token]
+```
+
+With no flags, runs the vendor's own login command attached to your
+terminal, inside the provider's isolated credential directory — so the
+device-code prompt and browser hand-off behave exactly as they do by
+hand, and the result does not collide with your personal CLI login on
+the same machine.
+
+`--capture-token` runs the CLI's token-minting command (`claude
+setup-token`) and stores the result encrypted under the profile's token
+variable. **Prefer this where the vendor offers it:** no credential
+files to sync, no refresh-token rotation, and it survives an ephemeral
+container. `--token-stdin` stores a token you already have
+(`pass show … | crewlet llm login default --token-stdin`).
+`--print-token` writes a captured token to stdout instead of storing it,
+and refuses to run on a terminal.
+
+`--username` / `--password-stdin` drive a CLI's credential login where
+one genuinely exists (the `opencode` profile, a custom wrapper, a
+self-hosted gateway). The password is read from stdin or a declared
+environment variable, never from argv. Vendor subscription logins are
+browser OAuth with no password grant; for those the command explains
+that and points at the flows above rather than failing obscurely.
+
+### `crewlet llm doctor`
+
+```
+crewlet llm doctor [provider] [--company PATH] [--bootstrap PATH] [--dsn DSN]
+                              [--no-smoke]
+```
+
+The command to run before the first turn, and the one to run when a
+vendor ships a breaking CLI release. Checks the binary is on `PATH`,
+runs its version probe (printing it next to the version the built-in
+profile was written against), reports whether a login is present and
+whether token counts will be real or estimated — then runs **a real
+completion with a real tool**, because a profile can look correct and
+still not produce a parseable tool call. `--no-smoke` skips that last
+step so the check spends no subscription quota. Omit *provider* to check
+every `cli-agent` entry; exits non-zero if any has a problem.
+
+### `crewlet llm status` / `crewlet llm logout`
+
+```
+crewlet llm status <provider> [--company PATH]
+crewlet llm logout <provider> [--company PATH]
+```
+
+`status` forwards to the CLI's own status command. `logout` runs the
+CLI's logout **and** deletes the credential files — several CLIs clear
+only the active profile's entry, which would keep a revoked login
+seeding into every seat. A stored subscription token is a separate
+credential; remove it with `crewlet secrets unset`.
+
+### `crewlet llm export` / `crewlet llm import`
+
+```
+crewlet llm export <provider> [--secret-store] [--company PATH] [--bootstrap PATH]
+crewlet llm import <provider> [--secret-store] [--company PATH] [--bootstrap PATH]
+```
+
+Move one login between hosts. `export --secret-store` writes the
+credential files as one encrypted blob under
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, which any engine sharing that
+database restores at boot when its own credential directory is empty —
+so a rebuilt container comes up already authenticated. Without the flag
+the blob goes to stdout (refused on a terminal).
+
+Only credential files travel; sessions, history and caches never enter a
+bundle. On the way back in the archive is validated — files only, only
+the profile's own credential paths, size-capped — because an archive is
+an execution surface if unpacked on trust.
 
 ---
 
