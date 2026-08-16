@@ -101,13 +101,6 @@ class TurnContext:
     this field directly.
     """
 
-    original_task_description: str = ""
-    """The ``task_description`` as it was at turn start.  Set
-    automatically in ``__post_init__`` and never mutated afterwards.
-    Used by the turn-completion publisher to emit
-    ``TurnCompleted.task_summary`` and to feed ``Episode`` embeddings.
-    """
-
     turn_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_turn_id: str = ""
 
@@ -228,10 +221,6 @@ class TurnContext:
     _trigger_interactions: list[InboundInteraction] | None = field(
         default=None, init=False, repr=False
     )
-
-    def __post_init__(self) -> None:
-        if not self.original_task_description:
-            self.original_task_description = self.task_description
 
     def trigger_interactions(self) -> list[InboundInteraction]:
         """Canonical interactions derived from ``trigger_event``, memoized.

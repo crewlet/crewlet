@@ -1853,7 +1853,7 @@ class TurnEngine:
                 model=turn.model_keys.get("plan", "")
                 or turn.model_keys.get("execute", "")
                 or turn.model_keys.get("review", ""),
-                prompt=(turn.original_task_description or "")[:200],
+                prompt=(turn.task_description or "")[:200],
                 prompt_messages=[],
                 response=final_text,
                 input_tokens=turn.input_tokens,
@@ -1925,7 +1925,7 @@ class TurnEngine:
                 started_at=d.started_at,
                 ended_at=d.ended_at,
                 duration_ms=d.duration_ms,
-                task_summary=(turn.original_task_description or "")[:2000],
+                task_summary=(turn.task_description or "")[:2000],
                 plan_summary=d.plan_summary,
                 tool_sequence=d.tool_sequence,
                 plan_tool_sequence=list(turn.plan_tool_sequence),
@@ -1986,7 +1986,7 @@ class TurnEngine:
                     started_at=d.started_at,
                     ended_at=d.ended_at,
                     plan_summary=d.plan_summary,
-                    task_summary=(turn.original_task_description or "")[:2000],
+                    task_summary=(turn.task_description or "")[:2000],
                     tool_sequence=d.tool_sequence,
                     skills_used=d.skills_used,
                     review_outcome=review_outcome,  # type: ignore[arg-type]
