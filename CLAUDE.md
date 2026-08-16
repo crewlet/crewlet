@@ -171,6 +171,20 @@ src/crewlet/          # Main package
                       #   definition.py, instance.py, pool.py, memory.py,
                       #   turn.py (TurnEngine; resume_state re-enters Execute
                       #     mid-loop on sandbox completion), plan.py,
+                      #   iteration_log.py (prior-work ledger —
+                      #     IterationRecord + render_iteration_ledger. Each
+                      #     phase rebuilds its LLM conversation per
+                      #     iteration and plan_tool_executions resets, so a
+                      #     self_iterate round would otherwise re-plan a
+                      #     delivery that already fired. The engine-recorded
+                      #     tool calls carry the guarantee — notably on the
+                      #     done→self_iterate override, where Review wrote
+                      #     no completed_work at all — and
+                      #     ReviewOutcome.completed_work adds the prose
+                      #     gloss on top. Args elide PER VALUE, never per
+                      #     blob: json.dumps preserves key order and the
+                      #     discriminator (channel/key/page_id) is usually
+                      #     the shortest value),
                       #   onboarding_phase.py (run_onboarding_phase — dedicated
                       #     first-turn onboarding pass BEFORE Plan, own round
                       #     budget so it never starves submit_plan; strictly

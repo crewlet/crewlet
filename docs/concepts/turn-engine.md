@@ -97,13 +97,55 @@ The per-phase headers are deliberately verbose — each rule traces to an observ
 class ReviewOutcome(BaseModel):
     decision: Literal["done", "self_iterate"]
     notes: str = ""
+    completed_work: str = ""
     final_artifact: str = ""
 ```
 
 - `done` → return `final_artifact` (fallback: Execute's text).
-- `self_iterate` → append `notes` to the task description and loop back to Plan. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed` (engine-driven, not an LLM decision).
+- `self_iterate` → record the round in the [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) and loop back to Plan. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed` (engine-driven, not an LLM decision).
 
 When a turn is blocked and needs a manager or peer — a capability gap requiring someone else's identity / credentials, or a decision above the agent's authority — Review chooses `self_iterate` and says so in `notes`. The next Plan pass adds an outreach step and Execute reaches the colleague directly with its own colleague-surface tools (a Slack mention, a Jira comment, `a2a_ask`) — the same way a human teammate asks for help, and the same way an agent reaches a [human seat](humans-in-the-org.md). The colleague replies asynchronously and that re-triggers the agent. There is **no** engine-side handoff dispatcher, **no** `ask_colleague` decision, and **no** `role.fallback` chain: escalation is ordinary tool use during Execute (no special escalation mechanism).
+
+### Prior-work ledger across `self_iterate` rounds
+
+Every phase rebuilds its LLM conversation from scratch on each iteration — Plan and Execute start from `[system, user]`, and `turn.plan_tool_executions` is deliberately reset per iteration so the delivery gate can't read iteration 1's calls as iteration 2's delivery. Without a record kept *outside* those conversations, a `self_iterate` round starts blind: it cannot tell that iteration 1 already posted to Slack, so it plans the post again and the side effect fires twice.
+
+`TurnContext.iteration_history` is that record. The engine appends one `IterationRecord` (`src/crewlet/agent/iteration_log.py`) immediately before each loop-back, and `render_iteration_ledger` renders the accumulated records into three places:
+
+| Consumer | Where | Why |
+|---|---|---|
+| **Plan** | `## Already done earlier in this turn` in the **user** message | Plan only the gap, not the whole task again |
+| **Execute** | same block | Execute is what actually fires side effects, so it holds the evidence even if the planner re-lists a spent delivery tool |
+| **Review** | `## Earlier iterations (already delivered)` in the system prompt | Makes the duplicate-delivery rule work turn-wide instead of only inside one iteration |
+
+The block rides the **user** message in Plan and Execute, never the system prompt: the Plan system prompt is frozen at turn start (`TurnContext.plan_prefetch`) so its prefix stays byte-stable for provider prefix caching, and a section that grows each iteration would invalidate that cache on every loop. On iteration 1 the ledger is empty and the message is byte-identical to a single-pass turn.
+
+**Two layers, deliberately.** The tool-call lists are *engine-recorded*, so they cannot be forgotten — which matters most on the post-Review `done` → `self_iterate` override, where Review decided `done` and therefore wrote no prose at all, yet a partial delivery may already have landed. `ReviewOutcome.completed_work` is the reviewer's gloss on top, expressing what the mechanical log cannot: *"the post landed and reads fine — follow up in that thread rather than re-posting."* Same trust order the reviewer already applies to `## What Execute did` over `## What Execute produced`.
+
+**Reads are marked, not merged with writes.** Tool *results* are deliberately not carried across iterations, so a read the next round needs must be re-run — telling it "do not repeat" a `jira_get_issue` would push it to invent the data instead. Each record carries the positively-known read names the delivery gate already resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Failed calls stay marked `→ error`: they did not take effect and may be retried.
+
+### What the ledger trims, and why
+
+One principle decides every budget: **elide payloads, never structure.**
+
+A *payload* — a message body, page HTML, a diff — is unbounded, gets re-authored from the plan next round, and can never answer "did this already fire". Carrying it only buries the two lines that can. *Structure* — the plan's steps, the draft under review, the reviewer's correction — is bounded in practice and is exactly what the next round must act on, so it is cut only as a guard against pathological output, never as routine trimming.
+
+The budgets are guards, not a diet. Prompt caching keys on the system+tools prefix, which the ledger never touches, so a larger block costs little; the reason to bound it at all is that an unbounded one eats the turn's own `PhaseBudget` and drowns the signal.
+
+| Budget | Value | Anchored on |
+|---|---|---|
+| `LEDGER_VALUE_LIMIT` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so the whole discriminator survives while bodies are cut by an order of magnitude |
+| `LEDGER_BLOB_LIMIT` | 800 | ~12 identifier-shaped arguments — more than any real delivery tool takes |
+| `LEDGER_PLAN_SUMMARY_LIMIT` | 1200 | A realistic 6-step plan renders ~850 chars; 1200 covers ~8 |
+| `LEDGER_ARTIFACT_LIMIT` | 2000 | Matches `review.py`'s own `execute_summary[:2000]` — same content, same question |
+| `LEDGER_NOTE_LIMIT` | 2000 | `notes` is the correction and the ledger is its only carrier, so it gets the artifact's budget |
+| `LEDGER_MAX_READ_CALLS` | 12 | The recon a normal round does; only reads are ever dropped |
+
+Arguments use **per-value** elision, never a cap on the serialised blob. `json.dumps` preserves key order, so capping the object would drop whichever keys sort last — and the discriminating argument (`channel`, `key`, `page_id`) is usually the *shortest* one. A line that kept a 400-char message body but lost `channel` would look precise while hiding which of two deliveries actually fired. When even fully elided values exceed `LEDGER_BLOB_LIMIT`, the backstop drops **whole keys** — shortest-value-first, so identifiers survive — and appends `+N more` rather than cutting mid-serialisation. The same priority governs the read-line cap: only reads are ever omitted, never a write.
+
+**The ledger survives a sandbox suspend.** A detached `run_sandbox` ends the turn and the completion runs a *new* `run_turn`, so the records are serialised into `pending_sandbox_run.execute_state` and rehydrated onto the resumed `TurnContext`. Without that round-trip, a turn that self-iterated before suspending would forget those rounds and re-fire their deliveries after the resume. Rows written before the ledger existed decode to an empty record rather than raising, so an in-flight run started by an older engine still resumes.
+
+`task_description` is **not** mutated by a `self_iterate` round. Appending review notes to it leaked `Review notes: …` into the knowledge-search query builders, the sandbox brief, and the `Episode` / `TurnCompleted` publishers — all of which want the user's actual ask.
 
 ### Engine-driven `failed` outcome
 
@@ -367,6 +409,7 @@ All fields are optional; defaults apply when absent.
 | `agent/review.py` | Review phase runner + `ReviewOutcome` model + `submit_review` meta-tool |
 | `agent/subagent.py` | `spawn_subagent` with its runtime invariants |
 | `agent/guards.py` | Depth cap, stall detector |
+| `agent/iteration_log.py` | Prior-work ledger: `IterationRecord`, `format_tool_calls`, `render_iteration_ledger` |
 | `agent/skills/guard.py` | Required-skill guard: `SkillGuard`, `build_skill_guard` (load-before-use enforcement for `required: true` tool skills) |
 | `agent/extension.py` | Round-cap extension judge: `ExtensionDecision`, `judge_extension`, `maybe_extend` |
 | `agent/llm_loop.py` | Shared `run_tool_loop` (one call + tool-loop body across every phase) |

@@ -41,12 +41,13 @@ from pydantic import BaseModel, Field
 
 from crewlet._logging import get_logger
 from crewlet.agent.extension import DeferredJudgeEvent, emit_deferred, maybe_extend
+from crewlet.agent.iteration_log import render_iteration_ledger
 from crewlet.agent.llm_loop import (
     publish_phase_completed,
     publish_phase_started,
     run_tool_loop,
 )
-from crewlet.agent.prompts import build_plan_prompt
+from crewlet.agent.prompts import build_phase_user_message, build_plan_prompt
 from crewlet.agent.skills.guard import skill_guard_for_turn
 from crewlet.agent.skills.models import Phase as SkillPhase
 from crewlet.agent.tool_discovery import (
@@ -82,15 +83,20 @@ _EPISODE_RECALL_LIMIT = 3
 
 # Names of the Plan-phase meta-tools — pure scaffolding for the Plan
 # contract, carrying no business semantics.  ``submit_plan`` is the
-# artifact handoff; ``activate_tool`` and ``load_tool_skill`` are
-# in-Plan recon scaffolding.  Defined here as the source of truth so
-# Review's prompt formatter and the engine's delivery-override check
-# (both consumers in ``review.py`` / ``turn.py``) stay in sync — any
+# artifact handoff; ``activate_tool``, ``list_mcp_server_tools`` and
+# ``load_tool_skill`` are in-Plan recon scaffolding.  Defined here as
+# the source of truth so Review's prompt formatter, the engine's
+# delivery-override check, and the prior-work ledger (consumers in
+# ``review.py`` / ``turn.py`` / ``iteration_log.py``) stay in sync — any
 # new meta-tool added to ``_build_meta_tools`` below must also land in
-# this set, otherwise it leaks into Review's ``## What Plan did`` log
-# and into the engine's ``called_tool_names`` union.
+# this set, otherwise it leaks into Review's ``## What Plan did`` log,
+# into the engine's ``called_tool_names`` union, and into the ledger as
+# already-delivered work the next round is told not to repeat.
+# ``list_mcp_server_tools`` was missing here until the ledger landed;
+# ``turn.py`` had been unioning it into ``non_delivery_tools`` by hand,
+# which covered the delivery gate but not the two prompt consumers.
 PLAN_META_TOOL_NAMES: frozenset[str] = frozenset(
-    {"submit_plan", "activate_tool", "load_tool_skill"}
+    {"submit_plan", "activate_tool", "list_mcp_server_tools", "load_tool_skill"}
 )
 
 # Rendered in place of the ``## Similar prior work`` block when the
@@ -745,7 +751,15 @@ async def run_plan_phase(
         Message(role="system", content=system_prompt),
         Message(
             role="user",
-            content=f"Task:\n{turn.task_description or '(no description)'}",
+            # The prior-work ledger rides the USER message so the frozen
+            # system prefix above stays byte-stable across self_iterate
+            # loops (provider prefix caching); empty on iteration 1.
+            content=build_phase_user_message(
+                task_description=turn.task_description,
+                prior_work=render_iteration_ledger(
+                    turn.iteration_history, skip_names=PLAN_META_TOOL_NAMES
+                ),
+            ),
         ),
     ]
 

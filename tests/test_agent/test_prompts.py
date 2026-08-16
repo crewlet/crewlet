@@ -10,6 +10,7 @@ from crewlet.agent.prompts import (
     SUBAGENT_PREAMBLE,
     build_execute_prompt,
     build_onboarding_prompt,
+    build_phase_user_message,
     build_plan_prompt,
     build_review_prompt,
     build_subagent_prompt,
@@ -954,18 +955,28 @@ def test_execute_prompt_is_tiny():
 
 
 def test_review_prompt_is_small():
-    """Review body (no summaries) stays <560 tokens — identity +
-    decision enum + tool-delivery / sandbox / missing-tool / blocked
-    rules.  The original budget was 300 (identity + 6-line decision
-    enum); the rules added ~230 tokens to prevent real production
-    failures (silent half-finished turns when Plan didn't list the
-    right tools; and the sandbox rule, which stops Review from looping
-    a turn forever by mis-reading a `run_sandbox`-delegated investigation
-    as "fabricated").  The trade is worth it -- each rule maps to a
-    turn-ending bug we have actually observed."""
+    """Review body (no summaries) stays <600 tokens — identity +
+    decision enum + tool-delivery / sandbox / missing-tool / blocked /
+    duplicate-delivery rules and the `completed_work` instruction.  The
+    original budget was 300 (identity + 6-line decision enum); the
+    rules added ~290 tokens to prevent real production failures (silent
+    half-finished turns when Plan didn't list the right tools; the
+    sandbox rule, which stops Review from looping a turn forever by
+    mis-reading a `run_sandbox`-delegated investigation as "fabricated";
+    and the cross-iteration duplicate rule, which stops a second
+    `self_iterate` pass re-firing a side effect that already landed).
+    The trade is worth it -- each rule maps to a turn-ending bug we have
+    actually observed.
+
+    Raised 560 -> 600 when the duplicate rule had to be keyed on target
+    and content rather than tool name: keyed on the name alone it fired
+    on the in-thread follow-up ``PRIOR_WORK_HEADER`` explicitly asks
+    for, so every corrected turn looped to ``max_iterations`` and
+    terminated ``failed``.  Headroom is ~13 tokens on purpose: the next
+    addition should have to justify itself here, not slip in."""
     p = build_review_prompt(_def("Engineering Lead"))
     approx_tokens = len(p) // 4
-    assert approx_tokens < 560, f"Review prompt too large: ~{approx_tokens} tokens"
+    assert approx_tokens < 600, f"Review prompt too large: ~{approx_tokens} tokens"
 
 
 def test_execute_prompt_smaller_than_plan_prompt():
@@ -1172,3 +1183,59 @@ def test_phase_contract_headers_name_no_specific_platforms():
     for product in ("Slack", "Jira", "Confluence", "Copilot", "GitHub"):
         assert product not in PLAN_HEADER, f"PLAN_HEADER names {product!r}"
         assert product not in REVIEW_HEADER, f"REVIEW_HEADER names {product!r}"
+
+
+def test_review_prompt_omits_earlier_iterations_by_default():
+    """First iteration of a turn: no section over an empty ledger."""
+    p = build_review_prompt(_def(), plan_summary="P", execute_summary="E")
+    assert "\n## Earlier iterations (already delivered)\n" not in p
+
+
+def test_review_prompt_renders_earlier_iterations_before_this_round():
+    """Both per-phase tool logs reset each iteration (so the delivery
+    gate can't read iter-1 calls as iter-2 delivery), which left the
+    reviewer blind to a repeat across iterations. This section restores
+    that view, and lands first so the whole turn reads as one timeline.
+    """
+    p = build_review_prompt(
+        _def(),
+        plan_summary="PLAN",
+        execute_summary="E",
+        execute_tool_log="- slack_post(...) → success",
+        earlier_iterations=(
+            "### Iteration 1\nExecute called:\n- slack_post(...) → success"
+        ),
+    )
+    earlier_idx = p.index("\n## Earlier iterations (already delivered)\n")
+    plan_idx = p.index("\n## What Plan did\n")
+    assert earlier_idx < plan_idx
+    assert "### Iteration 1" in p
+
+
+def test_review_header_teaches_cross_iteration_duplicate_rule():
+    """A repeat of an already-delivered call is a duplicate too — the
+    rule is worthless if it only sees inside one iteration."""
+    assert "Earlier iterations" in REVIEW_HEADER
+    assert "completed_work" in REVIEW_HEADER
+
+
+def test_phase_user_message_without_prior_work_is_unchanged():
+    """The common single-pass turn must keep its exact pre-ledger shape
+    so nothing shifts for turns that never self_iterate."""
+    assert (
+        build_phase_user_message(task_description="do the thing")
+        == "Task:\ndo the thing"
+    )
+    assert build_phase_user_message(task_description="") == "Task:\n(no description)"
+
+
+def test_phase_user_message_appends_prior_work_block():
+    msg = build_phase_user_message(
+        task_description="post the summary",
+        prior_work="### Iteration 1\nExecute called:\n- slack_post(...) → success",
+    )
+    assert msg.startswith("Task:\npost the summary")
+    assert "Already done earlier in this turn" in msg
+    assert "### Iteration 1" in msg
+    # The rule that actually prevents the double-post.
+    assert "ALREADY RAN" in msg

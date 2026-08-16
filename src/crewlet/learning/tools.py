@@ -664,16 +664,17 @@ def register_refresh_memory_tool(
         # ``Current sender:`` line still surfaces during a refresh, and
         # so ``original_task`` is the salient inbound message rather
         # than the notification builder's triage scaffolding -- the
-        # ``context_hint`` is appended to ``original_task``, so if that
-        # were the enriched task description the hint would land past
-        # the filter's prompt-truncation window (the bug this fix
-        # closes for the initial prefetch too).
+        # ``context_hint`` is appended to ``original_task``, so anything
+        # bulkier here would push the hint past the filter's
+        # prompt-truncation window (the bug this fix closes for the
+        # initial prefetch too).  ``task_description`` is safe to read
+        # directly: a ``self_iterate`` round records what happened in
+        # ``TurnContext.iteration_history`` and no longer appends review
+        # notes to the ask.
         interactions = turn_ctx.trigger_interactions()
         original_task = salient_task_text(
             interactions,
-            getattr(turn_ctx, "task_description", "")
-            or getattr(turn_ctx, "original_task_description", "")
-            or "",
+            getattr(turn_ctx, "task_description", "") or "",
         )
 
         role: Role | None = None

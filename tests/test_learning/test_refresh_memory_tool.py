@@ -110,7 +110,6 @@ class _TurnCtxStub:
     ) -> None:
         self.turn_id = turn_id
         self.task_description = task_description
-        self.original_task_description = task_description
         self.trigger_event = trigger_event
 
     def trigger_interactions(self) -> list[Any]:

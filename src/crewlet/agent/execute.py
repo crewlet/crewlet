@@ -25,14 +25,15 @@ from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.agent.extension import DeferredJudgeEvent, emit_deferred, maybe_extend
+from crewlet.agent.iteration_log import render_iteration_ledger
 from crewlet.agent.llm_loop import (
     LoopResult,
     publish_phase_completed,
     publish_phase_started,
     run_tool_loop,
 )
-from crewlet.agent.plan import ExecutionPlan
-from crewlet.agent.prompts import build_execute_prompt
+from crewlet.agent.plan import PLAN_META_TOOL_NAMES, ExecutionPlan
+from crewlet.agent.prompts import build_execute_prompt, build_phase_user_message
 from crewlet.agent.skills.guard import skill_guard_for_turn
 from crewlet.agent.skills.models import Phase as SkillPhase
 from crewlet.agent.tool_discovery import (
@@ -76,6 +77,12 @@ class ExecuteResumeState:
     # calls and Review judges the (sandbox-delegated) work "fabricated" and loops
     # the turn forever.
     prior_tool_executions: list[dict[str, Any]] = field(default_factory=list)
+
+    # Serialised ``IterationRecord``s for rounds that closed BEFORE the
+    # suspend. The engine rehydrates these onto the resumed turn's fresh
+    # ``TurnContext`` so the prior-work ledger survives the suspend/resume
+    # boundary — see ``TurnEngine.run_turn``.
+    iteration_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -257,6 +264,13 @@ async def _suspend_execute(
         # ExecuteResult — and thus Review's evidence log — sees every call,
         # even across multiple suspend/resume hops.
         "tool_executions": full_tool_executions,
+        # Closed rounds from BEFORE the suspend.  The completion runs a new
+        # ``run_turn`` with a fresh ``TurnContext``, so without round-tripping
+        # the ledger the resumed turn forgets every earlier iteration — and a
+        # Review that self_iterates after the resume would hand the next Plan
+        # a ledger missing the deliveries those rounds already made, re-firing
+        # exactly the duplicate this record exists to prevent.
+        "iteration_history": [rec.to_dict() for rec in turn.iteration_history],
     }
     sandbox_id = (loop.suspend_payload or {}).get("sandbox_id", "")
     if pending_store is not None:
@@ -437,7 +451,16 @@ async def run_execute_phase(
             Message(role="system", content=system_prompt),
             Message(
                 role="user",
-                content=f"Task:\n{turn.task_description or '(no description)'}",
+                # Execute is the phase that actually fires side effects,
+                # so it carries the prior-work ledger too: if the planner
+                # re-lists a delivery tool that already ran, the executor
+                # still has the evidence not to fire it twice.
+                content=build_phase_user_message(
+                    task_description=turn.task_description,
+                    prior_work=render_iteration_ledger(
+                        turn.iteration_history, skip_names=PLAN_META_TOOL_NAMES
+                    ),
+                ),
             ),
         ]
 

@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from crewlet._logging import get_logger
 from crewlet.agent.execute import ExecuteResult
+from crewlet.agent.iteration_log import format_tool_calls, render_iteration_ledger
 from crewlet.agent.llm_loop import (
     publish_phase_completed,
     publish_phase_started,
@@ -56,6 +57,18 @@ class ReviewOutcome(BaseModel):
     colleague, the note tells Plan to add the outreach step so Execute
     reaches them directly with its own colleague-surface tools."""
 
+    completed_work: str = ""
+    """What already landed this turn and must not be repeated, in the
+    reviewer's own words -- the semantic layer over the engine-built
+    tool-call ledger (see :mod:`crewlet.agent.iteration_log`).
+
+    The ledger records that ``slack_conversations_add_message`` fired;
+    only the reviewer can say "the post landed and reads fine, it just
+    omits the breakdown -- follow up in that thread rather than
+    re-posting". Empty on ``done`` (nothing loops back) and empty
+    whenever Review never chose ``self_iterate`` itself, which is why
+    the ledger and not this field carries the guarantee."""
+
     final_artifact: str = ""
     """The artifact Review wants to return when decision is ``done``.
     If empty, the engine returns Execute's text."""
@@ -81,7 +94,11 @@ def _build_review_meta_tools() -> list[SimpleTool]:
                 "  in `final_artifact` (or leave empty to reuse "
                 "  Execute's output).\n"
                 "- `self_iterate`: not done -- loop back to Plan with "
-                "  an actionable correction in `notes`.\n\n"
+                "  an actionable correction in `notes`, and set "
+                "  `completed_work` to what ALREADY landed this turn "
+                "  (especially external side effects: posts, comments, "
+                "  status changes) so the next round adds to it instead "
+                "  of firing it a second time.\n\n"
                 "Choose `self_iterate` whenever the artifact is wrong "
                 "or incomplete, a required `tools_needed` action tool "
                 "was not actually called, or Execute narrated that it "
@@ -113,42 +130,25 @@ def _format_execute_tool_log(executions: list[dict[str, Any]]) -> str:
     Review sees an explicit "no action taken" signal rather than just
     an absent section.
 
-    ``arguments`` is always a JSON string in production data (see
-    ``llm_loop.run_tool_loop``); we treat it as plain text and never
-    re-parse.
+    Thin wrapper over :func:`~crewlet.agent.iteration_log.format_tool_calls`
+    at its no-truncation defaults.  The cross-iteration ledger shares
+    that renderer with elision budgets applied; this single-iteration
+    evidence log deliberately does not -- it is what Review judges
+    delivery against, so it must stay verbatim.
     """
-    if not executions:
-        return "(none)"
-    lines: list[str] = []
-    for exe in executions:
-        name = exe.get("name", "?")
-        args_str = str(exe.get("arguments", ""))
-        success = exe.get("success")
-        result = str(exe.get("result", ""))
-        # ``success is False`` for explicit failures; the unknown-tool
-        # branch covers entries where the loop returned the
-        # error string but didn't set ``success``.
-        if success is False or result.startswith("Unknown tool:"):
-            outcome = f"error: {result}"
-        else:
-            outcome = "success"
-        lines.append(f"- {name}({args_str}) → {outcome}")
-    return "\n".join(lines)
+    return format_tool_calls(executions)
 
 
 def _format_plan_tool_log(executions: list[dict[str, Any]]) -> str:
     """Plan-phase tool log for Review, with meta-tools filtered out.
 
-    Reuses :func:`_format_execute_tool_log` after dropping the Plan-
-    only meta-tools (see ``PLAN_META_TOOL_NAMES`` in
+    Same renderer as :func:`_format_execute_tool_log` after dropping the
+    Plan-only meta-tools (see ``PLAN_META_TOOL_NAMES`` in
     ``crewlet.agent.plan``).  An all-meta or empty input yields
     ``"(none)"`` so Review sees the explicit signal that Plan did no
     externally visible work during recon.
     """
-    filtered = [
-        exe for exe in executions if exe.get("name", "") not in PLAN_META_TOOL_NAMES
-    ]
-    return _format_execute_tool_log(filtered)
+    return format_tool_calls(executions, skip_names=PLAN_META_TOOL_NAMES)
 
 
 _REVIEW_RESCUE_DIRECTIVE = (
@@ -311,6 +311,9 @@ async def run_review_phase(
         execute_summary=(execute_result.text or "(empty)")[:2000],
         execute_tool_log=_format_execute_tool_log(execute_result.tool_executions),
         plan_tool_log=_format_plan_tool_log(turn.plan_tool_executions),
+        earlier_iterations=render_iteration_ledger(
+            turn.iteration_history, skip_names=PLAN_META_TOOL_NAMES
+        ),
         skill_registry=prompt_skill_registry,
     )
     user = "Judge whether this turn is done, or what should happen next."

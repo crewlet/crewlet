@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from crewlet.agent.instance import AgentInstance
+from crewlet.agent.iteration_log import IterationRecord
 from crewlet.events.types import Event
 from crewlet.learning.interaction import InboundInteraction
 
@@ -91,13 +92,13 @@ class TurnContext:
 
     task_id: str = ""
     task_description: str = ""
-    original_task_description: str = ""
-    """The ``task_description`` as it was at turn start, before any
-    ``self_iterate`` round appended review notes.  Set automatically
-    in ``__post_init__`` and never mutated afterwards.  Used by the
-    turn-completion publisher to emit ``TurnCompleted.task_summary``
-    and to feed ``Episode`` embeddings — both downstream learners
-    want the user's original ask, not the LLM-amended copy.
+    """The ask, as it arrived.  Never mutated during the turn: a
+    ``self_iterate`` round records what happened in
+    ``iteration_history`` instead of appending review notes here.  That
+    keeps every consumer reading the user's actual request — the
+    knowledge-search query builders, the sandbox brief, the extension
+    judge, and the ``Episode`` / ``TurnCompleted`` publishers all read
+    this field directly.
     """
 
     turn_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -191,6 +192,16 @@ class TurnContext:
     # gains review notes between iterations.
     plan_prefetch: PlanPrefetch | None = None
 
+    # Closed snapshots of every Plan -> Execute -> Review round that has
+    # already finished this turn, appended just before each
+    # ``self_iterate`` loops back.  Each phase rebuilds its LLM
+    # conversation from scratch every iteration, so without this the
+    # next Plan round starts blind and re-plans work (and external side
+    # effects) that already happened.  Rendered into the Plan and
+    # Execute user messages and into Review's evidence sections; see
+    # :mod:`crewlet.agent.iteration_log`.
+    iteration_history: list[IterationRecord] = field(default_factory=list)
+
     # Per-turn availability set built once by TurnEngine from the role's
     # ``mcp_env`` + registry ``check_fn`` calls.  Passed to each
     # ToolSurface factory as ``availability_filter`` so check_fns are
@@ -210,10 +221,6 @@ class TurnContext:
     _trigger_interactions: list[InboundInteraction] | None = field(
         default=None, init=False, repr=False
     )
-
-    def __post_init__(self) -> None:
-        if not self.original_task_description:
-            self.original_task_description = self.task_description
 
     def trigger_interactions(self) -> list[InboundInteraction]:
         """Canonical interactions derived from ``trigger_event``, memoized.

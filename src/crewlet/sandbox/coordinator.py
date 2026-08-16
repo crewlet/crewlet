@@ -480,6 +480,7 @@ class SandboxCoordinator:
             loaded_skill_keys=list(st.get("loaded_skill_keys", [])),
             result_success=result_success,
             prior_tool_executions=list(st.get("tool_executions", [])),
+            iteration_history=list(st.get("iteration_history", [])),
         )
         await turn_engine.run_turn(
             agent,
