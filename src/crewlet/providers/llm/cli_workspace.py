@@ -221,6 +221,60 @@ class _SeatState:
     in_flight: int = 0
 
 
+@dataclass
+class _SharedState:
+    """Generation bookkeeping for ONE state directory.
+
+    Keyed by the resolved directory rather than held per manager,
+    because "which seat generation is open" is a property of the files
+    on disk, not of the Python object that happens to be looking at
+    them. Two managers over one directory arise in two ordinary
+    situations, and both corrupt a live run without this:
+
+    * **Per-phase models.** Running Plan on ``opus`` and Execute on
+      ``sonnet`` means two ``providers.llm`` entries. Pointing both at
+      one ``state_dir`` is how an operator shares a single login
+      between them — and with independent counters, one entry's first
+      call would prune the other's in-flight session.
+    * **Hot reload.** ``apply_config`` rebuilds every provider. A fresh
+      manager starting at ``in_flight = 0`` would prune the seat home
+      of a call the outgoing provider is still running.
+    """
+
+    seats: dict[str, _SeatState] = field(default_factory=dict)
+    credential_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+#: Shared state per resolved state directory. A process global for the
+#: same reason the secret source is: the thing being guarded is
+#: process-wide (a directory), and every would-be holder is constructed
+#: independently from config.
+_SHARED: dict[Path, _SharedState] = {}
+
+
+def _shared_state(state_dir: Path) -> _SharedState:
+    """The :class:`_SharedState` for ``state_dir``, creating it once.
+
+    Resolved first so ``~/x``, ``./x`` and ``/home/u/x`` are recognised
+    as one directory — a near-miss would silently reinstate the very
+    race this exists to remove.
+    """
+    try:
+        key = state_dir.expanduser().resolve()
+    except OSError:  # pragma: no cover — unresolvable path
+        key = state_dir
+    shared = _SHARED.get(key)
+    if shared is None:
+        shared = _SharedState()
+        _SHARED[key] = shared
+    return shared
+
+
+def reset_shared_state() -> None:
+    """Drop every cached :class:`_SharedState` (tests only)."""
+    _SHARED.clear()
+
+
 class CLIWorkspaceManager:
     """Owns one provider's state directory and hands out seat workspaces.
 
@@ -243,10 +297,11 @@ class CLIWorkspaceManager:
             Path(state_dir) if state_dir else default_state_dir(provider_key)
         )
         self._extra_env = dict(extra_env or {})
-        self._seats: dict[str, _SeatState] = {}
-        # Guards reads/writes of the ONE shared credential directory
-        # against the many seats that seed from and refresh into it.
-        self._credential_lock = asyncio.Lock()
+        # Generation bookkeeping and the credential lock belong to the
+        # DIRECTORY, not to this object: several providers can point at
+        # one state dir to share a login, and a hot reload replaces this
+        # object while calls are still in flight. See _SharedState.
+        self._shared = _shared_state(self.state_dir)
 
     # -- layout ------------------------------------------------------
 
@@ -328,7 +383,7 @@ class CLIWorkspaceManager:
         paths = self.profile.credential_paths
         if not paths:
             return
-        async with self._credential_lock:
+        async with self._shared.credential_lock:
             for relative in paths:
                 src = _safe_join(self.credential_dir, relative)
                 dst = _safe_join(home, relative)
@@ -362,7 +417,7 @@ class CLIWorkspaceManager:
         if not paths:
             return False
         changed = False
-        async with self._credential_lock:
+        async with self._shared.credential_lock:
             for relative in paths:
                 src = _safe_join(home, relative)
                 dst = _safe_join(self.credential_dir, relative)
@@ -417,7 +472,7 @@ class CLIWorkspaceManager:
         sub-agents) share the generation and run in parallel.
         """
         seat = sanitize_seat(seat)
-        state = self._seats.setdefault(seat, _SeatState())
+        state = self._shared.seats.setdefault(seat, _SeatState())
         home = self.seat_home(seat)
         call_id = uuid.uuid4().hex[:12]
         work = self.seat_root(seat) / "work" / call_id
@@ -466,4 +521,5 @@ __all__ = [
     "copy_file_atomic",
     "default_state_dir",
     "file_digest",
+    "reset_shared_state",
 ]

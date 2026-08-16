@@ -215,6 +215,10 @@ providers:
                                         #   Empty: $CREWLET_LLM_CLI_HOME/<key>, else
                                         #   ~/.crewlet/llm-cli/<key>. Use a persistent
                                         #   volume in an ephemeral container.
+                                        #   Entries naming the SAME dir share one login
+                                        #   (how per-phase models run off one
+                                        #   `crewlet llm login`); they must then also
+                                        #   share the same `agent`.
         timeout_seconds: 300            # optional — one CLI invocation, wall clock.
                                         #   Separate from the entry's HTTP
                                         #   timeout_seconds: this covers process

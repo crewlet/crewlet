@@ -215,15 +215,23 @@ class _Launch:
 def _coding_agent_llm(llm_config: LLMProviderConfig) -> CodingAgentLLM:
     """The role's resolved LLM as a coding-agent descriptor.
 
-    Carries the raw model id + provider type + endpoint. The runner uses it
+    Carries the raw model id + model family + endpoint. The runner uses it
     to address the model and (OpenCode) declare a custom provider; the key
     rides the sandbox env, so it is deliberately absent here. The model is
     NOT an env var the agent reads — passed explicitly, or the agent falls
     back to its own built-in default (e.g. OpenCode → ``gpt-5.*``).
+
+    A ``cli-agent`` provider reports its CLI's **vendor** as the family:
+    every subscription entry has the same ``type``, so passing the type
+    through would tell OpenCode to address a Claude subscription's
+    ``sonnet`` as ``openai/sonnet``.
     """
+    provider_type = llm_config.type
+    if provider_type == "cli-agent" and llm_config.cli is not None:
+        provider_type = llm_config.cli.profile().vendor
     return CodingAgentLLM(
         model=(llm_config.model or "").strip(),
-        provider_type=llm_config.type,
+        provider_type=provider_type,
         base_url=llm_config.base_url,
     )
 

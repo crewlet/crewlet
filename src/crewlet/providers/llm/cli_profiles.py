@@ -143,6 +143,18 @@ class CLIAgentProfile(BaseModel):
     binary: str
     """Executable name resolved on ``PATH`` (or an absolute path)."""
 
+    vendor: Literal["anthropic", "openai", "google", "xai", "other"] = "other"
+    """Which model family this CLI actually talks to.
+
+    Not cosmetic: the sandbox's OpenCode runner addresses a model as
+    ``<family>/<model>``, and it can only derive that family from the
+    provider. For an API entry the ``providers.llm`` *type* carries it,
+    but every subscription entry has the same type (``cli-agent``) — so
+    without this, a Claude subscription's ``sonnet`` would be addressed
+    as ``openai/sonnet``. ``other`` means "the operator chooses" (the
+    provider-agnostic CLIs), and falls back to the OpenAI family exactly
+    as an unknown type always has."""
+
     verified_against: str = ""
     """Human-readable note naming the CLI release this profile's flags
     were written against.  Printed by ``crewlet llm doctor`` next to the
@@ -377,6 +389,7 @@ _GEMINI_SETTINGS = json.dumps(
 CLAUDE_CODE = CLIAgentProfile(
     name="claude-code",
     binary="claude",
+    vendor="anthropic",
     verified_against="Claude Code CLI 2.x (`claude --version`)",
     complete_args=[
         "--print",
@@ -423,6 +436,7 @@ CLAUDE_CODE = CLIAgentProfile(
 CODEX = CLIAgentProfile(
     name="codex",
     binary="codex",
+    vendor="openai",
     verified_against="OpenAI Codex CLI 0.x (`codex --version`)",
     complete_args=[
         "exec",
@@ -478,6 +492,7 @@ CODEX = CLIAgentProfile(
 GEMINI_CLI = CLIAgentProfile(
     name="gemini-cli",
     binary="gemini",
+    vendor="google",
     verified_against="Gemini CLI 0.x (`gemini --version`)",
     complete_args=["--output-format", "json"],
     prompt_via="stdin",
@@ -501,6 +516,7 @@ GEMINI_CLI = CLIAgentProfile(
 QWEN_CODE = CLIAgentProfile(
     name="qwen-code",
     binary="qwen",
+    vendor="openai",
     verified_against="Qwen Code 0.x (`qwen --version`), a Gemini CLI fork",
     complete_args=["--output-format", "json"],
     prompt_via="stdin",
@@ -591,6 +607,7 @@ COPILOT_CLI = CLIAgentProfile(
 GROK = CLIAgentProfile(
     name="grok",
     binary="grok",
+    vendor="xai",
     verified_against="xAI Grok CLI 0.x (`grok --version`)",
     complete_args=["--output-format", "json"],
     prompt_via="stdin",

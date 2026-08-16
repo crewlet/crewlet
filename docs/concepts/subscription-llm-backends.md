@@ -43,6 +43,7 @@ below.
 | Problem | Why it bites | Where it's solved |
 |---|---|---|
 | **Shared memory** | A CLI keeps sessions, history, todos, and project notes under one home. Seven seats on one subscription would read each other's transcripts. | [Isolation](#isolation-the-part-that-actually-matters) |
+| **One model per entry** | A CLI takes `--model`, so per-phase models mean several entries — which must not mean several logins. | [Per-phase models](#per-phase-models) |
 | **No tool channel** | The tool loop needs `tool_calls` back. A CLI prints prose. | [Tool calls](#tool-calls) |
 | **Browser-only auth** | Vendor logins are OAuth (PKCE) with MFA — no password grant to script. | [Authentication](#authentication) |
 
@@ -361,6 +362,71 @@ errors. Raise it on a large host with a plan that permits it.
 purpose: a backend that silently picked up a stray `ANTHROPIC_API_KEY`
 would bill the metered account while you believed you were on a flat-rate
 plan.
+
+---
+
+## Per-phase models
+
+Nothing changes. Phase selection resolves by `providers.llm` **key**,
+and the resolver never looks at a provider's type — so `llm_plan`,
+`llm_execute`, `llm_review`, `llm_subagent`, `llm_auxiliary`,
+`llm_judge` and `llm_sandbox` all behave exactly as they do for API
+entries, including mixing the two kinds in one role and including
+list-form fallback chains. See
+[Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
+
+The one difference is *where the model string goes*: an API entry sends
+it as a request field, a `cli-agent` entry passes it as `--model`. One
+entry is still one model, so per-phase models mean one entry per model:
+
+```yaml
+providers:
+  llm:
+    opus-sub:
+      type: cli-agent
+      model: opus
+      cli: { agent: claude-code, state_dir: /var/lib/crewlet/llm-cli/claude }
+    sonnet-sub:
+      type: cli-agent
+      model: sonnet
+      cli: { agent: claude-code, state_dir: /var/lib/crewlet/llm-cli/claude }
+    cheap:
+      type: openai
+      model: gpt-4o-mini
+      api_keys: ["${OPENAI_API_KEY}"]
+
+roles:
+  - name: Engineer
+    llm_plan: opus-sub              # deep reasoning on the subscription
+    llm_execute: [sonnet-sub, cheap]  # subscription first, key when spent
+    llm_auxiliary: cheap            # see the latency note below
+```
+
+**Point them at the same `state_dir` and they share one login.** Both
+entries above then use the credential directory a single `crewlet llm
+login` wrote, instead of needing one login per entry — the default
+`state_dir` is per provider key precisely so unrelated providers do
+*not* collide, which means entries that should share must say so. They
+also share one set of per-seat homes and one generation, so a call on
+one entry never wipes a live call on the other.
+
+Entries sharing a `state_dir` must drive the **same** CLI: two different
+CLIs disagree about which files are credentials and which are
+conversation memory, so each would prune the other's state.
+`crewlet validate` rejects that combination by name.
+
+**Concurrency is per entry.** `max_concurrent` caps one provider's
+processes, so two entries at the default of 4 can run 8 CLI processes at
+once. Size them together against the engine host's memory.
+
+**Auxiliary work is the one phase to think twice about.** Every
+reflection, summarisation and Plan-phase relevance prefetch goes through
+`llm_auxiliary`, and each one pays a process launch on this backend.
+Point it at a cheap API model unless you have no key at all. (Crewlet
+does handle the latency: the auxiliary call's 60-second deadline is
+widened to the provider's own `cli.timeout_seconds`, so a subscription
+aux provider is not cut off mid-call — it is simply slower than it needs
+to be.)
 
 ---
 

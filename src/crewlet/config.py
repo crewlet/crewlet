@@ -170,7 +170,18 @@ class CLIAgentConfig(BaseModel):
     per-seat homes.  Empty uses ``$CREWLET_LLM_CLI_HOME/<key>``, falling
     back to ``~/.crewlet/llm-cli/<key>``.  Point it at a persistent
     volume when the engine runs in an ephemeral container, or the login
-    is lost on every restart."""
+    is lost on every restart.
+
+    **Entries pointing at the same directory share one login** — and one
+    set of per-seat homes, and one generation, so a call on one entry
+    never prunes a live call on another.  That is how per-phase models
+    work off a single ``crewlet llm login``: an ``opus`` entry for Plan
+    and a ``sonnet`` entry for Execute, both naming this directory.  The
+    per-key default is the opposite behaviour on purpose, so unrelated
+    providers never collide; entries that *should* share have to say so.
+    Sharing requires the same :attr:`agent` — two CLIs disagree about
+    which files are credentials and which are memory, and
+    :class:`ProvidersConfig` rejects that pairing."""
 
     timeout_seconds: float = 300.0
     """Wall-clock cap on one CLI invocation.
@@ -1292,6 +1303,39 @@ class ProvidersConfig(BaseModel):
     sandbox: SandboxProviderConfig | None = None
     """Optional code-runtime sandbox provider. When unset
     (or ``type: none``) no role can run a sandboxed Execute backend."""
+
+    @model_validator(mode="after")
+    def _validate_shared_cli_state_dirs(self) -> ProvidersConfig:
+        """Entries sharing a ``cli.state_dir`` must drive the same CLI.
+
+        Sharing one directory is the supported way to run several models
+        off a **single** login — ``opus`` for Plan and ``sonnet`` for
+        Execute are two entries, and pointing both at one ``state_dir``
+        means one ``crewlet llm login`` instead of two. That works only
+        because both entries then agree on which files are credentials
+        and which are conversation memory.
+
+        Two *different* CLIs over one directory do not agree on either,
+        so each would prune the other's state and seed credentials the
+        other cannot read. Caught here so it fails ``crewlet validate``,
+        not at the first turn of whichever seat lost the race.
+        """
+        by_dir: dict[str, tuple[str, str]] = {}
+        for key, cfg in self.llm.items():
+            if cfg.type != "cli-agent" or cfg.cli is None or not cfg.cli.state_dir:
+                continue
+            seen = by_dir.get(cfg.cli.state_dir)
+            if seen is not None and seen[1] != cfg.cli.agent:
+                raise ValueError(
+                    f"providers.llm.{key} and providers.llm.{seen[0]} share "
+                    f"cli.state_dir {cfg.cli.state_dir!r} but drive different "
+                    f"CLIs ({cfg.cli.agent!r} vs {seen[1]!r}). Sharing a state "
+                    "directory shares one login and one set of per-seat "
+                    "homes, which only works for the same CLI — give them "
+                    "separate state_dirs."
+                )
+            by_dir.setdefault(cfg.cli.state_dir, (key, cfg.cli.agent))
+        return self
 
 
 class ExtensionConfig(BaseModel):

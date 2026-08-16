@@ -111,7 +111,15 @@ class CodingAgentLLM:
     model: str = ""
     """Raw model id (provider-agnostic, e.g. ``acme/model-x-large``)."""
     provider_type: str = ""
-    """The ``providers.llm`` type: ``anthropic`` | ``openai-compatible`` | …"""
+    """The model FAMILY the runner should address.
+
+    For an API entry this is the ``providers.llm`` type (``anthropic`` |
+    ``openai`` | ``openai-compatible``), which already names the family.
+    For a subscription (``cli-agent``) entry every provider shares one
+    type, so it carries the CLI profile's **vendor** instead — otherwise
+    a Claude subscription's ``sonnet`` would be addressed as
+    ``openai/sonnet``. See
+    :func:`crewlet.agent.execute_sandbox._coding_agent_llm`."""
     base_url: str = ""
     """The endpoint; empty means the vendor default (no custom provider)."""
 

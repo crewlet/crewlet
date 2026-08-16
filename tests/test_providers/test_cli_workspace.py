@@ -249,3 +249,79 @@ class TestPathSafety:
         async with manager.acquire("a"):
             pass
         assert outside.read_text() == "keep me"
+
+
+class TestSharedStateDir:
+    """Several providers over one ``state_dir`` share one generation.
+
+    This is how per-phase models run off a SINGLE login: ``llm_plan:
+    opus-sub`` / ``llm_execute: sonnet-sub`` are two ``providers.llm``
+    entries pointing at one directory. With per-manager bookkeeping,
+    one entry's first call would prune the other's live session.
+    """
+
+    def setup_method(self):
+        from crewlet.providers.llm.cli_workspace import reset_shared_state
+
+        reset_shared_state()
+
+    async def test_a_second_provider_does_not_prune_a_live_generation(self, tmp_path):
+        plan = make_manager(tmp_path)
+        execute = make_manager(tmp_path)
+        assert plan.state_dir == execute.state_dir
+
+        async with plan.acquire("sarah-chen") as a:
+            live = a.home / ".testcli" / "sessions" / "live.json"
+            live.parent.mkdir(parents=True, exist_ok=True)
+            live.write_text("in flight")
+            # The other entry joins the SAME open generation.
+            async with execute.acquire("sarah-chen") as b:
+                assert b.home == a.home
+                assert live.exists()
+            assert live.exists()
+        # Only when the last one leaves does the generation close.
+        assert not live.exists()
+
+    async def test_equivalent_paths_resolve_to_one_generation(self, tmp_path):
+        from crewlet.providers.llm.cli_profiles import CLIAgentProfile
+        from crewlet.providers.llm.cli_workspace import CLIWorkspaceManager
+
+        direct = make_manager(tmp_path)
+        # Same directory, spelled with a redundant hop.
+        indirect = CLIWorkspaceManager(
+            provider_key="other",
+            profile=CLIAgentProfile(**{**make_profile().model_dump()}),
+            state_dir=tmp_path / "sub" / ".." / "state",
+        )
+        async with direct.acquire("a") as first:
+            marker = first.home / ".testcli" / "sessions" / "x"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("live")
+            async with indirect.acquire("a"):
+                assert marker.exists()
+
+    async def test_separate_state_dirs_stay_independent(self, tmp_path):
+        from crewlet.providers.llm.cli_profiles import CLIAgentProfile
+        from crewlet.providers.llm.cli_workspace import CLIWorkspaceManager
+
+        one = make_manager(tmp_path)
+        two = CLIWorkspaceManager(
+            provider_key="two",
+            profile=CLIAgentProfile(**make_profile().model_dump()),
+            state_dir=tmp_path / "other-state",
+        )
+        async with one.acquire("a") as a, two.acquire("a") as b:
+            assert a.home != b.home
+
+    async def test_a_replacement_manager_does_not_prune_a_live_call(self, tmp_path):
+        """``apply_config`` rebuilds every provider. The new manager must
+        not wipe the seat home of a call the outgoing one is running."""
+        before = make_manager(tmp_path)
+        async with before.acquire("a") as ws:
+            live = ws.home / ".testcli" / "sessions" / "live.json"
+            live.parent.mkdir(parents=True, exist_ok=True)
+            live.write_text("mid-turn")
+            after = make_manager(tmp_path)  # hot reload
+            async with after.acquire("a"):
+                assert live.exists()
+            assert live.exists()

@@ -1918,3 +1918,68 @@ class TestCLIAgentProviderConfig:
         provider = create_llm_providers(cfg.providers)["default"]
         restored = provider.workspace.credential_dir / ".codex" / "auth.json"
         assert restored.read_bytes() == payload
+
+
+class TestSharedCLIStateDir:
+    """Two ``cli-agent`` entries may share a ``state_dir`` — and thus one
+    login — only when they drive the same CLI.
+
+    See ``docs/concepts/subscription-llm-backends.md``.
+    """
+
+    @staticmethod
+    def _cfg(entries: dict) -> dict:
+        return {"name": "A", "providers": {"llm": entries}}
+
+    @staticmethod
+    def _entry(agent: str, model: str, state_dir: str) -> dict:
+        return {
+            "type": "cli-agent",
+            "model": model,
+            "cli": {"agent": agent, "state_dir": state_dir},
+        }
+
+    def test_same_cli_may_share_one_login(self):
+        cfg = CompanyConfig.model_validate(
+            self._cfg(
+                {
+                    "opus-sub": self._entry("claude-code", "opus", "/srv/claude"),
+                    "sonnet-sub": self._entry("claude-code", "sonnet", "/srv/claude"),
+                }
+            )
+        )
+        assert cfg.providers.llm["opus-sub"].model == "opus"
+        assert cfg.providers.llm["sonnet-sub"].model == "sonnet"
+
+    def test_different_clis_sharing_a_dir_are_rejected(self):
+        with pytest.raises(ValidationError, match="drive different"):
+            CompanyConfig.model_validate(
+                self._cfg(
+                    {
+                        "a": self._entry("claude-code", "opus", "/srv/shared"),
+                        "b": self._entry("codex", "gpt-5-codex", "/srv/shared"),
+                    }
+                )
+            )
+
+    def test_different_dirs_may_use_different_clis(self):
+        CompanyConfig.model_validate(
+            self._cfg(
+                {
+                    "a": self._entry("claude-code", "opus", "/srv/claude"),
+                    "b": self._entry("codex", "gpt-5-codex", "/srv/codex"),
+                }
+            )
+        )
+
+    def test_unset_state_dirs_are_not_compared(self):
+        """Each entry then gets its own default directory, so different
+        CLIs never collide."""
+        CompanyConfig.model_validate(
+            self._cfg(
+                {
+                    "a": {"type": "cli-agent", "cli": {"agent": "claude-code"}},
+                    "b": {"type": "cli-agent", "cli": {"agent": "codex"}},
+                }
+            )
+        )

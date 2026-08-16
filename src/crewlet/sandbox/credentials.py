@@ -43,6 +43,26 @@ _CLAUDE_AUTH_KEYS = (
     "CLAUDE_CODE_USE_FOUNDRY",
 )
 
+# Credentials that satisfy OpenCode, which is provider-agnostic and
+# reads whichever key the custom provider the runner writes references
+# ({env:...}), plus its own native auth variables.
+_OPENCODE_AUTH_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "OPENCODE_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "XAI_API_KEY",
+    "GROQ_API_KEY",
+)
+
+_AGENT_AUTH_KEYS = {
+    "claude-code": _CLAUDE_AUTH_KEYS,
+    "opencode": _OPENCODE_AUTH_KEYS,
+}
+
 
 class SandboxCredentialError(ValueError):
     """The role's config can't satisfy the chosen coding agent's creds."""
@@ -217,6 +237,29 @@ def build_sandbox_env(
     # credential instead of raising here. Requiring a non-empty resolved
     # value is what makes this function's promise ("raises when no
     # Anthropic-compatible credential is reachable") actually true.
+    if llm_config.type == "cli-agent" and coding_agent != "claude-code":
+        # A subscription provider whose CLI mints no headless token
+        # contributes NOTHING to the box, yet the launch would proceed as
+        # if credentials had been threaded — the coding agent then fails
+        # inside the sandbox with a vendor auth error and no explanation.
+        # Only enforced for cli-agent providers: an API-key provider has
+        # always supplied a key here, so widening the check to those
+        # would reject configurations that work today (an operator whose
+        # OpenCode auth comes from a setup step or a baked template).
+        known = _AGENT_AUTH_KEYS.get(coding_agent, ())
+        if not any(resolved.get(k) for k in known):
+            agent_name = llm_config.cli.agent if llm_config.cli else "?"
+            raise SandboxCredentialError(
+                f"coding_agent {coding_agent!r} has no credential: the "
+                f"role's sandbox LLM is a 'cli-agent' provider "
+                f"({agent_name!r}) whose login lives in files on the "
+                "ENGINE host, and files do not travel to a remote box. "
+                "Either run the coding agent on that host with "
+                "providers.sandbox.type 'local', or give the box its own "
+                "key in role.sandbox.env (recognised here: "
+                f"{', '.join(known) or 'none'})."
+            )
+
     if coding_agent == "claude-code" and not any(
         resolved.get(k) for k in _CLAUDE_AUTH_KEYS
     ):
