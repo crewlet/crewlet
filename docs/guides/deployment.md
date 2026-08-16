@@ -174,6 +174,41 @@ Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned co
 
 Both communicate through Pulsar. Both accept `--debug` for verbose logging.
 
+### Replica count
+
+**Run exactly one `crewlet run` and one `crewlet run api` per company.** Neither
+process is horizontally scalable today, and nothing in the code enforces this —
+a second replica starts cleanly and then misbehaves silently.
+
+Scale **up** (a bigger host, a higher `max_concurrent`), not **out**. A single
+engine handles many concurrent turns: agent handlers are `asyncio` tasks, so the
+practical ceiling is LLM provider rate limits and host memory, not process count.
+
+What a second engine replica does:
+
+| Symptom | Cause |
+|---|---|
+| Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook | Each seat's inbox is a Pulsar **Shared** subscription, so two events for one agent land on two replicas and run concurrent turns. Turn exclusion is in-process state, so neither replica sees the other. |
+| Token budgets exceeded by N× | `BudgetManager` counters are per-process. An org cap of 500 k becomes N × 500 k. `max_concurrent` scales the same way. |
+| A config change applies to some replicas and not others | `crewlet.config.revision_activated` is a competing-consumer subscription: one replica applies the revision, the rest keep running the previous company — including deleted roles and rotated credentials. |
+| A rotated secret keeps failing | The secret snapshot is process-global and refreshed only on config apply, which reaches one replica. |
+| Inbound webhooks vanish with no error | A replica that missed the activation still answers `200 OK` and drops the payload, so the sender never retries. |
+| Live coding sandboxes torn down mid-run | `SandboxCoordinator.recover()` treats every in-flight run as abandoned at boot — valid with one engine, destructive with peers. |
+| Duplicate auto-drafted skill pages, N× LLM spend on synthesis | The clustering and curator workers are unclaimed interval loops. |
+
+A second **API** replica is less destructive but still wrong: each holds its own
+in-memory live-state projection and its own cached webhook HMAC secrets, so the
+dashboard shows a different picture per replica and a secret rotation 401s the
+fraction of deliveries that land on stale ones.
+
+Two processes must also not race the database migrator. Run `crewlet config
+import` (or `crewlet run --import-company`) to completion **before** starting
+the engine and API, rather than starting all three together — `migrate()` runs
+on every boot and takes no lock.
+
+For the full analysis and the redesign path, see
+[`SCALING.md`](https://github.com/crewlet/crewlet/blob/main/SCALING.md).
+
 ---
 
 ## Database
