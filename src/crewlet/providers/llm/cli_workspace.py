@@ -163,12 +163,18 @@ def file_digest(path: Path) -> str:
         return ""
 
 
-def _safe_join(base: Path, relative: str) -> Path | None:
+def safe_join(base: Path, relative: str) -> Path | None:
     """Resolve ``relative`` under ``base``, refusing to escape it.
 
     Profile paths are operator-overridable config; a ``../../..`` entry
-    in ``volatile_paths`` would otherwise delete outside the workspace.
-    Returns ``None`` for anything that does not land under ``base``.
+    in ``volatile_paths`` would otherwise delete outside the workspace,
+    and one in ``credential_paths`` would copy an arbitrary host file
+    into a sandbox (or out of one). Returns ``None`` for anything that
+    does not land under ``base``.
+
+    Public because the local sandbox provider seeds and collects the
+    same operator-supplied paths and needs the identical guarantee — a
+    second implementation is the one that would drift.
     """
     candidate = (base / relative).resolve()
     root = base.resolve()
@@ -385,8 +391,8 @@ class CLIWorkspaceManager:
             return
         async with self._shared.credential_lock:
             for relative in paths:
-                src = _safe_join(self.credential_dir, relative)
-                dst = _safe_join(home, relative)
+                src = safe_join(self.credential_dir, relative)
+                dst = safe_join(home, relative)
                 if src is None or dst is None:
                     continue
                 if src.is_file():
@@ -419,8 +425,8 @@ class CLIWorkspaceManager:
         changed = False
         async with self._shared.credential_lock:
             for relative in paths:
-                src = _safe_join(home, relative)
-                dst = _safe_join(self.credential_dir, relative)
+                src = safe_join(home, relative)
+                dst = safe_join(self.credential_dir, relative)
                 if src is None or dst is None or not src.is_file():
                     continue
                 if not dst.is_file():
@@ -440,7 +446,7 @@ class CLIWorkspaceManager:
 
     def _volatile_targets(self, home: Path) -> Iterator[Path]:
         for relative in self.profile.volatile_paths:
-            target = _safe_join(home, relative)
+            target = safe_join(home, relative)
             if target is not None:
                 yield target
 
@@ -451,7 +457,7 @@ class CLIWorkspaceManager:
 
     def _seed_files(self, home: Path) -> None:
         for relative, content in self.profile.seed_files.items():
-            target = _safe_join(home, relative)
+            target = safe_join(home, relative)
             if target is None:
                 continue
             _mkdir(target.parent)
@@ -522,4 +528,5 @@ __all__ = [
     "default_state_dir",
     "file_digest",
     "reset_shared_state",
+    "safe_join",
 ]

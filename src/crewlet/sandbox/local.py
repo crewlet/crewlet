@@ -56,6 +56,7 @@ from crewlet.providers.llm.cli_workspace import (
     BASE_PASSTHROUGH_ENV,
     copy_file_atomic,
     file_digest,
+    safe_join,
 )
 from crewlet.sandbox.protocol import (
     DEFAULT_SANDBOX_HOME,
@@ -182,12 +183,18 @@ class BoxLayout:
 
 
 def _seed_credentials(layout: BoxLayout, credential_files: dict[str, str]) -> None:
-    """Copy the CLI login into the box before the coding agent runs."""
+    """Copy the CLI login into the box before the coding agent runs.
+
+    The keys are relative paths from an operator-overridable profile
+    (``cli.overrides.credential_paths``), so they are joined through
+    :func:`safe_join`: an entry like ``../../etc/cron.d/x`` would
+    otherwise write a host file every time a box was created.
+    """
     for relative, source in credential_files.items():
         src = Path(source)
-        if not src.is_file():
+        dst = safe_join(layout.root, relative)
+        if dst is None or not src.is_file():
             continue
-        dst = layout.root / relative
         dst.parent.mkdir(parents=True, exist_ok=True)
         copy_file_atomic(src, dst)
 
@@ -201,11 +208,16 @@ def _collect_credentials(layout: BoxLayout, credential_files: dict[str, str]) ->
     at the next expiry. Only writes back over a file that already exists
     in the shared store, so a torn-down box can never *create* a login
     the operator has since removed.
+
+    Read through :func:`safe_join` for the same reason the seed is
+    written through it: a ``../../`` key would otherwise copy an
+    arbitrary host file out of the box's directory and over the
+    credential store.
     """
     for relative, source in credential_files.items():
-        src = layout.root / relative
+        src = safe_join(layout.root, relative)
         dst = Path(source)
-        if not src.is_file() or not dst.is_file():
+        if src is None or not src.is_file() or not dst.is_file():
             continue
         if file_digest(src) == file_digest(dst):
             continue

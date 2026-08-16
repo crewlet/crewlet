@@ -387,39 +387,44 @@ print(json.dumps({"result": os.environ.get("FAKE_OAUTH", "ABSENT")}))
         assert completion.content == "oat-123"
 
     async def test_concurrency_cap_is_enforced(self, tmp_path, monkeypatch):
+        # Each invocation APPENDS one byte on entry and one on exit. A
+        # single small append is atomic on POSIX, so concurrent writers
+        # cannot corrupt the log — unlike a read-modify-write counter,
+        # which is exactly the race this test is trying to observe and
+        # would therefore lose to intermittently.
         script = """
-import json, os, time, pathlib
-counter = pathlib.Path(os.environ["FAKE_COUNTER"])
-peak = pathlib.Path(os.environ["FAKE_PEAK"])
-live = int(counter.read_text()) + 1
-counter.write_text(str(live))
-peak.write_text(str(max(live, int(peak.read_text()))))
+import json, os, time
+log = os.environ["FAKE_LOG"]
+with open(log, "a") as f:
+    f.write("+")
 time.sleep(0.2)
-counter.write_text(str(int(counter.read_text()) - 1))
+with open(log, "a") as f:
+    f.write("-")
 print(json.dumps({"result": "ok"}))
 """
         monkeypatch.setenv("PATH", write_script(tmp_path, "fakecli", script))
-        counter = tmp_path / "counter"
-        peak = tmp_path / "peak"
-        counter.write_text("0")
-        peak.write_text("0")
+        log = tmp_path / "concurrency.log"
+        log.write_text("")
         provider = make_provider(
             tmp_path,
             max_concurrent=2,
-            profile_kwargs={
-                "passthrough_env": ["FAKE_COUNTER", "FAKE_PEAK"],
-                "env": {},
-            },
+            profile_kwargs={"passthrough_env": ["FAKE_LOG"], "env": {}},
         )
-        monkeypatch.setenv("FAKE_COUNTER", str(counter))
-        monkeypatch.setenv("FAKE_PEAK", str(peak))
+        monkeypatch.setenv("FAKE_LOG", str(log))
         await asyncio.gather(
             *(
                 provider.complete([Message(role="user", content="x")], None)
                 for _ in range(6)
             )
         )
-        assert int(peak.read_text()) <= 2
+        events = log.read_text()
+        assert events.count("+") == 6, events
+        live = 0
+        peak = 0
+        for event in events:
+            live += 1 if event == "+" else -1
+            peak = max(peak, live)
+        assert peak <= 2, f"{peak} processes ran at once: {events}"
 
 
 class TestLifecycle:

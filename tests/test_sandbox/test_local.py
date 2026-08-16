@@ -47,11 +47,20 @@ def provider(tmp_path, **kwargs) -> LocalSandboxProvider:
 
 
 async def wait_for(predicate, timeout: float = 10.0) -> bool:
-    deadline = time.monotonic() + timeout
-    import asyncio
+    """Poll ``predicate`` until it is true or ``timeout`` elapses.
 
+    Accepts a sync or async callable — the process-state probes read
+    ``/proc`` directly and are not coroutines.
+    """
+    import asyncio
+    import inspect
+
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if await predicate() if callable(predicate) else predicate:
+        result = predicate()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
             return True
         await asyncio.sleep(0.05)
     return False
@@ -306,9 +315,15 @@ class TestPauseResume:
             marker = f"{box.home}/workspace/tick.txt"
             pid = await box.start_background(f"sleep 0.6; echo done > {marker}")
             await box.pause()
-            # The job is a session leader, so killpg reaches it: SIGSTOP
-            # really stops it ("T"), and the marker cannot appear.
-            assert _process_state(int(pid)) == "T"
+            # The job is a session leader, so killpg reaches it and
+            # SIGSTOP really stops it. Polled rather than sampled once:
+            # a process sitting in uninterruptible sleep reports "D"
+            # until it leaves that state, and only then shows "T", so
+            # asserting on the instant after pause() is a race.
+            assert await wait_for(
+                lambda: _process_state(int(pid)) == "T", timeout=5.0
+            ), f"job never stopped (state {_process_state(int(pid))!r})"
+            # The behavioural half: a stopped job cannot reach its work.
             assert not await _exists(box, marker)
 
             resumed = await p.connect(box.id)
@@ -371,6 +386,40 @@ class TestCredentialHandling:
         shared.unlink()  # the operator ran `crewlet llm logout`
         await box.close()
         assert not shared.exists()
+
+    @pytest.mark.parametrize(
+        "escape", ["../../escaped.json", "/etc/shadow-copy", "a/../../escaped.json"]
+    )
+    async def test_a_credential_path_cannot_escape_the_box(self, tmp_path, escape):
+        """``credential_paths`` comes from operator-overridable profile
+        config, so a ``../../`` entry must not let a box seeding write —
+        or a box teardown read — outside its own directory."""
+        source = tmp_path / "login.json"
+        source.write_text("secret")
+        outside = tmp_path / "escaped.json"
+        p = provider(tmp_path)
+        box = await p.create(SandboxSpec(credential_files={escape: str(source)}))
+        try:
+            assert not outside.exists()
+        finally:
+            await box.close()
+        assert not outside.exists()
+
+    async def test_a_credential_path_cannot_exfiltrate_on_teardown(self, tmp_path):
+        """The collect direction is guarded too: the source file exists,
+        so an unguarded join would copy whatever the escaped path names
+        over the shared credential store."""
+        shared = tmp_path / "shared.json"
+        shared.write_text("original")
+        target = tmp_path / "sandboxes" / "boxes"
+        target.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "sandboxes" / "outside.json").write_text("host secret")
+        p = provider(tmp_path)
+        box = await p.create(
+            SandboxSpec(credential_files={"../../outside.json": str(shared)})
+        )
+        await box.close()
+        assert shared.read_text() == "original"
 
     async def test_missing_login_is_not_an_error(self, tmp_path):
         p = provider(tmp_path)

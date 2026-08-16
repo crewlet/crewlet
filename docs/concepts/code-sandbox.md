@@ -160,14 +160,18 @@ The box directory is bind-mounted at `/home/user` — the same home E2B uses —
 
 **Setup steps and containment.** `direct` mode has no filesystem virtualisation, so a setup step that writes a *system* path is refused with an error naming the mode — it would otherwise write to the engine host's real `/usr/local/bin`. The shipped [git-auth recipe](#the-git-auth-recipe) is one of these; under `direct`, root it in the box's home instead:
 
+File paths in a setup step are absolute and are **not** shell-expanded, so `$HOME` does not work there — write the helper with a `commands` heredoc, which does run in a shell:
+
 ```yaml
 setup:
   - name: git-auth-local
-    files:
-      "/home/../.local/bin/git-credential-crewlet": |   # any path under $HOME
+    commands:
+      - mkdir -p "$HOME/.local/bin"
+      - |
+        cat > "$HOME/.local/bin/git-credential-crewlet" <<'SH'
         #!/bin/sh
         ...
-    commands:
+        SH
       - chmod +x "$HOME/.local/bin/git-credential-crewlet"
       - 'git config --global credential."https://gitlab.com".helper "$HOME/.local/bin/git-credential-crewlet"'
 ```
