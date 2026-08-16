@@ -5120,6 +5120,7 @@ class Engine:
                 except Exception:
                     logger.exception("inbox_unsubscribe_failed", handle=agent.handle)
                 self._subscribed_inboxes.discard(agent.handle)
+            self._purge_cli_llm_workspaces(agent.handle)
             await self.agent_pool.terminate(agent)
             logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)
 
@@ -5134,6 +5135,32 @@ class Engine:
             if old_role is not None:
                 await self._stop_role_mcp(old_role)
         self._role_mcp_tools.pop(role_name, None)
+
+    def _purge_cli_llm_workspaces(self, handle: str) -> None:
+        """Delete a departing seat's CLI-agent homes.
+
+        A ``cli-agent`` LLM provider keeps a coding CLI's home per seat
+        on the engine host — including a copy of the subscription
+        credential it refreshed. When the seat is decommissioned that
+        directory has no owner; leaving it behind keeps a live
+        credential and the seat's last prompts on disk indefinitely, and
+        would be silently re-used if the handle were ever recycled.
+        Best-effort: a failure here must never block the teardown.
+        """
+        if not handle:
+            return
+        for key, provider in (self._llm_providers or {}).items():
+            workspace = getattr(provider, "workspace", None)
+            purge = getattr(workspace, "purge_seat", None)
+            if purge is None:
+                continue
+            try:
+                purge(handle)
+                logger.debug("cli_llm_workspace_purged", provider=key, handle=handle)
+            except Exception:
+                logger.exception(
+                    "cli_llm_workspace_purge_failed", provider=key, handle=handle
+                )
 
     async def _apply_org_diff(self, old_org: Any, new_org: Any) -> None:
         """Apply role-level differences between two :class:`Organization` s.

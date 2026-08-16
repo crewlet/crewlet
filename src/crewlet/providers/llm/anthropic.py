@@ -124,6 +124,17 @@ class AnthropicProvider:
             )
             self._clients[head] = self._client
 
+    @property
+    def call_timeout_seconds(self) -> float:
+        """This provider's own per-call budget, in seconds.
+
+        Read by callers that impose a deadline of their own (the
+        auxiliary-LLM helper) so raising ``timeout_seconds`` for a slow
+        reasoning model widens those calls too, instead of leaving them
+        capped at a default sized for a fast model.
+        """
+        return self._timeout
+
     async def aclose(self) -> None:
         """Close every cached ``AsyncAnthropic`` client. Called by
         ``Engine.stop`` to release httpx connection pools.

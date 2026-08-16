@@ -925,3 +925,205 @@ async def test_launch_after_reap_repoints_the_existing_row_at_the_new_box(
     assert row.paused_at is None
     # The original framing survives — the row was updated, not replaced.
     assert row.conversation_key == "k"
+
+
+# ---------------------------------------------------------------------------
+# build_sandbox_env — subscription (cli-agent) providers
+# ---------------------------------------------------------------------------
+
+
+def _cli_agent_config(agent: str = "claude-code", **cli) -> LLMProviderConfig:
+    block = {"agent": agent}
+    block.update(cli)
+    return LLMProviderConfig(type="cli-agent", model="sonnet", cli=block)
+
+
+def test_subscription_token_reaches_the_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A role on a subscription CLI backend can still do code work: the
+    headless token travels to the box, so Claude Code there bills the
+    same Pro/Max plan instead of a metered key."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abc")
+    env = build_sandbox_env(coding_agent="claude-code", llm_config=_cli_agent_config())
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-abc"
+    assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_subscription_token_honours_an_explicit_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MY_OAUTH", "sk-ant-oat01-xyz")
+    cfg = _cli_agent_config(auth={"mode": "subscription", "token": "${MY_OAUTH}"})
+    env = build_sandbox_env(coding_agent="claude-code", llm_config=cfg)
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-xyz"
+
+
+def test_missing_subscription_token_points_at_capture_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The error must name the actual next step, not send the operator
+    hunting for an API key the subscription never had."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    with pytest.raises(SandboxCredentialError) as excinfo:
+        build_sandbox_env(coding_agent="claude-code", llm_config=_cli_agent_config())
+    message = str(excinfo.value)
+    assert "--capture-token" in message
+    assert "providers.sandbox.type 'local'" in message
+
+
+def test_a_cli_without_a_headless_token_points_at_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    with pytest.raises(SandboxCredentialError) as excinfo:
+        build_sandbox_env(
+            coding_agent="claude-code", llm_config=_cli_agent_config("codex")
+        )
+    assert "mints no headless token" in str(excinfo.value)
+
+
+def test_cli_agent_api_key_mode_exports_the_key() -> None:
+    cfg = LLMProviderConfig(
+        type="cli-agent",
+        model="sonnet",
+        api_keys=["sk-ant-metered"],
+        cli={"agent": "claude-code", "auth": {"mode": "api-key"}},
+    )
+    env = build_sandbox_env(coding_agent="claude-code", llm_config=cfg)
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-metered"
+
+
+def test_cli_credential_files_point_at_the_login(tmp_path) -> None:
+    """A local box seeds the very login `crewlet llm login` wrote."""
+    from crewlet.sandbox.credentials import cli_credential_files
+
+    cfg = _cli_agent_config(state_dir=str(tmp_path / "state"))
+    files = cli_credential_files("default", cfg)
+    assert files == {
+        ".claude/.credentials.json": str(
+            tmp_path / "state" / "credentials" / ".claude" / ".credentials.json"
+        )
+    }
+
+
+def test_cli_credential_files_empty_for_api_key_providers() -> None:
+    from crewlet.sandbox.credentials import cli_credential_files
+
+    assert cli_credential_files("default", LLMProviderConfig(type="anthropic")) == {}
+
+
+# ---------------------------------------------------------------------------
+# Model family for a subscription provider
+# ---------------------------------------------------------------------------
+
+
+def test_cli_agent_reports_its_vendor_as_the_model_family() -> None:
+    """OpenCode addresses a model as ``<family>/<model>``. Every
+    subscription entry shares one provider *type*, so the family has to
+    come from the CLI's vendor — otherwise a Claude subscription's
+    ``sonnet`` is addressed as ``openai/sonnet``."""
+    from crewlet.agent.execute_sandbox import _coding_agent_llm
+    from crewlet.sandbox.coding_agents.opencode import opencode_model_arg
+
+    llm = _coding_agent_llm(_cli_agent_config("claude-code"))
+    assert llm.provider_type == "anthropic"
+    assert opencode_model_arg(llm) == "anthropic/sonnet"
+
+
+@pytest.mark.parametrize(
+    "agent,family",
+    [
+        ("claude-code", "anthropic"),
+        ("codex", "openai"),
+        ("gemini-cli", "google"),
+        ("grok", "xai"),
+        ("opencode", "openai"),  # provider-agnostic → the historic default
+    ],
+)
+def test_vendor_maps_to_the_opencode_family(agent: str, family: str) -> None:
+    from crewlet.agent.execute_sandbox import _coding_agent_llm
+    from crewlet.sandbox.coding_agents.opencode import opencode_model_arg
+
+    llm = _coding_agent_llm(_cli_agent_config(agent))
+    assert opencode_model_arg(llm) == f"{family}/sonnet"
+
+
+@pytest.mark.parametrize(
+    "kind,family",
+    [("anthropic", "anthropic"), ("openai", "openai"), ("openai-compatible", "openai")],
+)
+def test_api_providers_keep_their_family(kind: str, family: str) -> None:
+    """The vendor lookup must not disturb the API-key providers."""
+    from crewlet.agent.execute_sandbox import _coding_agent_llm
+    from crewlet.sandbox.coding_agents.opencode import opencode_model_arg
+
+    cfg = LLMProviderConfig(
+        type=kind,
+        model="m",
+        api_keys=["k"],
+        **({"base_url": "https://x/v1/"} if kind == "openai-compatible" else {}),
+    )
+    llm = _coding_agent_llm(cfg)
+    # A custom base_url still routes through the crewlet custom provider.
+    expected = "crewlet/m" if cfg.base_url else f"{family}/m"
+    assert opencode_model_arg(llm) == expected
+
+
+# ---------------------------------------------------------------------------
+# Credential check for the coding agent actually selected
+# ---------------------------------------------------------------------------
+
+
+def test_opencode_on_a_fileonly_subscription_fails_at_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex's login is files on the engine host, which cannot travel to
+    a remote box — so the launch must refuse rather than let OpenCode
+    fail inside the sandbox with a bare vendor auth error."""
+    for var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(SandboxCredentialError) as excinfo:
+        build_sandbox_env(
+            coding_agent="opencode", llm_config=_cli_agent_config("codex")
+        )
+    message = str(excinfo.value)
+    assert "providers.sandbox.type 'local'" in message
+    assert "role.sandbox.env" in message
+
+
+def test_opencode_accepts_an_operator_supplied_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key in role.sandbox.env satisfies the check — the engine only
+    refuses when NOTHING credentials the box."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env = build_sandbox_env(
+        coding_agent="opencode",
+        llm_config=_cli_agent_config("codex"),
+        role_sandbox_env={"OPENAI_API_KEY": "sk-operator"},
+    )
+    assert env["OPENAI_API_KEY"] == "sk-operator"
+
+
+def test_opencode_accepts_a_subscription_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abc")
+    env = build_sandbox_env(
+        coding_agent="opencode", llm_config=_cli_agent_config("claude-code")
+    )
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-abc"
+
+
+def test_opencode_on_an_api_provider_is_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new check is scoped to cli-agent providers: an API-key config
+    that works today must keep working, including one whose OpenCode auth
+    comes from a setup step rather than the engine."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env = build_sandbox_env(
+        coding_agent="opencode", llm_config=LLMProviderConfig(type="openai")
+    )
+    assert "OPENAI_API_KEY" not in env

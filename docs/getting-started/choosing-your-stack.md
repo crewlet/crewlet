@@ -27,10 +27,23 @@ A useful mental model: for each integration there is usually
 | **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Required if you want Claude Code as the sandbox coding agent. |
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
 | **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
+| **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives `claude` / `codex` / `gemini` / `opencode` / `cursor-agent` / `copilot` on the operator's own subscription. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
 
 You can configure several named providers and pick per role (`role.llm`), plus
 a cheap auxiliary model per role (`role.llm_auxiliary`) for reflection and
-summarisation work. See [Quickstart § LLM options](quickstart.md#llm-options).
+summarisation work. `role.llm` also accepts a **list**, which is how a
+subscription and a metered key compose: `llm: [subscription, default]` runs
+on the flat-rate CLI and falls through to the API key when the subscription
+window is spent. See [Quickstart § LLM options](quickstart.md#llm-options).
+
+**Which to pick.** A metered key is the default answer for a fleet that has
+to be fast and always available. A subscription CLI is the better answer when
+you are developing, evaluating, or running a small company yourself and want
+predictable cost — check your plan's terms, which are generally written for
+interactive use by the subscriber. A subscription can also back the
+[code sandbox](../concepts/code-sandbox.md) — via a headless token on any
+backend, or via `providers.sandbox.type: local`, which runs the coding agent
+on the engine host against the same login.
 
 **Embeddings** (`providers.embeddings`) power the agent-learning subsystem
 (personal diary + episode recall). Any OpenAI-compatible embeddings endpoint
@@ -213,10 +226,14 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 | **None** | omit `providers.sandbox` (or `type: none`) | Roles use the native Execute tool-loop; no code authoring. |
 | **E2B cloud** | `type: e2b` + `E2B_API_KEY` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
 | **Self-hosted E2B** | `type: e2b` + `domain: "${E2B_DOMAIN}"` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
+| **Local — container** | `type: local` + `local: {containment: container, image: …}` | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [subscription login](../concepts/subscription-llm-backends.md) instead of an API key. |
+| **Local — direct** | `type: local` + `local: {containment: direct}` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for a subscription backend — but the coding agent runs as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only. |
 
 Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
 OpenAI-compatible provider you already configured — no extra secret);
-**Claude Code** requires an `anthropic` provider entry (select it per role via
+**Claude Code** requires an `anthropic` provider entry, a
+[`cli-agent`](../concepts/subscription-llm-backends.md) one, or an
+`ANTHROPIC_*` credential in `role.sandbox.env` (select it per role via
 `role.llm_sandbox`).
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot

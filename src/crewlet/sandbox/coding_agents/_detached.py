@@ -18,11 +18,13 @@ import abc
 import json
 import re
 import shlex
+from dataclasses import dataclass
 from typing import Any
 
 from crewlet._logging import get_logger
-from crewlet.sandbox.coding_agents.ask import ASK_SHIM_PATH, build_ask_shim
+from crewlet.sandbox.coding_agents.ask import build_ask_shim, findings_brief_instruction
 from crewlet.sandbox.protocol import (
+    DEFAULT_SANDBOX_HOME,
     CodingAgentLLM,
     CodingAgentResult,
     RunHandle,
@@ -34,7 +36,14 @@ logger = get_logger("sandbox.coding_agent")
 
 # Side dir for the detached artifacts (out of the checkout so a git clean
 # in the brief can't wipe them).
-WORK_DIR = "/home/user/.crewlet"
+#
+# These module constants are the DEFAULT-home values, kept because they
+# are the E2B paths and are re-exported. The runner itself never uses
+# them: it derives every path from ``sandbox.home`` via :func:`run_paths`,
+# because a local backend runs many boxes on one filesystem and a shared
+# ``/home/user/.crewlet`` would have each run reading its neighbour's
+# done-marker.
+WORK_DIR = f"{DEFAULT_SANDBOX_HOME}/.crewlet"
 RESULT_PATH = f"{WORK_DIR}/result.json"
 ERR_PATH = f"{WORK_DIR}/err.log"
 # The done-marker AND exit-code file. The marker is written by the shell
@@ -61,6 +70,73 @@ MCP_CONFIG_PATH = f"{WORK_DIR}/mcp.json"
 # of the checkout) so a ``git clean`` in the brief can't wipe it.
 FINDINGS_PATH = f"{WORK_DIR}/findings.md"
 
+
+@dataclass(frozen=True)
+class RunPaths:
+    """Every artefact path for one sandbox, derived from its home.
+
+    One object rather than a bag of f-strings so a new backend cannot
+    half-relocate the run (a relocated result file with a default-home
+    done-marker would poll forever).
+    """
+
+    home: str = DEFAULT_SANDBOX_HOME
+
+    @property
+    def work_dir(self) -> str:
+        return f"{self.home}/.crewlet"
+
+    @property
+    def result(self) -> str:
+        return f"{self.work_dir}/result.json"
+
+    @property
+    def err(self) -> str:
+        return f"{self.work_dir}/err.log"
+
+    @property
+    def done(self) -> str:
+        return f"{self.work_dir}/done"
+
+    @property
+    def exit_code(self) -> str:
+        return f"{self.work_dir}/exit_code"
+
+    @property
+    def ask(self) -> str:
+        return f"{self.work_dir}/ask.json"
+
+    @property
+    def mcp_config(self) -> str:
+        return f"{self.work_dir}/mcp.json"
+
+    @property
+    def findings(self) -> str:
+        return f"{self.work_dir}/findings.md"
+
+    @property
+    def bin_dir(self) -> str:
+        """Where the ``crewlet-ask`` shim is installed.
+
+        Under the box's own home, not ``/usr/local/bin``: a local backend
+        runs as an unprivileged engine user with no business writing to a
+        system path, and two boxes would overwrite each other's shim
+        there. :meth:`DetachedFileRunner.start` prepends this to ``PATH``
+        so ``crewlet-ask`` resolves exactly as it did before.
+        """
+        return f"{self.work_dir}/bin"
+
+    @property
+    def ask_shim(self) -> str:
+        return f"{self.bin_dir}/crewlet-ask"
+
+
+def run_paths(sandbox: Sandbox) -> RunPaths:
+    """The artefact paths for ``sandbox``."""
+    home = (getattr(sandbox, "home", "") or DEFAULT_SANDBOX_HOME).rstrip("/")
+    return RunPaths(home=home or DEFAULT_SANDBOX_HOME)
+
+
 # github.com/<owner>/<repo>/pull/<n> — the PR the agent opened.
 PR_RE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 
@@ -85,8 +161,10 @@ async def clear_run_artifacts(sandbox: Sandbox) -> None:
     ``collect`` would read the old result. The checkout itself is
     deliberately left intact — that disk state is the continued context.
     """
+    paths = run_paths(sandbox)
     await sandbox.exec(
-        f"rm -f {DONE_MARKER} {EXIT_PATH} {RESULT_PATH} {FINDINGS_PATH} {ASK_PATH}"
+        f"rm -f {paths.done} {paths.exit_code} {paths.result} "
+        f"{paths.findings} {paths.ask}"
     )
 
 
@@ -138,10 +216,11 @@ class DetachedFileRunner(abc.ABC):
         """
         if not mcp_servers:
             return ""
+        path = run_paths(sandbox).mcp_config
         await sandbox.write_file(
-            self.mcp_config_path, json.dumps({"mcpServers": mcp_servers}, indent=2)
+            path, json.dumps({"mcpServers": mcp_servers}, indent=2)
         )
-        return self.mcp_config_path
+        return path
 
     async def install(self, sandbox: Sandbox) -> None:
         # CLI ships in E2B's template; set up the artifact dir + the
@@ -149,9 +228,10 @@ class DetachedFileRunner(abc.ABC):
         # Environment provisioning (git auth, registry creds, toolchains)
         # is NOT the runner's concern — the manager applies the launch's
         # setup steps after install (``crewlet.sandbox.setup``).
-        await sandbox.exec(f"mkdir -p {WORK_DIR}")
-        await sandbox.write_file(ASK_SHIM_PATH, build_ask_shim())
-        await sandbox.exec(f"chmod +x {ASK_SHIM_PATH}")
+        paths = run_paths(sandbox)
+        await sandbox.exec(f"mkdir -p {paths.bin_dir}")
+        await sandbox.write_file(paths.ask_shim, build_ask_shim(paths.ask))
+        await sandbox.exec(f"chmod +x {paths.ask_shim}")
 
     async def run(
         self,
@@ -163,9 +243,10 @@ class DetachedFileRunner(abc.ABC):
         llm: CodingAgentLLM | None = None,
         mcp_servers: dict[str, Any] | None = None,
     ) -> CodingAgentResult:
+        paths = run_paths(sandbox)
         path = await self._write_config(sandbox, mcp_servers or {}, llm)
         cmd = self._build_command(
-            brief,
+            self._final_brief(brief, paths),
             limits,
             llm=llm,
             mcp_config_path=path,
@@ -174,7 +255,9 @@ class DetachedFileRunner(abc.ABC):
         # the run by the exec timeout (the inline analogue of the detached
         # `timeout` wrap below).
         res = await sandbox.exec(
-            f"{cmd} < /dev/null", env=env, timeout_s=limits.timeout_s
+            f"{self._with_shim_path(cmd, paths)} < /dev/null",
+            env=env,
+            timeout_s=limits.timeout_s,
         )
         result = self._parse_result(res.stdout)
         if res.stderr and res.stderr.strip():
@@ -191,12 +274,16 @@ class DetachedFileRunner(abc.ABC):
         llm: CodingAgentLLM | None = None,
         mcp_servers: dict[str, Any] | None = None,
     ) -> RunHandle:
+        paths = run_paths(sandbox)
         path = await self._write_config(sandbox, mcp_servers or {}, llm)
-        inner = self._build_command(
-            brief,
-            limits,
-            llm=llm,
-            mcp_config_path=path,
+        inner = self._with_shim_path(
+            self._build_command(
+                self._final_brief(brief, paths),
+                limits,
+                llm=llm,
+                mcp_config_path=path,
+            ),
+            paths,
         )
         # Close stdin (a headless agent must never block on input). The job
         # runs UNCAPPED — we never force-stop it on a wall-clock timer, so a
@@ -206,12 +293,33 @@ class DetachedFileRunner(abc.ABC):
         # exits, ``poll`` falls back to the non-empty result file, so the run
         # still completes (and the sandbox is torn down, killing the husk).
         script = (
-            f"{inner} < /dev/null > {RESULT_PATH} 2> {ERR_PATH}; "
-            f"code=$?; echo $code > {EXIT_PATH}; echo $code > {DONE_MARKER}"
+            f"{inner} < /dev/null > {paths.result} 2> {paths.err}; "
+            f"code=$?; echo $code > {paths.exit_code}; echo $code > {paths.done}"
         )
         pid = await sandbox.start_background(f"sh -lc {shlex.quote(script)}", env=env)
         logger.info("coding_agent_started", agent=self.name, pid=pid)
         return RunHandle(command_id=pid)
+
+    @staticmethod
+    def _with_shim_path(cmd: str, paths: RunPaths) -> str:
+        """Prepend the box's shim directory to ``PATH`` for ``cmd``.
+
+        The ``crewlet-ask`` shim lives under the box's own home rather
+        than ``/usr/local/bin`` (see :attr:`RunPaths.bin_dir`), so the
+        brief's ``crewlet-ask "..."`` instruction only resolves if the
+        directory is on the agent's PATH.
+        """
+        return f'PATH={shlex.quote(paths.bin_dir)}:"$PATH" {cmd}'
+
+    @staticmethod
+    def _final_brief(brief: str, paths: RunPaths) -> str:
+        """Append the report-file instruction, addressed at THIS box.
+
+        Composed here rather than by the launch path because the findings
+        path is a property of the sandbox the run lands in, which the
+        caller does not know when it builds the brief.
+        """
+        return brief.rstrip() + "\n" + findings_brief_instruction(paths.findings)
 
     def _result_done(self, stdout: str) -> bool:
         """Whether the agent's streamed output signals it has finished.
@@ -244,9 +352,10 @@ class DetachedFileRunner(abc.ABC):
         #       waiting — a genuinely hung-but-alive process is indistinguishable
         #       from a working one without a timer, which we deliberately do not
         #       impose.
-        if await sandbox.read_file(DONE_MARKER):
+        paths = run_paths(sandbox)
+        if await sandbox.read_file(paths.done):
             return True
-        stdout = await _read_text(sandbox, RESULT_PATH)
+        stdout = await _read_text(sandbox, paths.result)
         if stdout and self._result_done(stdout):
             return True
         if handle.command_id and not await self._process_alive(
@@ -272,20 +381,21 @@ class DetachedFileRunner(abc.ABC):
         return res.exit_code == 0
 
     async def collect(self, sandbox: Sandbox, handle: RunHandle) -> CodingAgentResult:
-        stdout = await _read_text(sandbox, RESULT_PATH)
+        paths = run_paths(sandbox)
+        stdout = await _read_text(sandbox, paths.result)
         result = self._parse_result(stdout)
         # Capture the coding agent's activity transcript for dashboard
         # observability (the OTLP-less surface). The parser may already have
         # built one from streamed events (OpenCode --format json); otherwise
         # fall back to the raw stderr (claude / plain runs). Read stderr once;
         # reuse for the crash detail.
-        err = (await _read_text(sandbox, ERR_PATH)).strip()
+        err = (await _read_text(sandbox, paths.err)).strip()
         if result.transcript:
             result.transcript = _tail(result.transcript, _MAX_TRANSCRIPT_CHARS)
         elif err:
             result.transcript = _tail(err, _MAX_TRANSCRIPT_CHARS)
 
-        code = (await _read_text(sandbox, EXIT_PATH)).strip()
+        code = (await _read_text(sandbox, paths.exit_code)).strip()
         crashed = bool(code) and code != "0"
 
         # The findings file is the result carrier of record: the brief asks the
@@ -294,7 +404,7 @@ class DetachedFileRunner(abc.ABC):
         # was lost (and a tool-only stdout that parses to no text), so prefer
         # it for the result text and treat its presence as the success signal
         # unless the process itself crashed.
-        findings = (await _read_text(sandbox, FINDINGS_PATH)).strip()
+        findings = (await _read_text(sandbox, paths.findings)).strip()
         if findings:
             result.text = findings
             if not result.delivered_refs:
@@ -319,7 +429,7 @@ class DetachedFileRunner(abc.ABC):
         self, sandbox: Sandbox, result: CodingAgentResult
     ) -> CodingAgentResult:
         """If the ``crewlet-ask`` shim dropped a question, surface it."""
-        blob = (await _read_text(sandbox, ASK_PATH)).strip()
+        blob = (await _read_text(sandbox, run_paths(sandbox).ask)).strip()
         if not blob:
             return result
         try:
@@ -344,5 +454,7 @@ __all__ = [
     "RESULT_PATH",
     "WORK_DIR",
     "DetachedFileRunner",
+    "RunPaths",
     "clear_run_artifacts",
+    "run_paths",
 ]

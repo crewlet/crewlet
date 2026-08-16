@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from crewlet._logging import get_logger
 from crewlet.sandbox.protocol import (
+    DEFAULT_SANDBOX_HOME,
     CodingAgentLLM,
     CodingAgentResult,
     ExecResult,
@@ -26,8 +27,11 @@ logger = get_logger("sandbox.fake")
 class FakeSandbox:
     """In-memory :class:`~crewlet.sandbox.protocol.Sandbox` for tests."""
 
-    def __init__(self, sandbox_id: str = "fake-sandbox") -> None:
+    def __init__(
+        self, sandbox_id: str = "fake-sandbox", home: str = DEFAULT_SANDBOX_HOME
+    ) -> None:
         self._id = sandbox_id
+        self._home = home
         self._files: dict[str, bytes] = {}
         self.commands: list[str] = []
         # env passed to each exec/start_background call, index-aligned with
@@ -47,6 +51,10 @@ class FakeSandbox:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def home(self) -> str:
+        return self._home
 
     async def exec(
         self,

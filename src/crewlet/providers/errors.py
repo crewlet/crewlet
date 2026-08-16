@@ -135,14 +135,46 @@ def retry_after_seconds(exc: Exception) -> float | None:
     return None
 
 
+class ProviderCallError(Exception):
+    """A provider failure that carries its own classification.
+
+    The SDK branches below can only classify exceptions the OpenAI and
+    Anthropic clients raise.  A provider that talks to something else --
+    the CLI-agent backend drives a local subprocess, where the signal is
+    an exit code plus the wording of a message on stderr -- has no such
+    exception to hand, and returning ``FATAL`` for its failures would
+    stop :class:`~crewlet.providers.fallback.FallbackLLMProvider` from
+    ever falling through to the next entry in the role's chain.
+
+    Providers raise this with the ``kind`` they determined, and
+    :func:`classify` honours it.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        kind: ProviderErrorKind = ProviderErrorKind.FATAL,
+        *,
+        provider_key: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.provider_key = provider_key
+
+
 def classify(exc: Exception) -> ProviderErrorKind:
     """Classify a provider SDK exception into a :class:`ProviderErrorKind`.
 
-    Recognises OpenAI and Anthropic exception shapes. Falls back to
-    ``FATAL`` for anything unrecognised -- the safer default. Callers
-    that need a different behaviour for unknown errors should branch
-    on this explicitly.
+    Recognises OpenAI and Anthropic exception shapes, plus any
+    :class:`ProviderCallError` a non-SDK provider raised with its own
+    verdict. Falls back to ``FATAL`` for anything unrecognised -- the
+    safer default. Callers that need a different behaviour for unknown
+    errors should branch on this explicitly.
     """
+    # A provider that classified its own failure (see ProviderCallError).
+    if isinstance(exc, ProviderCallError):
+        return exc.kind
+
     # OpenAI SDK.
     try:
         from openai import (
@@ -233,6 +265,7 @@ class AllCredentialsExhausted(Exception):
 
 __all__ = [
     "AllCredentialsExhausted",
+    "ProviderCallError",
     "ProviderErrorKind",
     "classify",
     "retry_after_seconds",

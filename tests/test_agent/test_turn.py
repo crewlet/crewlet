@@ -2213,3 +2213,50 @@ async def test_resume_turn_rehydrates_the_prior_work_ledger():
     assert "## Earlier iterations (already delivered)" in system
     assert "slack_post(" in system
     assert "The summary post already landed." in system
+
+
+async def test_turn_binds_the_llm_seat_scope():
+    """Stateful LLM backends (the ``cli-agent`` provider, which keeps a
+    coding CLI's home on disk) resolve their isolated workspace from the
+    ambient seat.  The provider map is shared across every role, so if
+    the turn engine stopped binding it, one seat's CLI session would
+    leak into another's.
+    """
+    from crewlet.providers.llm.scope import ENGINE_SEAT, current_seat
+
+    seen: list[str] = []
+
+    class _SeatRecordingProvider(_PhaseScriptedProvider):
+        async def complete(self, messages, **kwargs):
+            seen.append(current_seat())
+            return await super().complete(messages, **kwargs)
+
+    agent = _mk_agent()
+    provider = _SeatRecordingProvider(
+        plan=_plan_submission(["search"]),
+        execute=[
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="c1", name="search", arguments={"q": "x"})],
+            ),
+            Completion(content="done", tool_calls=[]),
+        ],
+        review=_review_submission("done", final_artifact="Final"),
+    )
+    assert current_seat() == ENGINE_SEAT
+    await engine_run(agent, provider)
+    assert seen, "no LLM calls were made"
+    assert set(seen) == {"eng"}
+    # And the binding does not survive the turn.
+    assert current_seat() == ENGINE_SEAT
+
+
+async def engine_run(agent, provider) -> str:
+    engine = TurnEngine(
+        llm_providers={"default": provider},
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+    )
+    return await engine.run_turn(
+        agent, task_id="t1", task_description="Do it", org=agent.definition.org
+    )

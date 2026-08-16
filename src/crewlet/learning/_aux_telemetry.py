@@ -42,7 +42,30 @@ logger = get_logger("learning.aux_telemetry")
 # The callers all catch exceptions and degrade gracefully, so a
 # :class:`TimeoutError` here surfaces as an empty prefetch block / a
 # skipped worker rather than a wedged turn.
+#
+# 60 s is sized for an HTTP round trip to a small, fast auxiliary
+# model.  It is a *floor*, not a ceiling: a provider whose own
+# per-call budget is larger -- an operator who raised
+# ``timeout_seconds`` for a slow reasoning model, or the ``cli-agent``
+# backend, where a process launch alone can cost seconds -- would
+# otherwise have every aux call cut off here and silently degrade
+# every prefetch. Such providers advertise their budget as
+# ``call_timeout_seconds`` and :func:`effective_aux_timeout` honours
+# it.
 _AUX_CALL_TIMEOUT_SECONDS = 60.0
+
+
+def effective_aux_timeout(provider: LLMProvider, requested: float) -> float:
+    """The deadline to apply to one aux call on ``provider``.
+
+    The larger of the caller's deadline and the provider's own
+    advertised per-call budget.  Providers that do not advertise one
+    (every HTTP provider with a default timeout) are unaffected.
+    """
+    advertised = getattr(provider, "call_timeout_seconds", 0.0)
+    if isinstance(advertised, int | float) and advertised > requested:
+        return float(advertised)
+    return requested
 
 
 def format_response_with_reasoning(completion: Completion) -> str:
@@ -94,7 +117,9 @@ async def complete_with_telemetry(
     matching ``AgentPhaseCompleted`` event.
 
     The ``provider.complete`` call is bounded by ``timeout`` seconds
-    (default :data:`_AUX_CALL_TIMEOUT_SECONDS`).  On timeout an
+    (default :data:`_AUX_CALL_TIMEOUT_SECONDS`), widened to the
+    provider's own advertised budget when that is larger — see
+    :func:`effective_aux_timeout`.  On timeout an
     :class:`TimeoutError` is raised -- callers already catch it and
     degrade (an empty prefetch block, a skipped reflection worker) so
     a hung provider never wedges the host turn.
@@ -120,7 +145,7 @@ async def complete_with_telemetry(
     """
     completion = await asyncio.wait_for(
         provider.complete(messages=messages, **complete_kwargs),
-        timeout=timeout,
+        timeout=effective_aux_timeout(provider, timeout),
     )
     if event_queue is None:
         return completion

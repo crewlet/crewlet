@@ -54,6 +54,16 @@ OPENCODE_CONFIG_PATH = "/home/user/.config/opencode/opencode.json"
 OPENCODE_PROVIDER_ID = "crewlet"
 
 
+#: ``CodingAgentLLM.provider_type`` → OpenCode's built-in provider id.
+#: Anything unlisted falls back to ``openai``, which is where
+#: ``openai-compatible`` and an unknown type have always landed.
+_OPENCODE_FAMILY = {
+    "anthropic": "anthropic",
+    "google": "google",
+    "xai": "xai",
+}
+
+
 def opencode_model_arg(llm: CodingAgentLLM | None) -> str:
     """The ``--model`` value for OpenCode given the role's LLM (or ``""``).
 
@@ -61,13 +71,18 @@ def opencode_model_arg(llm: CodingAgentLLM | None) -> str:
     (``crewlet/<model>``, declared by :func:`to_opencode_provider`).
     Without one (the vendor's own endpoint) we address the matching
     built-in provider family directly (``openai/…`` / ``anthropic/…``).
+
+    The family comes from ``provider_type``, which for a subscription
+    (``cli-agent``) entry is the CLI's **vendor** rather than the
+    Crewlet provider type — every subscription entry shares one type, so
+    reading the type would address a Claude subscription's ``sonnet`` as
+    ``openai/sonnet``.
     """
     if llm is None or not llm.model:
         return ""
     if llm.base_url:
         return f"{OPENCODE_PROVIDER_ID}/{llm.model}"
-    family = "anthropic" if llm.provider_type == "anthropic" else "openai"
-    return f"{family}/{llm.model}"
+    return f"{_OPENCODE_FAMILY.get(llm.provider_type, 'openai')}/{llm.model}"
 
 
 def to_opencode_provider(llm: CodingAgentLLM) -> dict[str, Any]:

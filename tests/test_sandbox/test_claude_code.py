@@ -147,8 +147,10 @@ async def test_inline_run_parses_exec_stdout() -> None:
     assert r.success is True
     assert r.text == "shipped"
     assert r.input_tokens == 5
-    # the claude command was executed
-    assert any(c.startswith("claude -p") for c in sb.commands)
+    # the claude command was executed, with the box's shim dir on PATH so
+    # the brief's `crewlet-ask` instruction resolves
+    assert any("claude -p" in c for c in sb.commands)
+    assert any(".crewlet/bin:" in c for c in sb.commands)
 
 
 async def test_start_backgrounds_a_redirecting_script() -> None:
@@ -158,8 +160,10 @@ async def test_start_backgrounds_a_redirecting_script() -> None:
     )
     assert handle.command_id == "fake-pid-1"
     script = sb.background[0]
-    # "implement" is a shell-safe word so shlex.quote leaves it bare.
-    assert "claude -p implement" in script
+    # The brief is shell-quoted; the runner appends the report-file
+    # instruction to it, so it is no longer the bare word.
+    assert "claude -p " in script
+    assert "implement" in script
     assert f"> {RESULT_PATH}" in script
     # The done-marker carries the exit code (written, not `touch`ed) so the
     # completion poll can see a finished/crashed job — a zero-byte marker
@@ -184,7 +188,11 @@ async def test_start_does_not_wall_clock_cap_the_agent() -> None:
     )
     script = sb.background[0]
     assert "timeout " not in script
-    assert "claude -p implement" in script
+    assert "claude -p " in script
+    # The brief carries the report-file instruction, appended by the runner
+    # because the findings path belongs to THIS box.
+    assert "implement" in script
+    assert ".crewlet/findings.md" in script
 
 
 async def test_poll_reads_done_marker() -> None:

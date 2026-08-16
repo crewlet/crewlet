@@ -39,7 +39,8 @@ How the engine works, one subsystem per page:
 - **[Humans in the Org Chart](concepts/humans-in-the-org.md)** — Human seats (`kind: human`): hierarchy membership, contact identities, notify delivery, escalation terminus, prompts and lookup
 - **[Agent Runtime](concepts/agent-runtime.md)** — Agent lifecycle, states, execution model, graceful shutdown
 - **[Turn Engine](concepts/turn-engine.md)** — Per-agent Plan / Execute / Review loop, sub-agents, colleague-surface tools, per-phase LLM models
-- **[Code Sandbox](concepts/code-sandbox.md)** — Sandboxed coding-agent execution: the `run_sandbox` tool, E2B cloud/self-hosted, Claude Code & OpenCode runners, git-auth recipes, mid-run clarifications
+- **[Subscription LLM Backends](concepts/subscription-llm-backends.md)** — Run agents on a coding CLI you already subscribe to (Claude Code, Codex, Gemini CLI, OpenCode, …) instead of a metered API key: per-seat state isolation, the in-prompt tool-call channel, `crewlet llm login`, and falling back to a key when the window is spent
+- **[Code Sandbox](concepts/code-sandbox.md)** — Sandboxed coding-agent execution: the `run_sandbox` tool, E2B cloud/self-hosted, local boxes (direct or containerised, on a subscription login), Claude Code & OpenCode runners, git-auth recipes, mid-run clarifications
 - **[Tool Skills](concepts/tool-skills.md)** — Knowledge-base-sourced prompt fragments (Confluence or Plane pages) that teach agents *how to use* each tool / MCP server
 - **[Tool Capabilities](concepts/tool-capabilities.md)** — How the engine stays tool-stack agnostic: capability prose + MCP annotations, no hardcoded tool names
 - **[Event System](concepts/event-system.md)** — EventQueue, topics, routing, inbox batching, distributed tracing

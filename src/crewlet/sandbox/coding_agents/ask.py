@@ -22,9 +22,18 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-# Where the shim drops its signal; the runner reads this on collect.
-ASK_SHIM_PATH = "/usr/local/bin/crewlet-ask"
-ASK_OUTPUT_PATH = "/home/user/.crewlet/ask.json"
+from crewlet.sandbox.protocol import DEFAULT_SANDBOX_HOME
+
+# Where the shim lives and where it drops its signal, for a sandbox at
+# the default home. These are DEFAULTS: the runner installs the shim (and
+# points it at an output path) derived from the box's own
+# ``sandbox.home`` — see
+# :class:`~crewlet.sandbox.coding_agents._detached.RunPaths`. A local
+# backend runs many boxes on one filesystem, where a single system-wide
+# ``/usr/local/bin/crewlet-ask`` would be both unwritable (the engine user
+# is unprivileged) and shared between boxes.
+ASK_SHIM_PATH = f"{DEFAULT_SANDBOX_HOME}/.crewlet/bin/crewlet-ask"
+ASK_OUTPUT_PATH = f"{DEFAULT_SANDBOX_HOME}/.crewlet/ask.json"
 
 
 def build_ask_shim(output_path: str = ASK_OUTPUT_PATH) -> str:

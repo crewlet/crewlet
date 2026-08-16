@@ -108,6 +108,33 @@ def build_sandbox_manager(cfg: CompanyConfig) -> Any | None:
             "claude-code": ClaudeCodeRunner(),
             "opencode": OpenCodeRunner(),
         }
+    elif sb.type == "local":
+        # Same runners as E2B: the local backend implements the Sandbox
+        # protocol, so the coding-agent runners are unchanged — which is
+        # the whole reason the protocol exists.
+        from crewlet.sandbox.coding_agents.claude_code import ClaudeCodeRunner
+        from crewlet.sandbox.coding_agents.opencode import OpenCodeRunner
+        from crewlet.sandbox.local import LocalSandboxProvider
+
+        local = sb.local
+        assert local is not None  # guaranteed by SandboxProviderConfig
+        provider = LocalSandboxProvider(
+            containment=local.containment,
+            state_dir=local.state_dir,
+            image=local.image,
+            runtime=local.runtime,
+            network=local.network,
+            run_args=list(local.run_args),
+        )
+        runners = {
+            "claude-code": ClaudeCodeRunner(),
+            "opencode": OpenCodeRunner(),
+        }
+        logger.info(
+            "local_sandbox_provider_built",
+            containment=local.containment,
+            image=local.image or "(n/a)",
+        )
     else:  # pragma: no cover — Literal already constrains the type
         raise SandboxConfigError(f"unknown sandbox provider type {sb.type!r}")
 

@@ -125,6 +125,22 @@ class FallbackLLMProvider:
         return self._last_used_model
 
     @property
+    def call_timeout_seconds(self) -> float:
+        """The widest per-call budget in the chain.
+
+        A caller that imposes its own deadline (the auxiliary-LLM
+        helper) must size it for whichever provider ends up answering,
+        not just the head: a chain that falls through from a fast HTTP
+        provider to a slow ``cli-agent`` one would otherwise be cut off
+        on the attempt that was going to succeed.
+        """
+        budgets = [
+            float(getattr(p, "call_timeout_seconds", 0.0) or 0.0)
+            for _, p in self._chain
+        ]
+        return max(budgets) if budgets else 0.0
+
+    @property
     def attempted_keys(self) -> list[str]:
         """Keys attempted in the most recent ``complete`` call.
 

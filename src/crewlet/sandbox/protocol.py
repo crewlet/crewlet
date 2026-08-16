@@ -71,6 +71,22 @@ class SandboxSpec:
     timeout_s: float = 900.0
     pause_ttl_s: float = 1800.0
     env: dict[str, str] = field(default_factory=dict)
+    credential_files: dict[str, str] = field(default_factory=dict)
+    """A ``cli-agent`` LLM provider's login: path-relative-to-the-box-home
+    → absolute path on the **engine host**.
+
+    Populated when the role's resolved sandbox provider is a
+    :ref:`subscription CLI backend <cli-agent>`, so a local sandbox runs
+    the coding agent against the very login ``crewlet llm login``
+    established — no token minting, no API key.
+
+    Each provider decides what to do with it, and they decide
+    differently on purpose. ``local`` seeds the files into the box (and
+    writes a refreshed one back). ``e2b`` **ignores it**: these files
+    carry a refresh token whose rotation is shared fleet state, and
+    pushing that onto a remote VM is a materially larger trust step than
+    the scoped headless token ``build_sandbox_env`` already exports.
+    """
 
 
 @dataclass
@@ -95,7 +111,15 @@ class CodingAgentLLM:
     model: str = ""
     """Raw model id (provider-agnostic, e.g. ``acme/model-x-large``)."""
     provider_type: str = ""
-    """The ``providers.llm`` type: ``anthropic`` | ``openai-compatible`` | …"""
+    """The model FAMILY the runner should address.
+
+    For an API entry this is the ``providers.llm`` type (``anthropic`` |
+    ``openai`` | ``openai-compatible``), which already names the family.
+    For a subscription (``cli-agent``) entry every provider shares one
+    type, so it carries the CLI profile's **vendor** instead — otherwise
+    a Claude subscription's ``sonnet`` would be addressed as
+    ``openai/sonnet``. See
+    :func:`crewlet.agent.execute_sandbox._coding_agent_llm`."""
     base_url: str = ""
     """The endpoint; empty means the vendor default (no custom provider)."""
 
@@ -142,12 +166,33 @@ class CodingAgentResult:
     (e.g. OpenCode) that emits no OTLP. Tail-capped; redacted at publish."""
 
 
+#: Home directory of a sandbox that doesn't say otherwise — E2B's box
+#: user. Every run artefact (result, done-marker, ask signal, findings)
+#: lives under ``<home>/.crewlet``.
+DEFAULT_SANDBOX_HOME = "/home/user"
+
+
 @runtime_checkable
 class Sandbox(Protocol):
     """A live, isolated execution environment for one Execute phase."""
 
     @property
     def id(self) -> str: ...
+
+    @property
+    def home(self) -> str:
+        """Absolute path the run's artefacts live under.
+
+        A remote box has one home per VM, so this was a module constant
+        for as long as E2B was the only backend.  A *local* backend runs
+        many boxes on one filesystem — sharing ``/home/user/.crewlet``
+        between them would have every run reading its neighbour's
+        done-marker and result. Making the home a property of the
+        sandbox is what lets the same
+        :class:`~crewlet.sandbox.coding_agents._detached.DetachedFileRunner`
+        drive both backends unchanged.
+        """
+        ...
 
     async def exec(
         self,
@@ -297,6 +342,7 @@ class CodingAgentRunner(Protocol):
 
 
 __all__ = [
+    "DEFAULT_SANDBOX_HOME",
     "CodingAgentLLM",
     "CodingAgentResult",
     "CodingAgentRunner",
