@@ -32,7 +32,14 @@ around it, which together cover every deployment shape:
    password into them would break on the vendor's next login-page
    change and would fail outright against MFA.  Crewlet refuses to
    pretend a credential login exists where it does not.
-4. **Move the login between hosts** (:func:`export_bundle` /
+4. **Adopt a login the machine already has**
+   (:func:`adopt_host_login`) — the common starting state is an
+   operator who has been using ``claude`` on this box for months.
+   Crewlet does not read ``$HOME`` (the child process never sees it,
+   which is the isolation the whole backend rests on), so that login is
+   invisible until it is explicitly copied in. One command does the
+   copy; nothing happens implicitly.
+5. **Move the login between hosts** (:func:`export_bundle` /
    :func:`import_bundle`) — the credential directory as one encrypted
    blob in the secret store, so a fresh container, a second engine
    host, or a rebuilt VM comes up already authenticated.
@@ -57,7 +64,11 @@ from crewlet.providers.llm.cli_profiles import (
     MODEL_PLACEHOLDER,
     CLIAgentProfile,
 )
-from crewlet.providers.llm.cli_workspace import CLIWorkspaceManager
+from crewlet.providers.llm.cli_workspace import (
+    CLIWorkspaceManager,
+    copy_file_atomic,
+    safe_join,
+)
 
 logger = get_logger("llm.cli.login")
 
@@ -120,6 +131,12 @@ class DoctorReport:
     has_token: bool = False
     reports_usage: bool = False
     status_output: str = ""
+    host_login: list[str] = field(default_factory=list)
+    """Credential files found under the engine user's own home — a login
+    the operator established by running the CLI themselves. Crewlet does
+    not use these until they are adopted; reported so "not logged in" on
+    a machine where the CLI plainly works is explained rather than
+    baffling."""
     smoke_ok: bool | None = None
     smoke_detail: str = ""
     problems: list[str] = field(default_factory=list)
@@ -127,6 +144,71 @@ class DoctorReport:
     @property
     def ok(self) -> bool:
         return not self.problems
+
+
+def host_login_files(
+    profile: CLIAgentProfile, home: Path | None = None
+) -> dict[str, Path]:
+    """The profile's credential files as they exist under ``home``.
+
+    ``home`` defaults to the engine user's real home — the login an
+    operator established by running the CLI themselves. Only paths that
+    actually exist are returned, so an empty result means "this machine
+    has no login for this CLI".
+    """
+    root = (home or Path.home()).expanduser()
+    found: dict[str, Path] = {}
+    for relative in profile.credential_paths:
+        candidate = root / relative
+        if candidate.is_file():
+            found[relative] = candidate
+    return found
+
+
+def adopt_host_login(
+    workspace: CLIWorkspaceManager,
+    profile: CLIAgentProfile,
+    home: Path | None = None,
+) -> list[str]:
+    """Copy the machine's existing login into Crewlet's credential dir.
+
+    Explicit rather than automatic, and a copy rather than a redirect,
+    for two different reasons.
+
+    *Explicit*, because the alternative is an engine that silently
+    borrows a human's personal credentials the moment its own directory
+    happens to be empty — the opposite of the isolation every other part
+    of this backend maintains.
+
+    *A copy*, because seats must not write into the operator's own
+    ``~/.claude``: a fleet refreshing that file mid-session is a
+    surprise the human never opted into. The cost is that the two
+    credentials become independent lineages from one refresh token, so a
+    vendor that rotates refresh tokens can invalidate whichever side
+    refreshes second. Where the CLI mints a headless token
+    (:func:`capture_token`) that is the better answer and avoids the
+    fork entirely.
+
+    Returns the relative paths copied.
+    """
+    files = host_login_files(profile, home)
+    target = _login_home(workspace)
+    copied: list[str] = []
+    for relative, source in files.items():
+        destination = safe_join(target, relative)
+        if destination is None:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if copy_file_atomic(source, destination):
+            copied.append(relative)
+    if copied:
+        logger.info(
+            "cli_host_login_adopted",
+            provider=workspace.provider_key,
+            agent=profile.name,
+            files=len(copied),
+        )
+    return copied
 
 
 def _login_home(workspace: CLIWorkspaceManager) -> Path:
@@ -522,14 +604,31 @@ def build_report(
         )
 
     if not report.has_credentials and not report.has_token:
-        report.problems.append(
-            f"no login found: run `crewlet llm login {provider_key}`"
-            + (
-                f" (or `--capture-token` to mint a {profile.token_env})"
-                if profile.token_capture_args
-                else ""
+        report.host_login = sorted(host_login_files(profile))
+        if report.host_login:
+            # The CLI works for the operator on this very machine, so
+            # "no login found" alone reads as a bug in Crewlet. Name the
+            # login we can see and the one command that adopts it.
+            report.problems.append(
+                "no login of its own, but this machine has one at "
+                f"~/{report.host_login[0]} — adopt it with "
+                f"`crewlet llm login {provider_key} --from-host`"
+                + (
+                    f", or mint a headless {profile.token_env} with "
+                    "`--capture-token` (preferred: no shared refresh token)"
+                    if profile.token_capture_args
+                    else ""
+                )
             )
-        )
+        else:
+            report.problems.append(
+                f"no login found: run `crewlet llm login {provider_key}`"
+                + (
+                    f" (or `--capture-token` to mint a {profile.token_env})"
+                    if profile.token_capture_args
+                    else ""
+                )
+            )
 
     if profile.status_args:
         result = status(workspace, profile)
@@ -556,6 +655,8 @@ def format_report(report: DoctorReport) -> str:
         f"token env     : {'set' if report.has_token else 'unset'}",
         f"token usage   : {'reported by CLI' if report.reports_usage else 'estimated'}",
     ]
+    if report.host_login:
+        lines.append(f"host login    : {', '.join(report.host_login)} (not adopted)")
     if report.status_output:
         lines.append(f"cli status    : {report.status_output.splitlines()[0]}")
     if report.smoke_ok is not None:
@@ -592,6 +693,7 @@ __all__ = [
     "BundleError",
     "CommandResult",
     "DoctorReport",
+    "adopt_host_login",
     "build_report",
     "bundle_env_name",
     "capture_token",
@@ -599,6 +701,7 @@ __all__ = [
     "export_bundle",
     "extract_token",
     "format_report",
+    "host_login_files",
     "import_bundle",
     "interactive_login",
     "logout",

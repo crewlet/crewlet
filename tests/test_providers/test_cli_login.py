@@ -322,3 +322,104 @@ class TestDoctorReport:
             subscription_token="tok",
         )
         assert not any("no login found" in p for p in report.problems)
+
+
+class TestHostLogin:
+    """Adopting a login the machine already has.
+
+    The common starting state: the operator has been running the CLI on
+    this box themselves. Crewlet never reads ``$HOME`` (the child
+    process is given its own), so that login is invisible until copied
+    in — deliberately, and only on request.
+    """
+
+    def test_detects_an_existing_login(self, tmp_path):
+        _workspace, profile = make_workspace(tmp_path)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        (home / ".fake" / "auth.json").write_text('{"token": "personal"}')
+        assert sorted(cli_login.host_login_files(profile, home)) == [".fake/auth.json"]
+
+    def test_no_login_on_the_machine_reads_as_empty(self, tmp_path):
+        _workspace, profile = make_workspace(tmp_path)
+        assert cli_login.host_login_files(profile, tmp_path / "empty") == {}
+
+    def test_adopt_copies_into_crewlets_own_directory(self, tmp_path):
+        workspace, profile = make_workspace(tmp_path)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        source = home / ".fake" / "auth.json"
+        source.write_text('{"token": "personal"}')
+
+        copied = cli_login.adopt_host_login(workspace, profile, home)
+        assert copied == [".fake/auth.json"]
+        assert workspace.has_credentials()
+        assert (
+            workspace.credential_dir / ".fake" / "auth.json"
+        ).read_text() == '{"token": "personal"}'
+
+    def test_the_operators_own_login_is_left_alone(self, tmp_path):
+        """A copy, not a redirect: agents must never write into a
+        human's personal credential file."""
+        workspace, profile = make_workspace(tmp_path)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        source = home / ".fake" / "auth.json"
+        source.write_text('{"token": "personal"}')
+
+        cli_login.adopt_host_login(workspace, profile, home)
+        # A seat refreshes the credential; the operator's copy must not move.
+        (workspace.credential_dir / ".fake" / "auth.json").write_text(
+            '{"token": "refreshed-by-a-seat"}'
+        )
+        assert source.read_text() == '{"token": "personal"}'
+
+    def test_adoption_is_never_implicit(self, tmp_path):
+        """An engine whose directory is empty must not quietly borrow the
+        human's credentials — that is the isolation this backend rests
+        on."""
+        workspace, profile = make_workspace(tmp_path)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        (home / ".fake" / "auth.json").write_text('{"token": "personal"}')
+        assert not workspace.has_credentials()
+
+    def test_a_traversing_credential_path_cannot_escape(self, tmp_path):
+        workspace, profile = make_workspace(
+            tmp_path, credential_paths=["../../escaped.json"]
+        )
+        home = tmp_path / "operator-home"
+        home.mkdir(parents=True)
+        (tmp_path / "escaped.json").write_text("host secret")
+        assert cli_login.adopt_host_login(workspace, profile, home) == []
+
+    def test_doctor_points_at_the_host_login(self, tmp_path, monkeypatch):
+        """ "Not logged in" on a machine where the CLI plainly works is
+        baffling; doctor names what it can see and how to adopt it."""
+        install(tmp_path, "print('v1')", monkeypatch)
+        workspace, profile = make_workspace(tmp_path)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        (home / ".fake" / "auth.json").write_text("{}")
+        monkeypatch.setattr(cli_login.Path, "home", staticmethod(lambda: home))
+
+        report = cli_login.build_report(
+            provider_key="default", profile=profile, workspace=workspace
+        )
+        assert report.host_login == [".fake/auth.json"]
+        problem = next(p for p in report.problems if "host" in p or "machine" in p)
+        assert "--from-host" in problem
+        assert "--capture-token" in problem
+        assert "(not adopted)" in cli_login.format_report(report)
+
+    def test_doctor_says_plain_not_logged_in_without_one(self, tmp_path, monkeypatch):
+        install(tmp_path, "print('v1')", monkeypatch)
+        workspace, profile = make_workspace(tmp_path)
+        monkeypatch.setattr(
+            cli_login.Path, "home", staticmethod(lambda: tmp_path / "empty-home")
+        )
+        report = cli_login.build_report(
+            provider_key="default", profile=profile, workspace=workspace
+        )
+        assert report.host_login == []
+        assert any("no login found" in p for p in report.problems)

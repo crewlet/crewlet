@@ -19,7 +19,10 @@ providers:
 ```
 
 ```bash
-crewlet llm login default --capture-token   # once, on the engine host
+# Already have the CLI logged in on this machine? Adopt that login:
+crewlet llm login default --from-host
+# Otherwise log in (or mint a headless token) inside Crewlet's own dir:
+crewlet llm login default --capture-token
 crewlet llm doctor default                  # verify before the first turn
 ```
 
@@ -174,6 +177,45 @@ MFA, or a one-time code. **There is no username/password grant to
 script**, and driving a headless browser to type into one would break on
 the vendor's next login-page change. Crewlet does not pretend otherwise.
 What it does instead covers every deployment shape:
+
+### 0. Already logged in on this machine? Adopt it
+
+```bash
+crewlet llm login default --from-host
+```
+
+The usual starting point: you have been running `claude` on this box
+yourself for months. Crewlet **does not** use that login on its own —
+the child process is given its own `HOME`, so your `~/.claude` is
+invisible to it, which is exactly the isolation the rest of this page
+depends on. `--from-host` copies the CLI's credential files out of your
+home directory into Crewlet's, once, on request.
+
+It is a *copy*, not a redirect: agents never write into your personal
+credential file, so a fleet refreshing a token mid-session is not a
+surprise you get handed. The cost is that both copies then descend from
+one refresh token, and a vendor that rotates refresh tokens can log out
+whichever side refreshes second. Where the CLI mints a headless token
+(option 2 below), that is the better answer and avoids the fork
+entirely — `crewlet llm login --from-host` says so after it runs.
+
+`--home PATH` reads from somewhere other than the engine user's own home,
+for a deployment where the engine runs as a different user than the one
+that logged the CLI in.
+
+`crewlet llm doctor` looks for a host login too, so "no login" on a
+machine where the CLI plainly works explains itself:
+
+```
+credentials   : none on disk
+host login    : .claude/.credentials.json (not adopted)
+problems:
+  - no login of its own, but this machine has one at
+    ~/.claude/.credentials.json — adopt it with
+    `crewlet llm login default --from-host`, or mint a headless
+    CLAUDE_CODE_OAUTH_TOKEN with `--capture-token` (preferred: no
+    shared refresh token)
+```
 
 ### 1. Broker the vendor's own login (any CLI)
 

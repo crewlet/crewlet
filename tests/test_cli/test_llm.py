@@ -313,3 +313,78 @@ class TestLogout:
         assert main(["llm", "logout", "subscription", "--company", str(company)]) == 0
         assert not target.exists()
         assert "crewlet secrets unset FAKE_OAUTH" in capsys.readouterr().out
+
+
+class TestAdoptHostLogin:
+    def test_adopts_the_machines_existing_login(
+        self, company, tmp_path, monkeypatch, capsys
+    ):
+        install(tmp_path, "pass", monkeypatch)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        (home / ".fake" / "auth.json").write_text('{"token": "personal"}')
+
+        code = main(
+            [
+                "llm",
+                "login",
+                "subscription",
+                "--company",
+                str(company),
+                "--from-host",
+                "--home",
+                str(home),
+            ]
+        )
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "Adopted .fake/auth.json" in out
+        # The operator's own login is untouched and never written to.
+        assert (home / ".fake" / "auth.json").read_text() == '{"token": "personal"}'
+        assert (
+            tmp_path / "state" / "credentials" / ".fake" / "auth.json"
+        ).read_text() == '{"token": "personal"}'
+
+    def test_warns_about_the_shared_refresh_token(
+        self, company, tmp_path, monkeypatch, capsys
+    ):
+        install(tmp_path, "pass", monkeypatch)
+        home = tmp_path / "operator-home"
+        (home / ".fake").mkdir(parents=True)
+        (home / ".fake" / "auth.json").write_text("{}")
+        main(
+            [
+                "llm",
+                "login",
+                "subscription",
+                "--company",
+                str(company),
+                "--from-host",
+                "--home",
+                str(home),
+            ]
+        )
+        out = capsys.readouterr().out
+        assert "share one refresh token" in out
+        assert "--capture-token" in out
+
+    def test_missing_host_login_explains_where_it_looked(
+        self, company, tmp_path, monkeypatch, capsys
+    ):
+        install(tmp_path, "pass", monkeypatch)
+        code = main(
+            [
+                "llm",
+                "login",
+                "subscription",
+                "--company",
+                str(company),
+                "--from-host",
+                "--home",
+                str(tmp_path / "empty-home"),
+            ]
+        )
+        assert code == 1
+        err = capsys.readouterr().err
+        assert ".fake/auth.json" in err
+        assert "empty-home" in err

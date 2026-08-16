@@ -26,7 +26,7 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet secrets get <NAME> --reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [--dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | List the [`cli-agent`](../concepts/subscription-llm-backends.md) LLM providers in a company config and whether each looks logged in |
-| `crewlet llm login <provider>` | Authenticate a subscription CLI backend: broker the vendor's own login, mint a headless token, or drive a credential login |
+| `crewlet llm login <provider>` | Authenticate a subscription CLI backend: adopt the machine's existing login (`--from-host`), broker the vendor's own login, mint a headless token, or drive a credential login |
 | `crewlet llm doctor [provider]` | Verify a CLI backend end to end — binary, version, login, token accounting, and a real smoke completion |
 | `crewlet llm status <provider>` | Ask the CLI who it is logged in as |
 | `crewlet llm logout <provider>` | Run the CLI's logout and delete its stored credentials |
@@ -239,6 +239,15 @@ terminal, inside the provider's isolated credential directory — so the
 device-code prompt and browser hand-off behave exactly as they do by
 hand, and the result does not collide with your personal CLI login on
 the same machine.
+
+`--from-host` skips logging in at all when the machine already has a
+login: it copies the CLI's credential files out of your home directory
+into Crewlet's. Crewlet never reads `$HOME` by itself (each call gets
+its own), so an existing login is invisible until adopted this way.
+A copy, not a redirect — agents never write into your personal
+credential file. Both copies then share one refresh token, so prefer
+`--capture-token` where the vendor mints one. `--home PATH` reads from a
+different user's home.
 
 `--capture-token` runs the CLI's token-minting command (`claude
 setup-token`) and stores the result encrypted under the profile's token

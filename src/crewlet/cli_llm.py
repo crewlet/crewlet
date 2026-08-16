@@ -85,6 +85,26 @@ def add_llm_parser(sub: argparse._SubParsersAction) -> None:
         ),
     )
     login_p.add_argument(
+        "--from-host",
+        action="store_true",
+        help=(
+            "Adopt the login this machine already has — copy the CLI's own "
+            "credential files out of your home directory into Crewlet's "
+            "isolated one. For the common case where you have been using the "
+            "CLI here yourself and do not want to log in again"
+        ),
+    )
+    login_p.add_argument(
+        "--home",
+        type=Path,
+        default=None,
+        help=(
+            "Home directory --from-host reads from (default: the engine "
+            "user's own). Use when the engine runs as a different user than "
+            "the one that logged the CLI in"
+        ),
+    )
+    login_p.add_argument(
         "--token-stdin",
         action="store_true",
         help=(
@@ -320,6 +340,33 @@ def cmd_llm_login(args: argparse.Namespace) -> int:
     from crewlet.providers.llm import cli_login
 
     key, _cfg, profile, workspace = _resolve_one(args)
+
+    if args.from_host:
+        found = cli_login.host_login_files(profile, args.home)
+        if not found:
+            where = args.home or "your home directory"
+            raise _LLMCliError(
+                f"no {profile.name!r} login found under {where} — expected "
+                f"{', '.join(profile.credential_paths) or '(none declared)'}. "
+                f"Log the CLI in there first ({profile.binary}), or run "
+                f"`crewlet llm login {key}` to log in inside Crewlet's own "
+                "directory."
+            )
+        copied = cli_login.adopt_host_login(workspace, profile, args.home)
+        print(
+            f"Adopted {', '.join(copied)} into {workspace.credential_dir}.\n"
+            "Crewlet now has its own copy; your own CLI login is untouched "
+            "and is not written to by agents."
+        )
+        if profile.token_capture_args:
+            print(
+                "\nNote: both copies now share one refresh token, so a "
+                "vendor that rotates it can log one side out. "
+                f"`crewlet llm login {key} --capture-token` mints a separate "
+                "headless token and avoids that entirely."
+            )
+        print(f"Verify with `crewlet llm doctor {key}`.")
+        return 0
 
     if args.token_stdin:
         token = cli_login.read_password(f"{profile.token_env or 'Token'}: ")
