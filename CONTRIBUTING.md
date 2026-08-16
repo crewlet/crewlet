@@ -111,6 +111,88 @@ The pages under `docs/` are the source of truth and are published to
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
 
+## Commit messages
+
+Commit subjects follow the [Conventional Commits](https://www.conventionalcommits.org/)
+shape — a type, an optional component scope, then the summary:
+
+```
+type(scope): summary
+
+optional body explaining why, wrapped at 72 columns
+
+Fixes #123
+```
+
+### Type
+
+Required, and drawn from this set:
+
+| Type | Use for |
+|---|---|
+| `feat` | a new capability — a config field, CLI command, tool, endpoint, provider |
+| `fix` | a bug fix, including correcting a tuning value that was wrong |
+| `docs` | pages under `docs/`, the root markdown files, docstrings |
+| `refactor` | a change that neither fixes a bug nor adds a capability |
+| `perf` | a change made for speed, memory, or token cost |
+| `test` | tests only |
+| `ci` | `.github/workflows/*`, `.github/dependabot.yml`, release tooling |
+| `build` | `pyproject.toml`, packaging metadata, the Compose stack |
+| `chore` | anything else with no user-visible effect (dependency bumps, tidying) |
+| `revert` | reverting an earlier commit |
+
+### Scope
+
+The scope names the **component** the change lands in. For code that is the
+package directory under `src/crewlet/` — `agent`, `sandbox`, `plane`, `api`,
+`db`, `secrets`, `knowledge`, `notifications`, `schedule`, `tools`, `mcp`, and
+so on — so a reader can go from a subject line to a directory without guessing.
+Use `dashboard` for `src/crewlet/static/dashboard/`, which is the component
+people call it. Outside the package, scope by area: `docs`, `deps`,
+`packaging`, `examples`, `schema`, `scripts` — and for CI, the workflow's own
+name (`ci(release)`, `ci(docs-publish)`).
+
+Drop the scope only when a change genuinely spans the whole repository
+(`chore: normalise line endings`). The type is never optional.
+
+### Summary
+
+- Imperative present tense — "add", not "added" or "adds".
+- Lowercase first word (unless it is an identifier), no trailing period.
+- 72 characters or fewer, prefix included.
+- Say what changed for someone using the code, not which file you edited.
+
+Put the *why* in the body; the diff already shows the *what*. Reference issues
+in a footer (`Fixes #123`). A breaking change gets a `!` before the colon —
+`feat(config)!: …` — and a `BREAKING CHANGE:` footer describing the migration.
+
+### One change per commit
+
+Keep unrelated work in separate commits, each with its own scope. A bug you
+fixed in passing, or a tuning value you corrected while doing something else,
+belongs in its own commit — that keeps it reviewable, and revertable, on its
+own.
+
+### Examples
+
+```
+feat(sandbox): reuse a paused box when a clarification is answered
+fix(plane): relax the page-search query when the server returns no hits
+perf(providers): cache the tool-definition prefix on Anthropic calls
+docs(secret-store): document that the keyring is required
+ci(docs-publish): rebuild the docs site when a release ships
+chore(deps): bump ruff to 0.14
+```
+
+Nothing enforces any of this — there is no commit-message hook and CI does not
+check subjects. Git history is permanent and public, so the convention holds
+only because contributors apply it.
+
+**This applies to pull request titles too.** A pull request lands on `main` as a
+single squashed commit whose subject is the pull request title, so the title
+takes the same `type(scope): summary` form — and everything after the colon is
+what readers see in the generated release notes. See below.
+
 ## Pull requests
 
 1. Fork and create a feature branch.
@@ -120,8 +202,9 @@ linked there** — the site build fails on a page nothing links to.
    matters more than anywhere else**: GitHub generates each release's notes from
    the titles of the pull requests merged since the previous tag, and those
    notes are the *only* record of what a release contains. Yours is read by
-   people deciding whether to upgrade, so write it as a release note — what
-   changed for someone running Crewlet — rather than as a commit log. Labels
+   people deciding whether to upgrade, so the summary after the
+   `type(scope):` prefix has to read as a release note — what changed for
+   someone running Crewlet — rather than as a commit log. Labels
    group it: Dependabot's `dependencies` label sorts bumps to the bottom (see
    `.github/release.yml`).
 
