@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import stat
 import sys
 import time
@@ -47,20 +46,12 @@ def provider(tmp_path, **kwargs) -> LocalSandboxProvider:
 
 
 async def wait_for(predicate, timeout: float = 10.0) -> bool:
-    """Poll ``predicate`` until it is true or ``timeout`` elapses.
-
-    Accepts a sync or async callable — the process-state probes read
-    ``/proc`` directly and are not coroutines.
-    """
+    """Poll an async ``predicate`` until true or ``timeout`` elapses."""
     import asyncio
-    import inspect
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        result = predicate()
-        if inspect.isawaitable(result):
-            result = await result
-        if result:
+        if await predicate():
             return True
         await asyncio.sleep(0.05)
     return False
@@ -312,23 +303,42 @@ class TestPauseResume:
         p = provider(tmp_path)
         box = await p.create(SandboxSpec())
         try:
-            marker = f"{box.home}/workspace/tick.txt"
-            pid = await box.start_background(f"sleep 0.6; echo done > {marker}")
+            work = f"{box.home}/workspace"
+            started, release, done = (
+                f"{work}/started.txt",
+                f"{work}/release.txt",
+                f"{work}/done.txt",
+            )
+            # The job announces itself, then spins until `release` shows
+            # up. Handshaking through files rather than asserting on
+            # ``/proc`` scheduler state tests OUR guarantee — a paused box
+            # makes no progress — instead of the kernel's bookkeeping: a
+            # process with a pending SIGSTOP still reports "D" while it
+            # sits in uninterruptible sleep, so the state letter is not a
+            # sound proxy for "stopped". `release` is written only AFTER
+            # pause(), so the job can reach `done` only if the SIGSTOP
+            # never took.
+            await box.start_background(
+                f"echo x > {started}; "
+                f"until [ -f {release} ]; do sleep 0.05; done; "
+                f"echo x > {done}"
+            )
+            assert await wait_for(lambda: _exists(box, started)), "job never started"
+
             await box.pause()
-            # The job is a session leader, so killpg reaches it and
-            # SIGSTOP really stops it. Polled rather than sampled once:
-            # a process sitting in uninterruptible sleep reports "D"
-            # until it leaves that state, and only then shows "T", so
-            # asserting on the instant after pause() is a race.
-            assert await wait_for(
-                lambda: _process_state(int(pid)) == "T", timeout=5.0
-            ), f"job never stopped (state {_process_state(int(pid))!r})"
-            # The behavioural half: a stopped job cannot reach its work.
-            assert not await _exists(box, marker)
+            await box.write_file(release, "go")
+            # A live job picks the release up within one 0.05 s poll of
+            # its own loop; 1.5 s is thirty of them, so a pause that did
+            # not land fails here instead of hiding behind a slow runner.
+            assert not await wait_for(lambda: _exists(box, done), timeout=1.5), (
+                "paused job kept working"
+            )
 
             resumed = await p.connect(box.id)
             assert resumed.home == box.home
-            assert await wait_for(lambda: _exists(box, marker))
+            assert await wait_for(lambda: _exists(box, done)), (
+                "resumed job never finished"
+            )
         finally:
             await box.close()
 
@@ -556,20 +566,5 @@ async def _probe_dead(box: DirectSandbox, pid: str) -> bool:
     return res.exit_code != 0
 
 
-def _process_state(pid: int) -> str:
-    """Single-letter process state from /proc, or "" when gone."""
-    try:
-        stat_line = Path(f"/proc/{pid}/stat").read_text()
-    except OSError:
-        return ""
-    try:
-        return stat_line.rsplit(")", 1)[1].split()[0]
-    except IndexError:  # pragma: no cover
-        return ""
-
-
 def _cleanup(path: Path) -> None:  # pragma: no cover — belt and braces
     shutil.rmtree(path, ignore_errors=True)
-
-
-assert signal.SIGSTOP  # imported for the pause path's documentation value
