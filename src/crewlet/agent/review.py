@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from crewlet._logging import get_logger
 from crewlet.agent.execute import ExecuteResult
+from crewlet.agent.iteration_log import format_tool_calls
 from crewlet.agent.llm_loop import (
     publish_phase_completed,
     publish_phase_started,
@@ -113,42 +114,24 @@ def _format_execute_tool_log(executions: list[dict[str, Any]]) -> str:
     Review sees an explicit "no action taken" signal rather than just
     an absent section.
 
-    ``arguments`` is always a JSON string in production data (see
-    ``llm_loop.run_tool_loop``); we treat it as plain text and never
-    re-parse.
+    Thin wrapper over :func:`~crewlet.agent.iteration_log.format_tool_calls`
+    at its no-truncation defaults, so any other consumer of a tool log
+    renders identically instead of growing a second formatter that
+    drifts from this one.
     """
-    if not executions:
-        return "(none)"
-    lines: list[str] = []
-    for exe in executions:
-        name = exe.get("name", "?")
-        args_str = str(exe.get("arguments", ""))
-        success = exe.get("success")
-        result = str(exe.get("result", ""))
-        # ``success is False`` for explicit failures; the unknown-tool
-        # branch covers entries where the loop returned the
-        # error string but didn't set ``success``.
-        if success is False or result.startswith("Unknown tool:"):
-            outcome = f"error: {result}"
-        else:
-            outcome = "success"
-        lines.append(f"- {name}({args_str}) → {outcome}")
-    return "\n".join(lines)
+    return format_tool_calls(executions)
 
 
 def _format_plan_tool_log(executions: list[dict[str, Any]]) -> str:
     """Plan-phase tool log for Review, with meta-tools filtered out.
 
-    Reuses :func:`_format_execute_tool_log` after dropping the Plan-
-    only meta-tools (see ``PLAN_META_TOOL_NAMES`` in
+    Same renderer as :func:`_format_execute_tool_log` after dropping the
+    Plan-only meta-tools (see ``PLAN_META_TOOL_NAMES`` in
     ``crewlet.agent.plan``).  An all-meta or empty input yields
     ``"(none)"`` so Review sees the explicit signal that Plan did no
     externally visible work during recon.
     """
-    filtered = [
-        exe for exe in executions if exe.get("name", "") not in PLAN_META_TOOL_NAMES
-    ]
-    return _format_execute_tool_log(filtered)
+    return format_tool_calls(executions, skip_names=PLAN_META_TOOL_NAMES)
 
 
 _REVIEW_RESCUE_DIRECTIVE = (
