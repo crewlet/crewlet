@@ -50,31 +50,52 @@ from typing import Any
 # Applied ONLY to the cross-iteration ledger, never to Review's
 # single-iteration evidence log (which stays verbatim by contract).
 #
-# The ledger answers one question -- "did this exact delivery already
-# happen?" -- and identifiers are what answer it: channel names, issue
-# keys, page ids, handles, thread timestamps, URLs.  Those run well
-# under 120 chars.  Message bodies, page HTML, and diffs never
-# discriminate between two calls to the same tool, and the next Execute
-# re-authors the body from the plan anyway, so they are elided.
-LEDGER_VALUE_LIMIT = 120
+# ONE principle decides every number below: **elide payloads, never
+# structure.**  A payload (a message body, page HTML, a diff) is
+# unbounded, is re-authored from the plan next round, and can never
+# answer the ledger's question -- so carrying it only buries the two
+# lines that can.  Structure (the plan's steps, the draft under review,
+# the reviewer's correction) is bounded in practice and is exactly what
+# the next round has to act on, so it is cut only as a guard against
+# pathological output, never as routine trimming.
+#
+# Everything here is a *guard*, not a diet.  Prompt caching keys on the
+# system+tools prefix, which the ledger never touches, so the cost of a
+# larger block is small; the reason to bound it at all is that an
+# unbounded block eats the turn's own token budget (``PhaseBudget``) and
+# buries the signal.
+
+# Argument VALUES.  Identifiers are what say WHICH delivery fired --
+# channel names, issue keys, page ids, handles, thread timestamps, and
+# URLs -- and a long Confluence/GitHub URL with query params runs to
+# ~180 chars, so 200 keeps the whole discriminator while still cutting
+# message bodies and HTML by an order of magnitude.
+LEDGER_VALUE_LIMIT = 200
 # Backstop for a call carrying many arguments: even with every value
-# elided, ~40 keys would still be a wall of text.  400 chars holds the
-# ~8 identifier-shaped arguments a real delivery tool takes.  Enforced
-# by DROPPING WHOLE KEYS, never by cutting the serialised object -- see
-# :func:`_render_arguments`.
-LEDGER_BLOB_LIMIT = 400
-# The planner needs to recognise its previous plan, not re-read it.
-LEDGER_PLAN_SUMMARY_LIMIT = 300
-# Enough of the previous draft to see what was produced without
-# re-sending an entire artifact each iteration.
-LEDGER_ARTIFACT_LIMIT = 400
-# Reviewer-authored prose (``notes`` / ``completed_work``).  Both are
-# asked for as a sentence or two, but they are free-text LLM output and
-# a verbose model can return several KB -- multiplied by
-# ``max_iterations`` and by the three prompts that render the ledger.
-# 600 chars is ~4 sentences: generous for the ask, bounded against the
-# worst case.
-LEDGER_NOTE_LIMIT = 600
+# elided, ~40 keys is still a wall of text.  800 chars holds roughly a
+# dozen identifier-shaped arguments -- more than any real delivery tool
+# takes.  Enforced by DROPPING WHOLE KEYS, never by cutting the
+# serialised object -- see :func:`_fit_arguments`.
+LEDGER_BLOB_LIMIT = 800
+# The previous plan's steps.  A realistic 6-step plan renders ~850
+# chars, so 1200 covers ~8 steps: past anything a planner emits, while
+# still bounding a runaway 20-step plan.  Cutting lower chopped a
+# routine plan mid-step, which reads as a SHORTER plan rather than a
+# truncated one -- worse than omitting it.
+LEDGER_PLAN_SUMMARY_LIMIT = 1200
+# The draft Review judged.  2000 matches ``review.py``'s own
+# ``execute_summary=(execute_result.text or "(empty)")[:2000]`` -- the
+# same content answering the same question.  The next round has to
+# improve that draft, so anything Review had enough of to judge, Plan
+# needs enough of to extend rather than rewrite from scratch.
+LEDGER_ARTIFACT_LIMIT = 2000
+# Reviewer-authored prose (``notes`` / ``completed_work``).  ``notes``
+# is the correction the next round acts on and the ledger is now its
+# only carrier, so trimming it mid-instruction would lose engine-
+# critical content; it gets the same 2000 as the artifact.  This is a
+# pathological-output guard for a verbose model, not a routine trim --
+# the ask is one or two sentences.
+LEDGER_NOTE_LIMIT = 2000
 # Cap on rendered tool-call lines per phase per iteration.  Execute's
 # base round cap is 20 and its extension ceiling 40, so a busy iteration
 # can log dozens of calls.  Only positively-known READS are ever dropped

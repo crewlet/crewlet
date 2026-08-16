@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 
 from crewlet.agent.iteration_log import (
+    LEDGER_ARTIFACT_LIMIT,
     LEDGER_BLOB_LIMIT,
     LEDGER_MAX_READ_CALLS,
     LEDGER_NOTE_LIMIT,
+    LEDGER_PLAN_SUMMARY_LIMIT,
     LEDGER_VALUE_LIMIT,
     IterationRecord,
     format_tool_calls,
@@ -107,7 +109,7 @@ def test_elision_preserves_every_argument_key():
     assert "channel" in log
     assert "#eng-updates" in log
     assert "text" in log
-    assert "y" * 200 not in log
+    assert "y" * 400 not in log
 
 
 def test_elision_keeps_short_values_untouched():
@@ -161,7 +163,7 @@ def test_elision_truncates_long_error_text():
         blob_limit=LEDGER_BLOB_LIMIT,
     )
     assert "→ error:" in log
-    assert len(log) < 400
+    assert len(log) < LEDGER_VALUE_LIMIT + 200
 
 
 # ---------------------------------------------------------------------------
@@ -250,13 +252,14 @@ def test_render_ledger_accumulates_iterations_in_order():
 def test_render_ledger_elides_long_artifacts_and_plan_summaries():
     rec = IterationRecord(
         iteration=1,
-        plan_summary="p" * 3000,
-        execute_text="a" * 3000,
+        plan_summary="p" * 9000,
+        execute_text="a" * 9000,
     )
     out = render_iteration_ledger([rec])
     assert "…" in out
-    # Two elided blocks plus headings stay far below the raw 6000 chars.
-    assert len(out) < 1200
+    # Both blocks are guarded, so a pathological 18k of LLM output still
+    # lands within the two budgets plus headings.
+    assert len(out) < LEDGER_PLAN_SUMMARY_LIMIT + LEDGER_ARTIFACT_LIMIT + 400
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +281,8 @@ def test_blob_backstop_drops_keys_instead_of_cutting_the_object():
             "text": "A" * 400,
             "blocks": "B" * 400,
             "attachments": "C" * 400,
+            "metadata": "D" * 400,
+            "unfurl": "E" * 400,
             "thread_ts": "1712345678.000200",
             "channel": "#eng-updates",
         }
