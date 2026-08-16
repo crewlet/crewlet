@@ -17,9 +17,12 @@ injected; only non-secret OTel values are.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from crewlet._logging import get_logger
 from crewlet.config import (
     LLMProviderConfig,
+    _resolve_env_value,
     env_reference_is_resolvable,
     resolve_env_vars,
 )
@@ -27,9 +30,14 @@ from crewlet.config import (
 logger = get_logger("sandbox.credentials")
 
 # Anthropic-compatible signals that satisfy Claude Code's auth requirement.
+# ``CLAUDE_CODE_OAUTH_TOKEN`` is the SUBSCRIPTION credential (Claude
+# Pro/Max, minted by ``crewlet llm login --capture-token``): it is a
+# first-class headless auth path, not a lesser one, so a role backed by a
+# ``cli-agent`` provider is fully credentialled without any API key.
 _CLAUDE_AUTH_KEYS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
@@ -40,6 +48,72 @@ class SandboxCredentialError(ValueError):
     """The role's config can't satisfy the chosen coding agent's creds."""
 
 
+def _cli_agent_env(llm_config: LLMProviderConfig) -> dict[str, str]:
+    """Credential env for a ``cli-agent`` provider, for the sandbox.
+
+    A subscription backend has no API key — but the vendors that offer a
+    **headless token** (Claude Code's ``CLAUDE_CODE_OAUTH_TOKEN``, minted
+    by ``crewlet llm login --capture-token``) hand out exactly the kind
+    of credential that travels: one variable, scoped, revocable. Exported
+    here, the coding agent inside the sandbox authenticates on the same
+    subscription the role's LLM already uses, with no API key anywhere.
+
+    The credential *files* deliberately do not travel. They carry a
+    refresh token whose rotation is shared fleet state, and pushing that
+    into a remote VM is a materially bigger trust step than a scoped
+    token. A local sandbox (``providers.sandbox.type: local``) runs on
+    the engine host and reads the same credential directory directly, so
+    it needs neither.
+    """
+    cli = llm_config.cli
+    if cli is None:  # pragma: no cover — validation guarantees the block
+        return {}
+    profile = cli.profile()
+    env: dict[str, str] = {}
+    if cli.auth.mode == "api-key":
+        keys = llm_config.resolved_keys()
+        if profile.api_key_env and keys:
+            env[profile.api_key_env] = keys[0]
+        return env
+    if not profile.token_env:
+        return env
+    # Same two sources, same precedence, as the LLM provider itself: the
+    # explicit ${VAR} reference if the operator wrote one, else the
+    # profile's conventional variable from the secret store / environment.
+    token = cli.auth.token or f"${{{profile.token_env}}}"
+    env[profile.token_env] = token
+    return env
+
+
+def cli_credential_files(
+    provider_key: str, llm_config: LLMProviderConfig
+) -> dict[str, str]:
+    """The ``cli-agent`` login's files: box-relative path → host path.
+
+    Handed to the sandbox provider on the :class:`SandboxSpec` so a
+    **local** box runs the coding agent against the very login
+    ``crewlet llm login`` established — the point of "code with the same
+    agent". Returns ``{}`` for any other provider type, and for a CLI
+    whose auth is a token rather than files.
+
+    Deliberately *not* consumed by the E2B provider: see
+    :attr:`crewlet.sandbox.protocol.SandboxSpec.credential_files`.
+    """
+    if llm_config.type != "cli-agent" or llm_config.cli is None:
+        return {}
+    from crewlet.providers.llm.cli_workspace import default_state_dir
+
+    cli = llm_config.cli
+    profile = cli.profile()
+    if not profile.credential_paths:
+        return {}
+    state_dir = str(_resolve_env_value(cli.state_dir)) if cli.state_dir else ""
+    root = (
+        Path(state_dir).expanduser() if state_dir else default_state_dir(provider_key)
+    ) / "credentials"
+    return {relative: str(root / relative) for relative in profile.credential_paths}
+
+
 def _llm_env(coding_agent: str, llm_config: LLMProviderConfig) -> dict[str, str]:
     """Env vars that point the coding agent at the role's LLM provider.
 
@@ -47,6 +121,8 @@ def _llm_env(coding_agent: str, llm_config: LLMProviderConfig) -> dict[str, str]
     yields nothing here -- the caller's validation then requires an explicit
     key in ``role.sandbox.env``. OpenCode is provider-agnostic.
     """
+    if llm_config.type == "cli-agent":
+        return _cli_agent_env(llm_config)
     keys = llm_config.resolved_keys()
     api_key = keys[0] if keys else ""
     env: dict[str, str] = {}
@@ -146,18 +222,30 @@ def build_sandbox_env(
     ):
         extra = ""
         if llm_config.type == "cli-agent":
-            # A cli-agent provider authenticates a CLI *on the engine
-            # host*; the sandbox is a different machine entirely, so
-            # there is no credential to thread and no amount of
-            # role.llm_sandbox tuning fixes it. Say so, rather than
-            # sending the operator to look for a key that was never
-            # meant to exist.
-            extra = (
-                " A 'cli-agent' provider holds a subscription login on the "
-                "ENGINE host, which a remote sandbox cannot reach — give the "
-                "sandbox its own credential in role.sandbox.env, or point "
-                "role.llm_sandbox at an API-key provider."
-            )
+            # The subscription CAN reach a remote sandbox — but only as a
+            # headless TOKEN, and only for a vendor that mints one. Point
+            # at the exact next step instead of the generic API-key advice.
+            profile = llm_config.cli.profile() if llm_config.cli else None
+            token_env = getattr(profile, "token_env", "")
+            if token_env:
+                extra = (
+                    f" This role's LLM is a 'cli-agent' provider whose "
+                    f"{token_env} is not set: a remote sandbox authenticates "
+                    "on your subscription with that headless token, so mint "
+                    "one with `crewlet llm login <key> --capture-token`. "
+                    "(Credential FILES stay on the engine host — use "
+                    "providers.sandbox.type 'local' to run the coding agent "
+                    "there against them directly.)"
+                )
+            else:
+                extra = (
+                    " This role's LLM is a 'cli-agent' provider for a CLI "
+                    "that mints no headless token, so a remote sandbox has "
+                    "no credential to receive. Use providers.sandbox.type "
+                    "'local' to run the coding agent on the engine host "
+                    "against that login, or give the sandbox its own key in "
+                    "role.sandbox.env."
+                )
         raise SandboxCredentialError(
             "coding_agent 'claude-code' needs an Anthropic-compatible "
             f"provider (the resolved sandbox provider is type "
@@ -171,4 +259,5 @@ def build_sandbox_env(
 __all__ = [
     "SandboxCredentialError",
     "build_sandbox_env",
+    "cli_credential_files",
 ]

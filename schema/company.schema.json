@@ -767,6 +767,55 @@
       "title": "LearningConfig",
       "type": "object"
     },
+    "LocalSandboxConfig": {
+      "additionalProperties": false,
+      "description": "The ``local`` sandbox backend (``providers.sandbox.local``).\n\nRuns the coding agent on the **engine host** rather than a remote\nbox, so it can use the subscription login ``crewlet llm login``\nalready established \u2014 no E2B account, no API key. See\n``docs/concepts/code-sandbox.md#local-sandboxes``.",
+      "properties": {
+        "containment": {
+          "default": "direct",
+          "enum": [
+            "direct",
+            "container"
+          ],
+          "title": "Containment",
+          "type": "string"
+        },
+        "image": {
+          "default": "",
+          "title": "Image",
+          "type": "string"
+        },
+        "runtime": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "docker",
+            "podman"
+          ],
+          "title": "Runtime",
+          "type": "string"
+        },
+        "state_dir": {
+          "default": "",
+          "title": "State Dir",
+          "type": "string"
+        },
+        "network": {
+          "default": "",
+          "title": "Network",
+          "type": "string"
+        },
+        "run_args": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Run Args",
+          "type": "array"
+        }
+      },
+      "title": "LocalSandboxConfig",
+      "type": "object"
+    },
     "MCPServerConfig": {
       "additionalProperties": false,
       "description": "Configuration for an MCP server integration.\n\nSupports two transports:\n- ``stdio`` (default): launches a local subprocess\n- ``http``: connects to a remote Streamable HTTP server\n\nWhen ``shared`` is True (default), a single global server instance\nis launched and its tools are available to all agents.  When False,\nthe config is used only as a **template** for per-role instances\n(spawned from ``role.mcp_env`` overrides).  No global instance is\nlaunched.  Use ``shared: false`` for identity-bound servers where\neach agent needs its own credentials.\n\nPer-role instances work for **both** transports.  For each role that\ndeclares ``role.mcp_env[name]``, the engine launches a dedicated\ninstance and applies the role's overrides as **environment\nvariables** (``stdio``) or **HTTP headers** (``http``).  An ``http``\nserver with ``shared: false`` is therefore how an identity-bound\nremote server (e.g. the GitHub Copilot MCP) gets a per-agent token.\n\n**All tool servers are configured here** \u2014 including Jira/Confluence\n(name them ``atlassian``), Slack, and GitHub.  The\n``integrations.jira`` / ``.confluence`` / ``.slack`` / ``.github``\nsections carry only non-tool config (admin credentials, webhook\nsecrets); the engine never derives MCP servers from them.  See\n``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    mcp_servers:\n      # stdio, shared by all agents\n      - name: calculator\n        command: uvx\n        args: [\"mcp-calculator\"]\n      # stdio, per-role (token from role.mcp_env.atlassian)\n      - name: atlassian\n        shared: false\n        command: uvx\n        args: [\"mcp-atlassian\"]\n        env: { JIRA_URL: \"https://co.atlassian.net\" }\n      # http, per-role (Authorization header from role.mcp_env.github)\n      - name: github\n        transport: http\n        shared: false\n        url: \"https://api.githubcopilot.com/mcp/\"",
@@ -1697,11 +1746,23 @@
           "default": "e2b",
           "enum": [
             "e2b",
+            "local",
             "fake",
             "none"
           ],
           "title": "Type",
           "type": "string"
+        },
+        "local": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalSandboxConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "api_key": {
           "default": "",

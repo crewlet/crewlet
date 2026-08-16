@@ -290,7 +290,7 @@ async def test_runner_name_and_detached_collect() -> None:
 
     # detached: start backgrounds an opencode-run script
     await runner.start(sb, brief="implement", env={}, limits=RunLimits())
-    assert any("opencode run implement" in c for c in sb.background)
+    assert any("opencode run " in c and "implement" in c for c in sb.background)
     # The done-marker is written (carries the exit code), not `touch`ed —
     # a zero-byte marker is invisible to the completion poll.
     assert any(f"> {DONE_MARKER}" in c for c in sb.background)

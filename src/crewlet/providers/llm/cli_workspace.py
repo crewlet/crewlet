@@ -76,7 +76,7 @@ logger = get_logger("llm.cli.workspace")
 #: path, locale, TLS trust, and proxy configuration (a corporate proxy
 #: is exactly the deployment where the CLI cannot reach the vendor
 #: without them).
-_BASE_PASSTHROUGH: tuple[str, ...] = (
+BASE_PASSTHROUGH_ENV: tuple[str, ...] = (
     "PATH",
     "LANG",
     "LC_ALL",
@@ -151,8 +151,12 @@ def _remove(path: Path) -> None:
         logger.debug("cli_workspace_remove_failed", path=str(path))
 
 
-def _digest(path: Path) -> str:
-    """Content hash of ``path``, or ``""`` when it does not exist."""
+def file_digest(path: Path) -> str:
+    """Content hash of ``path``, or ``""`` when it does not exist.
+
+    Shared with the local sandbox provider, which uses the same
+    changed-or-not test to decide whether a run refreshed a credential.
+    """
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except (OSError, ValueError):
@@ -176,8 +180,13 @@ def _safe_join(base: Path, relative: str) -> Path | None:
     return candidate
 
 
-def _copy_file(src: Path, dst: Path) -> bool:
-    """Copy ``src`` onto ``dst`` atomically.  Returns whether it ran."""
+def copy_file_atomic(src: Path, dst: Path) -> bool:
+    """Copy ``src`` onto ``dst`` atomically.  Returns whether it ran.
+
+    Public because the local sandbox provider seeds and writes back the
+    same credential files through the same guarantees (0600, temp +
+    rename, never a partial file a concurrent reader could see).
+    """
     if not src.is_file():
         return False
     _mkdir(dst.parent)
@@ -277,7 +286,7 @@ class CLIWorkspaceManager:
         is what makes an unforeseen CLI quirk fixable without a release.
         """
         env: dict[str, str] = {}
-        names = (*_BASE_PASSTHROUGH, *self.profile.passthrough_env)
+        names = (*BASE_PASSTHROUGH_ENV, *self.profile.passthrough_env)
         for name in names:
             value = os.environ.get(name)
             if value is not None:
@@ -326,7 +335,7 @@ class CLIWorkspaceManager:
                 if src is None or dst is None:
                     continue
                 if src.is_file():
-                    _copy_file(src, dst)
+                    copy_file_atomic(src, dst)
                 elif dst.is_file():
                     # The shared store has no copy of this file — a
                     # leftover in the seat home is a stale login from a
@@ -361,9 +370,9 @@ class CLIWorkspaceManager:
                     continue
                 if not dst.is_file():
                     continue
-                if _digest(src) == _digest(dst):
+                if file_digest(src) == file_digest(dst):
                     continue
-                if _copy_file(src, dst):
+                if copy_file_atomic(src, dst):
                     changed = True
                     logger.info(
                         "cli_credential_refreshed",
@@ -449,9 +458,12 @@ class CLIWorkspaceManager:
 
 
 __all__ = [
+    "BASE_PASSTHROUGH_ENV",
     "DEFAULT_STATE_ROOT",
     "STATE_DIR_ENV",
     "CLIWorkspaceManager",
     "SeatWorkspace",
+    "copy_file_atomic",
     "default_state_dir",
+    "file_digest",
 ]

@@ -266,3 +266,96 @@ def test_sandbox_phase_falls_back_to_llm() -> None:
 
 # Code work is the run_sandbox Execute tool now, not an ExecutionPlan
 # backend field — see tests/test_tools/test_run_sandbox_tool.py.
+
+
+class TestLocalSandboxConfig:
+    """``providers.sandbox.type: local`` — the engine-host backend.
+
+    See ``docs/concepts/code-sandbox.md#local-sandboxes``.
+    """
+
+    def test_direct_is_the_default_containment(self) -> None:
+        from crewlet.config import SandboxProviderConfig
+
+        cfg = SandboxProviderConfig(type="local", local={})
+        assert cfg.local is not None
+        assert cfg.local.containment == "direct"
+
+    def test_type_requires_the_block(self) -> None:
+        """'direct' runs the coding agent as the engine user with no host
+        isolation — never assumed from a bare type."""
+        from crewlet.config import SandboxProviderConfig
+
+        with pytest.raises(ValidationError, match="needs a `local:` block"):
+            SandboxProviderConfig(type="local")
+
+    def test_block_on_another_type_is_rejected(self) -> None:
+        from crewlet.config import SandboxProviderConfig
+
+        with pytest.raises(ValidationError, match="only applies to"):
+            SandboxProviderConfig(type="e2b", local={"containment": "direct"})
+
+    def test_container_requires_an_image(self) -> None:
+        from crewlet.config import SandboxProviderConfig
+
+        with pytest.raises(ValidationError, match="requires `image`"):
+            SandboxProviderConfig(type="local", local={"containment": "container"})
+
+    def test_image_on_direct_is_rejected(self) -> None:
+        from crewlet.config import SandboxProviderConfig
+
+        with pytest.raises(ValidationError, match="only applies to containment"):
+            SandboxProviderConfig(
+                type="local", local={"containment": "direct", "image": "acme/x"}
+            )
+
+    def test_container_block_round_trips(self) -> None:
+        from crewlet.config import SandboxProviderConfig
+
+        cfg = SandboxProviderConfig(
+            type="local",
+            local={
+                "containment": "container",
+                "image": "acme/coding:1",
+                "runtime": "podman",
+                "network": "none",
+                "run_args": ["--cpus", "2"],
+            },
+        )
+        assert cfg.local is not None
+        assert cfg.local.runtime == "podman"
+        assert cfg.local.run_args == ["--cpus", "2"]
+
+    def test_extra_keys_rejected(self) -> None:
+        from crewlet.config import SandboxProviderConfig
+
+        with pytest.raises(ValidationError):
+            SandboxProviderConfig(type="local", local={"containmnet": "direct"})
+
+    def test_builder_constructs_the_local_provider(self, tmp_path) -> None:
+        from crewlet.config import CompanyConfig
+        from crewlet.engine_builders import build_sandbox_manager
+        from crewlet.sandbox.local import LocalSandboxProvider
+
+        cfg = CompanyConfig.model_validate(
+            {
+                "name": "A",
+                "providers": {
+                    "sandbox": {
+                        "type": "local",
+                        "local": {
+                            "containment": "direct",
+                            "state_dir": str(tmp_path / "boxes"),
+                        },
+                    }
+                },
+            }
+        )
+        manager = build_sandbox_manager(cfg)
+        assert manager is not None
+        assert isinstance(manager.provider, LocalSandboxProvider)
+        assert manager.provider_kind == "local"
+        # The SAME runners as E2B — the Sandbox protocol is what makes the
+        # backend swap free.
+        assert manager.runner_for("claude-code").name == "claude-code"
+        assert manager.runner_for("opencode").name == "opencode"

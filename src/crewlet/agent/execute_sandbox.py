@@ -43,12 +43,9 @@ from crewlet.config import (
 from crewlet.events.types import SandboxRunStarted
 from crewlet.providers.llm.protocol import LLMProvider, Message
 from crewlet.queue.protocol import EventQueue
-from crewlet.sandbox.coding_agents._detached import FINDINGS_PATH, clear_run_artifacts
-from crewlet.sandbox.coding_agents.ask import (
-    ask_brief_instruction,
-    findings_brief_instruction,
-)
-from crewlet.sandbox.credentials import build_sandbox_env
+from crewlet.sandbox.coding_agents._detached import clear_run_artifacts
+from crewlet.sandbox.coding_agents.ask import ask_brief_instruction
+from crewlet.sandbox.credentials import build_sandbox_env, cli_credential_files
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.mcp_render import resolve_sandbox_mcp
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
@@ -337,14 +334,15 @@ def _prepare_launch(
     # doesn't fail trying to clone, then how to ask a person when it gets
     # blocked — the roster + manager give it real names to target.
     roster, manager_handle = _team_context(turn)
+    # The report-file instruction is NOT appended here: its path depends on
+    # the sandbox the run lands in (``RunPaths.findings``), which does not
+    # exist yet. ``DetachedFileRunner`` appends it at start/run time.
     brief = (
         brief
         + "\n"
         + environment_brief(setup_steps, mcp_servers=list(mcp_servers))
         + "\n"
         + ask_brief_instruction(roster, manager_handle)
-        + "\n"
-        + findings_brief_instruction(FINDINGS_PATH)
     )
 
     # The box's INITIAL TTL is the keepalive window; the waiter refreshes it
@@ -355,6 +353,10 @@ def _prepare_launch(
         timeout_s=box_ttl_s,
         pause_ttl_s=sandbox_cfg.pause_ttl_seconds,
         env=env,
+        # A subscription CLI login, for a backend that can use the files
+        # (local). E2B ignores these and rides the headless token
+        # build_sandbox_env already exported.
+        credential_files=cli_credential_files(provider_key, llm_config),
     )
     return _Launch(
         provider_key=provider_key,

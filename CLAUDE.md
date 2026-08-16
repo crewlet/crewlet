@@ -395,6 +395,20 @@ src/crewlet/          # Main package
                       #   resources come from the TEMPLATE (build-time
                       #   cpu_count/memory_mb) — create takes none, so there
                       #   is no engine-side limits knob),
+                      #   local.py (LocalSandboxProvider — the ENGINE HOST as
+                      #     a backend, so code work can use the subscription
+                      #     CLI login `crewlet llm login` established, with no
+                      #     E2B account or API key. Two containments:
+                      #     DirectSandbox (process tree; per-box HOME/XDG +
+                      #     allowlisted env isolate STATE, not the host —
+                      #     write_file refuses paths outside the box, and the
+                      #     detached job is spawned with start_new_session so
+                      #     one killpg reaches the tree AND asyncio reaps it,
+                      #     since a zombie reads as alive to `kill -0`) and
+                      #     ContainerSandbox (docker/podman, box bind-mounted
+                      #     at /home/user so in-box paths match E2B; --init
+                      #     reaps). SandboxSpec.credential_files carries the
+                      #     CLI login in; a refreshed one is written back),
                       #   coding_agents/ (_detached.py DetachedFileRunner
                       #   base — start() runs the agent UNCAPPED (no timeout
                       #   kill) + closes stdin; poll() = done-marker OR
@@ -687,7 +701,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 10. **Database** — PostgreSQL (token_usage, agent_diary + episodes via pgvector)
 11. **Tool Registry** — builtins + MCP tools + A2A tools
 12. **Tool Skills** — knowledge-base-sourced prompt fragments injected per-phase based on the active tool / MCP surface (`agent.skills`; see `docs/concepts/tool-skills.md`)
-13. **Code Sandbox** — per-role sandboxed coding-agent Execute backend (`crewlet.sandbox`; see `docs/concepts/code-sandbox.md`)
+13. **Code Sandbox** — per-role sandboxed coding-agent Execute backend (`crewlet.sandbox`; E2B, or the engine host via `type: local` — `direct`/`container`; see `docs/concepts/code-sandbox.md`). Artefact paths are per-sandbox (`Sandbox.home` → `RunPaths`), never module constants — many local boxes share one filesystem
 14. **API** — standalone Starlette process (EventQueue)
 15. **Extension System** — hooks and middleware
 16. **Scheduler** — role/unit-scoped cron-style recurring work; fires `TaskAssigned` on a schedule with at-most-once delivery (`scheduled_runs`), missed-tick catchup, and a per-task wall-clock cap (`crewlet.schedule`; see `docs/concepts/scheduling.md`)

@@ -102,15 +102,83 @@ roles:
 
 ## Sandbox backends
 
-The provider layer is pluggable behind the `SandboxProvider` protocol (`sandbox/protocol.py`). Three backends ship:
+The provider layer is pluggable behind the `SandboxProvider` protocol (`sandbox/protocol.py`). Four backends ship:
 
 - **E2B cloud** (`type: e2b`, no `domain`). Sign up at [e2b.dev](https://e2b.dev), export `E2B_API_KEY` from the dashboard. The engine uses the open-source [`e2b`](https://pypi.org/project/e2b/) async SDK and E2B's prebuilt [`claude`](https://e2b.dev/docs/agents/claude-code) / [`opencode`](https://e2b.dev/docs/agents/opencode) templates (the coding-agent CLI preinstalled), picked automatically per coding agent when `template` is empty.
 - **Self-hosted / local E2B** (`type: e2b` + `domain`). E2B's infrastructure is open source ([e2b-dev/infra](https://github.com/e2b-dev/infra)); set `domain` to your cluster's domain and the **same class and code path** talks to it — one field is the whole cloud↔self-hosted switch. The cluster still issues its own `E2B_API_KEY` (the SDK always authenticates; `domain` only changes *which* API it talks to). If your self-hosted keys aren't in the SDK's `e2b_<hex>` format, set `E2B_VALIDATE_API_KEY=false` — see [Environment Variables](../reference/environment-variables.md#code-runtime-sandbox-optional).
+- **[Local](#local-sandboxes)** (`type: local`). The engine host itself — `direct` (a process tree) or `container` (Docker/Podman). No E2B account, and the coding agent can use the **subscription login** `crewlet llm login` already established. See below.
 - **`fake`** — deterministic in-process stubs (`sandbox/fake.py`): an in-memory filesystem, scripted coding-agent results, no network. The unit-test substrate; it does **not** run real code.
 
 > **Watch for a leftover `E2B_DOMAIN`.** The E2B SDK reads `E2B_DOMAIN` from the environment directly. With no `domain` in config you are targeting e2b.dev cloud — make sure a stale `E2B_DOMAIN` export from an earlier self-hosted experiment isn't silently routing the SDK to a dead cluster.
 
 The `e2b` SDK is an optional dependency: `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout). It is imported lazily, so an engine without the extra runs fine until an E2B sandbox is actually provisioned.
+
+### Local sandboxes
+
+`type: local` runs the coding agent on the machine running `crewlet run`. It exists for the case the [subscription LLM backends](subscription-llm-backends.md) create: you already logged a coding CLI in on that host, and you want code work to use that same login — no E2B account, no API key, no token to mint.
+
+```yaml
+providers:
+  sandbox:
+    type: local
+    default_coding_agent: claude-code
+    local:
+      containment: direct         # direct | container
+      state_dir: ""               # empty → $CREWLET_SANDBOX_LOCAL_HOME,
+                                  #   else ~/.crewlet/sandboxes
+```
+
+The `local:` block is **required** and has no implied default, because choosing `direct` is choosing to run an autonomous coding agent as the engine user.
+
+| | `direct` | `container` |
+|---|---|---|
+| Runs as | the engine user, on the host | PID inside a Docker/Podman container |
+| Isolates state (per box) | yes | yes |
+| Isolates the **host** | **no** | yes |
+| Needs an image | no | yes (`image:`, no default) |
+| System paths in setup steps | refused | work, as on E2B |
+| Sizing | the host | `run_args: ["--cpus", "2", "--memory", "4g"]` |
+
+**Both modes isolate state.** Each box gets its own directory with `HOME`, the XDG variables and `TMPDIR` pointed inside it, an **allowlisted** environment (PATH, locale, TLS trust, proxy — never the engine's own `SLACK_BOT_TOKEN` or database DSN), and an empty per-box workspace as the working directory. Boxes are removed at teardown; ones an engine crash left behind are reaped on the next create.
+
+**Only `container` isolates the host.** In `direct` mode the coding agent runs with its own tools enabled as the engine user, so it can read what that user can read and reach what its credentials reach. That is the normal bargain of a local mode, and it is the right one on a workstation or a dedicated VM — but it is not a security boundary, and Crewlet will not pretend otherwise. On a shared host, or anywhere the work is untrusted, use `container`:
+
+```yaml
+providers:
+  sandbox:
+    type: local
+    local:
+      containment: container
+      image: ghcr.io/acme/crewlet-coding:1   # must have the coding CLI installed
+      runtime: auto                          # auto | docker | podman
+      network: ""                            # "none" cuts the box off entirely —
+                                             #   including from its own LLM
+      run_args: ["--cpus", "2", "--memory", "4g"]
+```
+
+The box directory is bind-mounted at `/home/user` — the same home E2B uses — so in-box paths, setup steps and briefs are identical across the two backends. The container is started with `--init` so a finished detached job is reaped rather than left as a zombie (which the completion probe would read as *still running*).
+
+**Setup steps and containment.** `direct` mode has no filesystem virtualisation, so a setup step that writes a *system* path is refused with an error naming the mode — it would otherwise write to the engine host's real `/usr/local/bin`. The shipped [git-auth recipe](#the-git-auth-recipe) is one of these; under `direct`, root it in the box's home instead:
+
+```yaml
+setup:
+  - name: git-auth-local
+    files:
+      "/home/../.local/bin/git-credential-crewlet": |   # any path under $HOME
+        #!/bin/sh
+        ...
+    commands:
+      - chmod +x "$HOME/.local/bin/git-credential-crewlet"
+      - 'git config --global credential."https://gitlab.com".helper "$HOME/.local/bin/git-credential-crewlet"'
+```
+
+`container` mode needs no such change.
+
+**Credentials.** When the role's resolved sandbox LLM provider is a [`cli-agent`](subscription-llm-backends.md) entry, the local backend seeds that provider's credential files into the box before the run and writes a **refreshed** one back afterwards — OAuth access tokens expire in hours and most vendors rotate the refresh token with them, so discarding the rewritten file would log the fleet out at the next expiry. A credential the operator has since removed with `crewlet llm logout` is never re-created from a box.
+
+**Pause / resume works.** A run blocked on a human answer is genuinely suspended: `direct` SIGSTOPs the job's process group, `container` issues `docker pause`. Both hold memory, which is exactly why the same `default_pause_ttl_seconds` reaper bounds them as it bounds a billed E2B snapshot.
+
+**What local mode does not give you:** template-based sizing (use `run_args`, or the host), provider-enforced network egress policy (use `network:` plus your own firewall), and a fresh machine per run — a `direct` box shares the host's installed toolchain, which is usually the point.
 
 ---
 
@@ -123,6 +191,8 @@ Two runners ship behind the `CodingAgentRunner` protocol, selected by `role.sand
 Runs headless — `claude -p "<brief>" --output-format json --permission-mode bypassPermissions` — and its JSON output maps directly onto the result (final text, session id, token usage, cost).
 
 Claude Code **speaks the Anthropic API only**, so it needs an Anthropic-compatible credential. The sandbox's LLM derives from the role's provider chain: `role.llm_sandbox` → `llm_execute` → `llm` → `default`. Point `role.llm_sandbox` at an `anthropic` `providers.llm` entry (a custom `base_url` on that entry becomes `ANTHROPIC_BASE_URL` — an Anthropic-API gateway works). A role whose resolved provider is *not* Anthropic-compatible cannot launch Claude Code — the launch fails with `SandboxCredentialError` (see [Failure modes](#failure-modes)) unless `ANTHROPIC_API_KEY` (or a Bedrock/Vertex/Foundry toggle) is supplied in `role.sandbox.env`.
+
+**A subscription counts.** When the resolved provider is a [`cli-agent`](subscription-llm-backends.md) entry, the headless subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, minted by `crewlet llm login <key> --capture-token`) is exported into the box and Claude Code there bills your Pro/Max plan — no API key anywhere. This works on **every** backend including remote E2B, because a token is one scoped, revocable variable. The credential *files* deliberately never leave the engine host: they carry a refresh token whose rotation is shared fleet state. A CLI that mints no headless token (Codex, Gemini CLI) therefore needs [`type: local`](#local-sandboxes), where the coding agent reads the login directly.
 
 ### OpenCode
 
@@ -201,6 +271,7 @@ The GitLab form of this recipe — same shape, `gitlab.com` scoping, `oauth2` us
 
 - **LLM credentials**, derived from the role's resolved `providers.llm` entry (the chain above): `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` for an Anthropic provider, `OPENAI_API_KEY` / `OPENAI_BASE_URL` otherwise (for OpenCode the real endpoint redirect is the custom provider written into `opencode.json`; the env forms are kept for parity).
 - **Agent identity** — `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL`, the per-launch facts static config cannot know, which setup recipes map into tool shape (git commit identity above).
+- **A subscription token**, when the resolved provider is a `cli-agent` entry: the profile's own variable (`CLAUDE_CODE_OAUTH_TOKEN`) rather than an API key. Its credential *files* travel only to a [local](#local-sandboxes) box, never to a remote one.
 
 Everything tool-specific comes from config: external-service tokens (`GITHUB_TOKEN`, `GITLAB_TOKEN`, registry tokens, a test `DATABASE_URL`, …) are declared in `role.sandbox.env` or a setup step's `env` and merely `${VAR}`-resolved — the engine never extracts, names, or special-cases them. Precedence, later wins: derived LLM creds → agent identity → setup-step env → `role.sandbox.env` → non-secret OTel values.
 
@@ -276,6 +347,7 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 ## Security model
 
 - **The sandbox is the isolation boundary.** Arbitrary, autonomously generated code runs *there*, never on the engine host. That is the whole reason running the coding agent with permissions bypassed is acceptable: the blast radius is one ephemeral, provider-isolated VM that is torn down at phase end. Human gating, where wanted, happens at the merge request — not mid-run.
+- **`local` + `containment: direct` moves that boundary, deliberately.** There the coding agent runs as the engine user: per-box state isolation and an allowlisted environment still hold, but the host does not. Pick it for a workstation or a dedicated VM you are willing to hand to an autonomous agent; pick `containment: container` (or E2B) anywhere else. This is the one configuration in Crewlet where the sandbox is not a security boundary, and it is opt-in twice over — `type: local` plus an explicit `containment`.
 - **Only the seat's own identity enters the box.** The injected env carries credentials the agent legitimately acts *as* — its LLM key and the external-service tokens its config declares (`role.sandbox.env`). Leaking those from inside the box exposes only what the agent already is. Because the code-host token is the seat's **own** PAT, an MR/PR the coding agent opens is attributed to the agent, not to a shared bot identity.
 - **Shared infrastructure secrets never enter the box.** The OTLP backend's ingest token is the canonical example: the sandbox sees only an engine-fronted, path-token-scoped OTLP endpoint (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`); the engine attaches the real backend credential upstream. Apply the same rule to any credential you add — if the agent doesn't act *as* it, don't inject it.
 - **Injected values are ephemeral.** `${VAR}` references are resolved at acquire time into that sandbox's process env only; the database stores references, never values, and the values die with the box.
@@ -290,7 +362,9 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 What an operator should recognize:
 
 - **`SandboxCredentialError` at launch** — the role chose `claude-code` but its resolved LLM provider isn't Anthropic-compatible. The run never starts; the error says exactly what to do: point `role.llm_sandbox` at an `anthropic` `providers.llm` entry, put `ANTHROPIC_API_KEY` in `role.sandbox.env`, or switch the role (or the provider default) to `opencode`.
-  A [`cli-agent` provider](subscription-llm-backends.md) is a special case of this and the error calls it out: that backend's subscription login lives on the **engine host**, which a remote sandbox cannot reach. Give the sandbox its own credential in `role.sandbox.env`, or point `role.llm_sandbox` at an API-key provider.
+  For a [`cli-agent` provider](subscription-llm-backends.md) the error is specific to the two cases: a CLI that mints a headless token says "run `crewlet llm login <key> --capture-token`", and one that does not says to use `providers.sandbox.type: local` instead.
+- **`LocalSandboxError: refuses to touch …`** — a setup step tried to write a system path under `containment: direct`, which has no filesystem virtualisation. Root the file under the box's `$HOME`, or switch to `containment: container`.
+- **`LocalSandboxError: neither docker nor podman`** — `containment: container` with no container runtime on the engine host's PATH. Install one, name it in `runtime:`, or use `direct`.
 - **`sandbox_env_unresolved` warnings** — a declared `${VAR}` resolved empty; the run proceeds but the coding agent will hit auth failures (a clone dying anonymously, a 401 from a registry). Export the variable the config references.
 - **Setup-step failure** (`sandbox_setup_failed`) — a provisioning command exited non-zero; the box is torn down before any brief runs. This is an operator config problem (a broken recipe), logged distinctly from a coding-agent install failure.
 - **Sandbox lost mid-run** — the waiter's gone-detection above. The run is marked failed and the executor reports what happened; look for `sandbox_connect_failed` streaks preceding it. If the engine was down longer than `default_timeout_seconds`, E2B reaped the box as an orphan — that TTL is the knob to raise for deployments with long maintenance windows.

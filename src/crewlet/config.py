@@ -372,6 +372,76 @@ class EmbeddingProviderConfig(BaseModel):
     """Embedding vector dimensions. Must match the model's output size."""
 
 
+class LocalSandboxConfig(BaseModel):
+    """The ``local`` sandbox backend (``providers.sandbox.local``).
+
+    Runs the coding agent on the **engine host** rather than a remote
+    box, so it can use the subscription login ``crewlet llm login``
+    already established — no E2B account, no API key. See
+    ``docs/concepts/code-sandbox.md#local-sandboxes``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    containment: Literal["direct", "container"] = "direct"
+    """How far the box is separated from the engine host.
+
+    ``direct`` runs a process tree in a per-box directory with ``HOME``
+    and the XDG variables pointed at it and an allowlisted environment.
+    That isolates **state** — no box sees another's checkout, memory or
+    credentials — but **not the host**: the coding agent runs as the
+    engine user, so it can read what that user can read and reach what
+    its credentials reach. Right for a workstation or a dedicated VM;
+    wrong for a shared host.
+
+    ``container`` runs each box in its own Docker/Podman container with
+    the box directory bind-mounted at ``/home/user``, giving real host
+    isolation and the same in-box paths E2B uses. It needs an
+    :attr:`image` that has the coding-agent CLI installed."""
+
+    image: str = ""
+    """Container image for ``containment: container``. Required there —
+    there is deliberately no default, because a box whose image lacks the
+    coding-agent CLI fails only once an agent tries to use it."""
+
+    runtime: Literal["auto", "docker", "podman"] = "auto"
+    """Container CLI to drive. ``auto`` prefers ``docker`` and falls back
+    to ``podman`` (the rootless default on Fedora/RHEL, same
+    subcommands)."""
+
+    state_dir: str = ""
+    """Parent directory for box directories. Empty uses
+    ``$CREWLET_SANDBOX_LOCAL_HOME``, falling back to
+    ``~/.crewlet/sandboxes``. Boxes are removed at teardown, and orphans
+    from a crashed engine are reaped on the next create."""
+
+    network: str = ""
+    """``--network`` for ``containment: container``. Empty uses the
+    runtime's default. Set ``none`` to cut the box off from the network
+    entirely — which also cuts off the coding agent's LLM, so only do it
+    for a box whose work is purely local."""
+
+    run_args: list[str] = Field(default_factory=list)
+    """Extra arguments spliced into the container ``run`` command (
+    ``--cpus``, ``--memory``, extra ``-v`` mounts, ``--user``). This is
+    where a container box is *sized*, mirroring how an E2B box is sized
+    by its template."""
+
+    @model_validator(mode="after")
+    def _validate(self) -> LocalSandboxConfig:
+        if self.containment == "container" and not self.image:
+            raise ValueError(
+                "providers.sandbox.local.containment 'container' requires "
+                "`image` — an image with the coding-agent CLI installed."
+            )
+        if self.containment == "direct" and self.image:
+            raise ValueError(
+                "providers.sandbox.local.image only applies to containment "
+                "'container'. Remove it, or switch containment."
+            )
+        return self
+
+
 class SandboxProviderConfig(BaseModel):
     """Engine-level sandbox provider config (``providers.sandbox``).
 
@@ -385,9 +455,15 @@ class SandboxProviderConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["e2b", "fake", "none"] = "e2b"
+    type: Literal["e2b", "local", "fake", "none"] = "e2b"
     """Provider backend. ``e2b`` (cloud, or self-hosted via ``domain``),
-    ``fake`` (in-process tests), or ``none`` (disabled)."""
+    ``local`` (the engine host — directly or in a container, see
+    :class:`LocalSandboxConfig`; the way to run code work on a
+    subscription CLI login with no E2B account), ``fake`` (in-process
+    tests), or ``none`` (disabled)."""
+    local: LocalSandboxConfig | None = None
+    """The ``local`` backend's block. Required when ``type`` is ``local``
+    and rejected otherwise."""
     api_key: str = ""
     """E2B API key (``${ENV}`` interpolated). Empty falls back to the
     ``E2B_API_KEY`` env var at construction time."""
@@ -441,7 +517,41 @@ class SandboxProviderConfig(BaseModel):
     documented ``git-auth`` recipe here (see ``docs/concepts/code-sandbox.md``
     and ``examples/nimbus.company.yaml``) so headless clones authenticate with
     the injected ``$GITHUB_TOKEN`` and the coding agent's brief tells it
-    so."""
+    so.
+
+    **Containment matters here.** Steps that provision *system* paths —
+    the shipped git-auth recipe writes ``/usr/local/bin/…`` — work on
+    E2B and in a ``local`` **container** box, but are refused by
+    ``local`` **direct** mode, which has no filesystem virtualisation and
+    would otherwise write to the engine host itself. Direct mode wants
+    the same recipe rooted under ``$HOME`` (see
+    ``docs/concepts/code-sandbox.md#local-sandboxes``)."""
+
+    @model_validator(mode="after")
+    def _validate_local_block(self) -> SandboxProviderConfig:
+        """Keep ``type`` and the ``local`` block in agreement.
+
+        Both directions matter: ``type: local`` without the block would
+        silently take the ``direct`` default (running the coding agent on
+        the host, which must be a deliberate choice), and a ``local``
+        block on an E2B provider would be read by nobody.
+        """
+        if self.type == "local":
+            if self.local is None:
+                raise ValueError(
+                    "providers.sandbox.type 'local' needs a `local:` block "
+                    "choosing a containment mode, e.g. "
+                    "`local: {containment: direct}`. 'direct' runs the coding "
+                    "agent as the engine user with no host isolation, so it "
+                    "is never assumed."
+                )
+        elif self.local is not None:
+            raise ValueError(
+                f"`local:` only applies to providers.sandbox.type 'local' "
+                f"(this is type {self.type!r}). Remove the block, or change "
+                "the type."
+            )
+        return self
 
 
 class QueueConfig(BaseModel):

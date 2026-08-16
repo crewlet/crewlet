@@ -434,12 +434,15 @@ See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
 - **The CLI runs on the engine host.** It must be installed there, and
   the engine process must be able to execute it. This is not a remote
   service.
-- **Not available to the [code sandbox](code-sandbox.md).** A
-  `cli-agent` provider holds a login on the engine host; a remote E2B
-  sandbox cannot reach it. Give the sandbox its own credential in
-  `role.sandbox.env`, or point `role.llm_sandbox` at an API-key
-  provider. Selecting a `cli-agent` provider for `llm_sandbox` fails at
-  launch with that explanation.
+- **Code work needs one more decision.** A subscription *can* back the
+  [code sandbox](code-sandbox.md), two ways. On any backend including
+  remote E2B, the headless token travels: `crewlet llm login <key>
+  --capture-token` and Claude Code in the box bills your plan. For a CLI
+  that mints no such token (Codex, Gemini CLI), use
+  [`providers.sandbox.type: local`](code-sandbox.md#local-sandboxes),
+  where the coding agent runs on the engine host and reads the login
+  directly. The credential *files* never travel to a remote box: they
+  carry a refresh token whose rotation is shared fleet state.
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every
   summarisation.

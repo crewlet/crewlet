@@ -106,6 +106,7 @@ class SandboxManager:
         timeout_s: float = 0.0,
         pause_ttl_s: float = -1.0,
         env: dict[str, str] | None = None,
+        credential_files: dict[str, str] | None = None,
     ) -> SandboxSpec:
         """Overlay per-role inputs onto the provider defaults.
 
@@ -123,6 +124,7 @@ class SandboxManager:
             timeout_s=timeout_s or self._default_timeout_s,
             pause_ttl_s=(self._default_pause_ttl_s if pause_ttl_s < 0 else pause_ttl_s),
             env=dict(env or {}),
+            credential_files=dict(credential_files or {}),
         )
 
     async def acquire(

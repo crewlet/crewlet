@@ -18,7 +18,12 @@ from __future__ import annotations
 from typing import Any
 
 from crewlet._logging import get_logger
-from crewlet.sandbox.protocol import ExecResult, Sandbox, SandboxSpec
+from crewlet.sandbox.protocol import (
+    DEFAULT_SANDBOX_HOME,
+    ExecResult,
+    Sandbox,
+    SandboxSpec,
+)
 
 logger = get_logger("sandbox.e2b")
 
@@ -49,6 +54,11 @@ class E2BSandbox:
     @property
     def id(self) -> str:
         return self._sbx.sandbox_id
+
+    @property
+    def home(self) -> str:
+        # Every E2B template runs as the `user` account; one box, one home.
+        return DEFAULT_SANDBOX_HOME
 
     async def exec(
         self,
