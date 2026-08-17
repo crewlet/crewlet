@@ -11,7 +11,6 @@ from crewlet.notifications.sources import (
     WebhookSource,
     parse_github_webhook,
     parse_jira_webhook,
-    parse_slack_webhook,
 )  # noqa: I001
 
 # --- WebhookSource tests ---
@@ -680,121 +679,6 @@ class TestGitHubParser:
 
 
 # --- Slack parser tests ---
-
-
-class TestSlackParser:
-    @pytest.mark.asyncio
-    async def test_parse_message(self):
-        body = {
-            "team_id": "T123",
-            "event": {
-                "type": "message",
-                "user": "U456",
-                "user_email": "alice@test.com",
-                "text": "Hey, check this out",
-                "channel": "C789",
-                "ts": "1234567890.123456",
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is not None
-        assert result.recipient_email == "alice@test.com"
-        assert result.body == "Hey, check this out"
-        assert result.metadata["channel"] == "C789"
-
-    @pytest.mark.asyncio
-    async def test_parse_non_message_returns_none(self):
-        body = {
-            "event": {
-                "type": "reaction_added",
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_parse_message_changed_returns_none(self):
-        """Edit bookkeeping has no top-level user/text — never a
-        notification (same rule as SlackTransport.handle_event)."""
-        body = {
-            "event": {
-                "type": "message",
-                "subtype": "message_changed",
-                "hidden": True,
-                "channel": "C789",
-                "ts": "9999.0001",
-                "message": {"type": "message", "user": "U456", "text": "edited"},
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_parse_hidden_event_without_subtype_returns_none(self):
-        """``message_replied`` arrives without its subtype (Slack bug);
-        the ``hidden`` flag alone must catch it."""
-        body = {
-            "event": {
-                "type": "message",
-                "hidden": True,
-                "channel": "C789",
-                "ts": "9999.0002",
-                "message": {"type": "message", "user": "U456", "text": "parent"},
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_parse_channel_join_returns_none(self):
-        body = {
-            "event": {
-                "type": "message",
-                "subtype": "channel_join",
-                "user": "U456",
-                "text": "<@U456> has joined the channel",
-                "channel": "C789",
-                "ts": "9999.0003",
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_parse_bot_message_sender_fallback(self):
-        body = {
-            "event": {
-                "type": "message",
-                "subtype": "bot_message",
-                "username": "CI Bot",
-                "bot_id": "B999",
-                "text": "build failed",
-                "channel": "C789",
-                "ts": "9999.0004",
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is not None
-        assert result.sender == "CI Bot"
-        assert result.body == "build failed"
-        assert result.metadata["user"] == ""
-
-    @pytest.mark.asyncio
-    async def test_parse_file_share_without_comment_renders_files(self):
-        body = {
-            "event": {
-                "type": "message",
-                "subtype": "file_share",
-                "user": "U456",
-                "text": "",
-                "files": [{"name": "report.pdf"}],
-                "channel": "C789",
-                "ts": "9999.0005",
-            },
-        }
-        result = await parse_slack_webhook("slack", body, {})
-        assert result is not None
-        assert result.body == "(shared file: report.pdf)"
 
 
 # --- PollingSource tests ---

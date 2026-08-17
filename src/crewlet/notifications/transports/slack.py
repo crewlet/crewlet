@@ -84,10 +84,15 @@ def slack_message_skip_reason(event: dict[str, Any]) -> str:
       lines (``channel_join``, ``channel_topic``, …) that do carry
       text but are *about* the channel, not addressed to anyone.
 
-    ``app_mention`` events carry neither field and always pass.  Both
-    Slack webhook parsers (:meth:`SlackTransport.handle_event` and
-    ``crewlet.notifications.sources.parse_slack_webhook``) resolve
-    through here so the delivery decision can never diverge.
+    ``app_mention`` events carry neither field and always pass.
+
+    A module-level function rather than a method so the delivery
+    decision has exactly one definition: a second parser for this source
+    once existed in ``crewlet.notifications.sources`` and, being
+    unreachable from the service, quietly drifted out of sync (it never
+    set ``recipient_handle`` or the ``transport`` metadata key, so
+    anything routed through it would have missed its agent and never
+    raised a working indicator).  It was deleted rather than repaired.
     """
     if event.get("hidden"):
         return f"hidden bookkeeping event (subtype: {event.get('subtype') or 'none'})"

@@ -159,11 +159,14 @@ A human seat is the natural **terminus** of an escalation chain, and an
 agent reaches one exactly as it reaches any colleague — with its **own
 colleague-surface tools** during Execute, never via the engine:
 
-- **Slack** — the agent DMs the human's member ID with its own
-  `slack_conversations_postMessage` tool, `<@…>`-mention prefixed. The
-  human's reply lands on the agent's Slack app and re-enters through the
-  normal webhook → inbox pipeline, so the answer goes back to the agent
-  that asked.
+- **Chat (Slack / Mattermost)** — the agent DMs the human's member ID
+  (or username) with its own chat tool, mention-prefixed. The engine
+  never names that tool: the deployed MCP server's names are not
+  knowable here, so the prompts describe the *capability* and the LLM
+  picks the match from its catalogue (see
+  [Tool Capabilities](tool-capabilities.md)). The human's reply lands on
+  the agent's own bot identity and re-enters through the normal inbound
+  pipeline, so the answer goes back to the agent that asked.
 - **Jira / Confluence / GitHub** — the agent comments / requests review
   with its own tools and the mention markup; the target is the artifact
   (issue / page / PR), the human is mentioned in the body.

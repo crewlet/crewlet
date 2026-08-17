@@ -749,58 +749,6 @@ async def parse_gitlab_webhook(
     return notifications
 
 
-async def parse_slack_webhook(
-    source_name: str,
-    body: dict[str, Any],
-    headers: dict[str, str],
-) -> InboundNotification | None:
-    """Parse a Slack Events API payload into a notification.
-
-    Handles: message events (DMs, mentions).
-    """
-    from crewlet.notifications.transports.slack import (
-        slack_message_sender,
-        slack_message_skip_reason,
-        slack_message_text,
-    )
-
-    event = body.get("event", {})
-    event_type = event.get("type", "")
-
-    if event_type != "message":
-        return None
-
-    # Same delivery decision as ``SlackTransport.handle_event``:
-    # bookkeeping ``message`` events (edits, deletions, thread-reply
-    # counters, channel system lines) carry no top-level
-    # ``user``/``text`` and must not become empty notifications.
-    if slack_message_skip_reason(event):
-        return None
-
-    return InboundNotification(
-        source="slack",
-        source_event_type=event_type,
-        recipient_email=event.get("user_email", ""),
-        sender=slack_message_sender(event),
-        subject="Slack message",
-        body=slack_message_text(event),
-        metadata={
-            "channel": event.get("channel", ""),
-            "ts": event.get("ts", ""),
-            # Same conversation-identity contract as the SlackTransport
-            # producer: ``thread_ts`` anchors thread-grained coalescing
-            # keys, ``channel_type`` flags DM/group-DM channels so a
-            # top-level DM burst coalesces at channel granularity (and
-            # the learning subsystem derives channel kind).
-            "thread_ts": event.get("thread_ts", ""),
-            "channel_type": event.get("channel_type", "")
-            or ("im" if event.get("channel", "").startswith("D") else ""),
-            "user": event.get("user", ""),
-            "team": body.get("team_id", ""),
-        },
-    )
-
-
 class PollingSource:
     """Notification source that polls for new notifications.
 
