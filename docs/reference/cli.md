@@ -39,6 +39,7 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs (minted from the config's `${VAR}` references), and project webhooks — idempotent, with rotation and decommission paths |
 | `crewlet slack provision <company.yaml> --base-url URL` | Create/update one Slack app per Slack-enabled agent via Slack's App Manifest APIs, run the OAuth installs, write tokens into `.env` or the [secret store](../concepts/secret-store.md) |
+| `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into `.env` or the [secret store](../concepts/secret-store.md) |
 | `crewlet --version` | Show the installed version |
 
 ---
@@ -451,6 +452,36 @@ Requires an app **configuration token** (`SLACK_CONFIG_REFRESH_TOKEN`, generated
 | `--reinstall` | Redo the OAuth install even for agents whose bot-token env var is already set (mints a fresh `xoxb-` token, e.g. after a revoke or scope change). |
 
 Re-runs are idempotent (ledger-keyed; byte-identical manifests are skipped as `unchanged`) and resumable — state and secrets are persisted after every step, so an interrupted run continues where it stopped. One agent's failure is reported as `FAILED`, the remaining agents still run, and the exit code is non-zero.
+
+---
+
+## `crewlet mattermost provision`
+
+```
+crewlet mattermost provision my_company.yaml [--admin-token TOKEN]
+                                             [--secret-store] [--env-file PATH]
+                                             [--bootstrap PATH] [--dsn DSN]
+                                             [--handles a,b] [--dry-run]
+                                             [--decommission a,b]
+```
+
+Creates (or updates) **one Mattermost bot account per Mattermost-enabled agent seat** — a role whose `integrations.mattermost.bot_token` is a whole-value `${VAR}` placeholder — adds it to the configured team and channels, and mints its personal access token into the exact `${VAR}` the YAML references: into `.env` by default, or the encrypted [secret store](../concepts/secret-store.md) with `--secret-store`.
+
+Unlike the Slack provisioner there is **no app manifest, no local ledger and no OAuth click**: Mattermost is its own directory, so a seat is found by looking up a deterministic username and the reconcile is stateless. The one manual prerequisite is a **system-admin personal access token** (`--admin-token`, or `$MATTERMOST_ADMIN_TOKEN`) — creating bot accounts and minting their tokens both require system-admin rights, and an admin must first enable personal access tokens in System Console → Integrations.
+
+A preflight aborts before touching anything if the credential is not a system admin or the team does not exist — a half-provisioned fleet is worse than a refusal. It also reports the server's active-**human**-user headroom; bot accounts are excluded from that cap, so agent seats do not consume it.
+
+| Flag | Description |
+|------|-------------|
+| `--admin-token TOKEN` | System-admin personal access token (default: `$MATTERMOST_ADMIN_TOKEN`). |
+| `--handles a,b` | Comma-separated agent handles to provision (default: all Mattermost-enabled seats). |
+| `--decommission a,b` | Disable these handles' bot accounts and revoke their tokens instead of provisioning. Accounts keep their history and can be re-enabled by a later run — but the revoked token is gone, so a restored seat is minted a fresh one. |
+| `--dry-run` | Print the plan (which seats would mint which vars); create and modify nothing. |
+| `--secret-store` | Write minted tokens into the encrypted [`secret_values`](../concepts/secret-store.md) table instead of an env file. Needs a Tier A keyring + DSN (`--bootstrap` / `--dsn`). |
+| `--env-file PATH` | The env file minted tokens are written to (default `.env`). Ignored with `--secret-store`. |
+| `--bootstrap PATH` / `--dsn DSN` | Tier A bootstrap YAML (default `./config.yaml`) supplying the DB DSN + keyring for `--secret-store`, or an explicit DSN override. |
+
+Re-runs are idempotent and resumable: every step is find-or-create, a seat whose token var already carries a value is never re-minted (Mattermost returns a token's value exactly once), and one seat's failure is reported as `FAILED` while the rest still provision — the exit code is then non-zero. See [Mattermost integration](../integrations/mattermost.md#automated-setup-crewlet-mattermost-provision).
 
 ---
 

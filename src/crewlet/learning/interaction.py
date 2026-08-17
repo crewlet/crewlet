@@ -428,6 +428,7 @@ def merge_interactions_by_sender(
 
 _EXTERNAL_ID_KEYS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
     "slack": ("slack_user_id", "user_id", "user"),
+    "mattermost": ("user_id", "user"),
     # Webhook transports stamp the TRIGGER ACTOR's id on every routed
     # copy as ``actor_account_id`` — that is the counterparty whose
     # profile this feeds.  Recipient-side routing keys
@@ -453,19 +454,43 @@ def _extract_external_id(platform: str, metadata: dict[str, Any], fallback: str)
     return fallback
 
 
+#: Per-chat-backend mapping from the platform's own ``channel_type``
+#: vocabulary onto the coarse kinds used for prompt flavour.  A map per
+#: platform rather than a chain of ``if platform == ...`` branches:
+#: every chat backend has its own single-word vocabulary for the same
+#: four ideas, and a second branch is how the third backend gets
+#: forgotten.  Mattermost's values are the raw single letters the server
+#: stamps (``O``pen / ``P``rivate / ``D``irect / ``G``roup), lowercased
+#: here like every other platform's.
+_CHANNEL_KIND_BY_PLATFORM: dict[str, dict[str, ChannelKind]] = {
+    "slack": {
+        "im": "dm",
+        "dm": "dm",
+        "group": "group",
+        "mpim": "group",
+        "public": "public",
+        "channel": "public",
+    },
+    "mattermost": {
+        "d": "dm",
+        "g": "group",
+        "o": "public",
+        "p": "group",
+    },
+}
+
+
 def _channel_kind_for_external(platform: str, metadata: dict[str, Any]) -> ChannelKind:
     """Derive a coarse channel category for prompt-context flavour.
 
     Used only for descriptive context; never branched on for behaviour.
     """
-    if platform == "slack":
+    vocabulary = _CHANNEL_KIND_BY_PLATFORM.get(platform)
+    if vocabulary is not None:
         channel_type = str(metadata.get("channel_type", "") or "").lower()
-        if channel_type in ("im", "dm"):
-            return "dm"
-        if channel_type in ("group", "mpim"):
-            return "group"
-        if channel_type in ("public", "channel"):
-            return "public"
+        kind = vocabulary.get(channel_type)
+        if kind is not None:
+            return kind
     if platform == "email":
         return "dm"
     if platform in ("jira", "confluence", "github", "gitlab", "plane"):

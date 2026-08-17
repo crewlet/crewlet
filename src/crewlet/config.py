@@ -1677,6 +1677,146 @@ class SlackConfig(BaseModel):
     status_phrases: SlackStatusPhrases = Field(default_factory=SlackStatusPhrases)
 
 
+class MattermostProvisioningConfig(BaseModel):
+    """Inputs for ``crewlet mattermost provision`` — consumed by the CLI
+    only.  The engine never reads this block; it must parse so a
+    provisioning-ready config validates today."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username_prefix: str = ""
+    """Optional prefix prepended to each agent handle to form the
+    Mattermost username (e.g. ``agent-`` when the server is shared with
+    humans and a handle could collide with a person's username)."""
+
+    channels: list[str] = Field(default_factory=list)
+    """Channel *names* (the URL slug, not the display name) every agent
+    bot is added to, on top of whatever ``role.integrations.mattermost.channel``
+    names.  A bot only receives messages from channels it is a member of."""
+
+    display_name_suffix: str = ""
+    """Optional suffix appended to each bot's display name (e.g. ``" (AI)"``)
+    so humans can tell agents from colleagues at a glance."""
+
+
+class MattermostConfig(BaseModel):
+    """Organisation-level Mattermost integration.
+
+    The self-hosted, open-source chat backend.  Shaped like
+    :class:`GitLabConfig` / :class:`PlaneConfig` — ``enabled`` plus a
+    required ``url`` and ``team`` — with one structural difference that
+    shapes the whole integration: **Mattermost has no usable inbound
+    webhook.**
+
+    Its outgoing webhooks fire only in *public* channels (the server
+    gates on ``ChannelTypeOpen``), and their payload carries no
+    ``root_id``, no channel type and no mention list — so DMs, private
+    channels and thread attribution are all unreachable through them.
+    The supported path for an external service is the **WebSocket event
+    API**, authenticated as each bot.  The engine therefore holds one
+    connection per Mattermost-enabled agent seat
+    (:mod:`crewlet.mattermost.events`) instead of receiving HTTP
+    callbacks, and there is no ``webhook_secret`` here to configure.
+
+    That also means an agent seat needs only **one** credential — the
+    bot's personal access token drives the websocket, the REST calls and
+    the MCP tool server alike.
+
+    ``typing_status`` defaults to ``off``, unlike Slack's ``addressed``.
+    Mattermost's indicator has a fixed vocabulary ("*is typing…*"), so it
+    conveys only *busy* where Slack's carries the phase, and it has to be
+    re-asserted every few seconds against Slack's 45 — a multi-minute
+    turn costs one to two orders of magnitude more requests for strictly
+    less information.  Operators who still want it opt in; the per-phase
+    ``status_phrases`` setting has deliberately no analogue here, because
+    no text this backend accepts would ever be rendered.
+
+    The Mattermost *tool* server is declared in ``mcp_servers`` as a
+    ``shared: false`` server; each agent supplies the same token in
+    ``role.mcp_env.mattermost``.  See ``docs/integrations/mattermost.md``.
+
+    Example YAML::
+
+        integrations:
+          mattermost:
+            enabled: true
+            url: "https://chat.nimbus.example"   # instance base URL (required)
+            team: nimbus                         # team slug (required)
+            typing_status: off                   # off (default) | addressed | always
+            provisioning:          # consumed ONLY by the CLI, ignored by
+                                   #   the engine
+              username_prefix: ""  # e.g. "agent-" if humans share the server
+              channels: [town-square, engineering]   # channels every bot joins
+              display_name_suffix: " (AI)"
+
+        mcp_servers:
+          - name: mattermost
+            shared: false
+            command: uvx
+            args: ["mcp-server-mattermost"]
+            env:
+              MATTERMOST_URL: "https://chat.nimbus.example"
+            tool_prefix: "mattermost_"
+
+        roles:
+          - name: Agent SWE
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_SWE}"
+                channel: engineering
+            mcp_env:
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"   # same token
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    url: str = ""
+    """Base URL of the Mattermost instance
+    (e.g. ``https://chat.nimbus.example``).  Required when enabled; used
+    for the websocket endpoint, REST calls and provisioning."""
+
+    team: str = ""
+    """Team slug agents belong to.  Required when enabled — channels are
+    team-scoped, so the provisioner cannot place a bot without it."""
+
+    typing_status: WorkingStatusMode = WorkingStatusMode.OFF
+    """When to raise the composer typing indicator.  Defaults ``off`` —
+    see the class docstring for why this differs from Slack."""
+
+    provisioning: MattermostProvisioningConfig | None = None
+    """Inputs for the provisioning CLI. Ignored by the engine."""
+
+    @model_validator(mode="after")
+    def _require_url_and_team(self) -> MattermostConfig:
+        if self.enabled:
+            if not self.url:
+                raise ValueError(
+                    "mattermost.url is required when mattermost is enabled"
+                )
+            if not self.team:
+                raise ValueError(
+                    "mattermost.team is required when mattermost is enabled"
+                )
+        return self
+
+    @property
+    def api_base(self) -> str:
+        """The ``/api/v4`` REST base derived from ``url``."""
+        return f"{self.url.rstrip('/')}/api/v4"
+
+    @property
+    def websocket_url(self) -> str:
+        """The ``/api/v4/websocket`` endpoint, with the ws(s) scheme."""
+        base = self.url.rstrip("/")
+        if base.startswith("https://"):
+            base = "wss://" + base[len("https://") :]
+        elif base.startswith("http://"):
+            base = "ws://" + base[len("http://") :]
+        return f"{base}/api/v4/websocket"
+
+
 class GitHubConfig(BaseModel):
     """Organisation-level GitHub integration configuration — webhook side.
 
@@ -2126,6 +2266,7 @@ class IntegrationsConfig(BaseModel):
     jira: JiraConfig | None = None
     confluence: ConfluenceConfig | None = None
     slack: SlackConfig | None = None
+    mattermost: MattermostConfig | None = None
     github: GitHubConfig | None = None
     gitlab: GitLabConfig | None = None
     plane: PlaneConfig | None = None
@@ -2235,6 +2376,64 @@ class RoleSlackIdentity(BaseModel):
         return self
 
 
+#: Mattermost usernames are lowercase and limited to alphanumerics plus
+#: ``.``, ``-`` and ``_``; the server rejects anything else outright.
+#: Validated at config load so a bad username fails on the line that
+#: authored it, not midway through a provisioning run that has already
+#: created half the fleet.
+_MATTERMOST_USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+class RoleMattermostIdentity(BaseModel):
+    """Per-agent Mattermost identity (one bot account per agent).
+
+    Unlike Slack, a seat needs exactly **one** credential: the bot's
+    personal access token authenticates the inbound websocket, the
+    outbound REST calls and the Mattermost MCP server alike.  There is no
+    signing secret because there is no inbound webhook to verify — see
+    :class:`MattermostConfig`.
+
+    Name the same ``${VAR}`` here and under
+    ``role.mcp_env.mattermost.MATTERMOST_TOKEN``: two consumers, one
+    secret, minted once by ``crewlet mattermost provision``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    bot_token: str = ""
+    """The bot account's personal access token.  A whole-value
+    ``${VAR}`` placeholder is what makes the seat provisionable; a
+    literal marks a manually managed bot, reported and left untouched."""
+
+    username: str = ""
+    """Mattermost username of the bot account.  Defaults to the agent's
+    handle (with ``provisioning.username_prefix`` applied).  Set it
+    explicitly only when the account already exists under another name."""
+
+    channel: str = ""
+    """Optional default channel *name* for this agent's outbound
+    notifications."""
+
+    @field_validator("username")
+    @classmethod
+    def _validate_username(cls, value: str) -> str:
+        """Reject usernames Mattermost itself would refuse.
+
+        A ``${VAR}`` reference is allowed through: the value is resolved
+        later, and rejecting the unresolved form here would forbid
+        configuring the username from the environment.
+        """
+        if not value or env_var_reference(value):
+            return value
+        if not _MATTERMOST_USERNAME_RE.match(value):
+            raise ValueError(
+                f"invalid Mattermost username {value!r} — usernames must be "
+                "lowercase and contain only letters, numbers, '.', '-' and "
+                "'_', starting with a letter or number"
+            )
+        return value
+
+
 class JiraIdentity(BaseModel):
     """The Jira project a unit / root-role owns.
 
@@ -2305,6 +2504,7 @@ class RoleIntegrationsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     slack: RoleSlackIdentity | None = None
+    mattermost: RoleMattermostIdentity | None = None
     jira: JiraIdentity | None = None
     confluence: ConfluenceIdentity | None = None
     plane: PlaneIdentity | None = None
@@ -2768,6 +2968,27 @@ def _slack_dict(cfg: RoleIntegrationsConfig) -> dict[str, str]:
     return slack
 
 
+def _mattermost_dict(cfg: RoleIntegrationsConfig) -> dict[str, str]:
+    """Materialise ``role.integrations.mattermost`` into the
+    ``role.mattermost`` transport dict the runtime reads.
+
+    No fan-out: the Mattermost MCP token is configured explicitly in
+    ``mcp_env.mattermost`` — the same ``${VAR}`` by convention, but the
+    loader never writes one block from the other, so an operator who
+    deliberately splits them (a read-only MCP token, say) keeps that
+    split.
+    """
+    mattermost: dict[str, str] = {}
+    if cfg.mattermost is not None:
+        if cfg.mattermost.bot_token:
+            mattermost["bot_token"] = cfg.mattermost.bot_token
+        if cfg.mattermost.username:
+            mattermost["username"] = cfg.mattermost.username
+        if cfg.mattermost.channel:
+            mattermost["channel"] = cfg.mattermost.channel
+    return mattermost
+
+
 def _integration_identities(
     cfg: RoleIntegrationsConfig | UnitIntegrationsConfig,
 ) -> tuple[str, str, str]:
@@ -2810,6 +3031,7 @@ def _parse_role(data: RoleConfig | dict[str, Any]) -> Role:
     cfg = data if isinstance(data, RoleConfig) else RoleConfig.model_validate(data)
 
     slack = _slack_dict(cfg.integrations)
+    mattermost = _mattermost_dict(cfg.integrations)
     jira_project, confluence_space, plane_project = _integration_identities(
         cfg.integrations
     )
@@ -2860,6 +3082,7 @@ def _parse_role(data: RoleConfig | dict[str, Any]) -> Role:
         sandbox=cfg.sandbox,
         mcp_env={k: dict(v) for k, v in cfg.mcp_env.items()},
         slack=slack,
+        mattermost=mattermost,
         jira_project=jira_project,
         confluence_space=confluence_space,
         plane_project=plane_project,
@@ -3552,6 +3775,41 @@ def register_slack_apps_from_org(
         )
         transport.register_app(handle, config)
         logger.debug("slack_app_registered", handle=handle)
+
+
+def register_mattermost_bots_from_org(
+    transport: Any,
+    org: Any,
+) -> None:
+    """Register per-agent Mattermost bots on a MattermostTransport.
+
+    Scans all roles for materialised ``mattermost`` config dicts and
+    calls ``transport.register_bot()`` for each.  ``${VAR}`` references
+    are resolved here; the username defaults to the agent's handle,
+    which is also what the provisioner names the account.
+
+    Args:
+        transport: A MattermostTransport instance.
+        org: An Organization whose roles may carry ``mattermost`` config.
+    """
+    from crewlet.notifications.transports.mattermost import MattermostBotConfig
+
+    for role in org.all_roles():
+        if not role.mattermost:
+            continue
+        resolved = resolve_env_vars(role.mattermost)
+        bot_token = resolved.get("bot_token", "")
+        handle = role.get_handle()
+        if not bot_token:
+            logger.warning("mattermost_bot_token_empty", role=role.name)
+            continue
+        config = MattermostBotConfig(
+            bot_token=bot_token,
+            username=resolved.get("username", "") or handle,
+            channel=resolved.get("channel", ""),
+        )
+        transport.register_bot(handle, config)
+        logger.debug("mattermost_bot_registered", handle=handle)
 
 
 def build_project_key_lead_map(

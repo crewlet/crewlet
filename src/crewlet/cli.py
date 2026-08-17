@@ -287,6 +287,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_gitlab_parser(sub)
 
+    # --- mattermost ---
+    from crewlet.mattermost.provision_cli import add_mattermost_parser
+
+    add_mattermost_parser(sub)
+
     # --- plane ---
     plane_p = sub.add_parser(
         "plane",
@@ -1698,6 +1703,18 @@ def main(argv: list[str] | None = None) -> int:
             "provision": cmd_plane_provision,
         }
         return plane_commands[subcmd](args)
+
+    if args.command == "mattermost":
+        from crewlet.mattermost.provision_cli import cmd_mattermost_provision
+
+        subcmd = getattr(args, "mattermost_command", None)
+        if subcmd is None:
+            parser.print_help()
+            return 0
+        mattermost_commands = {
+            "provision": cmd_mattermost_provision,
+        }
+        return mattermost_commands[subcmd](args)
 
     if args.command == "gitlab":
         from crewlet.gitlab.provision_cli import cmd_gitlab_provision

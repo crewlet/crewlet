@@ -177,6 +177,7 @@ class RoleKind(StrEnum):
 #: resolution, and identity rendering all derive from this map.
 CONTACT_FIELD_BY_TRANSPORT: dict[str, str] = {
     "slack": "slack_user_id",
+    "mattermost": "mattermost_user_id",
     "jira": "atlassian_account_id",
     "confluence": "atlassian_account_id",
     "github": "github_login",
@@ -232,6 +233,12 @@ class HumanContact(BaseModel):
     slack_user_id: str = ""
     """Slack member ID (e.g. ``U0123456789``) — used for ``<@…>``
     mentions and DM delivery."""
+
+    mattermost_user_id: str = ""
+    """Mattermost username — used for ``@name`` mentions and DM
+    delivery.  The *username*, not the 26-char user id: Mattermost
+    mentions address a person by name, and the name is what an agent
+    has to write into a message for it to render."""
 
     atlassian_account_id: str = ""
     """Atlassian Cloud account ID — one ID covers both Jira and
@@ -549,6 +556,23 @@ class Role(BaseModel):
     bot token via ``mcp_env.slack.SLACK_MCP_XOXB_TOKEN`` (typically the
     same ``${...}`` reference as ``bot_token`` here).
     """
+    mattermost: dict[str, str] = Field(default_factory=dict)
+    """Per-agent Mattermost bot credentials for the MattermostTransport.
+
+    The resolved transport identity, authored under the role's
+    ``integrations.mattermost`` block and materialised here by the config
+    loader::
+
+        integrations:
+          mattermost:
+            bot_token: "${MATTERMOST_TOKEN_ENGINEER}"
+            username: agent-engineer   # optional; defaults to the handle
+            channel: engineering       # optional default channel
+
+    One credential covers everything on this backend: the inbound
+    websocket, the outbound REST calls and — named again under
+    ``mcp_env.mattermost.MATTERMOST_TOKEN`` — the MCP tool server.
+    """
     jira_project: str = ""
     """Jira project key this role owns (``integrations.jira.project``).
 
@@ -641,6 +665,7 @@ class Role(BaseModel):
                 ("learning_enabled", self.learning_enabled is not None),
                 ("schedules", bool(self.schedules)),
                 ("slack", bool(self.slack)),
+                ("mattermost", bool(self.mattermost)),
                 ("integrations.jira", bool(self.jira_project)),
                 ("integrations.confluence", bool(self.confluence_space)),
                 ("integrations.plane", bool(self.plane_project)),
@@ -657,7 +682,8 @@ class Role(BaseModel):
                 raise ValueError(
                     f"role '{self.name}' is a human seat and needs at least "
                     f"one 'contact' identity (slack_user_id / "
-                    f"atlassian_account_id / github_login / gitlab_username / "
+                    f"mattermost_user_id / atlassian_account_id / "
+                    f"github_login / gitlab_username / "
                     f"plane_user_id) so agents can mention and reach them"
                 )
         else:

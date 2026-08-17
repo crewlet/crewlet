@@ -49,7 +49,7 @@ OUTBOUND_CONSUMER_GROUP = "notification-svc-outbound"
 # ``object_kind`` and ``emoji`` branches), so for them the WARNING
 # below is the only signal that an entirely unhandled event type is
 # being discarded.
-_QUIET_EMPTY_SOURCES: frozenset[str] = frozenset({"plane"})
+_QUIET_EMPTY_SOURCES: frozenset[str] = frozenset({"plane", "mattermost"})
 
 
 class NotificationService:
@@ -512,6 +512,9 @@ class NotificationService:
             elif source == "slack":
                 handle = payload.get("handle", "")
                 notifications = await self._parse_slack(body, handle, headers, body_raw)
+            elif source == "mattermost":
+                handle = payload.get("handle", "")
+                notifications = await self._parse_mattermost(body, handle)
             elif source == "github":
                 notifications = await self._parse_github(body, headers)
             elif source == "gitlab":
@@ -626,6 +629,38 @@ class NotificationService:
                 await self._record_skip("slack", handle, skip_reason)
             return []
         logger.warning("slack_transport_not_configured")
+        return []
+
+    async def _parse_mattermost(
+        self,
+        body: dict,
+        handle: str,
+    ) -> list[InboundNotification]:
+        """Parse one post forwarded by the Mattermost websocket fleet.
+
+        Unlike every other source here the body did not arrive over HTTP
+        — :mod:`crewlet.mattermost.events` republishes socket events onto
+        the same ``raw_webhook`` envelope so this dispatch, coalescing
+        and the prompt registry stay transport-shaped rather than
+        webhook-shaped.
+        """
+        from crewlet.notifications.transports.mattermost import MattermostTransport
+
+        transport = self._transports.get("mattermost")
+        if isinstance(transport, MattermostTransport):
+            result = await transport.handle_event(body=body, handle=handle)
+            if result is not None:
+                return [result]
+            skip_reason = transport.last_skip_reason
+            if skip_reason:
+                logger.debug(
+                    "mattermost_event_skipped",
+                    handle=handle,
+                    reason=skip_reason,
+                )
+                await self._record_skip("mattermost", handle, skip_reason)
+            return []
+        logger.warning("mattermost_transport_not_configured")
         return []
 
     async def _parse_github(

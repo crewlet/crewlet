@@ -110,7 +110,15 @@ def summarize_change(old: dict[str, Any], new: dict[str, Any]) -> str:
     # gitlab / plane).
     old_int = old.get("integrations") or {}
     new_int = new.get("integrations") or {}
-    for kind in ("jira", "confluence", "slack", "github", "gitlab", "plane"):
+    for kind in (
+        "jira",
+        "confluence",
+        "slack",
+        "mattermost",
+        "github",
+        "gitlab",
+        "plane",
+    ):
         if old_int.get(kind) != new_int.get(kind):
             return f"Updated {kind}"
 

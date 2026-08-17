@@ -180,6 +180,7 @@ export function seatIntegrations(mcpEnvChain) {
 // runnable — so this is what the same chip row shows for them.
 export const CONTACT_FIELDS = [
   ["slack_user_id", "slack"],
+  ["mattermost_user_id", "mattermost"],
   ["atlassian_account_id", "jira"],
   ["github_login", "github"],
   ["gitlab_username", "gitlab"],
@@ -224,6 +225,7 @@ export function catClass(category) {
 // identifies the source at a glance instead of a generic "notification".
 export const INTEGRATIONS = {
   slack: { label: "Slack", icon: "message", color: "var(--purple-ink)" },
+  mattermost: { label: "Mattermost", icon: "hash", color: "var(--brown-ink)" },
   jira: { label: "Jira", icon: "clipboard", color: "var(--blue-ink)" },
   github: { label: "GitHub", icon: "git", color: "var(--text)" },
   gitlab: { label: "GitLab", icon: "git", color: "var(--orange-ink)" },

@@ -86,6 +86,12 @@ forge = ["pyjwt[crypto]>=2.8"]
 # role actually launches a sandbox. Self-hosted/local E2B uses the same
 # SDK (providers.sandbox.domain). See docs/concepts/code-sandbox.md.
 sandbox = ["e2b>=2.0"]
+# Mattermost chat backend (integrations.mattermost). Opt-in: Mattermost has
+# no usable inbound webhook, so the engine holds a websocket per agent seat
+# and needs a websocket client — imported lazily, so the engine runs without
+# it until an org actually enables Mattermost.
+# See docs/integrations/mattermost.md.
+mattermost = ["websockets>=13.0"]
 # The union of every runtime extra above. tests/test_packaging asserts it stays
 # that way, so adding an extra without adding it here fails the build.
 all = [
@@ -94,6 +100,7 @@ all = [
     "starlette>=0.37",
     "pyjwt[crypto]>=2.8",
     "e2b>=2.0",
+    "websockets>=13.0",
 ]
 dev = [
     "pytest>=8.0",

@@ -511,7 +511,15 @@ async def put_integration(request: Request) -> JSONResponse:
     ``gitlab``, ``plane``.
     """
     kind = request.path_params["kind"]
-    if kind not in {"jira", "confluence", "slack", "github", "gitlab", "plane"}:
+    if kind not in {
+        "jira",
+        "confluence",
+        "slack",
+        "mattermost",
+        "github",
+        "gitlab",
+        "plane",
+    }:
         return JSONResponse(
             {"error": "unknown_integration", "kind": kind}, status_code=404
         )

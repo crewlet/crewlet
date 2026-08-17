@@ -183,11 +183,30 @@ github.com only (no self-hosted GitHub support in the integration):
 
 ---
 
-## Chat: Slack
+## Chat: Slack or Mattermost
 
-Slack is the human↔agent conversational surface (DMs, channels, escalations)
+Chat is the human↔agent conversational surface (DMs, channels, escalations)
 and is also where the DACI [decision framework](../concepts/decision-framework.md)
-plays out. There is no self-hosted variant:
+plays out. Two backends ship, and an org can run both at once — each agent
+seat carries whichever identities it needs.
+
+| | Slack | Mattermost |
+|---|---|---|
+| Hosting | SaaS only | **self-hosted**, open source |
+| Credentials per agent | 2 (bot token + signing secret) | 1 (bot token) |
+| Manual steps per agent | one OAuth **Allow** click | none |
+| Engine must be publicly reachable | yes — the Events API POSTs to it | **no** — the engine dials out |
+| Working status | free text, per turn phase | fixed *"is typing…"* (default off) |
+
+Pick **Mattermost** when the conversational surface has to live in your own
+infrastructure, or when you want provisioning to be a single non-interactive
+command. Pick **Slack** when the org already runs on it, or when the
+per-phase working indicator matters. Details:
+[Mattermost integration](../integrations/mattermost.md).
+
+### Slack
+
+There is no self-hosted variant:
 
 1. **Create the Slack workspace yourself** (or use your company's).
 2. **Declare each agent's Slack identity in the company YAML** — the
@@ -212,6 +231,25 @@ still works if you prefer it — see
 
 Details (scopes, Events API, thread routing, the working-status indicator):
 [Slack integration](../integrations/slack.md).
+
+### Mattermost
+
+1. **Run the Mattermost server yourself** (official Docker image; it needs
+   its own PostgreSQL) and **create the team** agents will live in. Crewlet
+   never creates top-level tenancy.
+2. **Declare each agent's identity in the company YAML** — one per-agent bot
+   token as a `${VAR}` placeholder under `role.integrations.mattermost`, and
+   the Mattermost MCP tool server in `mcp_servers`.
+3. **Provision the bots** with
+   [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
+   which creates one bot account per agent, adds it to the team and its
+   channels, and mints its access token into the `${VAR}` the YAML
+   references. The only thing you do by hand is generate one system-admin
+   token, once.
+
+Nothing needs to reach the engine from outside: it opens outbound websockets
+per seat rather than receiving webhooks, so no tunnel and no public URL.
+Details: [Mattermost integration](../integrations/mattermost.md).
 
 ---
 
