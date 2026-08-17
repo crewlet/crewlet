@@ -26,13 +26,14 @@ from crewlet.api.auth import ApiAuthMiddleware, load_tokens
 from crewlet.api.config_audit import build_config_audit_routes
 from crewlet.api.config_entity_routes import build_config_entity_routes
 from crewlet.api.config_refresh import (
+    ConfigStateRefresher,
     prime_api_state_from_active,
-    subscribe_config_refresh,
 )
 from crewlet.api.config_routes import build_config_routes
 from crewlet.api.routes import build_routes
 from crewlet.api.streaming import StreamService, build_health_envelope
 from crewlet.config import resolve_node_id
+from crewlet.db.config_plane import ConfigPlaneStore
 from crewlet.db.deliveries import (
     MemoryDeliveryDedupeStore,
     PostgresDeliveryDedupeStore,
@@ -280,19 +281,30 @@ def create_app(
     return app
 
 
-async def attach_config_refresh(app: Starlette) -> None:
-    """Subscribe ``app`` to ``revision_activated`` and prime its
-    cached state from the active revision if one exists.
+async def attach_config_refresh(
+    app: Starlette, *, poll: bool = True
+) -> ConfigStateRefresher | None:
+    """Prime ``app``'s cached state and attach its config reconciler.
 
-    Called once after the API process starts the event_queue and
-    connects to the DB.  Idempotent — safe to call multiple times.
+    Called once after the process starts the event_queue and connects to
+    the DB.  Idempotent — safe to call multiple times; the second call
+    returns the refresher the first one attached.
+
+    ``poll=False`` attaches the broadcast nudge but starts no loop: the
+    caller drives :meth:`ConfigStateRefresher.refresh_if_changed` itself.
+    That is the merged-node path, where the engine already polls the
+    activation pointer and a second loop would only let the two halves of
+    one process disagree about which epoch they are on.
+
+    Returns the refresher (``None`` when there is no config store to
+    reconcile against, e.g. a programmatic embed).
     """
-    await subscribe_config_refresh(
-        app,
-        store=app.state.company_config_store,
-        event_queue=app.state.event_queue,
-    )
-    await prime_api_state_from_active(app, app.state.company_config_store)
+    existing = getattr(app.state, "config_refresher", None)
+    if existing is not None:
+        return existing
+
+    store = app.state.company_config_store
+    await prime_api_state_from_active(app, store)
 
     # Roles are now populated (the standalone API learns them from the
     # active revision) — hydrate the live-state projection's baseline so
@@ -304,3 +316,26 @@ async def attach_config_refresh(app: Starlette) -> None:
         ]
         with contextlib.suppress(Exception):
             await stream.hydrate(app.state.event_store, role_names)
+
+    if store is None:
+        return None
+
+    database = getattr(app.state, "database", None)
+    plane = ConfigPlaneStore(database) if database is not None else None
+    refresher = ConfigStateRefresher(app, store, plane)
+    # The prime above already reflects the active revision, so record the
+    # epoch it satisfied.  Skipping this would make the first tick
+    # re-derive state that is already current.
+    await refresher.refresh_if_changed()
+    await refresher.start(app.state.event_queue, poll=poll)
+    app.state.config_refresher = refresher
+    return refresher
+
+
+async def detach_config_refresh(app: Starlette) -> None:
+    """Stop the reconciler attached by :func:`attach_config_refresh`."""
+    refresher = getattr(app.state, "config_refresher", None)
+    if refresher is None:
+        return
+    app.state.config_refresher = None
+    await refresher.stop()

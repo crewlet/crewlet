@@ -33,6 +33,7 @@ from crewlet.config import (
     register_plane_accounts_from_org,
     register_slack_apps_from_org,
     resolve_env_vars,
+    resolve_node_id,
 )
 from crewlet.config_resolution import resolution_fingerprint
 from crewlet.db.protocol import StorageBackend
@@ -240,10 +241,23 @@ class ConfigApplyError(RuntimeError):
         subsystem: str,
         original: Exception,
         applied_before_failure: list[str],
+        *,
+        degraded: bool = False,
     ) -> None:
         self.subsystem = subsystem
         self.original = original
         self.applied_before_failure = applied_before_failure
+        self.degraded = degraded
+        """Whether rollback could NOT restore what the apply tore down.
+
+        ``_rollback`` is synchronous: it cannot respawn MCP subprocesses,
+        and it reinstalls transport objects that were already stopped. So
+        a failure AFTER a restart-required subsystem was mutated leaves
+        the node claiming the prior epoch while its tool surface is
+        amputated and its inbound path may be dead. That is a materially
+        different state from a clean rollback, and the control plane has
+        to be able to tell them apart — a node in it must never be
+        counted as somewhere work can safely go."""
         super().__init__(
             f"apply_config failed at subsystem={subsystem!r}: "
             f"{type(original).__name__}: {original}"
@@ -343,6 +357,24 @@ class Engine:
         # resolved to when it was applied. Half of the no-op check —
         # see crewlet.config_resolution.
         self._active_resolution: str = ""
+        # Control-plane state — see crewlet.db.config_plane.
+        self._config_plane_store: Any = None
+        self._node_id: str = ""
+        self._applied_epoch: int = 0
+        self._apply_attempts: int = 0
+        self._ticks_behind: int = 0
+        self._apply_status: Any = None
+        self._posture: Any = None
+        self._reconcile_task: asyncio.Task[Any] | None = None
+        # Set by the broadcast activation nudge to shorten the next poll.
+        # Never carries data — see ``_subscribe_activation_nudge``.
+        self._reconcile_nudge: asyncio.Event = asyncio.Event()
+        self._nudge_unsubscribe: Any = None
+        # Refreshes the embedded API's cached projection (webhook
+        # secrets, roles, org) from the activation pointer.  Driven from
+        # this engine's reconcile tick rather than its own loop, so a
+        # merged node polls the pointer once, not twice.
+        self._api_refresher: Any = None
         # Secret-encryption keyring (Tier A ``secrets``).  ``None`` when
         # encryption is disabled; set by ``from_bootstrap``.  Used by
         # ``load_config`` to decrypt the whole config document in an
@@ -563,6 +595,11 @@ class Engine:
         )
         engine._bootstrap = bootstrap
         engine._company_config_store = company_config_store
+        # Resolved here as well as in ``start()`` because the boot-time
+        # apply — and the ``_seed_applied_epoch`` that follows it — runs
+        # before ``start()`` does, and a node that reports its apply
+        # status under an empty id is invisible to its peers.
+        engine._node_id = resolve_node_id(bootstrap)
         # Build the secret-encryption keyring from Tier A ``secrets``.
         # ``None`` when no keys are configured (encryption disabled);
         # ``load_config`` then fails closed only if an activated revision
@@ -759,6 +796,7 @@ class Engine:
                 snapshot = self._snapshot_for_rollback()
                 applied: list[str] = []
                 failed_subsystem: str | None = None
+                entered_restart_required = False
                 try:
                     new_org_obj = config_to_organization(new)
                     failed_subsystem = "org"
@@ -784,6 +822,10 @@ class Engine:
                     if self._apply_scalars_diff(old, new):
                         applied.append("scalars")
                     failed_subsystem = "restart_required"
+                    # Past this point rollback cannot undo what is about
+                    # to change: MCP children are respawned and
+                    # transports stopped, and `_rollback` is synchronous.
+                    entered_restart_required = True
                     applied.extend(await self._apply_restart_required_diff(old, new))
                     failed_subsystem = None
                 except Exception as exc:
@@ -795,7 +837,10 @@ class Engine:
                     )
                     self._rollback(snapshot)
                     raise ConfigApplyError(
-                        failed_subsystem or "unknown", exc, applied
+                        failed_subsystem or "unknown",
+                        exc,
+                        applied,
+                        degraded=entered_restart_required,
                     ) from exc
                 # Refresh derived state that the org renders into.
                 self.delegation = DelegationHandler(
@@ -1136,106 +1181,368 @@ class Engine:
                 ),
             )
 
-    async def _subscribe_revision_activated(self) -> None:
-        """Subscribe to ``crewlet.config.revision_activated``.
+    async def _subscribe_activation_nudge(self) -> None:
+        """Wake the reconcile loop the moment a revision activates.
 
-        Handler loads the activated revision from the
-        :class:`CompanyConfigStore`, calls :meth:`apply_config`, and
-        publishes ``ConfigRevisionApplied`` with the outcome.  Both
-        configured and unconfigured engines subscribe — the
-        unconfigured one wakes up on the first PUT /config.
+        A **nudge only** — it carries no payload the loop trusts and
+        skipping it costs at most one poll interval.  That distinction is
+        the whole point of the rewrite: this used to be a *durable
+        competing-consumer* subscription (group ``engine-config``) that
+        did the apply itself, so with N engine processes exactly ONE
+        applied any given revision and the rest ran the previous company
+        indefinitely.  Deleted roles kept answering Slack, rotated
+        credentials kept being used, and the dashboard reported success
+        because the one node that applied it published ``ok``.
+
+        Broadcasting it (``subscribe_stream``) fixes the fan-out but not
+        the reliability: an ephemeral stream consumer starts at the
+        latest message, so anything published while a node reconnects is
+        simply gone, and there is no cursor to replay from.  Hence the
+        split — the poll in :meth:`_reconcile_config_loop` is
+        authoritative because it *asks*, and this only makes the common
+        case fast.
         """
-        from crewlet.config import CompanyConfig
-        from crewlet.events.types import ConfigRevisionActivated, ConfigRevisionApplied
+        from crewlet.events.types import ConfigRevisionActivated
 
         store = getattr(self, "_company_config_store", None)
         if store is None:
             logger.debug(
-                "skip_revision_activated_subscription",
+                "skip_activation_nudge_subscription",
                 reason="no company_config_store on engine",
             )
             return
 
-        async def _handle(event: ConfigRevisionActivated) -> None:
-            from uuid import UUID as _UUID
-
-            try:
-                rev_id = _UUID(event.revision_id)
-            except (ValueError, TypeError) as exc:
-                logger.error(
-                    "config_revision_activated_invalid_id",
-                    revision_id=event.revision_id,
-                    error=str(exc),
-                )
-                return
-
+        async def _handle(topic: str, event: ConfigRevisionActivated) -> None:
             logger.info(
-                "config_revision_activated_received",
-                revision_id=event.revision_id,
-                source=event.source,
+                "config_activation_nudge",
+                revision_id=getattr(event, "revision_id", ""),
+                source=getattr(event, "source", ""),
             )
-            revision = await store.get_revision(rev_id)
-            if revision is None:
-                logger.error(
-                    "config_revision_not_in_store",
-                    revision_id=event.revision_id,
-                )
-                return
+            self._reconcile_nudge.set()
 
-            applied_subsystems: list[str] = []
+        self._nudge_unsubscribe = await self.event_queue.subscribe_stream(
+            "crewlet.config.revision_activated",
+            _handle,
+        )
+        logger.info("subscribed_to_activation_nudge")
+
+    # ── control plane ────────────────────────────────────────────────
+
+    def _config_plane(self) -> Any:
+        """The activation log + apply-status store.
+
+        Falls back to the in-memory twin without a database — the same
+        rule the lease, budget and rate-limit stores follow.  It is the
+        *correct* plane for that shape rather than a stub: with no shared
+        database there is also no shared config store, so there is
+        exactly one process and nothing to converge with.  Keeping the
+        seam a real object (instead of ``None``) is what lets the
+        reconcile path have one implementation instead of two.
+        """
+        from crewlet.db.client import Database
+
+        if self._config_plane_store is not None:
+            return self._config_plane_store
+        if not isinstance(self.storage, Database):
+            from crewlet.db.config_plane import MemoryConfigPlaneStore
+
+            self._config_plane_store = MemoryConfigPlaneStore()
+            return self._config_plane_store
+        if self._config_plane_store is None and isinstance(self.storage, Database):
+            from crewlet.db.config_plane import ConfigPlaneStore
+
+            self._config_plane_store = ConfigPlaneStore(self.storage)
+        return self._config_plane_store
+
+    @property
+    def posture(self) -> Any:
+        """This node's current config posture. See :mod:`crewlet.db.config_plane`."""
+        from crewlet.db.config_plane import Posture
+
+        return self._posture or Posture.SERVE
+
+    def admits_triggers(self) -> bool:
+        """Whether this node should accept NEW work right now.
+
+        The gate sits on trigger admission rather than on ``run_turn``,
+        for two reasons the review gate made concrete. A stale node still
+        *consumes* inbound messages — and Slack HMAC verification happens
+        consume-side against this node's cached secret, where a failure
+        is a skip plus an ack, so a rotated signing secret means it
+        silently eats every message it wins. And refusing at ``run_turn``
+        would strand a seat whose sandbox run just completed: the pending
+        row is already flipped to ``resumed``, the box collected, the
+        inbox paused, and nothing reaps a ``resumed`` row in-process.
+        """
+        from crewlet.db.config_plane import Posture
+
+        return self.posture not in (Posture.SHED, Posture.STUCK)
+
+    async def _apply_posture(self, posture: Any) -> None:
+        """Pause or resume trigger topics to match ``posture``.
+
+        Uses the ``config`` pause reason, so releasing it cannot un-gate a
+        seat the sandbox is holding, and the sandbox releasing its own
+        hold cannot un-gate a diverged node.
+        """
+        from crewlet.db.config_plane import Posture
+
+        if posture == self._posture:
+            return
+        previous, self._posture = self._posture, posture
+        shed = posture in (Posture.SHED, Posture.STUCK)
+        was_shed = previous in (Posture.SHED, Posture.STUCK)
+        if shed == was_shed:
+            return
+
+        topics = [f"crewlet.agent.{a.handle}.inbox" for a in self.agent_pool.agents]
+        topics.append("crewlet.notifications.inbound")
+        for topic in topics:
             try:
-                from crewlet.secrets import load_config
+                if shed:
+                    await self.event_queue.pause_topic(topic, reason="config")
+                else:
+                    await self.event_queue.resume_topic(topic, reason="config")
+            except Exception:
+                logger.exception("config_posture_topic_failed", topic=topic)
+        logger.warning(
+            "config_posture_changed",
+            posture=str(posture),
+            previous=str(previous or "serve"),
+            shedding=shed,
+        )
 
-                # Decrypt the encrypted-document payload to plaintext before
-                # validation + apply.
-                new = CompanyConfig.model_validate(
-                    load_config(revision.payload, self._cipher)
-                )
-                applied_subsystems = await self.apply_config(new) or []
-                applied_status = "ok"
-                error = ""
-            except ConfigApplyError as exc:
-                # Mid-apply failure: rollback already restored prior
-                # state.  Pull the ordered list of subsystems that DID
-                # succeed before the failure off the exception so the
-                # ConfigRevisionApplied event reports partial progress
-                # (dashboard "applied: org, budgets; failed at:
-                # turn_engine") instead of an empty list.
-                logger.exception(
-                    "config_apply_failed",
-                    revision_id=event.revision_id,
-                    subsystem=exc.subsystem,
-                    error=str(exc.original),
-                )
-                applied_subsystems = list(exc.applied_before_failure)
-                applied_status = "error"
-                error = f"{exc.subsystem}: {exc.original}"
-            except Exception as exc:
-                logger.exception(
-                    "config_apply_failed",
-                    revision_id=event.revision_id,
-                    error=str(exc),
-                )
-                applied_status = "error"
-                error = str(exc)
+    async def _reconcile_config_once(self) -> Any:
+        """One reconcile tick: converge if behind, then set posture."""
+        from crewlet.db.config_plane import (
+            MAX_APPLY_ATTEMPTS,
+            FleetView,
+            Posture,
+            decide_posture,
+        )
 
-            await self.event_queue.publish(
-                "crewlet.config.revision_applied",
-                ConfigRevisionApplied(
-                    source="engine.apply_config",
-                    revision_id=event.revision_id,
-                    status=applied_status,
-                    applied_subsystems=applied_subsystems,
-                    error=error,
+        plane = self._config_plane()
+        store = getattr(self, "_company_config_store", None)
+        if plane is None or store is None:
+            return Posture.SERVE
+
+        # The embedded API's cached projection (webhook secrets above
+        # all) follows the same pointer.  Driven here rather than from
+        # its own loop so one process polls once — see
+        # crewlet.api.config_refresh.
+        if self._api_refresher is not None:
+            try:
+                await self._api_refresher.refresh_if_changed()
+            except Exception:
+                logger.exception("embedded_api_state_refresh_failed")
+
+        target = await plane.target()
+        if target is None:
+            return Posture.SERVE
+
+        if (
+            self._applied_epoch < target.epoch
+            and self._apply_attempts < MAX_APPLY_ATTEMPTS
+        ):
+            self._apply_attempts += 1
+            await self._converge_to(target, plane, store)
+
+        self._ticks_behind = (
+            self._ticks_behind + 1 if self._applied_epoch < target.epoch else 0
+        )
+        peers_ok, peers_reported = await plane.peer_health(
+            target.epoch, exclude_node=self._node_id
+        )
+        posture = decide_posture(
+            FleetView(
+                target_epoch=target.epoch,
+                applied_epoch=self._applied_epoch,
+                ticks_behind=self._ticks_behind,
+                attempts=self._apply_attempts,
+                peers_ok=peers_ok,
+                peers_reported=peers_reported,
+                self_status=self._apply_status,
+            )
+        )
+        if posture == Posture.ISOLATED:
+            logger.error(
+                "config_revision_unapplied_fleet_wide",
+                epoch=target.epoch,
+                hint=(
+                    "no node applied this revision — it is probably the "
+                    "revision, not this node. Serving the prior config."
                 ),
             )
+        await self._apply_posture(posture)
+        return posture
 
-        await self.event_queue.subscribe(
-            topic="crewlet.config.revision_activated",
-            group="engine-config",
-            handler=_handle,
+    async def _converge_to(self, target: Any, plane: Any, store: Any) -> None:
+        """Apply ``target`` and record the outcome for the fleet."""
+        from crewlet.config import CompanyConfig
+        from crewlet.db.config_plane import ApplyStatus
+        from crewlet.events.types import ConfigRevisionApplied
+        from crewlet.secrets import load_config
+
+        status = ApplyStatus.OK
+        error = ""
+        applied_subsystems: list[str] = []
+        try:
+            revision = await store.get_revision(target.revision_id)
+            if revision is None:
+                raise RuntimeError(f"revision {target.revision_id} not in store")
+            # Decrypt the encrypted-document payload before validation.
+            new = CompanyConfig.model_validate(
+                load_config(revision.payload, self._cipher)
+            )
+            applied_subsystems = await self.apply_config(new) or []
+        except ConfigApplyError as exc:
+            # Rollback has already run.  ``degraded`` distinguishes the
+            # case rollback could not undo (MCP children not respawnable,
+            # transports reinstalled already-stopped) — the control plane
+            # must never count such a node as somewhere work can go.
+            status = ApplyStatus.DEGRADED if exc.degraded else ApplyStatus.ERROR
+            error = f"{exc.subsystem}: {exc.original}"
+            applied_subsystems = list(exc.applied_before_failure)
+            logger.error(
+                "config_converge_failed",
+                epoch=target.epoch,
+                revision_id=str(target.revision_id),
+                subsystem=exc.subsystem,
+                degraded=exc.degraded,
+                error=str(exc.original),
+            )
+        except Exception as exc:
+            status = ApplyStatus.ERROR
+            error = str(exc)
+            logger.exception(
+                "config_converge_failed",
+                epoch=target.epoch,
+                revision_id=str(target.revision_id),
+            )
+        else:
+            self._applied_epoch = target.epoch
+            self._apply_attempts = 0
+            self._ticks_behind = 0
+            logger.info(
+                "config_converged",
+                epoch=target.epoch,
+                revision_id=str(target.revision_id),
+                subsystems=applied_subsystems,
+            )
+
+        self._apply_status = status
+        try:
+            await plane.record_apply(
+                self._node_id,
+                epoch=target.epoch,
+                revision_id=target.revision_id,
+                status=status,
+                error=error,
+            )
+        except Exception:
+            # The write is how peers learn this node's outcome; losing it
+            # makes the node look silent rather than failed, which
+            # ``decide_posture`` reads as "no evidence" — the conservative
+            # direction.  The local apply already happened either way.
+            logger.exception("config_apply_status_write_failed")
+
+        await self.event_queue.publish(
+            "crewlet.config.revision_applied",
+            ConfigRevisionApplied(
+                source="engine.reconcile",
+                revision_id=str(target.revision_id),
+                status=str(status),
+                applied_subsystems=applied_subsystems,
+                error=error,
+            ),
         )
-        logger.info("subscribed_to_revision_activated")
+
+    async def _reconcile_config_loop(self) -> None:
+        """Poll the activation pointer forever.
+
+        The AUTHORITATIVE delivery mechanism, deliberately — see
+        :meth:`_subscribe_activation_nudge` for why the event it replaced
+        could not be.  A poll cannot miss anything, because it asks.
+
+        The nudge shortens the wait but never replaces the tick: after a
+        nudge fires, the next iteration still sleeps a full jittered
+        interval, so an activation storm cannot turn into an apply storm.
+        """
+        from crewlet.db.config_plane import reconcile_delay
+
+        # Runs from Tier-A boot until :meth:`_stop_control_plane`
+        # cancels it — deliberately NOT gated on ``self._running``, which
+        # only flips true at the END of the Tier-B cascade.  An
+        # unconfigured engine has to reconcile: the first activation is
+        # precisely what brings it to life.
+        while True:
+            try:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        self._reconcile_nudge.wait(), timeout=reconcile_delay()
+                    )
+                self._reconcile_nudge.clear()
+                await self._reconcile_config_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("config_reconcile_tick_failed")
+
+    async def _stop_control_plane(self) -> None:
+        """Cancel the reconcile loop and drop the activation nudge.
+
+        Called before the rest of the teardown: the reconciler can start
+        a full apply — respawning MCP children, rebuilding transports —
+        and one that lands mid-shutdown would resurrect subsystems the
+        drain is trying to bring down.
+        """
+        if self._reconcile_task is not None:
+            task, self._reconcile_task = self._reconcile_task, None
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        if self._nudge_unsubscribe is not None:
+            unsubscribe, self._nudge_unsubscribe = self._nudge_unsubscribe, None
+            with contextlib.suppress(Exception):
+                await unsubscribe()
+        if self._api_refresher is not None:
+            refresher, self._api_refresher = self._api_refresher, None
+            with contextlib.suppress(Exception):
+                await refresher.stop()
+
+    async def _seed_applied_epoch(self, revision_id: Any) -> None:
+        """Record the epoch the boot-time apply of ``revision_id`` satisfied.
+
+        Boot applies the *active revision*; the reconcile loop converges
+        on the *activation pointer*.  Those agree in the ordinary case,
+        and when they do this node is already at that epoch — recording
+        it is what stops the first tick from re-applying (and restarting
+        every MCP child) seconds after boot.
+
+        When they disagree — an activation landed between the boot read
+        and this call — the epoch is deliberately left unseeded so the
+        first tick converges properly.
+        """
+        from crewlet.db.config_plane import ApplyStatus
+
+        plane = self._config_plane()
+        if plane is None:
+            return
+        try:
+            target = await plane.target()
+            if target is None or str(target.revision_id) != str(revision_id):
+                return
+            self._applied_epoch = target.epoch
+            self._apply_status = ApplyStatus.OK
+            await plane.record_apply(
+                self._node_id,
+                epoch=target.epoch,
+                revision_id=target.revision_id,
+                status=ApplyStatus.OK,
+            )
+            logger.info("config_epoch_seeded", epoch=target.epoch)
+        except Exception:
+            logger.exception("config_epoch_seed_failed")
 
     async def start(self) -> None:
         """Boot the engine.
@@ -1303,12 +1610,20 @@ class Engine:
             logger.info("start_step", step="3/8", action="start_observability")
             await self.observability.start()
 
-            # 3.5. Subscribe to crewlet.config.revision_activated so the
-            # engine picks up live config edits.  Subscription is set
-            # up regardless of whether a Tier B config is currently
-            # active — an unconfigured engine wakes up when the first
-            # revision arrives.
-            await self._subscribe_revision_activated()
+            # 3.5. Attach the control plane so the node picks up live
+            # config edits.  Both halves run regardless of whether a
+            # Tier B config is currently active — an unconfigured engine
+            # wakes up on the first activation.
+            #
+            # The reconcile LOOP is authoritative; the broadcast nudge
+            # only makes the common case fast.  See
+            # ``_subscribe_activation_nudge``.
+            self._node_id = resolve_node_id(getattr(self, "_bootstrap", None))
+            await self._subscribe_activation_nudge()
+            if self._reconcile_task is None:
+                self._reconcile_task = asyncio.create_task(
+                    self._reconcile_config_loop()
+                )
 
             self._tier_a_done = True
 
@@ -1383,6 +1698,9 @@ class Engine:
             handle_registry=self.handle_registry,
             rate_limit=self._notification_rate_limit,
         )
+        # A stale node must stop consuming inbound before it stops
+        # running turns — see NotificationService._handle_inbound.
+        self.notification_service.set_admission_gate(self.admits_triggers)
 
         # Register per-agent Slack apps from role configs
         from crewlet.notifications.transports.slack import (
@@ -2099,6 +2417,7 @@ class Engine:
                     jitter_seconds=sched_cfg.jitter_seconds,
                     catchup_min_seconds=sched_cfg.catchup_min_seconds,
                     catchup_max_seconds=sched_cfg.catchup_max_seconds,
+                    admits=self.admits_triggers,
                 )
                 logger.info("scheduler_enabled", schedules=count_schedules(self.org))
             else:
@@ -2303,6 +2622,28 @@ class Engine:
             # copies wait on the queue; this branch only catches deliveries
             # already in flight when the pause landed.
             if agent.state == AgentState.AWAITING_SANDBOX:
+                await self._requeue_inbox_events(agent, events)
+                return
+            # Config posture: this node cannot apply an epoch its peers
+            # have, so it must not start NEW work under a stale company.
+            # Park by requeue + ack, never NAK — three redeliveries at 1s
+            # dead-letter a perfectly healthy event, and the node may be
+            # shedding for minutes.
+            #
+            # This sits AFTER the AWAITING_SANDBOX branch on purpose: a
+            # seat mid-sandbox is already parked there, so a clarification
+            # answer reaching a shedding node behaves exactly as it does
+            # on a healthy one.  The sandbox *resume* never passes through
+            # here at all — the coordinator dispatches it directly — which
+            # is what keeps the gate from stranding a run whose pending
+            # row is already flipped and whose box is already collected.
+            if not self.admits_triggers():
+                logger.info(
+                    "inbox_events_shed",
+                    agent_handle=agent.handle,
+                    posture=str(self.posture),
+                    count=len(events),
+                )
                 await self._requeue_inbox_events(agent, events)
                 return
             # Re-entrancy guard (memory backend): a publish to this agent's
@@ -2831,7 +3172,11 @@ class Engine:
             stream=stream,
         )
         if store is not None:
-            await attach_config_refresh(app)
+            # poll=False: this engine's reconcile loop already polls the
+            # activation pointer and drives ``refresh_if_changed`` from
+            # its tick.  A second loop in the same process would only let
+            # the engine and its API disagree about the current epoch.
+            self._api_refresher = await attach_config_refresh(app, poll=False)
         elif self._active_config is not None:
             # No config store — a programmatic embed, or an engine built
             # without a database. There is no revision to read and no
@@ -3125,6 +3470,11 @@ class Engine:
         #    (deadline retries, scheduled runs, periodic syncs) queue up
         #    behind the paused queue.
         logger.debug("cancelling_background_tasks")
+        # The config reconciler is a producer too: it can start a full
+        # apply (respawning MCP children, rebuilding transports) that
+        # would race the teardown below.  Cancelled first, before
+        # anything it might touch begins to come down.
+        await self._stop_control_plane()
         if self._cancel_deadline_timers is not None:
             self._cancel_deadline_timers()
             self._cancel_deadline_timers = None
@@ -3286,6 +3636,8 @@ class Engine:
             """Run *coro* with a 2s timeout, swallowing all errors."""
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(coro, timeout=2.0)
+
+        await _quiet(self._stop_control_plane())
 
         # Embedded API: no graceful escalation here — force uvicorn out
         # and reap the serve task so the process can exit.

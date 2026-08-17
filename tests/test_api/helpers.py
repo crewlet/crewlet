@@ -34,10 +34,14 @@ class FakeNodeRuntime:
         in_flight: int = 0,
         shutting_down: bool = False,
         tools: list[dict[str, Any]] | None = None,
+        posture: str = "serve",
+        applied_epoch: int = 0,
     ) -> None:
         self._in_flight = in_flight
         self._shutting_down = shutting_down
         self._tools = tools or []
+        self._posture = posture
+        self._applied_epoch = applied_epoch
 
     @property
     def in_flight(self) -> int:
@@ -46,6 +50,14 @@ class FakeNodeRuntime:
     @property
     def shutting_down(self) -> bool:
         return self._shutting_down
+
+    @property
+    def posture(self) -> str:
+        return self._posture
+
+    @property
+    def applied_epoch(self) -> int:
+        return self._applied_epoch
 
     def tools_data(self) -> list[dict[str, Any]]:
         return list(self._tools)

@@ -270,6 +270,24 @@ src/crewlet/          # Main package
                       #   monotonic `epoch` fencing token, owner = a process
                       #   INCARNATION (config.resolve_node_incarnation),
                       #   release expires in place so the epoch never resets;
+                      #   config_plane.py — THE CONTROL PLANE (replaces the
+                      #   competing-consumer `engine-config`/`api-config`
+                      #   groups, under which exactly ONE process applied a
+                      #   revision and the rest ran the old company forever):
+                      #   config_activations = append-only epoch pointer
+                      #   (appended INSIDE CompanyConfigStore's own
+                      #   activation transaction via ACTIVATION_INSERT_SQL,
+                      #   and append-only because re-activating an UNCHANGED
+                      #   revision is the documented rotation gesture) +
+                      #   config_apply_status = per-node outcome, three-valued
+                      #   (ok | error | degraded — degraded = failed AFTER a
+                      #   restart-required subsystem was mutated, so rollback
+                      #   could not restore it; never counted as converged) +
+                      #   decide_posture (serve|wait|shed|isolated|stuck).
+                      #   The rule: lag alone NEVER sheds — every successful
+                      #   rollout produces lag, so shedding on it makes the
+                      #   fastest node the cause of a fleet-wide outage.
+                      #   See docs/concepts/control-plane.md;
                       #   secret_values.py — SecretValueStore over the
                       #   encrypted secret store (per-row AAD binds the var
                       #   name; keyring REQUIRED, no plaintext mode) +
@@ -645,7 +663,15 @@ src/crewlet/          # Main package
                       #   boot-time snapshot or a publish listener.
                       #   runtime.py — NodeRuntime, the single seam for
                       #   facts only a co-located engine can answer
-                      #   (in-flight turns, drain state, live MCP tools);
+                      #   (in-flight turns, drain state, live MCP tools,
+                      #   config posture + applied epoch);
+                      #   config_refresh.py — ConfigStateRefresher, the
+                      #   cached projection's reconciler over the
+                      #   activation pointer (refresh_if_changed = one tick,
+                      #   run() = the loop). A MERGED node passes poll=False
+                      #   and the engine drives the tick from its own
+                      #   reconcile loop, so one process polls once and its
+                      #   two halves can't disagree about the epoch;
                       #   auth guards EVERY route bar probes, webhooks
                       #   (HMAC), /otlp (signed token) and the dashboard
                       #   shell —

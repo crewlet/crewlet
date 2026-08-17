@@ -83,6 +83,20 @@ class NotificationService:
         self._running = False
         self._subscribed = False
 
+        # Admission gate — ``() -> bool``, set by the engine to its
+        # ``admits_triggers``.  ``None`` means always admit (a service
+        # constructed without an engine: tests, programmatic embeds).
+        #
+        # Inbound routing is where a stale node does its most damage:
+        # Slack HMAC verification runs CONSUME-side against this
+        # process's cached signing secret, and a verification failure is
+        # a skip plus an ack.  So a node that missed a secret rotation
+        # does not merely lag — it silently eats its share of the
+        # fleet's inbound messages.  Gating here, before the parse,
+        # keeps those deliveries on the queue for a node that can read
+        # them.
+        self._admits: Any = None
+
         # GitLab webhook config (url + optional read token), set by the
         # engine via set_gitlab_config — enables participants-based
         # routing in _parse_gitlab.  None = payload-only routing.
@@ -90,6 +104,15 @@ class NotificationService:
 
         # Rate limiting: max notifications per second per agent (0 = unlimited)
         # {agent_id: [timestamp, ...]}
+
+    def set_admission_gate(self, admits: Any) -> None:
+        """Wire the predicate that decides whether to accept inbound work.
+
+        Called by the engine with :meth:`Engine.admits_triggers`.  Read
+        per delivery, so a posture change takes effect on the next
+        message with no re-subscription.
+        """
+        self._admits = admits
 
     def set_gitlab_config(self, gitlab_config: Any) -> None:
         """Wire (or clear) the GitLab integration config.
@@ -201,6 +224,19 @@ class NotificationService:
            source as transport name.
         """
         if not self._running:
+            return
+
+        # Config posture: park rather than parse.  Republish-then-ack —
+        # never NAK, which dead-letters a healthy event after three
+        # one-second redeliveries while a shed can last minutes.  The
+        # copy waits on the topic for a node that can read it.
+        if self._admits is not None and not self._admits():
+            await self._event_queue.publish(INBOUND_TOPIC, event)
+            logger.info(
+                "inbound_notification_shed",
+                source=event.source,
+                event_id=str(event.id),
+            )
             return
 
         # Restore OTel context from the incoming event so all

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -336,9 +337,9 @@ async def test_rollback_restores_scheduling_config() -> None:
     assert engine._scheduling_config is old_sched
 
 
-# C2 — Pulsar handler reports applied_before_failure on ConfigApplyError
-async def test_revision_handler_publishes_partial_applied_on_failure() -> None:
-    """When apply_config raises ConfigApplyError, the Pulsar handler must
+# C2 — converge reports applied_before_failure on ConfigApplyError
+async def test_converge_publishes_partial_applied_on_failure() -> None:
+    """When apply_config raises ConfigApplyError, the converge path must
     pull the list of subsystems that DID succeed off the exception and
     publish it as ConfigRevisionApplied.applied_subsystems — not []."""
     from unittest.mock import AsyncMock
@@ -352,43 +353,83 @@ async def test_revision_handler_publishes_partial_applied_on_failure() -> None:
         )
     )
 
-    # Drive the handler by registering it and emitting a fake event.
     published: list[tuple[str, object]] = []
 
     class _StubQueue:
-        async def subscribe(self, *, topic, group, handler):  # noqa: ARG002
-            self._handler = handler
-
         async def publish(self, topic, event):
             published.append((topic, event))
 
-    queue = _StubQueue()
-    engine.event_queue = queue  # type: ignore[assignment]
-    engine._company_config_store = AsyncMock()
+    engine.event_queue = _StubQueue()  # type: ignore[assignment]
+    store = AsyncMock()
     revision = AsyncMock()
     revision.payload = {"name": "Acme"}
-    engine._company_config_store.get_revision = AsyncMock(return_value=revision)
+    store.get_revision = AsyncMock(return_value=revision)
+    engine._company_config_store = store
 
-    await engine._subscribe_revision_activated()
-    from uuid import uuid4
+    from crewlet.db.config_plane import ApplyStatus, MemoryConfigPlaneStore
 
-    from crewlet.events.types import ConfigRevisionActivated
+    plane = MemoryConfigPlaneStore()
+    revision_id = uuid4()
+    epoch = await plane.record_activation(revision_id)
+    await engine._converge_to(await plane.target(), plane, store)
 
-    await queue._handler(
-        ConfigRevisionActivated(
-            revision_id=str(uuid4()),
-            source="api",
-            created_by="test",
-            summary="",
-        )
-    )
-
-    assert published, "handler did not publish a ConfigRevisionApplied event"
+    assert published, "converge did not publish a ConfigRevisionApplied event"
     topic, event = published[0]
     assert topic == "crewlet.config.revision_applied"
     assert event.status == "error"
     assert event.applied_subsystems == ["org", "budgets"]
     assert "providers" in event.error
+
+    # A clean rollback is `error`, not `degraded` — the node still
+    # serves the prior epoch, which is a legitimate state and one a peer
+    # may safely route work to.
+    ok, reported = await plane.peer_health(epoch, exclude_node="somebody-else")
+    assert (ok, reported) == (0, 1)
+    assert engine._apply_status is ApplyStatus.ERROR
+
+
+async def test_converge_records_degraded_when_rollback_could_not_restore() -> None:
+    """A failure after a restart-required subsystem was mutated is a
+    materially different state, and the control plane has to see it.
+
+    ``_rollback`` is synchronous: it cannot respawn MCP subprocesses and
+    it reinstalls transports that were already stopped.  So the node's
+    declared epoch is a lie — it reports the prior config while its tool
+    surface is amputated and its inbound path may be dead.  Such a node
+    must never be counted as somewhere work can safely go.
+    """
+    from unittest.mock import AsyncMock
+
+    from crewlet.db.config_plane import ApplyStatus, MemoryConfigPlaneStore
+    from crewlet.engine import ConfigApplyError
+
+    engine = await make_engine(company=make_company(name="Acme"))
+    engine.apply_config = AsyncMock(  # type: ignore[method-assign]
+        side_effect=ConfigApplyError(
+            "mcp_servers",
+            RuntimeError("spawn failed"),
+            ["org"],
+            degraded=True,
+        )
+    )
+
+    class _StubQueue:
+        async def publish(self, topic, event): ...
+
+    engine.event_queue = _StubQueue()  # type: ignore[assignment]
+    store = AsyncMock()
+    revision = AsyncMock()
+    revision.payload = {"name": "Acme"}
+    store.get_revision = AsyncMock(return_value=revision)
+
+    plane = MemoryConfigPlaneStore()
+    epoch = await plane.record_activation(uuid4())
+    await engine._converge_to(await plane.target(), plane, store)
+
+    assert engine._apply_status is ApplyStatus.DEGRADED
+    # Reported, but NOT counted as ok.
+    ok, reported = await plane.peer_health(epoch, exclude_node="somebody-else")
+    assert (ok, reported) == (0, 1)
 
 
 # first-activation applied_subsystems includes "scheduling"

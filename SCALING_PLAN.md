@@ -262,6 +262,41 @@ single-claim on each counter, against PG and the memory twins.
 found the same fatal flaw, plus three more. The revised design below is what
 gets built; the original is kept only where the gate endorsed it.
 
+**Status: 4.A–4.D and 4.G shipped. 4.E and 4.F remain.**
+
+What landed, with the deviations:
+
+- Migration `023_config_plane.sql` + `db/config_plane.py` — the epoch log,
+  per-node apply status, `decide_posture`, and a memory twin.
+- The activation append runs **inside `CompanyConfigStore`'s own
+  transaction** (`ACTIVATION_INSERT_SQL`, one statement shared by both
+  activation paths), not at the API route. A crash between the `is_active`
+  flip and the epoch append would otherwise leave a fleet converged on a
+  revision nobody asked for. It also covers `crewlet config import`, which
+  a route-level append would have missed entirely.
+- **Both** competing groups retired. `revision_activated` survives as a
+  broadcast **nudge** on `subscribe_stream`; the poll is authoritative
+  because an ephemeral stream consumer starts at the latest message.
+- The API's cached projection became `ConfigStateRefresher` — one tick
+  (`refresh_if_changed`) plus an optional loop. A merged node passes
+  `poll=False` and the engine drives the tick from its own reconcile loop,
+  so one process polls the pointer once rather than twice.
+- **Deviation from 4.C:** no new `pause_subscription(topic, group)`. The
+  existing `pause_topic` gained a `reason` instead, so the config shed and
+  the sandbox busy gate hold the same topics without either releasing the
+  other's hold. Reversible, no broker-side subscription is touched, and it
+  reuses machinery both callers already needed.
+- The engine's control plane falls back to `MemoryConfigPlaneStore` without
+  a database — the correct plane for that shape rather than a stub, since
+  without a shared database there is also no shared config store and so
+  exactly one process.
+
+**Incidental bug fixed:** `CompanyConfigStore.activate()` deactivated the
+current revision and then silently matched zero rows when the target
+revision did not exist — leaving the company with **no** active revision,
+which reads to every consumer as "unconfigured". It now raises inside the
+transaction, so the deactivate rolls back with it.
+
 ### What the gate endorsed, unchanged
 
 - **4.1 activation epoch, not revision id.** Confirmed necessary: the

@@ -216,8 +216,16 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
         body["in_flight"] = runtime.in_flight
         shutting_down = runtime.shutting_down
         body["shutting_down"] = shutting_down
+        # ``posture`` is what the node concluded about its own config
+        # lag, and the only place an operator can see WHY a node left
+        # rotation — /ready reports a bare 503 either way, and "draining"
+        # and "cannot apply epoch 41" call for opposite responses.
+        body["posture"] = runtime.posture
+        body["applied_epoch"] = runtime.applied_epoch
         if shutting_down:
             body["status"] = "shutting_down"
+        elif body["posture"] not in ("serve", "wait"):
+            body["status"] = str(body["posture"])
     return body
 
 
@@ -246,16 +254,27 @@ def build_readiness_envelope(app: Any) -> tuple[dict[str, Any], int]:
     unconfigured node cannot verify a webhook signature, and taking it
     out of rotation is how a fleet avoids answering with a node that
     would only reject the delivery.
+
+    And not ready while the node is **shedding** or **stuck**: it has
+    confirmed it cannot apply an epoch its peers have, so it would answer
+    under a stale company.  ``wait`` and ``isolated`` deliberately stay
+    ready — ``wait`` is ordinary propagation during a rollout (failing
+    readiness there would make every successful rollout a fleet-wide
+    outage), and ``isolated`` means *no* node applied the revision, so
+    taking this one out would take the fleet out over one bad revision.
     """
     runtime = getattr(app.state, "runtime", None)
     configured = bool(getattr(app.state, "configured", False))
     draining = bool(runtime.shutting_down) if runtime is not None else False
-    ready = configured and not draining
+    posture = str(runtime.posture) if runtime is not None else "serve"
+    diverged = posture in ("shed", "stuck")
+    ready = configured and not draining and not diverged
     body: dict[str, Any] = {
         "ready": ready,
         "node": str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID),
         "configured": configured,
         "draining": draining,
+        "posture": posture,
     }
     return body, (200 if ready else 503)
 

@@ -69,7 +69,8 @@ class MemoryEventQueue:
         # (NOT dropped) and flushed on ``resume_topic``.  Observability
         # listeners + stream still fire immediately so the dashboard sees
         # the queued events.
-        self._paused_topics: set[str] = set()
+        # topic -> reasons holding it paused; delivered when empty.
+        self._paused_topics: dict[str, set[str]] = {}
         self._paused_topic_buffer: dict[str, list[Event]] = {}
         self._max_redeliveries = max_redeliveries
         self._history: deque[Event] = deque(maxlen=max_history)
@@ -222,16 +223,26 @@ class MemoryEventQueue:
         self._paused = True
         logger.info("memory_event_queue_paused")
 
-    async def pause_topic(self, topic: str) -> None:
-        """Pause handler delivery for one topic (buffer, don't drop)."""
-        self._paused_topics.add(topic)
-        logger.info("memory_topic_paused", topic=topic)
+    async def pause_topic(self, topic: str, *, reason: str = "default") -> None:
+        """Take one reason's hold on a topic (buffer, don't drop)."""
+        self._paused_topics.setdefault(topic, set()).add(reason)
+        logger.info("memory_topic_paused", topic=topic, reason=reason)
 
-    async def resume_topic(self, topic: str) -> None:
-        """Resume a paused topic and flush its buffered events in order."""
-        if topic not in self._paused_topics:
+    async def resume_topic(self, topic: str, *, reason: str = "default") -> None:
+        """Release one reason's hold; flush buffered events when none remain."""
+        holds = self._paused_topics.get(topic)
+        if not holds:
             return
-        self._paused_topics.discard(topic)
+        holds.discard(reason)
+        if holds:
+            logger.info(
+                "memory_topic_still_paused",
+                topic=topic,
+                released=reason,
+                held_by=sorted(holds),
+            )
+            return
+        self._paused_topics.pop(topic, None)
         buffered = self._paused_topic_buffer.pop(topic, [])
         logger.info("memory_topic_resumed", topic=topic, flushed=len(buffered))
         for event in buffered:

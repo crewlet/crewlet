@@ -47,6 +47,21 @@ class NodeRuntime(Protocol):
         """Whether a graceful drain is under way."""
         ...
 
+    @property
+    def posture(self) -> str:
+        """This node's config posture — see :mod:`crewlet.db.config_plane`.
+
+        ``"serve"`` on a converged node.  Anything else is the node
+        telling a load balancer, and an operator, what it has concluded
+        about its own lag.
+        """
+        ...
+
+    @property
+    def applied_epoch(self) -> int:
+        """The activation epoch this node has actually applied."""
+        ...
+
     def tools_data(self) -> list[dict[str, Any]]:
         """The live tool surface: builtins + per-role MCP tools.
 
@@ -88,6 +103,24 @@ class EngineNodeRuntime:
             return bool(self._engine.shutting_down or not self._engine.is_running)
         except Exception:
             return False
+
+    @property
+    def posture(self) -> str:
+        try:
+            return str(self._engine.posture)
+        except Exception:
+            # Unknown lag is not evidence of lag — the same rule
+            # ``decide_posture`` follows.  Reporting "serve" here keeps a
+            # transient read failure from pulling a healthy node out of
+            # rotation.
+            return "serve"
+
+    @property
+    def applied_epoch(self) -> int:
+        try:
+            return int(self._engine._applied_epoch)
+        except Exception:
+            return 0
 
     def tools_data(self) -> list[dict[str, Any]]:
         try:

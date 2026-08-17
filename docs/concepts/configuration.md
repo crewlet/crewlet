@@ -74,7 +74,7 @@ The engine boots in this order:
 3. Connect to Pulsar + PostgreSQL
 4. Run migrations in two phases, serialized behind a PostgreSQL advisory lock so concurrent processes wait rather than race: first apply the self-contained bootstrap tables (`company_config`, `secret_values`, `leases`), read the active revision's `providers.embeddings.dimensions`, then apply the rest with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model. The width is **never guessed** — with no active revision the run stops before those migrations and they apply later, when a config declares one (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)). A company bootstrapped through the unconfigured state gets them applied as part of its first `apply_config`.
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
-6. Subscribe the engine to `crewlet.config.revision_activated` on Pulsar
+6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 7. `SELECT payload FROM company_config WHERE is_active = TRUE`
    - **Row present**: call `apply_config(payload)` which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
@@ -97,7 +97,7 @@ curl -X PUT https://crewlet.example.com/config \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: initial bootstrap" \
   --data-binary @company.yaml
-# Engine receives crewlet.config.revision_activated and spawns the
+# Every node reconciles onto the new activation epoch and spawns the
 # company in place — no restart needed.
 ```
 
@@ -112,7 +112,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 **What stays running:**
 
 - The Tier A connections — Pulsar, PostgreSQL, the API socket — all up.
-- The API's `/config/*` routes and the engine's `revision_activated` subscriber.
+- The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - Structlog with `state=unconfigured` so the unconfigured posture is obvious in logs and on the dashboard.
 
 **What returns degraded responses:**
@@ -129,21 +129,23 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first `crewlet.config.revision_activated` arrives → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
 
 ---
 
 ## Live Propagation
 
-When a new revision is activated (via `PUT /config`, per-entity write, revert, or `crewlet config import`), the API publishes `crewlet.config.revision_activated` on Pulsar. Both the engine (consumer group `engine-config`) and the API process (consumer group `api-config`) subscribe; each handler does independent work.
+When a new revision is activated (via `PUT /config`, per-entity write, revert, or `crewlet config import`), the write appends an **activation epoch** in the same transaction. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
 
-### Engine subscriber
+This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-config`, `api-config`) under which exactly one process applied any given revision and the rest ran the previous company indefinitely. The full mechanism — the epoch log, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
 
-The engine handler runs `await self.apply_config(payload)`, which:
+### The engine half
 
-1. Acquires `self._apply_lock` (serialises CLI + Pulsar callers).
-2. Validates the payload as `CompanyConfig` (defence in depth).
-3. **No-op short-circuit:** if the new payload equals the current active config, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes.
+Converging runs `await self.apply_config(payload)`, which:
+
+1. Acquires `self._apply_lock` (serialises the CLI path, the reconcile loop, and tests).
+2. Re-reads the secret store, then validates the payload as `CompanyConfig` (defence in depth).
+3. **No-op short-circuit:** if the new payload equals the current active config **and** its [resolution fingerprint](control-plane.md#rotation) is unchanged, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes. Same payload with a *moved* fingerprint is a credential rotation, not a no-op: the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild and the rest is skipped.
 4. Snapshots in-memory state for rollback (including `_scheduling_config` so a rollback after `_apply_scheduling_live` restores the prior scheduler settings).
 5. Dispatches per-subsystem diff handlers in order:
    - **`org`** — spawn new roles (seeding the per-role `token_budget`), terminate removed (dropping their budget + stopping their per-role MCP subprocesses), swap `AgentDefinition` for changed roles, apply a changed role's per-role `token_budget` in place, and re-seed the running notification transports' fall-through routing maps (Jira project / Confluence space / Plane project → unit lead) from the new org — the freshly built map is always pushed, so removing the last `integrations.*` identity *clears* live routing rather than leaving the stale map until restart
@@ -155,11 +157,17 @@ The engine handler runs `await self.apply_config(payload)`, which:
 6. Refreshes derived state (`DelegationHandler`).
 7. Publishes `crewlet.config.revision_applied` with `status`, `applied_subsystems`, optional `error`.
 
-On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-seeds the running transports' routing maps from the rolled-back org, so a failed apply never leaves live webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The Pulsar `revision_activated` handler unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list.
+On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-seeds the running transports' routing maps from the rolled-back org, so a failed apply never leaves live webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The converge path unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in `config_apply_status` so peers can see it.
 
-### API subscriber
+`ConfigApplyError` also carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Rollback is synchronous: it cannot respawn MCP subprocesses, and it reinstalls transport objects that were already stopped. Such a node reports the prior epoch while its tool surface is amputated, so the control plane records it as `degraded` and never counts it as converged — see [Control Plane](control-plane.md).
 
-The API handler refreshes `app.state.org_data`, `agent_roles`, `tools_data`, `github_webhook_secret`, `forge_app_id`, `configured` from the new payload. Without this, `GET /agents` / `/org` / `/health` would drift stale until the API restarts.
+### The API half
+
+The API's cached projection refreshes `app.state.org_data`, `agent_roles`, `tools_data`, `github_webhook_secret`, `forge_app_id`, `configured` from the new payload. Without this, `GET /agents` / `/org` / `/health` would drift stale — and, far worse, a rotated webhook signing secret would never be picked up, so inbound HMAC verification would fail against every delivery.
+
+It follows the same activation pointer, and deliberately follows the **pointer rather than the local apply outcome**: these fields decide whether inbound verification succeeds, and refusing deliveries because an apply failed would drop events the queue could otherwise have held. Keeping a stale node from *processing* work is the posture gate's job, not the receiver's.
+
+A merged node (engine + embedded API in one process) drives that refresh from the engine's own reconcile tick rather than a second loop, so the two halves can never disagree about which epoch they are on. A standalone `crewlet run api` runs the loop itself.
 
 ---
 

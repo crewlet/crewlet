@@ -105,10 +105,20 @@ class Scheduler:
         jitter_seconds: int = 0,
         catchup_min_seconds: int = 120,
         catchup_max_seconds: int = 7200,
+        admits: Callable[[], bool] | None = None,
     ) -> None:
         self._event_queue = event_queue
         self._agent_pool = agent_pool
         self._org_provider = org_provider
+        # Config posture gate (``Engine.admits_triggers``).  A schedule's
+        # fire identity is derived from the ORG — its name, cron and
+        # target seat — so a node that cannot apply the current epoch
+        # would fire the previous company's schedules: crons that were
+        # edited, seats that were deleted, schedules that were removed
+        # outright.  Unlike a delivery, there is no queued copy to fall
+        # back on, which is why the tick skips whole rather than firing
+        # something and letting a peer sort it out.
+        self._admits = admits
         self._store = store
         self._default_tz = default_timezone or "UTC"
         self._tick_seconds = max(1, int(tick_seconds))
@@ -174,6 +184,15 @@ class Scheduler:
         Returns the number of ``TaskAssigned`` events published.  Exposed
         so tests can drive the scheduler without waiting on the interval.
         """
+        if self._admits is not None and not self._admits():
+            # Deliberately WITHOUT advancing ``_last_tick_utc``: the
+            # skipped window stays open, so once this node converges the
+            # missed-tick catchup evaluates it. Anything a peer already
+            # fired is absorbed by the ``scheduled_runs`` at-most-once
+            # claim, and anything nobody fired still runs.
+            logger.info("scheduler_tick_shed")
+            return 0
+
         if now is None:
             now = datetime.now(UTC)
         elif now.tzinfo is None:

@@ -303,7 +303,7 @@ class EventQueue(Protocol):
         """
         ...
 
-    async def pause_topic(self, topic: str) -> None:
+    async def pause_topic(self, topic: str, *, reason: str = "default") -> None:
         """Pause delivery of ONE topic's messages to its handlers.
 
         Used by the sandbox subsystem to keep an agent "busy" while a
@@ -312,15 +312,22 @@ class EventQueue(Protocol):
         backlog / in-memory buffer) instead of starting a fresh turn
         mid-job. Unlike :meth:`pause_delivery` this is per-topic and
         reversible via :meth:`resume_topic`. Idempotent.
+
+        **Pauses are reason-scoped and a topic stays paused while ANY
+        reason holds it.** Two independent subsystems gate the same
+        inbox — the sandbox busy gate and the config-divergence shed —
+        and with one flat set the sandbox resuming its own run would
+        un-gate a node that is serving a stale company, on a completely
+        ordinary code path.
         """
         ...
 
-    async def resume_topic(self, topic: str) -> None:
-        """Resume a topic paused by :meth:`pause_topic`; flush its backlog.
+    async def resume_topic(self, topic: str, *, reason: str = "default") -> None:
+        """Release ONE reason's hold on a topic; flush if none remain.
 
         Buffered (in-memory) / queued (broker) messages are delivered to
-        the topic's handlers again. Idempotent — resuming a topic that
-        was never paused is a no-op.
+        the topic's handlers again once no reason holds it. Idempotent —
+        releasing a hold that was never taken is a no-op.
         """
         ...
 

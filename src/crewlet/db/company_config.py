@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from crewlet._logging import get_logger
 from crewlet.db._jsonb import decode_jsonb_dict
 from crewlet.db.client import Database
+from crewlet.db.config_plane import ACTIVATION_INSERT_SQL
 
 logger = get_logger("db.company_config")
 
@@ -92,11 +93,13 @@ class CompanyConfigStore:
                 summary,
                 json.dumps(payload),
             )
+            epoch = await conn.fetchval(ACTIVATION_INSERT_SQL, revision_id, summary)
         logger.info(
             "company_config_revision_activated",
             revision_id=str(revision_id),
             source=source,
             created_by=created_by,
+            epoch=int(epoch),
         )
         return revision_id
 
@@ -147,21 +150,35 @@ class CompanyConfigStore:
         revision and the dispatcher re-activates its payload.  The
         deactivate-then-activate pair runs in one transaction so the
         partial unique index never sees two ``TRUE`` rows.
+
+        Re-activating the revision that is *already* active is a
+        supported gesture, not a no-op: it is how an operator asks a
+        running fleet to pick up a rotated credential (see
+        ``docs/concepts/secret-store.md``).  The epoch append below is
+        unconditional for exactly that reason — keyed on the revision id
+        it could never express "same revision, new values".
         """
         pool = self._db._require_pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 "UPDATE company_config SET is_active = FALSE WHERE is_active",
             )
-            await conn.execute(
+            summary = await conn.fetchval(
                 """
                     UPDATE company_config
                     SET is_active = TRUE, activated_at = now()
                     WHERE revision_id = $1
+                    RETURNING summary
                     """,
                 revision_id,
+            )
+            if summary is None:
+                raise ValueError(f"revision {revision_id} does not exist")
+            epoch = await conn.fetchval(
+                ACTIVATION_INSERT_SQL, revision_id, str(summary)
             )
         logger.info(
             "company_config_revision_reactivated",
             revision_id=str(revision_id),
+            epoch=int(epoch),
         )

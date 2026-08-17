@@ -250,7 +250,9 @@ class PulsarEventQueue:
         # topic's consume loop stops FETCHING, so its messages stay on the
         # broker (no NAK churn) until ``resume_topic`` lets fetching
         # resume.  Reversible, unlike the one-way drain ``pause_delivery``.
-        self._paused_topics: set[str] = set()
+        # topic -> the set of reasons holding it paused. A topic is
+        # delivered only when no reason remains; see the protocol.
+        self._paused_topics: dict[str, set[str]] = {}
         # In-flight handler tracking: incremented before each handler
         # invocation, decremented in ``finally`` so the counter is exact
         # under exceptions.  ``wait_for_handlers`` waits on ``_idle_event``
@@ -368,17 +370,27 @@ class PulsarEventQueue:
         self._paused = True
         logger.info("pulsar_event_queue_paused")
 
-    async def pause_topic(self, topic: str) -> None:
-        """Pause fetching for one topic (sandbox busy gate)."""
-        self._paused_topics.add(topic)
-        logger.info("pulsar_topic_paused", topic=topic)
+    async def pause_topic(self, topic: str, *, reason: str = "default") -> None:
+        """Take one reason's hold on a topic (sandbox busy gate, config shed)."""
+        self._paused_topics.setdefault(topic, set()).add(reason)
+        logger.info("pulsar_topic_paused", topic=topic, reason=reason)
 
-    async def resume_topic(self, topic: str) -> None:
-        """Resume a paused topic; the consume loop fetches its backlog."""
-        if topic not in self._paused_topics:
+    async def resume_topic(self, topic: str, *, reason: str = "default") -> None:
+        """Release one reason's hold; fetch resumes when none remain."""
+        holds = self._paused_topics.get(topic)
+        if not holds:
             return
-        self._paused_topics.discard(topic)
-        logger.info("pulsar_topic_resumed", topic=topic)
+        holds.discard(reason)
+        if holds:
+            logger.info(
+                "pulsar_topic_still_paused",
+                topic=topic,
+                released=reason,
+                held_by=sorted(holds),
+            )
+            return
+        self._paused_topics.pop(topic, None)
+        logger.info("pulsar_topic_resumed", topic=topic, reason=reason)
 
     async def wait_for_handlers(self, timeout: float | None = None) -> int:
         """Wait for in-flight handler invocations to complete.

@@ -1343,6 +1343,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                     load_config(active_revision.payload, cipher)
                 )
             )
+            # Tell the control plane which activation epoch that apply
+            # satisfied.  Without it the first reconcile tick sees a
+            # target it has "never applied" and re-applies it seconds
+            # after boot — restarting every MCP child for nothing.
+            await engine._seed_applied_epoch(active_revision.revision_id)
 
         # Event store setup — in-memory store for instant reads,
         # TimescaleDB for persistence across restarts.  The event
