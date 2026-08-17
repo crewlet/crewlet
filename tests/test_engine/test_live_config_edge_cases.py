@@ -588,3 +588,91 @@ async def test_parse_body_or_400_returns_dict_on_valid_json() -> None:
     body, error = await _parse_body_or_400(request)
     assert error is None
     assert body == {"mission": "ship pixels"}
+
+
+# rollback RESTARTS the transports it restores
+async def test_rollback_restarts_the_transports_it_restores() -> None:
+    """A failed apply must not leave the node silently deaf.
+
+    ``_rollback`` used to restore transports with a dict assignment,
+    reinstalling objects the failed apply had already ``stop()``ed. The
+    node came out reporting the prior epoch with a dead inbound path —
+    every webhook rejected with ``handle_event_after_stop``, with nothing
+    in the logs tying it to the apply that caused it.
+    """
+
+    class _Transport:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.running = False
+            self.starts = 0
+
+        async def start(self) -> None:
+            self.running = True
+            self.starts += 1
+
+        async def stop(self) -> None:
+            self.running = False
+
+        async def send(self, *args, **kwargs) -> None: ...
+
+        def set_handle_registry(self, registry) -> None: ...
+
+    engine = await make_engine(company=make_company(name="Acme"))
+    surviving = _Transport("slack")
+    await surviving.start()
+    replacement = _Transport("slack")
+
+    class _Service:
+        def __init__(self) -> None:
+            self.transports: dict = {"slack": surviving}
+
+        def set_gitlab_config(self, cfg) -> None: ...
+
+    engine.notification_service = _Service()  # type: ignore[assignment]
+
+    # The apply swapped in a replacement and stopped the incumbent.
+    snapshot = engine._snapshot_for_rollback()
+    await engine._apply_notification_transports_live([replacement])
+    assert surviving.running is False
+    assert replacement.running is True
+
+    await engine._rollback(snapshot)
+
+    assert engine.notification_service.transports["slack"] is surviving
+    assert surviving.running is True, "rollback reinstalled a stopped transport"
+    assert replacement.running is False
+
+
+async def test_rollback_does_not_restart_an_untouched_transport() -> None:
+    """Restoring must be idempotent for transports the apply never moved
+    — a second ``start()`` on a live transport is its own failure mode."""
+
+    class _Transport:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.starts = 0
+
+        async def start(self) -> None:
+            self.starts += 1
+
+        async def stop(self) -> None: ...
+
+        async def send(self, *args, **kwargs) -> None: ...
+
+        def set_handle_registry(self, registry) -> None: ...
+
+    engine = await make_engine(company=make_company(name="Acme"))
+    transport = _Transport("slack")
+
+    class _Service:
+        def __init__(self) -> None:
+            self.transports: dict = {"slack": transport}
+
+        def set_gitlab_config(self, cfg) -> None: ...
+
+    engine.notification_service = _Service()  # type: ignore[assignment]
+    snapshot = engine._snapshot_for_rollback()
+
+    await engine._rollback(snapshot)
+    assert transport.starts == 0

@@ -262,7 +262,7 @@ single-claim on each counter, against PG and the memory twins.
 found the same fatal flaw, plus three more. The revised design below is what
 gets built; the original is kept only where the gate endorsed it.
 
-**Status: 4.A–4.D and 4.G shipped. 4.E and 4.F remain.**
+**Status: SHIPPED.**
 
 What landed, with the deviations:
 
@@ -291,11 +291,35 @@ What landed, with the deviations:
   without a shared database there is also no shared config store and so
   exactly one process.
 
+- 4.E/4.F landed together, because they only make sense together. The
+  pin (`agent/turn_pin.py`) is a `ContextVar` read *through the existing
+  accessors* — `TurnEngineSettings.get()`, a new `TurnEngine._llm_providers`
+  property, `_role_mcp_for()`, and `AgentInstance.definition` — so no read
+  site changed and sub-agent tasks inherit it for free. `live()` /
+  `live_definition` are the escape hatches the apply path itself uses.
+  The per-seat counter drains in `_apply_org_diff`, `_respawn_role_mcp`
+  and `_decommission_role_live`; the cap is `SEAT_DRAIN_TIMEOUT_SECONDS`
+  = 10 s, justified at its definition as the tail of one LLM round.
+
 **Incidental bug fixed:** `CompanyConfigStore.activate()` deactivated the
 current revision and then silently matched zero rows when the target
 revision did not exist — leaving the company with **no** active revision,
 which reads to every consumer as "unconfigured". It now raises inside the
 transaction, so the deactivate rolls back with it.
+
+**Both live bugs the gate found are fixed.** `ToolRegistry.unregister`
+landed with the rotation fix in the prior commit. `_rollback` became
+**async** and now routes the transport restore through
+`_apply_notification_transports_live` — the same machinery the apply
+uses — so a failed apply stops the failed revision's transports and
+*restarts* the snapshot's, instead of reinstalling objects it had already
+stopped and leaving the node silently deaf while reporting a healthy
+epoch.
+
+Rollback still does not respawn per-role MCP children: re-running the
+spawn sequence for every role inside an already-failing apply trades one
+failure for a longer, less predictable one. That residue is exactly what
+`degraded` records, and why such a node fails readiness.
 
 ### What the gate endorsed, unchanged
 

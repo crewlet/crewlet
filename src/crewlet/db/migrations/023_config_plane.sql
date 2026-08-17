@@ -25,11 +25,12 @@
 --   error     — failed and rolled back; the node still serves the prior
 --               epoch, which is a legitimate degraded-but-correct state.
 --   degraded  — failed AFTER a restart-required subsystem was mutated.
---               Rollback is synchronous and cannot respawn MCP children
---               or restart stopped transports, so this node's declared
---               epoch is a LIE: it reports the prior config while its
---               tool surface is amputated and its inbound path may be
---               dead. Never treated as converged.
+--               Rollback restores and restarts transports, but cannot
+--               respawn the per-role MCP children the failed revision
+--               already started, so this node's declared epoch is not
+--               the whole truth: it reports the prior config while its
+--               tool surface may be amputated. Never treated as
+--               converged.
 --
 -- Reading these two together is what lets a node distinguish "I am behind
 -- because propagation takes a moment" from "I am behind because I cannot

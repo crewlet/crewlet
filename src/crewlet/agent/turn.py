@@ -47,6 +47,7 @@ from crewlet.agent.plan import (
 )
 from crewlet.agent.review import run_review_phase
 from crewlet.agent.turn_context import TurnContext
+from crewlet.agent.turn_pin import TurnPin, pinned
 from crewlet.db.token_usage import TokenUsageRepository
 from crewlet.events.types import (
     AgentTurnCompleted,
@@ -73,6 +74,23 @@ from crewlet.tools.registry import ToolRegistry, build_availability_set
 from crewlet.tools.surface import ToolSurface
 
 logger = get_logger("agent.turn")
+
+# How long a config apply waits for one seat's in-flight turns to finish
+# before mutating that seat.
+#
+# The thing being waited on is the tail of an LLM round — the unit of
+# work a turn cannot be interrupted inside, and the reason a mid-turn
+# rewire is visible at all.  Ten seconds comfortably covers a completion
+# from every provider Crewlet ships against, and a turn that is between
+# rounds releases its count immediately, so in practice the wait is
+# either ~0 or one round.
+#
+# It is a CAP, not a contract. Past it the apply proceeds and logs
+# ``seat_drain_timed_out``: an apply that blocks indefinitely on one busy
+# seat is strictly worse than one turn seeing a mid-flight rewire — which
+# is what every turn saw before the drain existed, and which the turn pin
+# already makes survivable.
+SEAT_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
 def _annotation_is_read(ann: Any) -> bool:
@@ -221,7 +239,11 @@ class TurnEngine:
         from crewlet.agent.turn_settings import TurnEngineSettings
         from crewlet.config import TurnEngineConfig
 
-        self._llm_providers = llm_providers
+        # Held by reference so the engine's in-place provider swap
+        # (``clear()`` + ``update()``, identity deliberately preserved) is
+        # visible here.  Read through the ``_llm_providers`` property
+        # below, which prefers a turn's pin — see crewlet.agent.turn_pin.
+        self._llm_providers_live = llm_providers
         self._tool_registry = tool_registry
         self._event_queue = event_queue
         # Hold the engine's dict by reference -- NOT ``or {}``, which
@@ -337,6 +359,139 @@ class TurnEngine:
         # instead of starting a full Plan/Execute/Review run during the
         # drain.
         self._shutdown_event = asyncio.Event()
+
+        # Per-seat in-flight turn count, and a broadcast that fires
+        # whenever one reaches zero.  This is what :meth:`drain_seat`
+        # waits on, and it is deliberately a COUNTER rather than a read
+        # of ``AgentState``: a seat parked on a detached sandbox run
+        # stays ``AWAITING_SANDBOX`` for the whole run plus up to a
+        # clarification pause, so draining on the state would let one
+        # agent's pending question block a config apply — and, through
+        # it, the whole node.  A suspended turn returns from
+        # ``_run_turn_inner`` and so releases its count; the resume takes
+        # a fresh one.
+        self._seat_in_flight: dict[str, int] = {}
+        self._seat_idle: asyncio.Event = asyncio.Event()
+        self._seat_idle.set()
+
+    # ----- pinned reads ------------------------------------------------
+
+    @property
+    def _llm_providers(self) -> dict[str, Any]:
+        """The provider map — a turn's pinned copy where one is in force.
+
+        The engine's provider diff rebuilds clients and swaps them into
+        this dict in place, so without the pin a turn could resolve Plan
+        against one client and Execute against its replacement.
+        """
+        from crewlet.agent.turn_pin import current_pin
+
+        pin = current_pin()
+        if pin is not None and pin.owner == id(self):
+            return pin.llm_providers
+        return self._llm_providers_live
+
+    def _role_mcp_for(self, role_name: str, agent_id: str) -> list[Any]:
+        """This role's per-role MCP tools, pinned for the turn.
+
+        Read twice per turn from two different places (the availability
+        set and the tool catalogue), so an un-pinned read can produce a
+        turn whose planner saw a tool its executor cannot name.
+        """
+        from crewlet.agent.turn_pin import pin_for
+
+        pin = pin_for(self, agent_id)
+        if pin is not None:
+            return pin.role_mcp_tools
+        return self._role_mcp_tools.get(role_name, [])
+
+    def _capture_pin(self, agent: AgentInstance) -> TurnPin:
+        """Snapshot everything a live apply can move out from under a turn.
+
+        Shallow copies on purpose: the objects themselves (LLM clients,
+        MCP tool wrappers) are shared with the live engine and can still
+        be stopped underneath the turn.  What is pinned is the *set* —
+        which providers exist, which tools this role has, which
+        definition it is running as, and what the limits are — because
+        that is what has to stay consistent across phases.  See
+        :mod:`crewlet.agent.turn_pin` on why pinning a catalogue is not
+        pinning a capability.
+        """
+        return TurnPin(
+            owner=id(self),
+            agent_id=agent.id_str,
+            settings=self._settings.live(),
+            llm_providers=dict(self._llm_providers_live),
+            role_mcp_tools=list(self._role_mcp_tools.get(agent.role_name, [])),
+            definition=agent.live_definition,
+        )
+
+    # ----- per-seat drain ----------------------------------------------
+
+    def _seat_enter(self, role_name: str) -> None:
+        self._seat_in_flight[role_name] = self._seat_in_flight.get(role_name, 0) + 1
+        self._seat_idle.clear()
+
+    def _seat_exit(self, role_name: str) -> None:
+        remaining = self._seat_in_flight.get(role_name, 1) - 1
+        if remaining > 0:
+            self._seat_in_flight[role_name] = remaining
+            return
+        self._seat_in_flight.pop(role_name, None)
+        # One broadcast for all waiters; each re-checks its own seat.
+        # Swap-then-set would be needed for a per-seat event, but a
+        # single shared event with a re-check loop is simpler and the
+        # wait is bounded anyway.
+        self._seat_idle.set()
+
+    def seat_in_flight(self, role_name: str) -> int:
+        """Turns currently running for ``role_name`` in this process."""
+        return self._seat_in_flight.get(role_name, 0)
+
+    async def drain_seat(
+        self, role_name: str, *, timeout: float = SEAT_DRAIN_TIMEOUT_SECONDS
+    ) -> bool:
+        """Wait for ``role_name``'s in-flight turns to finish.
+
+        Returns whether the seat actually reached idle.  Called by the
+        config-apply path before it mutates a seat — swapping its
+        definition, respawning its per-role MCP children, terminating it
+        — so the mutation lands between turns rather than inside one.
+        This is what makes the turn pin load-bearing: the pin keeps a
+        turn *consistent*, and draining is what keeps its tools *alive*.
+
+        The timeout is a cap, not a contract.  What is being waited on is
+        the tail of an LLM round — the unit of work a turn cannot be
+        interrupted inside — and ten seconds comfortably covers one.
+        Beyond that the apply proceeds anyway and logs it: an apply that
+        blocks indefinitely on one busy seat is strictly worse than one
+        turn seeing a mid-flight rewire, and the turn was already
+        surviving that before the drain existed.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        while True:
+            # Clear BEFORE the re-check, with no await in between: an
+            # exit that lands after this point sets the event and the
+            # wait below returns immediately, and one that landed before
+            # it is caught by the re-check.  Clearing after the check
+            # would drop exactly the wakeup being waited for.
+            self._seat_idle.clear()
+            if self.seat_in_flight(role_name) == 0:
+                logger.debug("seat_drained", role=role_name)
+                self._seat_idle.set()
+                return True
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                logger.warning(
+                    "seat_drain_timed_out",
+                    role=role_name,
+                    in_flight=self.seat_in_flight(role_name),
+                    timeout_seconds=timeout,
+                )
+                return False
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._seat_idle.wait(), timeout=remaining)
 
     # ----- live-reload settings accessors -----------------------------
     # Each property reads through ``self._settings.get()`` on every
@@ -734,14 +889,20 @@ class TurnEngine:
                 for rec in getattr(resume_state, "iteration_history", []) or []
             ]
 
-        # Bind the seat for every LLM call this turn makes, including
-        # the ones made from child tasks (batched sub-agents inherit the
-        # context). Stateful backends -- the CLI-agent provider, which
-        # keeps a coding CLI's home on disk -- read this to pick an
-        # isolated workspace; without it a shared provider instance
-        # would let one seat's CLI session leak into another's. Bound
-        # here alongside the OTel span, which is the same kind of
-        # ambient turn context.
+        # Three pieces of ambient turn context, all wrapping the whole
+        # ``_run_turn_inner`` call rather than sitting inside it, so
+        # every phase — and every sub-agent task spawned from one, which
+        # inherits a copy of this context — sees the same values.
+        #
+        # ``bind_llm_scope`` binds the seat for every LLM call the turn
+        # makes. Stateful backends — the CLI-agent provider, which keeps
+        # a coding CLI's home on disk — read it to pick an isolated
+        # workspace; without it a shared provider instance would let one
+        # seat's CLI session leak into another's.
+        #
+        # ``pinned`` freezes the config this turn runs under, and the
+        # seat enter/exit below counts it busy, so a live activation
+        # cannot rewire a company out from under a turn in flight.
         with (
             bind_llm_scope(agent.handle or agent.role_name),
             tracer.start_as_current_span(
@@ -755,8 +916,13 @@ class TurnEngine:
                     "turn.delegation_depth": delegation_depth,
                 },
             ),
+            pinned(self._capture_pin(agent)),
         ):
-            return await self._run_turn_inner(turn)
+            self._seat_enter(agent.role_name)
+            try:
+                return await self._run_turn_inner(turn)
+            finally:
+                self._seat_exit(agent.role_name)
 
     # ----- internals --------------------------------------------------
 
@@ -1040,7 +1206,7 @@ class TurnEngine:
         """
         agent_context = self._build_agent_context(turn)
         role = turn.agent.definition.role
-        role_mcp = self._role_mcp_tools.get(turn.agent.role_name, [])
+        role_mcp = self._role_mcp_for(turn.agent.role_name, turn.agent.id_str)
 
         # Resolve per-tool availability once per turn from the
         # role's mcp_env + each registered ``check_fn``.  Cached on the
@@ -1837,7 +2003,7 @@ class TurnEngine:
         # the actual Execute ToolSurface's names -- doing it here
         # with the full registry would let a parent grant its sub-agent
         # tools the parent itself didn't have access to.
-        role_mcp_tools = self._role_mcp_tools.get(turn.agent.role_name, [])
+        role_mcp_tools = self._role_mcp_for(turn.agent.role_name, turn.agent.id_str)
         ctx.__dict__["spawn_subagent_config"] = {
             "llm_providers": self._llm_providers,
             "tool_registry": self._tool_registry,

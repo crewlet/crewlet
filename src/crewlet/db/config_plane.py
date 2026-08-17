@@ -72,11 +72,11 @@ class ApplyStatus(StrEnum):
     epoch — a legitimate degraded-but-correct state."""
 
     DEGRADED = "degraded"
-    """Failed AFTER a restart-required subsystem was mutated. Rollback is
-    synchronous and cannot respawn MCP children or restart stopped
-    transports, so this node's declared epoch is a lie: it claims the
-    prior config while its tool surface is amputated and its inbound path
-    may be dead. Never counts as converged."""
+    """Failed AFTER a restart-required subsystem was mutated. Rollback
+    restores and restarts transports, but cannot respawn the per-role MCP
+    children the failed revision already started — so this node's
+    declared epoch is not the whole truth: it claims the prior config
+    while its tool surface may be amputated. Never counts as converged."""
 
 
 class Posture(StrEnum):

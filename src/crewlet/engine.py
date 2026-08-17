@@ -250,14 +250,19 @@ class ConfigApplyError(RuntimeError):
         self.degraded = degraded
         """Whether rollback could NOT restore what the apply tore down.
 
-        ``_rollback`` is synchronous: it cannot respawn MCP subprocesses,
-        and it reinstalls transport objects that were already stopped. So
-        a failure AFTER a restart-required subsystem was mutated leaves
-        the node claiming the prior epoch while its tool surface is
-        amputated and its inbound path may be dead. That is a materially
-        different state from a clean rollback, and the control plane has
-        to be able to tell them apart — a node in it must never be
-        counted as somewhere work can safely go."""
+        ``_rollback`` restores and RESTARTS transports, but it cannot
+        respawn the per-role MCP children the failed revision already
+        started. So a failure AFTER a restart-required subsystem was
+        mutated leaves the node claiming the prior epoch while its tool
+        surface may be amputated. That is a materially different state
+        from a clean rollback, and the control plane has to be able to
+        tell them apart — a node in it must never be counted as somewhere
+        work can safely go.
+
+        Set conservatively, on *entering* the restart-required block
+        rather than on proving something was torn down: a false
+        ``degraded`` costs one node's readiness, a false ``ok`` costs
+        silent breakage no probe would catch."""
         super().__init__(
             f"apply_config failed at subsystem={subsystem!r}: "
             f"{type(original).__name__}: {original}"
@@ -822,9 +827,10 @@ class Engine:
                     if self._apply_scalars_diff(old, new):
                         applied.append("scalars")
                     failed_subsystem = "restart_required"
-                    # Past this point rollback cannot undo what is about
-                    # to change: MCP children are respawned and
-                    # transports stopped, and `_rollback` is synchronous.
+                    # Past this point rollback cannot fully undo what is
+                    # about to change: it restores and restarts
+                    # transports, but the per-role MCP children this
+                    # block respawns stay on the failed revision.
                     entered_restart_required = True
                     applied.extend(await self._apply_restart_required_diff(old, new))
                     failed_subsystem = None
@@ -835,7 +841,7 @@ class Engine:
                         subsystem=failed_subsystem or "unknown",
                         error=str(exc),
                     )
-                    self._rollback(snapshot)
+                    await self._rollback(snapshot)
                     raise ConfigApplyError(
                         failed_subsystem or "unknown",
                         exc,
@@ -1076,13 +1082,28 @@ class Engine:
             },
         }
 
-    def _rollback(self, snapshot: dict[str, Any]) -> None:
+    async def _rollback(self, snapshot: dict[str, Any]) -> None:
         """Restore engine state from a snapshot.
 
         Best-effort: an exception inside rollback is logged loudly
         (``config_rollback_failed``) but doesn't re-raise — the
         dashboard banner surfaces the divergence between
         the DB-active row and the engine-applied state.
+
+        **Async on purpose.** It used to be synchronous, which meant the
+        transport restore was a dict assignment — reinstalling transport
+        objects the failed apply had already ``stop()``ed. The node came
+        out of rollback reporting the prior epoch with a dead inbound
+        path: every webhook rejected with ``handle_event_after_stop``,
+        silently, until someone restarted the process. Restoring
+        transports has to *restart* them, and restarting is async.
+
+        What rollback still cannot undo is per-role MCP respawn: the
+        children of the failed revision are already running, and
+        re-running the spawn sequence for every role inside an
+        already-failing apply trades one failure for a longer, less
+        predictable one. That is what ``ConfigApplyError.degraded``
+        records, and why such a node fails readiness.
         """
         logger.warning(
             "config_rollback_started",
@@ -1141,19 +1162,22 @@ class Engine:
             # running services in their post-apply state even though
             # the stored configs reverted.
             if self.notification_service is not None:
-                self.notification_service.transports = dict(snapshot["live_transports"])
+                # Route the restore through the SAME machinery the apply
+                # used, rather than assigning the dict back. That is what
+                # stops the failed revision's transports, RESTARTS the
+                # snapshot's, and re-seeds routing from the now-restored
+                # org — a plain assignment reinstalled objects that had
+                # already been stopped, leaving the node silently deaf
+                # while it reported a healthy epoch. Transports whose
+                # identity never changed are skipped on both sides, so
+                # nothing is double-started.
+                await self._apply_notification_transports_live(
+                    list(snapshot["live_transports"].values())
+                )
                 # Same live-state restore for the GitLab routing config —
                 # the integrations diff pushed the failed revision's
                 # config onto the running service.
                 self.notification_service.set_gitlab_config(self._gitlab_config)
-                # ``_apply_org_diff`` re-seeded the surviving transports'
-                # lead maps (Jira project / Confluence space / Plane
-                # project → unit lead) from the FAILED revision's org.
-                # Now that ``self.org`` and the transports dict are
-                # restored, re-derive routing from the rolled-back org so
-                # a failed apply never leaves live routing on config that
-                # was never activated.
-                self._reseed_notification_routing()
             # Restore ExtensionManager._extensions to the pre-apply
             # set.  Cannot re-run on_engine_start on extensions that
             # were unregistered (their on_engine_stop already fired);
@@ -4289,6 +4313,24 @@ class Engine:
             ),
         )
 
+    async def _drain_seat(self, role_name: str) -> bool:
+        """Wait for one seat's in-flight turns before mutating it.
+
+        A turn already pins the config it started under
+        (:mod:`crewlet.agent.turn_pin`), so it stays internally coherent
+        through a live apply.  But a pin holds a *catalogue*, not a
+        *capability*: the MCP clients its tools dispatch to can still be
+        stopped underneath it, and the definition it was spawned from can
+        be replaced. Draining is what turns "the turn survives the
+        rewire" into "the rewire happens between turns".
+
+        No-op before the turn engine exists (first activation, per-entity
+        bootstrap). Returns whether the seat reached idle.
+        """
+        if self.turn_engine is None:
+            return True
+        return await self.turn_engine.drain_seat(role_name)
+
     async def _stop_role_mcp(self, role: Any) -> None:
         """Stop every per-role MCP instance for ``role``.
 
@@ -4336,6 +4378,13 @@ class Engine:
             if not role.mcp_env:
                 return
             self.mcp_bridge = MCPToolBridge()
+        # This is the mutation the turn pin CANNOT survive: the pin holds
+        # the tool wrappers, but the clients they dispatch to are about
+        # to be killed.  Drain the seat first, here rather than at each
+        # call site, so every caller (org diff, credential rotation, the
+        # rotation-only apply path) gets it.  Bounded — see
+        # ``SEAT_DRAIN_TIMEOUT_SECONDS``.
+        await self._drain_seat(role.name)
         # Tear down the role's existing per-role instances.
         cfg_by_name: dict[str, MCPServerConfig] = {c.name: c for c in self._mcp_configs}
         await self._stop_role_mcp(role)
@@ -5804,6 +5853,10 @@ class Engine:
         Safe for human seats and never-spawned roles —
         ``get_all_for_role`` simply returns no agents.
         """
+        # Let whatever this seat is mid-way through finish before its
+        # tools, budget and inbox consumer are taken away.  Bounded, so a
+        # wedged turn cannot block the decommission indefinitely.
+        await self._drain_seat(role_name)
         agents = self.agent_pool.get_all_for_role(role_name)
         for agent in agents:
             for issue_key in self.execution_tracker.get_issues(agent.id_str):
@@ -5979,6 +6032,17 @@ class Engine:
 
             updated_count += 1
             logger.debug("role_updated", role=role_name, changed_fields=changed)
+
+            # Let this seat's in-flight turns finish before swapping what
+            # they are running as.  A turn already pins its definition,
+            # providers and tool catalogue (see crewlet.agent.turn_pin),
+            # so it stays *coherent* through a rewire — but pinning a
+            # catalogue is not pinning a capability, and the MCP respawn
+            # below genuinely kills the clients a running turn's tools
+            # dispatch to.  Bounded, and never on ``AgentState``: a seat
+            # parked on a detached sandbox run would otherwise hold the
+            # whole apply for the length of the run.
+            await self._drain_seat(role_name)
 
             if new_role.kind == RoleKind.HUMAN:
                 # Human seats have no AgentDefinition or instance —

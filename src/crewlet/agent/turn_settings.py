@@ -28,6 +28,22 @@ class TurnEngineSettings:
         self._cfg = cfg or TurnEngineConfig()
 
     def get(self) -> TurnEngineConfig:
+        """The config in force — a turn's pinned snapshot, or the cell.
+
+        The ~18 ``TurnEngine`` accessors call this on **every access**, so
+        an un-pinned read lets one turn run Plan under one round cap and
+        Execute under another, or size a sub-agent's budget from a
+        fraction the parent never saw.  See :mod:`crewlet.agent.turn_pin`.
+        """
+        from crewlet.agent.turn_pin import current_pin
+
+        pin = current_pin()
+        if pin is not None and pin.settings is not None:
+            return pin.settings
+        return self._cfg
+
+    def live(self) -> TurnEngineConfig:
+        """The held config, ignoring any pin — what a new turn would take."""
         return self._cfg
 
     def set(self, cfg: TurnEngineConfig) -> None:

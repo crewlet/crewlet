@@ -20,6 +20,7 @@ Three properties, each of which was a bug in an earlier draft:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -456,3 +457,97 @@ def test_unknown_posture_reads_as_serve() -> None:
 
     assert EngineNodeRuntime(_Broken()).posture == "serve"
     assert EngineNodeRuntime(_Broken()).applied_epoch == 0
+
+
+# ── a live apply does not move a turn already running ────────────────
+
+
+async def test_a_live_apply_drains_the_seat_before_swapping_it() -> None:
+    """The whole point of 4.E/4.F, end to end.
+
+    A config apply that changes a role rebuilds that role's definition
+    and can respawn the MCP children its tools dispatch to.  A turn
+    already running keeps reading its own pinned view, and the apply
+    waits for it rather than landing mid-round.
+    """
+    from crewlet.agent.definition import AgentDefinition
+
+    engine, queue = await _engine_with_queue()
+    try:
+        turn_engine = engine.turn_engine
+        assert turn_engine is not None
+        agent = engine.agent_pool.agents[0]
+        original = agent.live_definition
+
+        # A turn is mid-flight on this seat.
+        turn_engine._seat_enter(agent.role_name)
+        released = asyncio.Event()
+
+        async def _apply() -> None:
+            new_org = Organization(
+                name="Acme",
+                mission="ship faster",
+                units=[
+                    OrgUnit(
+                        name="Core",
+                        type="team",
+                        lead="Dev",
+                        roles=[Role(name="Dev", goal="new goal")],
+                    )
+                ],
+            )
+            await engine._apply_org_diff(engine.org, new_org)
+            released.set()
+
+        applying = asyncio.create_task(_apply())
+        # The apply is parked on the drain, so the seat's definition is
+        # untouched while the turn runs.
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert not released.is_set()
+        assert agent.live_definition is original
+
+        turn_engine._seat_exit(agent.role_name)
+        await asyncio.wait_for(applying, timeout=5.0)
+        assert isinstance(agent.live_definition, AgentDefinition)
+        assert agent.live_definition is not original
+    finally:
+        await engine.stop()
+        await queue.stop()
+
+
+async def test_a_wedged_seat_does_not_block_the_apply_forever() -> None:
+    """The drain is a cap, not a contract — an apply that never finishes
+    is strictly worse than one turn seeing a mid-flight rewire."""
+    engine, queue = await _engine_with_queue()
+    try:
+        turn_engine = engine.turn_engine
+        assert turn_engine is not None
+        agent = engine.agent_pool.agents[0]
+        turn_engine._seat_enter(agent.role_name)  # never exits
+
+        original = agent.live_definition
+        new_org = Organization(
+            name="Acme",
+            mission="ship faster",
+            units=[
+                OrgUnit(
+                    name="Core",
+                    type="team",
+                    lead="Dev",
+                    roles=[Role(name="Dev", goal="new goal")],
+                )
+            ],
+        )
+        # Shorten the cap so the test does not sit out the real one.
+        original_drain = turn_engine.drain_seat
+
+        async def _short_drain(role_name: str, **_kwargs) -> bool:
+            return await original_drain(role_name, timeout=0.05)
+
+        turn_engine.drain_seat = _short_drain  # type: ignore[method-assign]
+        await asyncio.wait_for(engine._apply_org_diff(engine.org, new_org), timeout=5.0)
+        assert agent.live_definition is not original
+    finally:
+        await engine.stop()
+        await queue.stop()

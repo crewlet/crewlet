@@ -34,7 +34,7 @@ How the engine works, one subsystem per page:
 
 - **[Overview](concepts/overview.md)** — The org chart as execution graph, design principles, high-level architecture
 - **[Configuration](concepts/configuration.md)** — Two-tier config (ops-owned `config.yaml` + founder-owned versioned PostgreSQL), bootstrap sequence, unconfigured state, live propagation, auth, snapshot/rollback, whole-config encryption at rest
-- **[Control Plane](concepts/control-plane.md)** — How every node converges on one company config: the append-only activation epoch log, the reconcile poll, per-node apply status (`ok` / `error` / `degraded`), the posture a lagging node takes (`serve` / `wait` / `shed` / `isolated` / `stuck`), and what `/health` and `/ready` report
+- **[Control Plane](concepts/control-plane.md)** — How every node converges on one company config: the append-only activation epoch log, the reconcile poll, per-node apply status (`ok` / `error` / `degraded`), the posture a lagging node takes (`serve` / `wait` / `shed` / `isolated` / `stuck`), what a running turn sees through a live apply, and what `/health` and `/ready` report
 - **[Secret Store](concepts/secret-store.md)** — Encrypted `secret_values` table consulted ahead of `os.environ` when resolving `${VAR}`: `crewlet secrets set/list/unset/get/rekey`, the `--secret-store` provisioning sink that hands minted credentials straight to the engine, store-wins precedence, and the Tier A root-of-trust boundary
 - **[Organization Model](concepts/organization-model.md)** — Hierarchy, departments, teams, roles (seats), handles
 - **[Humans in the Org Chart](concepts/humans-in-the-org.md)** — Human seats (`kind: human`): hierarchy membership, contact identities, notify delivery, escalation terminus, prompts and lookup

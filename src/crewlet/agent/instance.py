@@ -49,7 +49,9 @@ class AgentInstance:
         # fresh ``uuid4()`` keeps the in-memory / test path working
         # unchanged.
         self.id: UUID = id if id is not None else uuid4()
-        self.definition = definition
+        # Read through the ``definition`` property below, never directly:
+        # a live config apply reassigns this mid-turn.
+        self._definition = definition
         self.email = email
         self.handle = handle
         self.state = AgentState.CREATED
@@ -94,6 +96,39 @@ class AgentInstance:
             email=self.email,
             handle=self.handle,
         )
+
+    @property
+    def definition(self) -> AgentDefinition:
+        """This agent's definition — pinned for the duration of a turn.
+
+        A live config apply reassigns the definition on the running
+        instance, and the definition (role prompt, model, tool list) is
+        read from roughly twenty places across a turn's phases.  Without
+        the pin a turn could plan against one role and execute as
+        another.  Outside a turn — and inside a turn belonging to a
+        different seat — this is the live value, unchanged.
+
+        See :mod:`crewlet.agent.turn_pin`.
+        """
+        from crewlet.agent.turn_pin import current_pin
+
+        pin = current_pin()
+        if pin is not None and pin.agent_id == str(self.id):
+            return pin.definition
+        return self._definition
+
+    @definition.setter
+    def definition(self, value: AgentDefinition) -> None:
+        self._definition = value
+
+    @property
+    def live_definition(self) -> AgentDefinition:
+        """The current definition, ignoring any pin.
+
+        For the config-apply path itself, which has to diff against what
+        is actually installed rather than what some turn is reading.
+        """
+        return self._definition
 
     @property
     def total_tokens(self) -> int:

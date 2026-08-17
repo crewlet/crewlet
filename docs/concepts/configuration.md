@@ -159,7 +159,9 @@ Converging runs `await self.apply_config(payload)`, which:
 
 On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-seeds the running transports' routing maps from the rolled-back org, so a failed apply never leaves live webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The converge path unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in `config_apply_status` so peers can see it.
 
-`ConfigApplyError` also carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Rollback is synchronous: it cannot respawn MCP subprocesses, and it reinstalls transport objects that were already stopped. Such a node reports the prior epoch while its tool surface is amputated, so the control plane records it as `degraded` and never counts it as converged — see [Control Plane](control-plane.md).
+Rollback **restarts** the transports it restores, routing them through the same swap the apply used, so a failed apply cannot leave the node with a live config and a dead inbound path.
+
+What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. `ConfigApplyError` therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
 
 ### The API half
 
