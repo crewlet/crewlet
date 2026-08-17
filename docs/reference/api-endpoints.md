@@ -10,7 +10,8 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)) |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
+| `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |

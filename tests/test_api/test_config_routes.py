@@ -12,10 +12,10 @@ import pytest
 import yaml
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.config import ApiAuthConfig, ApiAuthTokenConfig, ApiConfig, BootstrapConfig
 from crewlet.db.company_config import CompanyConfigRevision
 from crewlet.events.types import ConfigRevisionActivated, Event
+from tests.test_api.helpers import create_app
 
 
 class _MockQueue:
@@ -507,7 +507,8 @@ def test_health_flips_to_true_after_priming(
     revision; once primed, /health reports True."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
 
     store.get_active.return_value = _make_revision({"name": "Acme"})
     app = create_app(
@@ -523,16 +524,23 @@ def test_health_flips_to_true_after_priming(
 # ── webhook unconfigured early-out ───────────────────────────────────
 
 
-def test_jira_webhook_dropped_when_unconfigured(client: TestClient) -> None:
-    """Jira webhook returns 200-and-drop when engine has no active config."""
+def test_jira_webhook_rejected_when_unconfigured(client: TestClient) -> None:
+    """An unconfigured process answers 503 so the sender RETRIES.
+
+    The old 200-and-drop told Jira the delivery had been accepted while
+    discarding it — survivable when "unconfigured" meant the whole
+    deployment, and silent unrecoverable loss the moment one process of
+    several has simply not caught up yet.
+    """
     resp = client.post(
         "/webhooks/jira",
         json={"webhookEvent": "jira:issue_created", "issue": {}},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     body = resp.json()
-    assert body["status"] == "dropped"
+    assert body["status"] == "unavailable"
     assert body["reason"] == "unconfigured"
+    assert resp.headers["retry-after"]
 
 
 def test_webhook_passes_through_after_configured(
@@ -541,7 +549,8 @@ def test_webhook_passes_through_after_configured(
     """Once primed, webhook routes process normally (no drop)."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
 
     store.get_active.return_value = _make_revision({"name": "Acme"})
     app = create_app(
@@ -573,7 +582,8 @@ def test_attach_config_refresh_is_idempotent(
     twice on every revision activation."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
 
     store.get_active.return_value = None  # unconfigured
     subscribe_calls: list[str] = []
@@ -660,8 +670,9 @@ def test_configured_flips_back_to_false_after_apply_error_unconfigured(
     honest and the webhook unconfigured drop keeps firing."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
     from crewlet.events.types import ConfigRevisionApplied
+    from tests.test_api.helpers import create_app
 
     handlers: dict[str, Any] = {}
 
@@ -706,8 +717,9 @@ def test_configured_stays_true_after_apply_error_when_db_still_has_active(
     DB still has an active revision."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
     from crewlet.events.types import ConfigRevisionApplied
+    from tests.test_api.helpers import create_app
 
     handlers: dict[str, Any] = {}
 
@@ -753,8 +765,9 @@ def test_revision_activated_event_refreshes_app_state(
     and expects the API process's dashboard reads to reflect it."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
     from crewlet.db.agents import derive_agent_id
+    from tests.test_api.helpers import create_app
 
     handlers: dict[str, Any] = {}
 

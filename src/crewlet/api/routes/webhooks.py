@@ -31,6 +31,12 @@ from crewlet.telemetry import tracer
 
 logger = get_logger("api.routes")
 
+# ``Retry-After`` on the unconfigured 503. Matched to the control plane's
+# reconcile cadence: a node that missed an activation event picks the
+# revision up on its next poll, so telling a sender to come back sooner
+# just burns deliveries against a node that cannot have converged yet.
+WEBHOOK_UNCONFIGURED_RETRY_AFTER_SECONDS = 15
+
 _SENSITIVE_HEADERS = frozenset({"authorization", "cookie"})
 
 
@@ -144,22 +150,39 @@ async def _log_event(
 def _webhook_unconfigured_response(
     request: Request, *, source: str, event_type: str = ""
 ) -> JSONResponse | None:
-    """Return a 200 OK + WARNING log when the engine is unconfigured.
+    """Return a 503 + WARNING log when this process has no active config.
 
-    Webhook providers hammer their endpoints on a fixed retry schedule.
-    When the engine has no active company config there's nobody to
-    deliver to — but a non-2xx triggers retry storms, so we drop with a
-    200 (the signature check has already run in the caller).
+    **Fail closed, not quiet.** This used to answer 200 to avoid provoking
+    retries — which told the sender the delivery had been accepted when
+    nothing had been done with it. That trade only made sense while a
+    missing config meant the whole deployment was unconfigured. It stops
+    being true the moment more than one process serves webhooks: a node
+    that missed a config activation would silently discard real events
+    that its peers were handling fine, and the sender, having been told
+    "200", would never retry. Silent, unretried, unrecoverable loss.
+
+    A 503 is the honest answer — nothing here can handle this delivery
+    right now — and it is precisely what every provider's retry schedule
+    exists for. Slack disabling an endpoint after sustained 5xx is the
+    correct pressure toward fixing a genuinely-unconfigured deployment,
+    not a reason to lie about the outcome.
+
+    ``Retry-After`` keeps well-behaved senders from hot-looping while a
+    node is still converging on its first revision.
     """
     if getattr(request.app.state, "configured", False):
         return None
     logger.warning(
-        "webhook_dropped_unconfigured",
+        "webhook_rejected_unconfigured",
         source=source,
         event_type=event_type,
         remote=request.client.host if request.client else "",
     )
-    return JSONResponse({"status": "dropped", "reason": "unconfigured"})
+    return JSONResponse(
+        {"status": "unavailable", "reason": "unconfigured"},
+        status_code=503,
+        headers={"Retry-After": str(WEBHOOK_UNCONFIGURED_RETRY_AFTER_SECONDS)},
+    )
 
 
 # ---------------------------------------------------------------------------

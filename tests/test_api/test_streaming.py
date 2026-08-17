@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.api.streaming import (
     StreamService,
     build_health_envelope,
@@ -24,6 +23,7 @@ from crewlet.events.types import (
     TaskStarted,
 )
 from crewlet.timescaledb.memory import MemoryEventStore
+from tests.test_api.helpers import create_app
 
 
 class _MockQueue:

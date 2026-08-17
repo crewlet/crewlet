@@ -60,10 +60,6 @@ def create_app(
     event_queue: Any,
     *,
     event_store: Any = None,
-    agent_roles: list[dict[str, Any]] | None = None,
-    org_data: dict[str, Any] | None = None,
-    schedules_data: list[dict[str, Any]] | None = None,
-    tools_data: list[dict[str, Any]] | None = None,
     database: Any = None,
     github_webhook_secret: str | None = None,
     gitlab_signing_secret: str | None = None,
@@ -73,10 +69,19 @@ def create_app(
     forge_app_id: str = "",
     bootstrap: Any = None,
     company_config_store: Any = None,
-    engine: Any = None,
+    runtime: Any = None,
     stream: StreamService | None = None,
 ) -> Starlette:
     """Build a Starlette ASGI application.
+
+    **One wiring, everywhere.**  The app learns the company from the
+    active config revision (:func:`attach_config_refresh`) and learns
+    what is happening from the broadcast event stream — whether it runs
+    inside the engine process or on its own host.  There are deliberately
+    no parameters for pre-loaded roles, org, schedules or tools: passing
+    a boot-time snapshot on one path and deriving it on the other is what
+    made these two the same surface with two implementations, and the
+    divergence shipped three bugs.  See :mod:`crewlet.api.runtime`.
 
     Parameters
     ----------
@@ -86,15 +91,6 @@ def create_app(
         An ``EventStore`` instance for persistent event storage and
         agent state queries.  When ``None``, events/agents endpoints
         return empty results.
-    agent_roles:
-        Pre-loaded role list from YAML config (served by GET /agents).
-    org_data:
-        Serialized organization hierarchy (served by GET /org).
-    schedules_data:
-        Resolved role/unit schedule descriptors (served by GET
-        /schedules, enriched per-request with next-run + run history).
-    tools_data:
-        List of tool descriptions (served by GET /tools).
     database:
         Optional ``Database`` pool for learning-store reads
         (episodes, counterparty profiles, synthesized skills) used by
@@ -123,12 +119,12 @@ def create_app(
     company_config_store:
         Optional :class:`CompanyConfigStore`.  Required to mount the
         ``/config/*`` routes.
-    engine:
-        Optional ``Engine`` reference for live runtime metrics
-        (``in_flight_count``).  Only available on the embedded-API
-        path where engine and API share a process; the standalone
-        API process leaves this ``None`` and live-runtime fields are
-        omitted from ``/health``.
+    runtime:
+        Optional :class:`~crewlet.api.runtime.NodeRuntime` — the single
+        seam for facts only a co-located engine can answer (in-flight
+        turns, drain state, the live MCP tool surface).  Registered by
+        the embedded path; ``None`` on a standalone process, where those
+        fields are simply omitted.
     stream:
         Optional pre-wired :class:`~crewlet.api.streaming.StreamService`.
         The engine constructs one and wires it into the event flow (so
@@ -193,10 +189,12 @@ def create_app(
     # deployment those are two processes on two clocks.
     app.state.started_at = datetime.now(UTC).isoformat()
     app.state.event_queue = event_queue
-    app.state.agent_roles = agent_roles or []
-    app.state.org_data = org_data or {}
-    app.state.schedules_data = schedules_data or []
-    app.state.tools_data = tools_data or []
+    # Populated exclusively by ``attach_config_refresh`` from the active
+    # revision — never seeded from a boot-time snapshot, on either path.
+    app.state.agent_roles = []
+    app.state.org_data = {}
+    app.state.schedules_data = []
+    app.state.tools_data = []
     app.state.event_store = event_store
     app.state.database = database
     app.state.github_webhook_secret = github_webhook_secret
@@ -220,7 +218,7 @@ def create_app(
     )
     app.state.auth_tokens = auth_tokens
     app.state.auth_disabled = auth_disabled
-    app.state.engine = engine
+    app.state.runtime = runtime
     # Names the process answering /health; see build_health_envelope.
     app.state.node_id = resolve_node_id(bootstrap)
     app.state.stream = stream

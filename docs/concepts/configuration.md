@@ -120,13 +120,14 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 | Route | Behaviour while unconfigured |
 |-------|------------------------------|
 | `GET /health` | `200 {"status": "unconfigured", "node": "node-0", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
+| `GET /ready` | `503 {"ready": false, "configured": false}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
 | Per-entity routes (`POST /config/roles`, etc.) | `409 Conflict` — operator must initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
-| `POST /webhooks/...` | Signature check still runs; body logged at WARNING; returns `200 {"status": "dropped", "reason": "unconfigured"}` to avoid retry storms |
+| `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
 Transition out of unconfigured: the first `crewlet.config.revision_activated` arrives → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
 

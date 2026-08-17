@@ -488,21 +488,16 @@ async def test_refresh_plane_routing_seeds_leads_and_exclusions() -> None:
     engine._refresh_plane_routing(object())
 
 
-async def test_embedded_api_receives_plane_webhook_secret(monkeypatch) -> None:
-    """``_start_embedded_api`` passes the resolved Plane webhook secret
-    from ``self._plane_config`` into ``create_app`` — the seam the
-    ``/webhooks/plane`` route verifies against."""
+async def test_embedded_api_resolves_the_plane_webhook_secret(monkeypatch) -> None:
+    """The embedded API ends up with the resolved Plane webhook secret —
+    the seam ``/webhooks/plane`` verifies against.
+
+    Asserted on the app's state rather than on a ``create_app`` argument:
+    the secret is now DERIVED from the active config by the same
+    ``attach_config_refresh`` path the standalone API uses, so there is no
+    parameter to observe and nothing left that only one deployment does.
+    """
     import uvicorn
-
-    import crewlet.api.app as api_app
-
-    captured: dict = {}
-
-    def _fake_create_app(**kwargs):  # type: ignore[no-untyped-def]
-        captured.update(kwargs)
-        return MagicMock()
-
-    monkeypatch.setattr(api_app, "create_app", _fake_create_app)
 
     async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
         return None
@@ -517,7 +512,7 @@ async def test_embedded_api_receives_plane_webhook_secret(monkeypatch) -> None:
     )
     await engine._start_embedded_api()
     try:
-        assert captured["plane_webhook_secret"] == "wh-secret-123"
+        assert engine._api_app.state.plane_webhook_secret == "wh-secret-123"
     finally:
         if engine._api_serve_task is not None:
             await engine._api_serve_task
@@ -526,19 +521,9 @@ async def test_embedded_api_receives_plane_webhook_secret(monkeypatch) -> None:
 async def test_embedded_api_plane_secret_none_when_unconfigured(
     monkeypatch,
 ) -> None:
-    """Without a Plane integration the pass-through stays ``None`` (the
-    route then answers 500 ``webhook verification not configured``)."""
+    """Without a Plane integration the secret stays falsy (the route then
+    answers 500 ``webhook verification not configured``)."""
     import uvicorn
-
-    import crewlet.api.app as api_app
-
-    captured: dict = {}
-
-    def _fake_create_app(**kwargs):  # type: ignore[no-untyped-def]
-        captured.update(kwargs)
-        return MagicMock()
-
-    monkeypatch.setattr(api_app, "create_app", _fake_create_app)
 
     async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
         return None
@@ -548,13 +533,10 @@ async def test_embedded_api_plane_secret_none_when_unconfigured(
     engine = await make_engine(company=CompanyConfig(name="Acme"))
     await engine._start_embedded_api()
     try:
-        assert captured["plane_webhook_secret"] is None
+        assert not engine._api_app.state.plane_webhook_secret
     finally:
         if engine._api_serve_task is not None:
             await engine._api_serve_task
-
-
-# ── knowledge backend live rewire (searcher + skills sync) ─────────
 
 
 def _mk_prompt_skill(key: str = "tool:stale", page_id: str = "P-STALE"):
@@ -1412,3 +1394,73 @@ async def test_role_add_registers_slack_app_before_org_swap() -> None:
     )
     swe_config = next(cfg for h, cfg in captured if h == "agent-swe")
     assert swe_config.bot_token == "xoxb-swe"
+
+
+async def test_embedded_api_uses_the_broadcast_stream_not_a_publish_listener(
+    monkeypatch,
+) -> None:
+    """The core of the wiring merge.
+
+    ``add_publish_listener`` fires only on THIS process's publishes, so an
+    embedded dashboard fed by it is structurally unable to see a peer's
+    events — it would show 1/N of a fleet's activity and look correct.
+    ``subscribe_stream`` is the broadcast path the standalone API already
+    used; both now use it, which is what makes them one wiring.
+    """
+    import uvicorn
+
+    async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(uvicorn.Server, "serve", _noop_serve)
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+
+    listeners_before = len(getattr(engine.event_queue, "_publish_listeners", []))
+    subscribed: list[str] = []
+    original = engine.event_queue.subscribe_stream
+
+    async def _spy(pattern, handler):  # type: ignore[no-untyped-def]
+        subscribed.append(pattern)
+        return await original(pattern, handler)
+
+    monkeypatch.setattr(engine.event_queue, "subscribe_stream", _spy)
+
+    await engine._start_embedded_api()
+    try:
+        assert subscribed == ["crewlet.events.>"]
+        # The event-store writer keeps its own publish listener; the point
+        # is that the STREAM no longer adds one.
+        assert (
+            len(getattr(engine.event_queue, "_publish_listeners", []))
+            == listeners_before
+        )
+    finally:
+        if engine._api_serve_task is not None:
+            await engine._api_serve_task
+
+
+async def test_embedded_api_registers_a_runtime_for_live_engine_facts(
+    monkeypatch,
+) -> None:
+    """In-flight count and drain state cannot come from config or the
+    event stream — they are properties of a live engine object. That is
+    the one seam, and it replaces five embedded-only parameters."""
+    import uvicorn
+
+    from crewlet.api.runtime import EngineNodeRuntime
+
+    async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(uvicorn.Server, "serve", _noop_serve)
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    await engine._start_embedded_api()
+    try:
+        runtime = engine._api_app.state.runtime
+        assert isinstance(runtime, EngineNodeRuntime)
+        assert runtime.engine is engine
+    finally:
+        if engine._api_serve_task is not None:
+            await engine._api_serve_task

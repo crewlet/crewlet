@@ -14,9 +14,9 @@ from datetime import UTC, datetime
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.api.tokens import aggregate_phase_events
 from crewlet.timescaledb.memory import MemoryEventStore
+from tests.test_api.helpers import create_app
 
 # --------------------------------------------------------------------------- #
 # Aggregator unit tests

@@ -1778,7 +1778,17 @@ def cmd_api(args: argparse.Namespace) -> int:
         # / ``github_webhook_secret`` / ``forge_app_id`` are all
         # populated by ``attach_config_refresh`` after the app starts
         # (from the active revision, then refreshed live on every
-        # ``ConfigRevisionActivated`` event).
+        # ``ConfigRevisionActivated`` event) — the same derivation the
+        # embedded API uses.
+        #
+        # The OTLP receiver is built here too. In a split deployment THIS
+        # is the externally-reachable process, so it is what
+        # CREWLET_SANDBOX_OTEL_RECEIVER_URL names; omitting it answered
+        # 503 to every trace, metric and log a detached coding run
+        # exported. Tokens are signed, so the engine mints and this
+        # process verifies without sharing memory.
+        from crewlet.sandbox.otel import build_sandbox_otel_receiver
+
         app = create_app(
             event_queue=event_queue,
             event_store=event_store,
@@ -1786,6 +1796,7 @@ def cmd_api(args: argparse.Namespace) -> int:
             stream=stream,
             bootstrap=bootstrap,
             company_config_store=company_config_store,
+            sandbox_otel_receiver=build_sandbox_otel_receiver(bootstrap),
         )
 
         await event_store.start()

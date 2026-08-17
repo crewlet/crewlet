@@ -198,10 +198,9 @@ def _tools_data_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     Per-role MCP tools (atlassian, slack, github) are NOT visible here —
     they're derived from the ``jira:`` / ``confluence:`` / ``slack:`` /
-    ``github:`` blocks and only resolved at engine boot.  The embedded
-    API path (``app.state.engine`` is set) calls
-    :meth:`Engine._build_tools_data` instead, which sees every live
-    tool.
+    ``github:`` blocks and only resolved at engine boot.  A process with
+    a :class:`~crewlet.api.runtime.NodeRuntime` registered asks it
+    instead, and sees every live tool.
     """
     builtin_tool_names = [
         (
@@ -240,12 +239,12 @@ def _apply_payload_to_app(app: Any, payload: dict[str, Any]) -> None:
     Called from both ``cmd_api`` boot time (after store.get_active())
     and from the Pulsar handler below.
 
-    Tools view: when the embedded API has a live engine reference
-    (``app.state.engine``), the engine's ``_build_tools_data()`` is
-    the source of truth — it enumerates the live tool registry +
-    per-role MCP tools (atlassian, slack, github), which the payload
-    alone can't reveal.  Standalone API processes (no engine handle)
-    fall back to :func:`_tools_data_from_payload`.
+    Tools view: when a :class:`~crewlet.api.runtime.NodeRuntime` is
+    registered (an engine in this process), it is the source of truth —
+    it enumerates the live tool registry + per-role MCP tools
+    (atlassian, slack, github), which the payload alone can't reveal.
+    Without one, or before the spawn cascade has run, this falls back to
+    :func:`_tools_data_from_payload`.
     """
     # Materialise once; the engine has already validated this payload
     # upstream of revision_activated, but the standalone API process
@@ -282,17 +281,12 @@ def _apply_payload_to_app(app: Any, payload: dict[str, Any]) -> None:
     app.state.org_data = _serialize_org_data(readable)
     app.state.agent_roles = _serialize_agent_roles(readable)
     app.state.schedules_data = _serialize_schedules(cfg, org)
-    engine = getattr(app.state, "engine", None)
-    if engine is not None and hasattr(engine, "_build_tools_data"):
-        try:
-            app.state.tools_data = engine._build_tools_data()
-        except Exception:
-            # Defensive: engine hasn't finished spawning yet (the
-            # cascade runs after this handler returns).  Fall back to
-            # the thin payload-derived view so /tools doesn't 500.
-            app.state.tools_data = _tools_data_from_payload(readable)
-    else:
-        app.state.tools_data = _tools_data_from_payload(readable)
+    # ``NodeRuntime.tools_data`` returns [] rather than raising when the
+    # spawn cascade hasn't run yet (it runs after this handler returns),
+    # so an empty result is the signal to use the payload-derived view.
+    runtime = getattr(app.state, "runtime", None)
+    live_tools = runtime.tools_data() if runtime is not None else []
+    app.state.tools_data = live_tools or _tools_data_from_payload(readable)
     _set_webhook_secrets(app, plain)
     app.state.configured = True
     _broadcast_config_change(app)
@@ -415,10 +409,12 @@ async def subscribe_config_refresh(app: Any, store: Any, event_queue: Any) -> No
             # engine reference; re-derive ``tools_data`` from it so
             # ``GET /tools`` reflects every discovered MCP tool, not
             # just the thin payload-derived list.
-            engine = getattr(app.state, "engine", None)
-            if engine is not None and hasattr(engine, "_build_tools_data"):
+            runtime = getattr(app.state, "runtime", None)
+            if runtime is not None:
                 try:
-                    app.state.tools_data = engine._build_tools_data()
+                    live_tools = runtime.tools_data()
+                    if live_tools:
+                        app.state.tools_data = live_tools
                     logger.info(
                         "api_tools_data_refreshed_from_engine",
                         revision_id=event.revision_id,

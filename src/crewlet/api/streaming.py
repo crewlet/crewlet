@@ -186,15 +186,21 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
     "the config apply failed" into "the config apply failed on node-2"
     once a load balancer is in front of more than one process, and the
     only way a caller can tell which one it reached.
+
+    ``in_flight`` / ``shutting_down`` are present only when a
+    :class:`~crewlet.api.runtime.NodeRuntime` is registered (the embedded
+    path); a standalone process omits them.  ``status`` flips to
+    ``"shutting_down"`` during a graceful drain so the dashboard's live
+    dot tracks the drain instead of staying green.
     """
-    engine = getattr(app.state, "engine", None)
+    runtime = getattr(app.state, "runtime", None)
     stream = getattr(app.state, "stream", None)
     configured = bool(getattr(app.state, "configured", False))
     body: dict[str, Any] = {
         "status": "ok" if configured else "unconfigured",
         "node": str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID),
         "configured": configured,
-        "engine": engine is not None,
+        "engine": runtime is not None,
         "version": __version__,
         # The API process's own start. Deliberately separate from the
         # engine's: on the standalone deployment they are two processes
@@ -206,10 +212,9 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
         "feed_hydrated": bool(stream is not None and stream.hydrated),
         "clients": stream.client_count if stream is not None else 0,
     }
-    if engine is not None:
-        body["in_flight"] = engine.in_flight_count
-        body["engine_started_at"] = str(getattr(engine, "started_at", "") or "")
-        shutting_down = engine.shutting_down or not engine.is_running
+    if runtime is not None:
+        body["in_flight"] = runtime.in_flight
+        shutting_down = runtime.shutting_down
         body["shutting_down"] = shutting_down
         if shutting_down:
             body["status"] = "shutting_down"
@@ -226,6 +231,33 @@ def _schedule_projection(app: Any) -> list[dict[str, Any]]:
     from crewlet.api.routes.org import schedule_projection
 
     return schedule_projection(app)
+
+
+def build_readiness_envelope(app: Any) -> tuple[dict[str, Any], int]:
+    """Readiness for a load balancer: ``(body, http_status)``.
+
+    Distinct from ``/health`` on purpose.  Liveness answers "is this
+    process alive" — it must stay 200 through a drain so an orchestrator
+    does not SIGKILL a node mid-turn.  Readiness answers "should traffic
+    come here", and during a drain the answer is no: the balancer should
+    stop sending requests while in-flight turns finish.
+
+    Also not ready before the first config revision is applied — an
+    unconfigured node cannot verify a webhook signature, and taking it
+    out of rotation is how a fleet avoids answering with a node that
+    would only reject the delivery.
+    """
+    runtime = getattr(app.state, "runtime", None)
+    configured = bool(getattr(app.state, "configured", False))
+    draining = bool(runtime.shutting_down) if runtime is not None else False
+    ready = configured and not draining
+    body: dict[str, Any] = {
+        "ready": ready,
+        "node": str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID),
+        "configured": configured,
+        "draining": draining,
+    }
+    return body, (200 if ready else 503)
 
 
 class StreamService:

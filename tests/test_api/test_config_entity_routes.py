@@ -10,10 +10,10 @@ from uuid import uuid4
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.config import ApiAuthConfig, ApiAuthTokenConfig, ApiConfig, BootstrapConfig
 from crewlet.db.company_config import CompanyConfigRevision
 from crewlet.events.types import Event
+from tests.test_api.helpers import create_app
 
 
 class _MockQueue:

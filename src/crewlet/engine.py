@@ -2743,99 +2743,63 @@ class Engine:
         import uvicorn
 
         from crewlet.api.app import attach_config_refresh, create_app
+        from crewlet.api.runtime import EngineNodeRuntime
         from crewlet.api.streaming import StreamService
 
-        # Field-for-field the same shape ``_serialize_agent_roles``
-        # produces for the standalone API: two producers of one payload
-        # that disagree is how a field ends up present on one
-        # deployment and missing on the other.
-        agent_roles = [
-            {
-                "name": agent.definition.role_name,
-                "role": agent.role_name,
-                "id": agent.id_str,
-                "goal": agent.definition.role.goal,
-                "handle": agent.handle,
-                "token_budget": int(agent.definition.role.token_budget or 0),
-            }
-            for agent in self.agent_pool.agents
-        ]
-
-        org_data = self.org.to_api_dict()
-
-        from crewlet.config import SchedulingConfig
-        from crewlet.schedule import describe_schedules
-
-        sched_cfg = self._scheduling_config or SchedulingConfig()
-        schedules_data = describe_schedules(
-            self.org, default_timezone=sched_cfg.default_timezone
-        )
-
-        tools_data = self._build_tools_data()
-
-        gh_secret = (
-            self._github_config.webhook_secret
-            if self._github_config is not None
-            else None
-        )
-        gl_signing = (
-            self._gitlab_config.signing_secret
-            if self._gitlab_config is not None
-            else None
-        )
-        pl_secret = (
-            self._plane_config.webhook_secret
-            if self._plane_config is not None
-            else None
-        )
-        # Per-agent Slack signing secrets, so the embedded API can verify
-        # inbound Slack requests at the edge without reaching into the
-        # transport (the standalone API has no engine to reach into, and
-        # gets the same map from attach_config_refresh).
-        slack_signing_secrets = {
-            handle: app_cfg.signing_secret
-            for handle, app_cfg in getattr(
-                self._get_running_slack_transport(), "apps", {}
-            ).items()
-            if app_cfg.signing_secret
-        }
-        forge_app_id = getattr(self, "_forge_app_id", "")
         bootstrap = getattr(self, "_bootstrap", None)
         store = getattr(self, "_company_config_store", None)
 
-        # Wire the stream service directly into the shared EventQueue's
-        # publish listener — events emitted in this process update the
-        # live-state projection and land on every connected dashboard
-        # WebSocket without a queue round-trip.  Cached on ``self`` so
-        # repeated _start_embedded_api calls (test harnesses, future
-        # restart paths) don't stack listeners.
+        # Subscribe the stream service to the BROADCAST event stream —
+        # the same wiring ``crewlet run api`` uses.  The old embedded
+        # path registered a publish listener instead, which fires only on
+        # this process's own publishes: correct for one process, and
+        # structurally unable to see a peer's events.  Unifying on the
+        # broadcast path is what makes the two deployments the same code
+        # rather than the same surface with two implementations.
+        #
+        # Cached on ``self`` so repeated _start_embedded_api calls (test
+        # harnesses, future restart paths) don't stack subscriptions.
         stream = getattr(self, "_stream", None)
         if stream is None:
             stream = StreamService()
-            self.event_queue.add_publish_listener(stream.ingest)
+            try:
+                await self.event_queue.subscribe_stream(
+                    "crewlet.events.>", stream.ingest
+                )
+            except Exception:
+                logger.exception("embedded_api_stream_subscribe_failed")
             self._stream = stream
 
+        # Webhook secrets, roles, org, schedules and tools are NOT passed
+        # in: ``attach_config_refresh`` derives every one of them from the
+        # active revision, on this path exactly as on the standalone one.
         app = create_app(
             event_queue=self.event_queue,
             event_store=self._event_store,
-            agent_roles=agent_roles,
-            org_data=org_data,
-            schedules_data=schedules_data,
-            tools_data=tools_data,
             database=self.storage,
-            github_webhook_secret=gh_secret,
-            gitlab_signing_secret=gl_signing,
-            plane_webhook_secret=pl_secret,
-            slack_signing_secrets=slack_signing_secrets,
             sandbox_otel_receiver=getattr(self, "_sandbox_otel_receiver", None),
-            forge_app_id=forge_app_id,
             bootstrap=bootstrap,
             company_config_store=store,
-            engine=self,
+            runtime=EngineNodeRuntime(self),
             stream=stream,
         )
         if store is not None:
             await attach_config_refresh(app)
+        elif self._active_config is not None:
+            # No config store — a programmatic embed, or an engine built
+            # without a database. There is no revision to read and no
+            # activation event to react to, but the app still needs its
+            # roles, org, schedules and (above all) webhook secrets. Feed
+            # the in-memory config through the SAME derivation the refresh
+            # path uses, so there is one implementation with two sources
+            # rather than two implementations.
+            from crewlet.api.config_refresh import _apply_payload_to_app
+            from crewlet.config_yaml import company_config_to_dict
+
+            try:
+                _apply_payload_to_app(app, company_config_to_dict(self._active_config))
+            except Exception:
+                logger.exception("embedded_api_state_prime_failed")
 
         class _SignalFreeServer(uvicorn.Server):
             """Uvicorn server that never touches process signal handlers.
@@ -2855,6 +2819,10 @@ class Engine:
             @contextlib.contextmanager
             def capture_signals(self):  # type: ignore[override]
                 yield
+
+        # Exposed so operators (and tests) can inspect what the embedded
+        # API actually resolved — the state is derived now, not passed in.
+        self._api_app = app
 
         uv_config = uvicorn.Config(
             app,
@@ -4947,18 +4915,9 @@ class Engine:
         sandbox. ``None`` → the sandbox uses a directly-configured collector
         endpoint (or no telemetry).
         """
-        base = os.environ.get("CREWLET_SANDBOX_OTEL_RECEIVER_URL", "")
-        if not base:
-            return None
-        from crewlet.sandbox.otel import SandboxOtelReceiver
+        from crewlet.sandbox.otel import build_sandbox_otel_receiver
 
-        return SandboxOtelReceiver(
-            base_url=base,
-            upstream_endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-            upstream_headers=_parse_otlp_headers(
-                os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
-            ),
-        )
+        return build_sandbox_otel_receiver(getattr(self, "_bootstrap", None))
 
     def _role_for_agent_id(self, agent_id: str) -> str:
         """Role name for a live agent id, or ``""``.

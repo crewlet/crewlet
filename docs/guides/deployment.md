@@ -186,6 +186,10 @@ Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned co
 - **`crewlet run`** starts the agent engine — loads the org, boots agents, and processes tasks
 - **`crewlet run api`** starts the REST API server — receives webhooks (Slack, Plane, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue for the engine to consume
 
+Both processes build the **same** application: they learn the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever one is externally reachable — in a split deployment that is the standalone API, and it now serves the `/otlp/{token}/v1/{signal}` receiver (sandbox tokens are signed, so the engine mints and the API verifies without sharing memory). Signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key and logs a warning.
+
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies).
+
 Both communicate through Pulsar. Both accept `--debug` for verbose logging.
 
 ### Replica count

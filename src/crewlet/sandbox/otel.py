@@ -17,6 +17,10 @@ This module owns the token store + the receiver façade; the HTTP route is
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import os
 import secrets
 import time
 from collections.abc import Callable
@@ -30,42 +34,69 @@ logger = get_logger("sandbox.otel")
 class SandboxOtelTokens:
     """Mint + validate per-run, trace-scoped, expiring OTLP tokens.
 
-    In-memory + process-local (the receiver runs in the same engine that
-    minted the token). Expiry is lazy: a token past its deadline validates
-    as missing. ``now`` is injectable for deterministic tests.
+    **Stateless.** A token is a signed, self-describing string —
+    ``v1.<trace_id>.<expiry>.<hmac>`` — not a key into a dictionary. Any
+    process holding the same signing key can verify one, which is what
+    the deployment actually requires: the sandbox exports to whatever
+    address ``CREWLET_SANDBOX_OTEL_RECEIVER_URL`` names, and in a split
+    deployment that is the API process, while the token was minted by the
+    engine. The previous in-memory store made those the same process by
+    assumption — so the documented split deployment answered 503 to every
+    trace, metric and log from every detached coding run, visible only as
+    exporter retry noise inside the sandbox.
+
+    Expiry is carried in the token and checked on verify, so nothing has
+    to be reaped and a restart does not invalidate live runs' endpoints.
+    ``now`` is injectable for deterministic tests.
     """
 
-    def __init__(self, *, now: Callable[[], float] = time.monotonic) -> None:
+    _VERSION = "v1"
+
+    def __init__(
+        self,
+        *,
+        signing_key: bytes | str = b"",
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        # Wall-clock by default: the expiry travels between processes, so
+        # it cannot be a monotonic reading (whose epoch is per-boot and
+        # meaningless anywhere else).
         self._now = now
-        # token -> (trace_id, expires_at_monotonic)
-        self._tokens: dict[str, tuple[str, float]] = {}
+        self._key = (
+            signing_key.encode() if isinstance(signing_key, str) else signing_key
+        ) or secrets.token_bytes(32)
 
     def mint(self, trace_id: str, *, ttl_seconds: float) -> str:
-        token = secrets.token_urlsafe(24)
-        self._tokens[token] = (trace_id, self._now() + max(1.0, ttl_seconds))
-        return token
+        expires_at = int(self._now() + max(1.0, ttl_seconds))
+        payload = f"{self._VERSION}.{trace_id}.{expires_at}"
+        return f"{payload}.{self._sign(payload)}"
 
     def validate(self, token: str) -> str | None:
-        """Return the token's ``trace_id`` if live, else ``None`` (+ reap)."""
-        entry = self._tokens.get(token)
-        if entry is None:
+        """Return the token's ``trace_id`` if the signature is valid and
+        the token is unexpired, else ``None``."""
+        parts = token.split(".")
+        if len(parts) != 4 or parts[0] != self._VERSION:
             return None
-        trace_id, expires_at = entry
+        _, trace_id, expiry_raw, signature = parts
+        payload = f"{self._VERSION}.{trace_id}.{expiry_raw}"
+        if not hmac.compare_digest(signature, self._sign(payload)):
+            return None
+        try:
+            expires_at = int(expiry_raw)
+        except ValueError:
+            return None
         if self._now() >= expires_at:
-            self._tokens.pop(token, None)
             return None
         return trace_id
 
-    def revoke(self, token: str) -> None:
-        self._tokens.pop(token, None)
+    def _sign(self, payload: str) -> str:
+        digest = hmac.new(self._key, payload.encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
-    def sweep(self) -> int:
-        """Drop expired tokens; return how many were reaped."""
-        now = self._now()
-        dead = [t for t, (_, exp) in self._tokens.items() if now >= exp]
-        for t in dead:
-            self._tokens.pop(t, None)
-        return len(dead)
+    # No ``revoke`` / ``sweep``: there is no store to evict from or reap.
+    # Neither had a production caller under the old scheme either (the
+    # minted token is discarded at the call site), so nothing is lost —
+    # a token's lifetime is its TTL, which is already sized to the run.
 
 
 class SandboxOtelReceiver:
@@ -84,12 +115,16 @@ class SandboxOtelReceiver:
         *,
         base_url: str,
         tokens: SandboxOtelTokens | None = None,
+        signing_key: bytes | str = b"",
         upstream_endpoint: str = "",
         upstream_headers: dict[str, str] | None = None,
         post: Callable[..., Any] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self.tokens = tokens or SandboxOtelTokens()
+        # ``signing_key`` must be the SAME in every process that mints or
+        # verifies a token — see :class:`SandboxOtelTokens`. Derived from
+        # the Tier A keyring by ``build_sandbox_otel_receiver``.
+        self.tokens = tokens or SandboxOtelTokens(signing_key=signing_key)
         self._upstream = upstream_endpoint.rstrip("/")
         self._upstream_headers = dict(upstream_headers or {})
         # Injectable POST for tests; defaults to an httpx call.
@@ -103,11 +138,9 @@ class SandboxOtelReceiver:
         """Mint a token and return ``(otlp_endpoint, token)`` for a run.
 
         The endpoint embeds the token so the sandbox needs no auth header.
-        Sweeps expired tokens first, so the store stays bounded to roughly
-        the concurrent-run count even when a run dies without its token
-        ever being hit again (lazy reaping alone would never collect those).
+        Nothing is stored: the token carries its own expiry and signature,
+        so any process holding the signing key can verify it.
         """
-        self.tokens.sweep()
         token = self.tokens.mint(trace_id, ttl_seconds=ttl_seconds)
         return f"{self._base_url}/otlp/{token}", token
 
@@ -136,4 +169,78 @@ class SandboxOtelReceiver:
             logger.warning("sandbox_otel_forward_failed", signal=signal)
 
 
-__all__ = ["SandboxOtelReceiver", "SandboxOtelTokens"]
+__all__ = [
+    "SandboxOtelReceiver",
+    "SandboxOtelTokens",
+    "build_sandbox_otel_receiver",
+    "otlp_signing_key",
+    "parse_otlp_headers",
+]
+
+
+def parse_otlp_headers(raw: str) -> dict[str, str]:
+    """Parse the ``OTEL_EXPORTER_OTLP_HEADERS`` ``k=v,k2=v2`` form into a dict.
+
+    Gives the receiver the *upstream* backend's auth — added on the
+    trusted side, never handed to the sandbox.
+    """
+    headers: dict[str, str] = {}
+    for pair in raw.split(","):
+        key, sep, value = pair.partition("=")
+        if sep and key.strip():
+            headers[key.strip()] = value.strip()
+    return headers
+
+
+def otlp_signing_key(bootstrap: Any = None) -> bytes:
+    """Derive the OTLP token signing key shared by every process.
+
+    Minting and verifying happen in different processes whenever the API
+    runs on its own host, so the key cannot be per-process. It is derived
+    from the Tier A keyring — the one secret every Crewlet process already
+    loads, and never from the database, which the token check must not
+    depend on.
+
+    With no keyring configured the key is random per process. Single-
+    process deployments are unaffected (the same process mints and
+    verifies); a split deployment gets a loud warning, because the
+    alternative — inventing a deterministic key from non-secret material —
+    would let anyone who can reach the endpoint forge one.
+    """
+    keys = getattr(getattr(bootstrap, "secrets", None), "keys", None) or []
+    material = "".join(sorted(f"{k.id}:{k.material}" for k in keys))
+    if material:
+        return hashlib.sha256(f"crewlet.otlp.v1|{material}".encode()).digest()
+    logger.warning(
+        "sandbox_otel_signing_key_ephemeral",
+        hint=(
+            "no Tier A `secrets.keys` — OTLP tokens are signed with a "
+            "per-process key, so a split deployment cannot verify tokens "
+            "the other process minted. Configure a keyring "
+            "(`crewlet secrets keygen`) to fix."
+        ),
+    )
+    return secrets.token_bytes(32)
+
+
+def build_sandbox_otel_receiver(bootstrap: Any = None) -> SandboxOtelReceiver | None:
+    """Build the OTLP receiver from the environment, or ``None``.
+
+    The ONE construction path, called by the engine and by the standalone
+    API alike. The standalone API used to build no receiver at all, so
+    ``/otlp/{token}/v1/{signal}`` answered 503 for every export — while
+    the docs pointed ``CREWLET_SANDBOX_OTEL_RECEIVER_URL`` at exactly that
+    process, since in a split deployment it is the externally-reachable
+    one.
+    """
+    base = os.environ.get("CREWLET_SANDBOX_OTEL_RECEIVER_URL", "")
+    if not base:
+        return None
+    return SandboxOtelReceiver(
+        base_url=base,
+        signing_key=otlp_signing_key(bootstrap),
+        upstream_endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+        upstream_headers=parse_otlp_headers(
+            os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
+        ),
+    )

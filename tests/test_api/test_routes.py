@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.config import (
     ApiAuthConfig,
     ApiAuthTokenConfig,
@@ -27,6 +26,7 @@ from crewlet.config import (
 )
 from crewlet.events.types import Event
 from crewlet.timescaledb.memory import MemoryEventStore
+from tests.test_api.helpers import create_app
 
 # ---------------------------------------------------------------------------
 # Mock infrastructure
@@ -1165,12 +1165,13 @@ class TestPlaneWebhook:
         assert resp.status_code == 400
         assert resp.json() == {"error": "invalid JSON"}
 
-    def test_unconfigured_drop_200(
+    def test_unconfigured_rejected_503(
         self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
-        """A verified delivery to an unconfigured engine is dropped with
-        a 200 AFTER signature verification, protecting Plane's five-retry
-        auto-disable counter without accepting forgeries.
+        """A verified delivery to an unconfigured process gets a 503, AFTER
+        signature verification — so a forgery is still rejected as a
+        forgery, and a genuine delivery is retried rather than silently
+        discarded behind a 200.
 
         ``create_app`` without a ``company_config_store`` defaults
         ``configured`` to True, so the test flips it explicitly."""
@@ -1184,8 +1185,9 @@ class TestPlaneWebhook:
         client = TestClient(app, raise_server_exceptions=False)
         body = json.dumps({"event": "issue", "action": "created"}).encode()
         resp = client.post("/webhooks/plane", content=body, headers=self._headers(body))
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "dropped", "reason": "unconfigured"}
+        assert resp.status_code == 503
+        assert resp.json() == {"status": "unavailable", "reason": "unconfigured"}
+        assert resp.headers["retry-after"]
         assert event_queue.published == []
 
         # A forgery is still rejected even while unconfigured.
