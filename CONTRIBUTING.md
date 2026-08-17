@@ -30,6 +30,28 @@ CI runs exactly these three commands — please make sure all of them pass
 before opening a pull request. `ruff check --fix` and `ruff format` fix most
 issues automatically.
 
+### Integration tests, and why a skip is not a pass
+
+Some suites need real infrastructure and **skip silently without it** — a
+green run on a laptop with nothing up has simply not exercised them:
+
+```bash
+docker compose up -d                                    # Pulsar + PostgreSQL
+export CREWLET_TEST_DSN=postgresql://crewlet@localhost/crewlet
+uv run pytest -m integration -s                         # -s to see measurements
+```
+
+- **`CREWLET_TEST_DSN`** adds a third parameterisation to the storage
+  contract suites, running them against a real PostgreSQL alongside the
+  memory twin and the SQL fake. The fake can only confirm that SQL means
+  what its author thought; it cannot catch a statement PostgreSQL rejects.
+- **`tests/test_queue/test_broker_behavior.py`** measures the broker
+  behaviours the multi-node design rests on (redelivery timing, cursor
+  continuity across a subscription's change of owner, prefetch size) and
+  prints the numbers under `-s`. Run it after any Pulsar upgrade: it is
+  where a changed broker behaviour should fail, rather than in a
+  production handoff.
+
 CI also builds the distributions on every pull request, because a packaging
 break is otherwise invisible until the tag that publishes it. If you touched
 `pyproject.toml`, `README.md`, or anything under `src/crewlet/` that is not a

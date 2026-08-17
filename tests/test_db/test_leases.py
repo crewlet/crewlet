@@ -9,6 +9,7 @@ express a semantic is a bug in the twin.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -132,6 +133,71 @@ class _FakeSQL:
         self.rows[resource]["expires_at"] = self._now() - timedelta(seconds=1)
 
 
+class _RealSQL:
+    """The store's SQL against a REAL PostgreSQL, when one is offered.
+
+    ``_FakeSQL`` above keeps the store's semantics under test everywhere,
+    but it can only ever confirm that the SQL means what its author
+    *thought* it meant — it cannot catch a statement PostgreSQL rejects
+    or evaluates differently. The mixed-version guard is exactly that
+    shape of risk: an ``INSERT … SELECT … WHERE NOT EXISTS`` with a
+    second ``NOT EXISTS`` inside the ``ON CONFLICT DO UPDATE`` branch is
+    not something to trust unrun.
+
+    Point ``CREWLET_TEST_DSN`` at a database and the whole contract suite
+    runs a third time, against it. Without one this backend is skipped —
+    and skipping is not passing.
+    """
+
+    # One connection per TEST, opened lazily and closed by the fixture.
+    #
+    # Not one shared pool for the module, and not one per call: pytest-asyncio
+    # gives each test a fresh event loop, and an asyncpg pool is bound to
+    # the loop that created it — reusing one across tests hangs the second
+    # test rather than failing it. Leaking one per test exhausts
+    # ``max_connections`` instead. So: per test, and closed.
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._db: Any = None
+
+    async def _pool(self) -> Any:
+        if self._db is None:
+            from crewlet.db.client import Database
+
+            self._db = await Database.connect(self._dsn)
+            # Start from an empty table. The mixed-version guard is
+            # fleet-wide, so one test's leftover lease blocks the next
+            # test's claims. DELETE rather than TRUNCATE — TRUNCATE takes
+            # an ACCESS EXCLUSIVE lock that a pooled connection can
+            # contend with its own siblings for.
+            await self._db.execute("DELETE FROM leases")
+        return self._db
+
+    async def aclose(self) -> None:
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        return await (await self._pool()).fetchrow(query, *args)
+
+    async def execute(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        return await (await self._pool()).execute(query, *args)
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        return await (await self._pool()).fetchval(query, *args)
+
+    async def expire_async(self, resource: str) -> None:
+        await (await self._pool()).execute(
+            "UPDATE leases SET expires_at = now() - interval '1 second' "
+            "WHERE resource = $1",
+            resource,
+        )
+
+
+_TEST_DSN = os.environ.get("CREWLET_TEST_DSN", "")
+
+
 def _memory() -> Any:
     return MemoryLeaseStore()
 
@@ -140,20 +206,46 @@ def _postgres() -> Any:
     return LeaseStore(_FakeSQL())
 
 
-def _expire(store: Any, resource: str) -> None:
+def _real_postgres() -> Any:
+    return LeaseStore(_RealSQL(_TEST_DSN))
+
+
+async def _expire(store: Any, resource: str) -> None:
     """Lapse a lease without sleeping."""
     if isinstance(store, MemoryLeaseStore):
         store._rows[resource]["expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
+    elif isinstance(store._db, _RealSQL):
+        await store._db.expire_async(resource)
     else:
         store._db.expire(resource)
 
 
-BACKENDS = [pytest.param(_memory, id="memory"), pytest.param(_postgres, id="postgres")]
+BACKENDS = [
+    pytest.param(_memory, id="memory"),
+    pytest.param(_postgres, id="postgres"),
+    pytest.param(
+        _real_postgres,
+        id="postgres-real",
+        marks=[
+            pytest.mark.integration,
+            pytest.mark.skipif(
+                not _TEST_DSN, reason="set CREWLET_TEST_DSN to run against real PG"
+            ),
+        ],
+    ),
+]
 
 
 @pytest.fixture(params=BACKENDS)
-def store(request: pytest.FixtureRequest) -> Any:
-    return request.param()
+async def store(request: pytest.FixtureRequest) -> Any:
+    built = request.param()
+    yield built
+    # Only the real-PG backend holds a resource worth releasing, and it
+    # MUST be released per test — see _RealSQL on why the connection
+    # cannot outlive the test's event loop.
+    db = getattr(built, "_db", None)
+    if isinstance(db, _RealSQL):
+        await db.aclose()
 
 
 async def test_acquire_unclaimed_starts_at_epoch_one(store: Any) -> None:
@@ -179,7 +271,7 @@ async def test_unbroken_same_owner_reacquire_keeps_the_epoch(store: Any) -> None
 
 async def test_takeover_after_expiry_bumps_the_epoch(store: Any) -> None:
     first = await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     taken = await store.try_acquire("seat:ceo", owner="node-b", ttl_seconds=30)
     assert taken is not None
     assert taken.owner == "node-b"
@@ -194,7 +286,7 @@ async def test_same_owner_reacquire_after_lapse_also_bumps_the_epoch(
     self — otherwise a zombie coroutine from before the gap still passes
     ``WHERE owner_epoch = $current``."""
     first = await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     again = await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
     assert again is not None
     assert again.epoch == first.epoch + 1
@@ -212,7 +304,7 @@ async def test_renew_rejects_a_lapsed_lease(store: Any) -> None:
     new epoch. Renewing across a gap would silently re-cover work that ran
     unprotected."""
     lease = await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     assert not await store.renew(
         "seat:ceo", owner="node-a", epoch=lease.epoch, ttl_seconds=30
     )
@@ -220,7 +312,7 @@ async def test_renew_rejects_a_lapsed_lease(store: Any) -> None:
 
 async def test_renew_rejects_a_stale_epoch(store: Any) -> None:
     lease = await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     await store.try_acquire("seat:ceo", owner="node-b", ttl_seconds=30)
     assert not await store.renew(
         "seat:ceo", owner="node-a", epoch=lease.epoch, ttl_seconds=30
@@ -238,7 +330,7 @@ async def test_release_is_owner_and_epoch_predicated(store: Any) -> None:
     """The defect this primitive exists to fix: an unqualified release lets
     a departing owner clear its SUCCESSOR's live lease."""
     first = await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     await store.try_acquire("seat:ceo", owner="node-b", ttl_seconds=30)
 
     # node-a, late to notice it lost the seat, tries to clean up.
@@ -317,7 +409,7 @@ async def test_list_owned_excludes_lapsed_leases(store: Any) -> None:
     await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
     await store.try_acquire("seat:cto", owner="node-a", ttl_seconds=30)
     await store.try_acquire("seat:pm", owner="node-b", ttl_seconds=30)
-    _expire(store, "seat:cto")
+    await _expire(store, "seat:cto")
 
     owned = await store.list_owned("node-a")
     assert [lease.resource for lease in owned] == ["seat:ceo"]
@@ -436,7 +528,7 @@ async def test_the_gate_lifts_when_the_old_lease_lapses(store: Any) -> None:
         is None
     )
 
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     lease = await store.try_acquire(
         "seat:ceo", owner="new-node:1", ttl_seconds=30, protocol=2
     )
@@ -512,11 +604,11 @@ async def test_fleet_protocol_floor_reports_the_oldest_live_holder(store: Any) -
     await store.try_acquire("seat:eng", owner="old:1", ttl_seconds=30, protocol=1)
     assert await store.fleet_protocol_floor() == 1
 
-    _expire(store, "seat:eng")
+    await _expire(store, "seat:eng")
     assert await store.fleet_protocol_floor() == 3
 
 
 async def test_fleet_protocol_floor_ignores_lapsed_leases(store: Any) -> None:
     await store.try_acquire("seat:ceo", owner="old:1", ttl_seconds=30, protocol=1)
-    _expire(store, "seat:ceo")
+    await _expire(store, "seat:ceo")
     assert await store.fleet_protocol_floor() is None

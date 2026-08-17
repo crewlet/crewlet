@@ -487,9 +487,54 @@ an older-protocol node holds any lease), with strictly additive schemas as
 the default evolution rule; (c) the second adversarial review of the handoff
 interleavings has run.
 
-### Gate (a) — broker measurement — PARTIALLY CLOSED
+### Gate (a) — broker measurement — CLOSED
 
-**Closed:** `receiver_queue_size` is now set explicitly
+Measured against **Apache Pulsar 4.2.4 standalone** (`--no-functions-worker
+--no-stream-storage`, `PULSAR_MEM="-Xms512m -Xmx1g
+-XX:MaxDirectMemorySize=512m"` — the compose stack's own configuration),
+via `tests/test_queue/test_broker_behavior.py`:
+
+| Measurement | Result |
+|---|---|
+| Redelivery after a **graceful close** | **9 ms**; all held messages recovered |
+| Redelivery from a **wedged** consumer (never closes) | **12.0 s** against an 11 s ack timeout |
+| **Cursor continuity** on owner handoff | owner acked `[0,1,2]`, successor saw `[3,4,5]`, **replayed `[]`** |
+| **Attach latency** to an existing subscription | **4.9 ms** |
+| **Prefetch hostage** with `receiver_queue_size=64` | **64** of 256 (the 1000 default would have held all 256) |
+
+What the numbers decide:
+
+- **Owner-only Shared is sound.** The shared cursor survives a change of
+  owner with no replay and no loss. This was the entire case against
+  Exclusive and it is now measured rather than asserted.
+- **The broker imposes no floor on the lease TTL.** A graceful close
+  releases in 9 ms and attach costs 5 ms, so a successor is productive
+  essentially immediately. The TTL is therefore bounded by *heartbeat
+  reliability*, not by the broker — 45 s = 15 s interval × 2 tolerated
+  consecutive misses, plus headroom for clock skew.
+- **The claim-rate limit is not about attach.** At 5 ms, attaching is
+  free; the cost of a takeover is spawning that seat's MCP children. The
+  limiter stays where it was, for that reason.
+- **The wedged-node window is the ack timeout, confirmed.** 12.0 s against
+  an 11 s timeout scales to **~30 minutes** at the engine's real
+  `_INBOX_ACK_TIMEOUT_MS`. Nothing in the broker shortens it, which is
+  precisely why correctness against zombies comes from epoch fencing
+  (5.5, 5.7) and why the prefetch cap matters — the cap is the difference
+  between a wedged node holding 64 of a seat's messages for half an hour
+  and holding a thousand.
+
+Two things the run corrected in the harness itself, both of which would
+have quietly voided the numbers:
+
+- the Pulsar client **refuses an unacked-message timeout below 10 s**;
+- a **new subscription starts at `Latest`**, so a consumer that attaches
+  after publishing sees nothing at all. Harmless for the engine (its inbox
+  subscriptions exist before traffic flows) and fatal for a measurement
+  that publishes first.
+
+The prefetch cap and the harness themselves:
+
+**`receiver_queue_size` is now set explicitly**
 (`_RECEIVER_QUEUE_SIZE = 64` for durable consumers, scaled to `2 ×
 max_batch` for batch subscriptions; `_STREAM_RECEIVER_QUEUE_SIZE = 200`
 for the dashboard's broadcast consumers). The client default of 1000 was
@@ -507,16 +552,9 @@ handoff, attach latency, prefetch hostage size, and the explicit-prefetch
 regression guard. Each asserts the property the design rests on and
 prints the number to tune to.
 
-**NOT closed: the numbers.** This environment has no Pulsar broker and no
-container runtime to start one, so the harness has never run against a
-real one — it skips, and skipping is not passing. **The lease TTL and
-heartbeat constants below are therefore chosen from documented broker
-behaviour, not measurement, and are marked as such at their definitions.**
-Run `docker compose up -d pulsar && pytest
-tests/test_queue/test_broker_behavior.py -m integration -s` on a machine
-that has one, and re-tune. The two numbers most likely to move: the lease
-TTL floor (bounded by how fast a successor can attach) and the
-claim-rate limit (bounded by attach latency × seats).
+Re-run them any time with `pytest
+tests/test_queue/test_broker_behavior.py -m integration -s` against a
+broker; they skip without one, and skipping is not passing.
 
 ### Gate (b) — mixed-version fleets — CLOSED
 

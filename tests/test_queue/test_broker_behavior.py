@@ -31,9 +31,23 @@ Run them against a broker::
     pytest tests/test_queue/test_broker_behavior.py -m integration -s
 
 They skip when no broker is reachable, like the rest of
-``tests/test_queue/test_pulsar.py``. Skipping is not passing: the
-numbers in ``SCALING_PLAN.md`` are marked measurement-pending until a
-run of this file fills them in.
+``tests/test_queue/test_pulsar.py`` — and skipping is not passing.
+
+Measured on **Pulsar 4.2.4 standalone** (see ``SCALING_PLAN.md`` § Gate
+(a) for what each number decides):
+
+===============================================  ==================
+redelivery after a graceful close                9 ms, nothing lost
+redelivery from a wedged consumer                ack timeout + ~1 s
+cursor continuity on owner handoff               no replay, no loss
+attach latency to an existing subscription       4.9 ms
+prefetch hostage at ``receiver_queue_size=64``   exactly 64
+===============================================  ==================
+
+Two behaviours the first real run corrected in this file, both of which
+had silently voided its numbers: the client refuses an unacked-message
+timeout below 10 s, and a *new* subscription starts at ``Latest`` — so a
+consumer attaching after the publish sees nothing at all.
 """
 
 from __future__ import annotations
@@ -82,7 +96,12 @@ pytestmark = [
 # value is 30 minutes (an agent turn can run that long), which is not a
 # thing a test can wait out — so the measurement is of the *mechanism*,
 # and the report scales it.
-_MEASURE_ACK_TIMEOUT_MS = 5_000
+#
+# 11s, not less: the Pulsar client refuses to construct a consumer with
+# an unacked-message timeout below 10 seconds ("Unacknowledged message
+# timeout should be greater than 10 seconds"). Measured, not assumed —
+# this is the first thing a real broker taught this harness.
+_MEASURE_ACK_TIMEOUT_MS = 11_000
 
 
 def _report(name: str, **values: object) -> None:
@@ -107,19 +126,44 @@ class _RawConsumer:
             consumer_type=pulsar.ConsumerType.Shared,
             unacked_messages_timeout_ms=_MEASURE_ACK_TIMEOUT_MS,
             receiver_queue_size=queue_size,
+            # Earliest, explicitly. A NEW Pulsar subscription starts at
+            # ``Latest`` by default — measured here the hard way, as a
+            # consumer that received nothing at all because the harness
+            # publishes before it attaches. It does not affect the
+            # engine (its inbox subscriptions exist before traffic
+            # flows), but it silently voids any measurement that
+            # publishes first.
+            initial_position=pulsar.InitialPosition.Earliest,
         )
 
-    def drain(self, *, timeout_ms: int = 2000) -> list[int]:
-        """Receive everything available, WITHOUT acking."""
+    def drain(
+        self, *, timeout_ms: int = 2000, limit: int = 10_000, deadline_s: float = 20.0
+    ) -> list[int]:
+        """Receive what is available, WITHOUT acking, deduped by payload.
+
+        Bounded by BOTH a count and a wall clock, and deduped, because an
+        unbounded version does not terminate — and the reason is the very
+        mechanism under measurement. Nothing here is acked, so at the
+        unacked-message timeout the broker redelivers everything it has
+        already handed over, which refeeds the loop forever. That is the
+        wedged-node window made visible.
+        """
+        from crewlet.queue.serialization import deserialize_event
+
+        seen: set[int] = set()
         out: list[int] = []
-        while True:
+        end = time.monotonic() + deadline_s
+        while len(out) < limit and time.monotonic() < end:
             try:
                 msg = self.consumer.receive(timeout_ms)
             except Exception:
                 return out
-            from crewlet.queue.serialization import deserialize_event
-
-            out.append(int(deserialize_event(msg.data()).payload["n"]))
+            n = int(deserialize_event(msg.data()).payload["n"])
+            if n in seen:
+                continue  # a redelivery of something already counted
+            seen.add(n)
+            out.append(n)
+        return out
 
     def close(self) -> None:
         self.consumer.close()
@@ -168,13 +212,13 @@ async def test_measure_redelivery_after_consumer_death(queue, client) -> None:
     # Owner takes delivery and does NOT ack, then closes cleanly — the
     # graceful-drain path.
     owner = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
-    got = owner.drain()
+    got = owner.drain(limit=3, deadline_s=8.0)
     assert got, "owner received nothing to hold"
     started = time.monotonic()
     owner.close()
 
     successor = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
-    redelivered = successor.drain(timeout_ms=int(_MEASURE_ACK_TIMEOUT_MS * 2))
+    redelivered = successor.drain(timeout_ms=3000, limit=3, deadline_s=10.0)
     elapsed = time.monotonic() - started
     successor.close()
 
@@ -209,7 +253,7 @@ async def test_measure_redelivery_when_the_consumer_never_closes(queue, client) 
     await _publish(queue, topic, 3)
 
     zombie = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
-    held = zombie.drain()
+    held = zombie.drain(limit=3, deadline_s=8.0)
     assert held
 
     successor = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
@@ -218,7 +262,9 @@ async def test_measure_redelivery_when_the_consumer_never_closes(queue, client) 
     deadline = started + (_MEASURE_ACK_TIMEOUT_MS / 1000) * 3
     redelivered: list[int] = []
     while time.monotonic() < deadline and not redelivered:
-        redelivered = await asyncio.to_thread(successor.drain, timeout_ms=1000)
+        redelivered = await asyncio.to_thread(
+            successor.drain, timeout_ms=1000, limit=3, deadline_s=5.0
+        )
     elapsed = time.monotonic() - started
 
     _report(
@@ -265,7 +311,7 @@ async def test_measure_cursor_survives_owner_handoff(queue, client) -> None:
     owner.close()
 
     successor = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
-    rest = successor.drain(timeout_ms=3000)
+    rest = successor.drain(timeout_ms=3000, limit=3, deadline_s=10.0)
     successor.close()
 
     _report(
@@ -331,13 +377,15 @@ async def test_measure_prefetch_hostage_is_capped(queue, client) -> None:
     published = _RECEIVER_QUEUE_SIZE * 4
     await _publish(queue, topic, published)
 
+    # Construct the holder and DO NOT receive from it: the point is what
+    # the client prefetches on its own. Calling receive() would pull
+    # further messages and measure appetite rather than prefetch.
     small = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
-    # Let the client fill its local queue, then count what a SECOND
-    # consumer on the same subscription can still reach. Whatever the
-    # first holds is hostage.
-    await asyncio.sleep(2.0)
+    await asyncio.sleep(3.0)
     peer = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
-    reachable = await asyncio.to_thread(peer.drain, timeout_ms=3000)
+    reachable = await asyncio.to_thread(
+        peer.drain, timeout_ms=3000, limit=published, deadline_s=15.0
+    )
     hostage = published - len(reachable)
 
     _report(
