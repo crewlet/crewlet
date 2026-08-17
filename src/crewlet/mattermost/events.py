@@ -79,10 +79,31 @@ _DEDUPE_RING = 512
 _PING_INTERVAL = 10.0
 _PING_TIMEOUT = 20.0
 
+#: How long to wait for the server to acknowledge the authentication
+#: challenge.  It is a single round trip on a socket that has already
+#: completed its handshake, so this only has to survive a slow or loaded
+#: server; sized to :data:`_PING_TIMEOUT` so an auth that stalls is
+#: treated on the same timescale as a connection that has gone quiet.
+_AUTH_TIMEOUT = 20.0
+
+#: Sequence number used for the authentication challenge.  The server
+#: echoes it back as ``seq_reply``, which is how the ack is identified.
+_AUTH_SEQ = 1
+
 #: Mattermost websocket event names this fleet forwards.  Everything else
 #: (typing, presence changes, channel-viewed bookkeeping, preference
 #: updates) is chatter that would wake an agent with nothing to act on.
 _FORWARDED_EVENTS = frozenset({"posted", "post_edited"})
+
+
+class MattermostAuthError(MattermostError):
+    """The server rejected a seat's websocket authentication challenge.
+
+    Distinct from a transport failure because the operator response is
+    different: a connection error means the server is unreachable, this
+    means the seat's token is wrong, revoked, or belongs to a disabled
+    bot — re-run ``crewlet mattermost provision``.
+    """
 
 
 @dataclass
@@ -253,6 +274,14 @@ class MattermostEventFleet:
                 attempt = 0
             except asyncio.CancelledError:
                 raise
+            except MattermostAuthError as exc:
+                logger.error(
+                    "mattermost_ws_auth_rejected",
+                    handle=seat.handle,
+                    attempt=attempt + 1,
+                    error=str(exc),
+                )
+                attempt += 1
             except Exception as exc:
                 logger.warning(
                     "mattermost_ws_connection_failed",
@@ -281,12 +310,13 @@ class MattermostEventFleet:
             await socket.send(
                 json.dumps(
                     {
-                        "seq": 1,
+                        "seq": _AUTH_SEQ,
                         "action": "authentication_challenge",
                         "data": {"token": seat.token},
                     }
                 )
             )
+            early = await self._await_authentication(seat, socket)
             await self._resolve_identity(seat)
             logger.info(
                 "mattermost_ws_connected",
@@ -298,8 +328,57 @@ class MattermostEventFleet:
             # order.  Duplicates across the boundary are caught by the
             # seat's dedupe ring.
             await self._backfill(seat)
+            for raw in early:
+                await self._handle_frame(seat, raw)
             async for raw in socket:
                 await self._handle_frame(seat, raw)
+
+    async def _await_authentication(self, seat: _SeatState, socket: Any) -> list[Any]:
+        """Block until the server acknowledges the authentication challenge.
+
+        Mattermost answers ``authentication_challenge`` with a status
+        frame carrying ``seq_reply``, and sends an unsolicited ``hello``
+        event once the connection is authenticated.  A **rejected** token
+        gets ``status: FAIL`` and then a close.
+
+        Without waiting for that, both outcomes look identical from here:
+        ``connect()`` succeeds, the send succeeds, and the read loop ends
+        immediately when the server hangs up.  That returns cleanly, which
+        :meth:`_run_seat` treats as a normal server-side close and resets
+        the backoff — so a revoked or mistyped token reconnects once a
+        second, forever, logging ``mattermost_ws_connected`` on every
+        pass.  Raising here instead puts a bad token on the backoff
+        schedule and names it in the log.
+
+        Returns any non-auth frames read while waiting, so a post that
+        arrives in the same batch as the ack is not dropped.  They are
+        replayed by the caller *after* backfill, keeping the ordering
+        guarantee that backfilled history precedes live traffic.
+        """
+        early: list[Any] = []
+        while True:
+            raw = await asyncio.wait_for(socket.recv(), timeout=_AUTH_TIMEOUT)
+            try:
+                frame = json.loads(raw)
+            except (TypeError, ValueError):
+                logger.debug("mattermost_ws_undecodable_frame", handle=seat.handle)
+                continue
+            if not isinstance(frame, dict):
+                continue
+            if frame.get("seq_reply") == _AUTH_SEQ:
+                status = str(frame.get("status") or "").upper()
+                if status == "OK":
+                    return early
+                error = frame.get("error")
+                raise MattermostAuthError(
+                    f"websocket authentication rejected for {seat.handle}: "
+                    f"{error or status or 'unknown error'}"
+                )
+            if frame.get("event") == "hello":
+                # Success is also signalled unsolicited, and can land
+                # before the status reply.
+                return early
+            early.append(raw)
 
     async def _resolve_identity(self, seat: _SeatState) -> None:
         """Learn the bot's own user id (own-message suppression needs it)."""
