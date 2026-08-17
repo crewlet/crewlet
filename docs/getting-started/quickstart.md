@@ -93,6 +93,8 @@ roles:
     kind: human
     manages: [CEO]
     contact:
+      # One identity per surface you connect. Swap this for
+      # `slack_user_id` (a `U…` member ID) if Slack is your chat.
       mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}"   # your chat username
 
   - name: CEO
@@ -349,20 +351,21 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them.
-  [Mattermost](../integrations/mattermost.md) is the shortest path — it
-  ships in this repo's `docker-compose.yml`, and nothing has to reach the
-  engine (it opens outbound websockets, so no tunnel and no public URL):
+- Connect chat so agents collaborate in channels and you can DM them. If
+  your company already runs on [Slack](../integrations/slack.md), use it —
+  the agents land where the conversations already happen, under the
+  workspace admin and compliance setup you already have. It needs a public
+  URL for its Events API and one OAuth **Allow** click per agent:
+  ```bash
+  crewlet slack provision company.yaml --base-url https://your-server.com
+  ```
+  To try chat on this machine first,
+  [Mattermost](../integrations/mattermost.md) ships in this repo's
+  `docker-compose.yml` and needs no account, no public URL and no clicks:
   ```bash
   docker compose --profile mattermost up -d --wait
   scripts/mattermost-dev-bootstrap.sh
   crewlet mattermost provision company.yaml
-  ```
-  [Slack](../integrations/slack.md) works the same way from the config's
-  side — one `${VAR}` bot token per role — but needs a workspace, a public
-  URL for its Events API, and one OAuth **Allow** click per agent:
-  ```bash
-  crewlet slack provision company.yaml --base-url https://your-server.com
   ```
 - Connect a work-item tracker — self-hosted [Plane](../integrations/plane.md)
   (also ships a full local docker-compose loop), or

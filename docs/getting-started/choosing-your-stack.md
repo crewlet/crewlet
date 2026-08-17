@@ -189,22 +189,35 @@ github.com only (no self-hosted GitHub support in the integration):
 
 Chat is the human↔agent conversational surface (DMs, channels, escalations)
 and is also where the DACI [decision framework](../concepts/decision-framework.md)
-plays out. Two backends ship, and an org can run both at once — each agent
-seat carries whichever identities it needs.
+plays out. Two backends ship.
 
-| | Slack | Mattermost |
+| | Mattermost | Slack |
 |---|---|---|
-| Hosting | SaaS only | **self-hosted**, open source |
-| Credentials per agent | 2 (bot token + signing secret) | 1 (bot token) |
-| Manual steps per agent | one OAuth **Allow** click | none |
-| Engine must be publicly reachable | yes — the Events API POSTs to it | **no** — the engine dials out |
-| Working status | free text, per turn phase | fixed *"is typing…"* (default off) |
+| Hosting | self-hosted, open source | SaaS |
+| Credentials per agent | 1 (bot token) | 2 (bot token + signing secret) |
+| Manual steps per agent | none | one OAuth **Allow** click |
+| Engine must be publicly reachable | no — the engine dials out | yes — the Events API POSTs to it |
+| Working status | fixed *"is typing…"* (default off) | free text, per turn phase |
 
-Pick **Mattermost** unless you have a reason not to — it is what the bundled
-example runs on, and it is the only chat option with a local docker-compose
-loop in this repo, so it is the fastest one to see working. Pick **Slack**
-when the org already lives there, or when the per-phase working indicator
-matters enough to be worth an OAuth click per agent and a public URL.
+The two are interchangeable as far as the engine is concerned; they differ in
+what you have to stand up and where your people already are.
+
+**Mattermost is the quickest to try.** It ships in this repo's
+`docker-compose.yml`, provisioning is one non-interactive command, and nothing
+has to reach the engine — so you can go from nothing to an agent answering in a
+channel on a laptop, with no account to create and no tunnel. It is what the
+bundled example runs on, which makes it the path with the least between you and
+a working loop.
+
+**Slack is where most companies already are.** If yours is one of them, that is
+the answer regardless of anything above: the agents show up where the
+conversations already happen, under the workspace admin, SSO, retention and
+compliance setup your organization already runs, with nothing new to host or
+patch. It also renders the per-phase working indicator as real text, which
+Mattermost has no API for.
+
+Running both at once is supported — each agent seat carries whichever
+identities it needs.
 
 ### Option A: Mattermost (self-hosted)
 
