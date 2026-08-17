@@ -392,15 +392,148 @@ Provision the agent bots in the same run by pointing it at a company config:
 COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 ```
 
-Then point the config at the instance and start the engine:
+### First run, end to end
+
+The example org in `examples/nimbus.company.yaml` is **not** the shortest way
+to try this. It sets `integrations.plane.enabled: true` and
+`integrations.gitlab.enabled: true`, so loading it needs the whole Plane
+stack and a GitLab — a lot of infrastructure to stand up before you can send
+one chat message. Adding Mattermost to Nimbus is a supported thing to do
+(chat backends run alongside each other, and alongside Slack), but do it
+*after* you have seen the loop work.
+
+For a first run, use a two-agent config that enables nothing but chat. Save
+this as `mm-company.yaml`:
 
 ```yaml
+name: "Mattermost Test Co"
+mission: "Verify the Mattermost chat backend end to end"
+
+providers:
+  llm:
+    default:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys:
+        - "${ANTHROPIC_API_KEY}"
+
 integrations:
   mattermost:
     enabled: true
     url: "${MATTERMOST_URL}"     # written by the bootstrap
-    team: nimbus
+    team: nimbus                 # the team the bootstrap creates
+    typing_status: addressed     # off by default; on here so you can see it
+    provisioning:
+      channels: [town-square, engineering, product]
+      display_name_suffix: " (AI)"
+
+mcp_servers:
+  # How the agents reply. Without this they receive messages and plan a
+  # response, but have no tool to send one with.
+  - name: mattermost
+    shared: false                # per-agent identity
+    command: uvx
+    args: ["mcp-server-mattermost"]
+    env:
+      MATTERMOST_URL: "${MATTERMOST_URL}"
+    tool_prefix: "mattermost_"
+
+roles:
+  # You, in the chart, so escalation has a person to stop at. `founder` is
+  # the admin username the bootstrap creates.
+  - name: Founder
+    kind: human
+    manages: [Agent PM]
+    contact:
+      mattermost_user_id: founder
+
+units:
+  - name: Core
+    type: team
+    lead: Agent PM
+    purpose: "Answer questions and coordinate work in chat"
+    roles:
+      - name: Agent PM
+        goal: "Triage what arrives in chat and answer or delegate"
+        backstory: "A crisp product manager who replies briefly and clearly"
+        manages: [Agent SWE]
+        integrations:
+          mattermost:
+            bot_token: "${MATTERMOST_TOKEN_PM}"
+            channel: engineering
+        mcp_env:
+          mattermost:
+            MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
+
+      - name: Agent SWE
+        goal: "Answer engineering questions asked in chat"
+        backstory: "A pragmatic engineer who explains things without hedging"
+        integrations:
+          mattermost:
+            bot_token: "${MATTERMOST_TOKEN_SWE}"
+            channel: engineering
+        mcp_env:
+          mattermost:
+            MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
 ```
+
+The role names are what name the bot accounts: handles derive from them, so
+`Agent PM` becomes `agent-pm` and the bot is created as `@agent-pm`. Leave
+`provisioning.username_prefix` unset here — with handles that already start
+with `agent-`, a prefix would produce `@agent-agent-pm`.
+
+Then, from the repo root:
+
+```bash
+# 1. Postgres + Pulsar, then Mattermost
+docker compose up -d --wait
+docker compose --profile mattermost up -d --wait
+
+# 2. Admin account, PAT, team, channels -> .env
+scripts/mattermost-dev-bootstrap.sh
+
+# 3. Check the plan before it touches the server
+set -a; . ./.env; set +a
+crewlet mattermost provision mm-company.yaml --dry-run --print
+
+# 4. Create the bots and mint their tokens into .env
+crewlet mattermost provision mm-company.yaml
+
+# 5. Boot — one websocket per agent seat
+export ANTHROPIC_API_KEY=sk-ant-...
+crewlet run examples/nimbus.config.yaml --import-company mm-company.yaml
+```
+
+Step 3 prints one line per seat — handle, bot username, and the variables it
+would mint. Step 4 writes `MATTERMOST_TOKEN_PM` and `MATTERMOST_TOKEN_SWE`
+into `.env`, which the engine reads on boot; nothing has to be re-sourced.
+Both steps are idempotent, so re-run either freely.
+
+To watch it work, sign in at <http://localhost:8065> as `founder` /
+`crewlet-dev-password`, open `~engineering`, and post `@agent-pm what are you
+working on?`. Three things should follow, in order:
+
+1. The working-status indicator appears under `@agent-pm` (that is
+   `typing_status: addressed`).
+2. `@agent-pm` replies **in a thread** on your message. Reply in that thread
+   without mentioning anyone — it answers again, because it is now following
+   the thread.
+3. The engine's dashboard shows the turn. Start the API with
+   `crewlet run … --api-port 8000` and open <http://localhost:8000> —
+   Activity shows the inbound notification with a Mattermost badge, and the
+   agent's LLM calls are on its Agents page.
+
+If a bot stays silent, check in this order:
+
+1. `crewlet mattermost provision mm-company.yaml --dry-run` — does the seat
+   exist, and is its token minted?
+2. The engine log, for one `mattermost_ws_connected` line per seat. A
+   `mattermost_ws_auth_rejected` line instead means that seat's token is
+   wrong, revoked, or its bot is disabled — re-run the provisioner.
+3. Whether `uvx mcp-server-mattermost` resolves. A missing MCP server is the
+   one failure mode where the agent reasons about a reply and then has no
+   tool to send it with, so the logs show a complete turn and the channel
+   stays quiet.
 
 Three settings the compose service sets are load-bearing rather than
 convenience. All three default to `false` in the server's own config
