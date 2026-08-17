@@ -215,8 +215,8 @@ def build_notification_transports(
 
     if cfg.integrations.slack is not None:
         try:
+            from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
             from crewlet.db.client import Database
-            from crewlet.db.slack_thread_follows import SlackThreadFollowRepository
             from crewlet.notifications.transports.slack import SlackTransport
 
             if not isinstance(storage, Database):
@@ -224,7 +224,7 @@ def build_notification_transports(
                     "Slack thread routing requires a PostgreSQL database"
                 )
 
-            thread_follow_repo = SlackThreadFollowRepository(storage)
+            thread_follow_repo = ChatThreadFollowRepository(storage)
             transports.append(
                 SlackTransport(
                     thread_follow_repo=thread_follow_repo,

@@ -9,17 +9,22 @@ import pytest
 from crewlet.notifications.typing_status import (
     DEFAULT_PHASE,
     PHASE_PHRASES,
-    SlackConversation,
-    SlackTypingStatus,
-    SlackTypingStatusMode,
+    ChatConversation,
     StatusPhrases,
+    WorkingStatusDriver,
+    WorkingStatusMode,
     agent_is_addressed,
-    slack_conversation,
+    chat_conversation,
 )
 
 
 class FakePoster:
     """Records every ``assistant.threads.setStatus`` call."""
+
+    status_backend = "slack"
+    supports_status_text = True
+    status_refresh_interval = 45.0
+    dm_channel_id_prefix = "D"
 
     def __init__(self, ok: bool = True) -> None:
         self.ok = ok
@@ -69,22 +74,25 @@ SLACK_PASSIVE = {
 
 
 def test_conversation_uses_thread_ts_when_present():
-    conv = slack_conversation(
+    conv = chat_conversation(
         {
             "transport": "slack",
             "channel": "C1",
             "ts": "2.0",
             "thread_ts": "1.0",
-        }
+        },
+        "slack",
     )
-    assert conv == SlackConversation(channel="C1", thread_ts="1.0")
+    assert conv == ChatConversation(channel="C1", thread_id="1.0")
 
 
 def test_conversation_falls_back_to_message_ts_for_top_level():
     """A top-level message has no thread yet — its own ts anchors the
     thread the agent will reply under."""
-    conv = slack_conversation({"transport": "slack", "channel": "C1", "ts": "2.0"})
-    assert conv == SlackConversation(channel="C1", thread_ts="2.0")
+    conv = chat_conversation(
+        {"transport": "slack", "channel": "C1", "ts": "2.0"}, "slack"
+    )
+    assert conv == ChatConversation(channel="C1", thread_id="2.0")
 
 
 @pytest.mark.parametrize(
@@ -98,12 +106,12 @@ def test_conversation_falls_back_to_message_ts_for_top_level():
     ],
 )
 def test_conversation_none_for_non_slack_or_incomplete(metadata):
-    assert slack_conversation(metadata) is None
+    assert chat_conversation(metadata, "slack") is None
 
 
 def test_conversation_coerces_non_string_metadata():
-    conv = slack_conversation({"transport": "slack", "channel": "C1", "ts": 2})
-    assert conv == SlackConversation(channel="C1", thread_ts="2")
+    conv = chat_conversation({"transport": "slack", "channel": "C1", "ts": 2}, "slack")
+    assert conv == ChatConversation(channel="C1", thread_id="2")
 
 
 # --- addressed predicate --------------------------------------------------
@@ -125,7 +133,27 @@ def test_conversation_coerces_non_string_metadata():
     ],
 )
 def test_addressed_true(metadata):
-    assert agent_is_addressed(metadata) is True
+    assert agent_is_addressed(metadata, dm_channel_id_prefix="D") is True
+
+
+def test_dm_channel_prefix_is_opt_in_per_backend():
+    """The ``D``-prefix shortcut is Slack's, and must not leak to backends
+    whose channel ids are opaque.
+
+    A Mattermost channel id is a 26-char alphanumeric that can begin with
+    ``D`` by chance; treating that as a DM would raise a working
+    indicator on ordinary public-channel traffic nobody addressed to this
+    agent.  Without an explicit prefix the check is metadata-only.
+    """
+    mattermost_public = {
+        "transport": "mattermost",
+        "channel": "Dq1kw8s7z3bo9dxaqmc1yr6rpe",
+        "channel_type": "O",
+        "ts": "1.0",
+    }
+    assert agent_is_addressed(mattermost_public) is False
+    # ...and a real Mattermost DM still resolves, via channel_type.
+    assert agent_is_addressed({**mattermost_public, "channel_type": "D"}) is True
 
 
 @pytest.mark.parametrize(
@@ -206,7 +234,7 @@ def test_overrides_are_whitespace_trimmed():
 
 async def test_begin_sets_status_and_end_clears_it():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
 
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
@@ -221,7 +249,7 @@ async def test_begin_sets_status_and_end_clears_it():
 
 async def test_phase_transitions_swap_the_text():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
 
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
@@ -241,7 +269,7 @@ async def test_self_iterate_back_to_plan_shows_a_different_line():
     """A turn that loops Plan → Execute → Review → Plan must not re-show
     the line it opened with, or the indicator reads as stuck."""
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
 
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
@@ -260,7 +288,7 @@ async def test_two_threads_can_open_on_different_lines():
     """The turn_id is part of the seed, so the pool is actually used —
     a fixed line per phase would make every turn identical."""
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
 
     openings = set()
     for i in range(len(PHASE_PHRASES["plan"]) * 4):
@@ -275,7 +303,7 @@ async def test_two_threads_can_open_on_different_lines():
 
 async def test_unknown_phase_falls_back_to_the_default_pool():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
     session = await driver.begin(
         handle="swe", turn_id="t1", metadata=SLACK_DM, phase="onboarding"
     )
@@ -288,7 +316,7 @@ async def test_unknown_phase_falls_back_to_the_default_pool():
 
 async def test_custom_phrases_drive_the_indicator():
     poster = FakePoster()
-    driver = SlackTypingStatus(
+    driver = WorkingStatusDriver(
         poster,
         phrases=StatusPhrases.with_overrides(
             {"plan": ["is nimbusing..."], "execute": ["is nimbusing it..."]}
@@ -303,7 +331,7 @@ async def test_custom_phrases_drive_the_indicator():
 
 async def test_mode_addressed_skips_a_passive_channel_message():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster, SlackTypingStatusMode.ADDRESSED)
+    driver = WorkingStatusDriver(poster, WorkingStatusMode.ADDRESSED)
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_PASSIVE)
     assert session is None
     assert poster.calls == []
@@ -311,7 +339,7 @@ async def test_mode_addressed_skips_a_passive_channel_message():
 
 async def test_mode_always_covers_a_passive_channel_message():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster, SlackTypingStatusMode.ALWAYS)
+    driver = WorkingStatusDriver(poster, WorkingStatusMode.ALWAYS)
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_PASSIVE)
     assert session is not None
     assert poster.statuses[0] in PHASE_PHRASES["plan"]
@@ -320,14 +348,14 @@ async def test_mode_always_covers_a_passive_channel_message():
 
 async def test_mode_off_never_posts():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster, SlackTypingStatusMode.OFF)
+    driver = WorkingStatusDriver(poster, WorkingStatusMode.OFF)
     assert await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM) is None
     assert poster.calls == []
 
 
 async def test_non_slack_trigger_opens_no_session():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
     assert (
         await driver.begin(
             handle="swe",
@@ -343,7 +371,7 @@ async def test_two_turns_share_one_session_and_last_end_clears():
     """A suspend/resume pair — or a queued follow-up — must not clear the
     indicator while the other turn is still working."""
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
 
     first = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_MENTION)
     second = await driver.begin(handle="swe", turn_id="t2", metadata=SLACK_MENTION)
@@ -359,7 +387,7 @@ async def test_two_turns_share_one_session_and_last_end_clears():
 
 async def test_keep_alive_holds_the_indicator_across_a_sandbox_suspend():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
 
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_MENTION)
     assert session is not None
@@ -378,7 +406,7 @@ async def test_keep_alive_holds_the_indicator_across_a_sandbox_suspend():
 
 async def test_heartbeat_refreshes_before_slack_expires_the_status():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster, refresh_interval=0.01)
+    driver = WorkingStatusDriver(poster, refresh_interval=0.01)
 
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
@@ -397,7 +425,7 @@ async def test_heartbeat_drops_an_indicator_whose_agent_went_idle():
     """Safety net: a turn that dies without closing its session must not
     leave the agent looking like it is thinking forever."""
     poster = FakePoster()
-    driver = SlackTypingStatus(poster, refresh_interval=0.01)
+    driver = WorkingStatusDriver(poster, refresh_interval=0.01)
     busy = {"value": True}
 
     session = await driver.begin(
@@ -416,7 +444,9 @@ async def test_heartbeat_drops_an_indicator_whose_agent_went_idle():
 
 async def test_session_expires_after_the_max_lifetime():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster, refresh_interval=0.01, max_session_seconds=0.02)
+    driver = WorkingStatusDriver(
+        poster, refresh_interval=0.01, max_session_seconds=0.02
+    )
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
     await asyncio.sleep(0.1)
@@ -428,7 +458,7 @@ async def test_session_expires_after_the_max_lifetime():
 
 async def test_stop_clears_every_live_indicator():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
     await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     await driver.begin(handle="pm", turn_id="t2", metadata=SLACK_MENTION)
     assert len(driver.active_conversations) == 2
@@ -441,7 +471,7 @@ async def test_stop_clears_every_live_indicator():
 async def test_a_failing_slack_api_never_raises():
     poster = FakePoster()
     poster.raises = True
-    driver = SlackTypingStatus(poster, refresh_interval=0.01)
+    driver = WorkingStatusDriver(poster, refresh_interval=0.01)
 
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
@@ -453,7 +483,7 @@ async def test_a_failing_slack_api_never_raises():
 
 async def test_rejected_slack_call_is_tolerated():
     poster = FakePoster(ok=False)
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
     session = await driver.begin(handle="swe", turn_id="t1", metadata=SLACK_DM)
     assert session is not None
     await session.end()
@@ -464,6 +494,6 @@ async def test_rejected_slack_call_is_tolerated():
 
 async def test_missing_handle_opens_no_session():
     poster = FakePoster()
-    driver = SlackTypingStatus(poster)
+    driver = WorkingStatusDriver(poster)
     assert await driver.begin(handle="", turn_id="t1", metadata=SLACK_DM) is None
     assert poster.calls == []

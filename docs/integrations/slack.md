@@ -412,7 +412,7 @@ By default, agents only receive thread replies in threads they are **following**
 3. **Outbound participation** — the agent sends a reply in the thread
 4. **Outbound send** — the agent sends a reply via ``SlackTransport.send()``
 
-Thread tracking state is persisted in PostgreSQL (``slack_thread_follows`` table) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
+Thread tracking state is persisted in PostgreSQL (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
 
 Disable thread routing:
 

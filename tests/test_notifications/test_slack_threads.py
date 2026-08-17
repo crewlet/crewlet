@@ -11,10 +11,13 @@ from typing import Any
 import pytest
 
 from crewlet.notifications.protocol import InboundNotification
+from crewlet.notifications.transports.chat_threads import (
+    ChatThreadTracker,
+    ThreadFollowReason,
+)
 from crewlet.notifications.transports.slack import SlackAppConfig, SlackTransport
 from crewlet.notifications.transports.slack_threads import (
-    SlackThreadTracker,
-    ThreadFollowReason,
+    build_slack_thread_tracker,
     detect_follow_trigger,
 )
 
@@ -25,25 +28,25 @@ _TEST_SECRET = "test_signing_secret"
 
 
 class MemoryThreadFollowRepo:
-    """In-memory implementation of SlackThreadFollowRepository for tests."""
+    """In-memory implementation of ChatThreadFollowRepository for tests."""
 
     def __init__(self) -> None:
-        # (handle, channel, thread_ts) → reason
-        self._store: dict[tuple[str, str, str], str] = {}
+        # (backend, handle, channel, thread_id) → reason
+        self._store: dict[tuple[str, str, str, str], str] = {}
 
     async def upsert(
-        self, handle: str, channel: str, thread_ts: str, reason: str
+        self, backend: str, handle: str, channel: str, thread_id: str, reason: str
     ) -> None:
-        self._store[(handle, channel, thread_ts)] = reason
+        self._store[(backend, handle, channel, thread_id)] = reason
 
     async def is_following(
-        self, handle: str, channel: str, thread_ts: str
+        self, backend: str, handle: str, channel: str, thread_id: str
     ) -> str | None:
-        return self._store.get((handle, channel, thread_ts))
+        return self._store.get((backend, handle, channel, thread_id))
 
 
-def _make_tracker() -> SlackThreadTracker:
-    return SlackThreadTracker(MemoryThreadFollowRepo())
+def _make_tracker() -> ChatThreadTracker:
+    return build_slack_thread_tracker(MemoryThreadFollowRepo())
 
 
 def _make_signature(secret: str, timestamp: str, body: str) -> str:
@@ -113,10 +116,10 @@ class TestDetectFollowTrigger:
         assert reason == ThreadFollowReason.MENTION
 
 
-# --- SlackThreadTracker ---
+# --- ChatThreadTracker (Slack-bound) ---
 
 
-class TestSlackThreadTracker:
+class TestChatThreadTracker:
     @pytest.mark.asyncio
     async def test_not_following_by_default(self):
         tracker = _make_tracker()
@@ -156,11 +159,11 @@ class TestSlackThreadTracker:
     async def test_state_survives_new_tracker_instance(self):
         """Verify DB persistence: new tracker on same repo sees old state."""
         repo = MemoryThreadFollowRepo()
-        tracker1 = SlackThreadTracker(repo)
+        tracker1 = build_slack_thread_tracker(repo)
         await tracker1.start_following("engineer", "C1", "1234.5678")
 
         # Simulate engine restart: new tracker, same repo
-        tracker2 = SlackThreadTracker(repo)
+        tracker2 = build_slack_thread_tracker(repo)
         assert await tracker2.is_following("engineer", "C1", "1234.5678")
 
 
@@ -680,7 +683,9 @@ class TestSlackTransportThreadRouting:
         assert result is None  # Own message skipped
 
         # Participation should be recorded
-        assert await repo.is_following("engineer", "C1", "7000.0001") is not None
+        assert (
+            await repo.is_following("slack", "engineer", "C1", "7000.0001") is not None
+        )
         await transport.stop()
 
     @pytest.mark.asyncio
@@ -747,7 +752,9 @@ class TestSlackTransportThreadRouting:
         assert result is None  # Own message skipped
 
         # But participation is recorded
-        assert await repo.is_following("engineer", "C1", "9000.0001") is not None
+        assert (
+            await repo.is_following("slack", "engineer", "C1", "9000.0001") is not None
+        )
         await transport.stop()
 
     @pytest.mark.asyncio

@@ -36,21 +36,25 @@ from typing import Any
 import httpx
 
 from crewlet._logging import get_logger
-from crewlet.db.slack_thread_follows import SlackThreadFollowRepository
+from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
 from crewlet.notifications.handle import HandleRegistry
 from crewlet.notifications.protocol import (
     InboundNotification,
     OutboundMessage,
 )
-from crewlet.notifications.transports.slack_threads import (
-    SlackThreadTracker,
+from crewlet.notifications.transports.chat_threads import (
+    ChatThreadTracker,
     ThreadFollowReason,
+)
+from crewlet.notifications.transports.slack_threads import (
+    build_slack_thread_tracker,
     detect_follow_trigger,
 )
 from crewlet.notifications.typing_status import (
-    SlackTypingStatus,
-    SlackTypingStatusMode,
+    REFRESH_INTERVAL_SECONDS,
     StatusPhrases,
+    WorkingStatusDriver,
+    WorkingStatusMode,
 )
 
 logger = get_logger("notifications.slack")
@@ -147,26 +151,39 @@ class SlackTransport:
 
     name: str = "slack"
 
+    # --- StatusPoster contract (see notifications.typing_status) ---
+    status_backend: str = "slack"
+    supports_status_text: bool = True
+    """Slack's ``assistant.threads.setStatus`` renders free text, so the
+    per-phase phrase pools are live on this backend."""
+    status_refresh_interval: float = REFRESH_INTERVAL_SECONDS
+    dm_channel_id_prefix: str = "D"
+    """Slack channel ids beginning ``D`` are always DMs — the fallback
+    that keeps the addressed check right even for metadata that reached
+    the driver without a ``channel_type``."""
+
     def __init__(
         self,
         handle_registry: HandleRegistry | None = None,
         thread_routing: bool = True,
-        thread_follow_repo: SlackThreadFollowRepository | None = None,
-        typing_status_mode: SlackTypingStatusMode = SlackTypingStatusMode.ADDRESSED,
+        thread_follow_repo: ChatThreadFollowRepository | None = None,
+        typing_status_mode: WorkingStatusMode = WorkingStatusMode.ADDRESSED,
         typing_status_phrases: StatusPhrases | None = None,
     ) -> None:
         self._apps: dict[str, SlackAppConfig] = {}
         self._handle_registry = handle_registry
         self._client: httpx.AsyncClient | None = None
         self._thread_routing = thread_routing
-        self._thread_tracker: SlackThreadTracker | None = (
-            SlackThreadTracker(thread_follow_repo) if thread_follow_repo else None
+        self._thread_tracker: ChatThreadTracker | None = (
+            build_slack_thread_tracker(thread_follow_repo)
+            if thread_follow_repo
+            else None
         )
         # Working-status ("is thinking…") driver.  Owned here because the
         # per-agent bot tokens and the HTTP client live here, so its
         # heartbeats are torn down with the transport — a live config swap
         # that rebuilds the transport can't strand an indicator.
-        self._typing_status = SlackTypingStatus(
+        self._typing_status = WorkingStatusDriver(
             self, typing_status_mode, phrases=typing_status_phrases
         )
         # Dedup ring: tracks recently processed (handle, channel, ts) to
@@ -183,12 +200,12 @@ class SlackTransport:
         return dict(self._apps)
 
     @property
-    def thread_tracker(self) -> SlackThreadTracker | None:
+    def thread_tracker(self) -> ChatThreadTracker | None:
         """The thread-follow tracker (for external use / testing)."""
         return self._thread_tracker
 
     @property
-    def typing_status(self) -> SlackTypingStatus:
+    def typing_status(self) -> WorkingStatusDriver:
         """The working-status driver the TurnEngine opens sessions on."""
         return self._typing_status
 
@@ -371,7 +388,7 @@ class SlackTransport:
         self,
         handle: str,
         channel: str,
-        thread_ts: str,
+        thread_id: str,
         status: str,
     ) -> bool:
         """Set (or clear) an agent's working status in a Slack thread.
@@ -395,7 +412,7 @@ class SlackTransport:
         expires on Slack's side.  The caller is a cosmetic side-channel
         and must never fail an agent turn.
         """
-        if not channel or not thread_ts:
+        if not channel or not thread_id:
             return False
         app = self._get_app(handle)
         if app is None or not app.bot_token:
@@ -408,7 +425,7 @@ class SlackTransport:
                 "https://slack.com/api/assistant.threads.setStatus",
                 json={
                     "channel_id": channel,
-                    "thread_ts": thread_ts,
+                    "thread_ts": thread_id,
                     "status": status,
                 },
                 headers={

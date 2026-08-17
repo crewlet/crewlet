@@ -187,7 +187,7 @@ PostgreSQL via `asyncpg`. The TimescaleDB and pgvector extensions must be availa
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built by the `CounterpartyProfiler`.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
 - **`crewlet_events`** — TimescaleDB hypertable for the observability event store.
-- **`slack_thread_follows`** — Slack thread-follow state (regular table; survives restarts).
+- **`chat_thread_follows`** — per-agent chat thread-follow state, keyed by backend (regular table; survives restarts).
 
 The `crewlet_events` hypertable is created by the initial migration `001_initial.sql`. The full migration list is in `src/crewlet/db/migrations/`. Migrations are **forward-only**: each file is applied once and recorded by filename in `schema_migrations`, and there are no downgrade scripts. Downgrading the package below the schema it already migrated is not supported; restore a backup instead.
 

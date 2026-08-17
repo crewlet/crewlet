@@ -2103,7 +2103,7 @@
       "description": "Organisation-level Slack configuration.\n\nEvery *credential* is per-agent (``role.integrations.slack``); this\nblock is the transport-enable marker plus the genuinely org-wide\nSlack behaviour \u2014 ``typing_status`` and ``status_phrases``.\nDeclaring this section under the top-level ``integrations`` block\n(even as ``slack: {}``) turns on the outbound\n:class:`SlackTransport` and per-agent webhook routing; omit it to\ndisable Slack entirely.\n\n``typing_status`` controls the \"*<agent> is thinking\u2026*\" working\nindicator an agent shows while it reasons about a Slack message (see\n:mod:`crewlet.notifications.typing_status`):\n\n- ``addressed`` (default) \u2014 only when a human is plausibly waiting on\n  this agent: a DM / group DM, a direct ``@mention``, or a thread the\n  agent already follows.\n- ``always`` \u2014 on every Slack-triggered turn, including passive\n  top-level channel messages and ``@here`` broadcasts.\n- ``off`` \u2014 disabled.\n\n``status_phrases`` replaces the words it shows \u2014 see\n:class:`SlackStatusPhrases`.\n\nThe Slack *tool* server is declared separately in ``mcp_servers``\n(name it ``slack``, ``shared: false``).  A Slack-enabled agent needs\nits bot token in **two** places \u2014 they are two different consumers:\nthe transport identity (``role.integrations.slack``, whose\n``signing_secret`` also verifies inbound webhooks) and the Slack MCP\nsubprocess (``role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN``).  Both\nreference the same ``${VAR}``, so there is no secret duplication.\nSee ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      slack:\n        typing_status: addressed   # addressed | always | off\n        status_phrases:            # optional \u2014 built-ins otherwise\n          plan: [\"is nimbusing...\"]\n\n    mcp_servers:\n      - name: slack\n        shared: false\n        command: npm\n        args: [\"exec\", \"--yes\", \"--\", \"slack-mcp-server@latest\",\n               \"--transport\", \"stdio\"]\n        tool_prefix: \"slack_\"\n\n    roles:\n      - name: Engineer\n        integrations:                 # per-agent transport identity\n          slack:\n            bot_token: \"${SLACK_BOT_TOKEN_ENGINEER}\"\n            signing_secret: \"${SLACK_SIGNING_SECRET_ENGINEER}\"\n        mcp_env:                       # Slack MCP server identity\n          slack:\n            SLACK_MCP_XOXB_TOKEN: \"${SLACK_BOT_TOKEN_ENGINEER}\"",
       "properties": {
         "typing_status": {
-          "$ref": "#/$defs/SlackTypingStatusMode",
+          "$ref": "#/$defs/WorkingStatusMode",
           "default": "addressed"
         },
         "status_phrases": {
@@ -2155,16 +2155,6 @@
       },
       "title": "SlackStatusPhrases",
       "type": "object"
-    },
-    "SlackTypingStatusMode": {
-      "description": "When an agent shows a working status on Slack.\n\n``addressed`` (the default) covers exactly the cases where a human is\nplausibly waiting on *this* agent: a DM or group DM, a direct\n``@mention``, or a thread the agent already follows.  A broadcast\n(``@here`` / ``@channel``) and a passive top-level channel message are\ndeliberately excluded \u2014 every bot in the channel is woken by those, and\nthe Slack triage prompt tells most of them to stay silent, so lighting\nup N indicators would be noise rather than signal.\n\n``always`` shows it on every Slack-triggered turn (useful for a\nsingle-agent workspace); ``off`` disables the feature entirely.",
-      "enum": [
-        "off",
-        "addressed",
-        "always"
-      ],
-      "title": "SlackTypingStatusMode",
-      "type": "string"
     },
     "TurnEngineConfig": {
       "additionalProperties": false,
@@ -2311,6 +2301,16 @@
       },
       "title": "UnitIntegrationsConfig",
       "type": "object"
+    },
+    "WorkingStatusMode": {
+      "description": "When an agent shows a working status on a chat backend.\n\n``addressed`` (the default) covers exactly the cases where a human is\nplausibly waiting on *this* agent: a DM or group DM, a direct\n``@mention``, or a thread the agent already follows.  A broadcast\n(``@here`` / ``@channel``) and a passive top-level channel message are\ndeliberately excluded \u2014 every bot in the channel is woken by those, and\nthe chat triage prompt tells most of them to stay silent, so lighting\nup N indicators would be noise rather than signal.\n\n``always`` shows it on every chat-triggered turn (useful for a\nsingle-agent workspace); ``off`` disables the feature entirely.",
+      "enum": [
+        "off",
+        "addressed",
+        "always"
+      ],
+      "title": "WorkingStatusMode",
+      "type": "string"
     }
   },
   "additionalProperties": false,

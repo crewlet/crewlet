@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from crewlet._logging import get_logger
 from crewlet.env_refs import ENV_VAR_PATTERN, env_var_reference
-from crewlet.notifications.typing_status import SlackTypingStatusMode, StatusPhrases
+from crewlet.notifications.typing_status import StatusPhrases, WorkingStatusMode
 from crewlet.org.hierarchy import get_effective_lead
 from crewlet.org.models import (
     HumanContact,
@@ -1673,7 +1673,7 @@ class SlackConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    typing_status: SlackTypingStatusMode = SlackTypingStatusMode.ADDRESSED
+    typing_status: WorkingStatusMode = WorkingStatusMode.ADDRESSED
     status_phrases: SlackStatusPhrases = Field(default_factory=SlackStatusPhrases)
 
 
