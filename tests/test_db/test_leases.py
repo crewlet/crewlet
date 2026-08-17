@@ -49,6 +49,14 @@ class _FakeSQL:
             resource, owner, ttl, preferred, protocol = args
             row = self.rows.get(resource)
             now = self._now()
+            # The mixed-version guard: both the INSERT's ``WHERE NOT
+            # EXISTS`` and the ON CONFLICT branch's, which are the same
+            # predicate written twice.
+            if any(
+                r["expires_at"] > now and int(r.get("protocol") or 1) < int(protocol)
+                for r in self.rows.values()
+            ):
+                return None
             if row is None:
                 epoch = 1
             else:
@@ -105,7 +113,18 @@ class _FakeSQL:
         raise AssertionError(f"unexpected execute: {q}")
 
     async def fetchval(self, query: str, *args: Any) -> Any:
-        raise AssertionError("unused")
+        if self.fail:
+            raise RuntimeError("database is down")
+        q = " ".join(query.split())
+        if q.startswith("SELECT MIN(protocol)"):
+            now = self._now()
+            live = [
+                int(r.get("protocol") or 1)
+                for r in self.rows.values()
+                if r["expires_at"] > now
+            ]
+            return min(live) if live else None
+        raise AssertionError(f"unexpected fetchval: {q}")
 
     # -- test helpers ------------------------------------------------
     def expire(self, resource: str) -> None:
@@ -356,3 +375,148 @@ async def test_renew_raises_rather_than_reporting_loss_on_a_database_error() -> 
 def test_resource_naming_helpers() -> None:
     assert seat_resource("sarah-chen") == "seat:sarah-chen"
     assert worker_resource("scheduler") == "worker:scheduler"
+
+
+# ── mixed-version fleets ─────────────────────────────────────────────
+#
+# A rolling upgrade puts a vN and a vN+1 node on this table at once. Two
+# nodes that disagree about what holding a lease MEANS are each
+# individually correct and jointly wrong, so the newer one waits.
+
+
+async def test_a_newer_node_refuses_to_claim_beside_an_older_holder(
+    store: Any,
+) -> None:
+    """The gate, stated as the deploy it protects.
+
+    An old node holds one seat. The new node must claim NOTHING — not
+    even an unrelated, entirely unclaimed seat — until that hold ends.
+    """
+    old = await store.try_acquire(
+        "seat:ceo", owner="old-node:1", ttl_seconds=30, protocol=1
+    )
+    assert old is not None
+
+    assert (
+        await store.try_acquire(
+            "seat:engineer", owner="new-node:1", ttl_seconds=30, protocol=2
+        )
+        is None
+    )
+
+
+async def test_an_older_node_still_claims_beside_a_newer_holder(store: Any) -> None:
+    """Asymmetric on purpose: the old build has no check to run.
+
+    Nothing in the table can stop it, which is exactly why a downgrade
+    across a protocol bump needs a full fleet drain — documented at
+    ``PROTOCOL_VERSION``.
+    """
+    assert (
+        await store.try_acquire(
+            "seat:ceo", owner="new-node:1", ttl_seconds=30, protocol=2
+        )
+        is not None
+    )
+    assert (
+        await store.try_acquire(
+            "seat:engineer", owner="old-node:1", ttl_seconds=30, protocol=1
+        )
+        is not None
+    )
+
+
+async def test_the_gate_lifts_when_the_old_lease_lapses(store: Any) -> None:
+    """A rolling deploy converges: drain the old, the new take over."""
+    await store.try_acquire("seat:ceo", owner="old-node:1", ttl_seconds=30, protocol=1)
+    assert (
+        await store.try_acquire(
+            "seat:ceo", owner="new-node:1", ttl_seconds=30, protocol=2
+        )
+        is None
+    )
+
+    _expire(store, "seat:ceo")
+    lease = await store.try_acquire(
+        "seat:ceo", owner="new-node:1", ttl_seconds=30, protocol=2
+    )
+    assert lease is not None
+    assert lease.protocol == 2
+
+
+async def test_the_gate_lifts_when_the_old_lease_is_released(store: Any) -> None:
+    old = await store.try_acquire(
+        "seat:ceo", owner="old-node:1", ttl_seconds=30, protocol=1
+    )
+    assert old is not None
+    assert await store.release("seat:ceo", owner="old-node:1", epoch=old.epoch)
+
+    lease = await store.try_acquire(
+        "seat:engineer", owner="new-node:1", ttl_seconds=30, protocol=2
+    )
+    assert lease is not None
+
+
+async def test_same_protocol_peers_are_unaffected(store: Any) -> None:
+    """The gate must not fire between peers of the same build — that is
+    every normal deployment, and it would be a fleet-wide stall."""
+    assert (
+        await store.try_acquire(
+            "seat:ceo", owner="node-a:1", ttl_seconds=30, protocol=2
+        )
+        is not None
+    )
+    assert (
+        await store.try_acquire(
+            "seat:engineer", owner="node-b:1", ttl_seconds=30, protocol=2
+        )
+        is not None
+    )
+
+
+async def test_a_newer_node_cannot_renew_its_way_around_the_gate(store: Any) -> None:
+    """Re-acquire is the renew path for a live lease, so it goes through
+    the same guard — otherwise a node that claimed before the old one
+    appeared would keep extending indefinitely."""
+    mine = await store.try_acquire(
+        "seat:ceo", owner="new-node:1", ttl_seconds=30, protocol=2
+    )
+    assert mine is not None
+    await store.try_acquire(
+        "seat:engineer", owner="old-node:1", ttl_seconds=30, protocol=1
+    )
+
+    assert (
+        await store.try_acquire(
+            "seat:ceo", owner="new-node:1", ttl_seconds=30, protocol=2
+        )
+        is None
+    )
+    # ``renew`` is deliberately NOT gated: it extends a hold this node
+    # already has and already acts on, and refusing it would drop a seat
+    # mid-turn rather than prevent anything.
+    assert await store.renew(
+        "seat:ceo", owner="new-node:1", epoch=mine.epoch, ttl_seconds=30
+    )
+
+
+async def test_fleet_protocol_floor_reports_the_oldest_live_holder(store: Any) -> None:
+    """The observability half — ``try_acquire`` can only answer yes/no,
+    so a node stalled by the gate would otherwise look identical to one
+    whose peers simply hold every seat."""
+    assert await store.fleet_protocol_floor() is None
+
+    await store.try_acquire("seat:ceo", owner="new:1", ttl_seconds=30, protocol=3)
+    assert await store.fleet_protocol_floor() == 3
+
+    await store.try_acquire("seat:eng", owner="old:1", ttl_seconds=30, protocol=1)
+    assert await store.fleet_protocol_floor() == 1
+
+    _expire(store, "seat:eng")
+    assert await store.fleet_protocol_floor() == 3
+
+
+async def test_fleet_protocol_floor_ignores_lapsed_leases(store: Any) -> None:
+    await store.try_acquire("seat:ceo", owner="old:1", ttl_seconds=30, protocol=1)
+    _expire(store, "seat:ceo")
+    assert await store.fleet_protocol_floor() is None

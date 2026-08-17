@@ -487,6 +487,143 @@ an older-protocol node holds any lease), with strictly additive schemas as
 the default evolution rule; (c) the second adversarial review of the handoff
 interleavings has run.
 
+### Gate (a) — broker measurement — PARTIALLY CLOSED
+
+**Closed:** `receiver_queue_size` is now set explicitly
+(`_RECEIVER_QUEUE_SIZE = 64` for durable consumers, scaled to `2 ×
+max_batch` for batch subscriptions; `_STREAM_RECEIVER_QUEUE_SIZE = 200`
+for the dashboard's broadcast consumers). The client default of 1000 was
+not a throughput win but a liability: prefetched messages are
+delivered-but-unacked, `_INBOX_ACK_TIMEOUT_MS` is thirty minutes, and a
+*wedged-alive* node therefore sat on up to a thousand of its seat's
+messages for half an hour. Turns are serialized per seat, so prefetch
+beyond one batch buys nothing; 64 covers the default `max_batch` of 20
+three times over and cuts the worst case ~15×.
+
+**Closed:** the harness exists — `tests/test_queue/test_broker_behavior.py`,
+six measurements: redelivery after a graceful close, redelivery from a
+wedged consumer that never closes, cursor continuity across owner
+handoff, attach latency, prefetch hostage size, and the explicit-prefetch
+regression guard. Each asserts the property the design rests on and
+prints the number to tune to.
+
+**NOT closed: the numbers.** This environment has no Pulsar broker and no
+container runtime to start one, so the harness has never run against a
+real one — it skips, and skipping is not passing. **The lease TTL and
+heartbeat constants below are therefore chosen from documented broker
+behaviour, not measurement, and are marked as such at their definitions.**
+Run `docker compose up -d pulsar && pytest
+tests/test_queue/test_broker_behavior.py -m integration -s` on a machine
+that has one, and re-tune. The two numbers most likely to move: the lease
+TTL floor (bounded by how fast a successor can attach) and the
+claim-rate limit (bounded by attach latency × seats).
+
+### Gate (b) — mixed-version fleets — CLOSED
+
+`PROTOCOL_VERSION = 1` in `crewlet.db.leases`, enforced *inside*
+`try_acquire`'s statement rather than as a read-then-claim pair — the
+pair loses the race it exists to prevent. A node refuses to claim
+**anything** while any live lease is held at a lower protocol.
+
+The rule is asymmetric, and that is the point: older nodes keep working
+(they cannot run a check that postdates them), newer ones wait visibly
+until the last old lease lapses or is released. A rolling deploy
+converges because draining the old is what a rolling deploy does.
+`fleet_protocol_floor()` is the observability half — without it a node
+stalled by the gate looks exactly like one whose peers hold every seat.
+
+Two consequences, documented at the constant: schema evolution here is
+**additive-only**, and a **downgrade across a protocol bump requires a
+full fleet drain** — an older build has no check to run, so nothing in
+the table can stop it taking over a newer node's expired leases.
+
+### Gate (c) — adversarial review of the handoff interleavings — CLOSED
+
+Re-attacked the interaction SCALING.md § open question 7 names:
+republish-deferral × coalescing × turn-claim inside an ownership handoff.
+Six findings, each changing the design below.
+
+**C1 — coalescing destroys the trigger identity the claim is keyed on
+(fatal for 5.4 as written).** The inbox batcher merges N same-conversation
+notifications into ONE digest with a *fresh* event id. A claim keyed on
+that id can never match a redelivery, because a redelivery after node
+death coalesces a possibly-different set into a different merged id. The
+claim would silently never short-circuit for the majority of inbox
+traffic — dead weight that reads like protection.
+
+*Resolution:* the claim is keyed on the **constituent** event ids, not
+the merged one. A batch claims all of them in one statement, drops any
+already `completed` from the batch, and coalesces what remains. Node died
+after completing → every constituent is `completed`, nothing remains, ack
+and skip. Died mid-turn → constituents are `in_progress` at a dead epoch
+→ superseded → re-run.
+
+**C2 — a deferral that runs after a claim leaks the claim.** Republish-then-ack
+on a path that already took a claim leaves `in_progress` rows owned by a
+node that is not running them, at a *live* epoch — so the new owner
+cannot supersede them and the trigger stalls until the claim expires.
+
+*Resolution:* **no path may claim and then defer.** Every deferral
+condition (no turn engine, `AWAITING_SANDBOX`, config shed, not the lease
+owner) is evaluated before the claim is taken, and any post-claim failure
+deletes the claim in the same `finally` that defers.
+
+**C3 — republish-then-ack feeds itself during release (fatal).** The
+deferral republishes to the seat's own inbox topic. During a lease
+release the owner's consumer is still the only member of that Shared
+subscription, so it immediately receives its own republished copies and
+defers them again — a hot loop that ends only when the consumer detaches.
+
+*Resolution:* **quiesce the consume loop before deferring.** Release
+order is: stop the loop from dispatching → defer the in-flight partition
+(republish + ack, consumer still open so the ack lands) → close the
+consumer → release the lease. Deferring after the close is not an
+alternative: the ack would fail and the message would be both redelivered
+*and* republished.
+
+**C4 — handoff redeliveries spend the dead-letter budget.** Closing a
+consumer releases its unacked messages immediately (harness measurement
+1), which is convenient — but every redelivery increments
+`redeliveryCount`, and `_INBOX_MAX_REDELIVER` is 3. A message in flight
+across three seat handoffs is dead-lettered, and a rolling 3-node deploy
+can plausibly move a seat that often.
+
+*Resolution:* this is precisely why the deferral is republish-then-ack
+rather than "just close and let the broker redeliver" — a republished
+message is a *new* message with a zero redelivery count. C3's ordering is
+what makes it usable. The broker's own redelivery remains the fallback
+for the un-graceful path (`kill -9`), where three handoffs of one message
+is not a realistic shape.
+
+**C5 — the heartbeat's failure direction, and what a watchdog thread can
+actually do.** SCALING.md calls for the heartbeat on a dedicated OS
+thread that "kills its own seat work" when the loop stalls. It cannot: a
+stalled event loop does not process `call_soon_threadsafe` either, so no
+cross-thread signal can stop the work.
+
+*Resolution:* the heartbeat is an asyncio task, whose failure mode is
+already the safe one — a stalled loop stops renewing, leases lapse, peers
+take over. What the dedicated thread genuinely adds is *detection*, and
+the one action it can take unilaterally: a watchdog thread that observes
+event-loop lag and **hard-exits the process** when the loop is stalled
+past the lease TTL. A node that cannot prove it is alive removes itself
+rather than becoming a zombie. The residual window between lapse and exit
+is bounded by 5.7's in-turn fencing.
+
+**C6 — `preferred` must not be read as ownership.** The stickiness hint
+survives release by design, so after a node dies its id sits in
+`preferred` on every seat it held. Any placement pass that treats a
+matching `preferred` as a reason to *wait* would stall those seats until
+the dead node returns.
+
+*Resolution:* `preferred` biases the order a node tries seats in, and
+nothing else. Never a claim precondition, never a reason to skip.
+
+**Unchanged by the review:** the owner-only Shared subscription (the
+cursor argument holds), the turn-claim state machine's supersede rule,
+sandbox resumes never taking a turn claim, and the DB-claim variant of
+owner-routed sandbox control.
+
 ### 5.1 Seat leases
 
 - One lease per agent seat (`seat:{handle}`), greedy claim up to

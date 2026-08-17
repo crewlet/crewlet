@@ -99,6 +99,43 @@ _INBOX_MAX_REDELIVER = 3
 # window.
 _NEG_ACK_REDELIVERY_DELAY_MS = 1000
 
+# How many messages a durable consumer prefetches into its local queue.
+#
+# Set EXPLICITLY, which it never was: the client default is 1000, and
+# that default is a liability here rather than a throughput win.
+#
+# Prefetched messages are delivered-but-unacked. They are hostage to
+# this consumer for as long as it holds them, and ``_INBOX_ACK_TIMEOUT_MS``
+# is thirty minutes — deliberately, because an agent turn can run that
+# long. A node that is *wedged but alive* (the asyncio loop blocked while
+# the C++ client's IO threads keep answering broker keepalives) therefore
+# sits on its whole prefetch for half an hour before the broker
+# redelivers any of it. At 1000 that is potentially every message a busy
+# seat received in that window; a human waits half an hour for a reply
+# that was sitting in a dead process's memory.
+#
+# Throughput does not argue back. Turns are serialized per seat — one at
+# a time, minutes each — so a seat's consumer can only ever work through
+# its queue one batch at a time, and prefetching beyond a batch buys
+# nothing but hostages. 64 covers the default ``max_batch`` of 20 three
+# times over, so the batcher's zero-linger drain pass still fills a full
+# batch from local state, while cutting the worst-case hostage count by
+# ~15x.
+#
+# Batch subscriptions scale it to their own cap (see ``_make_consumer``)
+# so an operator who raises ``notification_coalesce_max_batch`` does not
+# silently starve the drain pass.
+_RECEIVER_QUEUE_SIZE = 64
+
+# The same knob for the dashboard's broadcast stream consumers.
+#
+# Different tradeoff, so a different number: these are non-durable, start
+# at the latest message, and their events are display-only — nothing is
+# lost that matters if one is dropped. The cost being bounded here is
+# memory, one queue per connected dashboard, and a browser that stops
+# reading must not make the client buffer 1000 events on its behalf.
+_STREAM_RECEIVER_QUEUE_SIZE = 200
+
 # Publish resilience.  A momentarily slow or unreachable broker must not
 # drop an event or wedge the engine.  Producers are created with
 # ``block_if_queue_full=False`` so a stalled broker makes ``send_async``
@@ -581,8 +618,11 @@ class PulsarEventQueue:
 
         # Same durable consumer shape as ``subscribe`` — batch delivery
         # changes *when* messages are handed to the handler, not their
-        # broker-side lifecycle.
-        consumer, executor = await self._create_durable_consumer(topic, group)
+        # broker-side lifecycle.  The prefetch is sized from the batch
+        # cap in force at subscribe time.
+        consumer, executor = await self._create_durable_consumer(
+            topic, group, max_batch=options.effective_max_batch
+        )
         loop = asyncio.get_running_loop()
 
         async def _consume() -> None:
@@ -655,7 +695,7 @@ class PulsarEventQueue:
         logger.info("unsubscribed", topic=topic, group=group, consumers=len(matched))
 
     async def _create_durable_consumer(
-        self, topic: str, group: str
+        self, topic: str, group: str, *, max_batch: int = 0
     ) -> tuple[Any, ThreadPoolExecutor]:
         """Create the durable consumer + receive executor for *topic*/*group*.
 
@@ -680,6 +720,11 @@ class PulsarEventQueue:
         """
         assert self._client is not None
         dlq_topic = f"persistent://{self._ns_path}/dlq-{topic}-{group}"
+        # Batch subscribers need at least one full batch available
+        # locally for the zero-linger drain pass to coalesce; an operator
+        # who raises ``notification_coalesce_max_batch`` past the default
+        # prefetch would otherwise silently get partial batches.
+        queue_size = max(_RECEIVER_QUEUE_SIZE, 2 * int(max_batch))
         consumer = await asyncio.to_thread(
             self._client.subscribe,
             self._full_topic(topic),
@@ -687,6 +732,7 @@ class PulsarEventQueue:
             consumer_type=pulsar.ConsumerType.Shared,
             unacked_messages_timeout_ms=_INBOX_ACK_TIMEOUT_MS,
             negative_ack_redelivery_delay_ms=_NEG_ACK_REDELIVERY_DELAY_MS,
+            receiver_queue_size=queue_size,
             dead_letter_policy=pulsar.ConsumerDeadLetterPolicy(
                 max_redeliver_count=_INBOX_MAX_REDELIVER,
                 dead_letter_topic=dlq_topic,
@@ -997,6 +1043,7 @@ class PulsarEventQueue:
             subscription_name,
             consumer_type=pulsar.ConsumerType.Shared,
             initial_position=pulsar.InitialPosition.Latest,
+            receiver_queue_size=_STREAM_RECEIVER_QUEUE_SIZE,
         )
 
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pulsar-stream")

@@ -44,6 +44,36 @@ from crewlet.db.client import SQLExecutor
 
 logger = get_logger("db.leases")
 
+# The seat-host protocol this build speaks.
+#
+# A rolling upgrade puts a vN and a vN+1 node on the same lease table and
+# the same topics at the same time. That is fine as long as both agree on
+# what *holding a lease means* — and catastrophic when they do not: two
+# nodes that disagree about whether a seat's inbox consumer is
+# owner-only, or about whether a turn claim fences a resume, will each be
+# individually correct and jointly wrong.
+#
+# So the rule is asymmetric, and deliberately so: **a node refuses to
+# claim anything while a live lease is held at a lower protocol.** The
+# older nodes keep working (they cannot know about a check that postdates
+# them); the newer ones wait, visibly, until the last old lease lapses or
+# is released. A rolling deploy converges because that is exactly what a
+# rolling deploy does — drain the old, then the new take over.
+#
+# Two consequences worth stating plainly:
+#
+# - **Schema evolution here is additive-only.** A column the older build
+#   does not select is invisible to it; a column it *requires* is a
+#   crash. Add, never rename or repurpose.
+# - **A downgrade across a protocol bump needs a full drain.** An older
+#   build has no protocol check at all, so it will happily take over a
+#   newer node's expired leases. Nothing in the table can stop it; the
+#   only protection is to stop the whole fleet before rolling back.
+#
+# Bump this when the meaning of holding a lease changes — not when
+# something merely gains a field.
+PROTOCOL_VERSION = 1
+
 
 class LeaseError(RuntimeError):
     """The lease store could not be reached or answered.
@@ -106,6 +136,8 @@ class LeaseBackend(Protocol):
 
     async def list_owned(self, owner: str) -> list[Lease]: ...
 
+    async def fleet_protocol_floor(self) -> int | None: ...
+
 
 def _validate(resource: str, owner: str, ttl_seconds: float | None = None) -> None:
     if not resource:
@@ -153,6 +185,14 @@ class LeaseStore:
         A DB error returns ``None``: never proceed as owner on unknown
         state.  This mirrors ``OnboardingMarkerStore.try_claim_pass``,
         whose fail-closed behaviour this generalises.
+
+        Refuses outright — same ``None`` — while ANY live lease is held
+        at a lower ``protocol``.  The guard is part of the same statement
+        rather than a read-then-claim pair, because a read-then-claim
+        loses the race it exists to prevent: an older node can take a
+        lease in the window between the two. Ask
+        :meth:`fleet_protocol_floor` once per claim sweep to tell a
+        protocol refusal apart from a peer simply holding the seat.
         """
         _validate(resource, owner, ttl_seconds)
         try:
@@ -161,7 +201,11 @@ class LeaseStore:
                 INSERT INTO leases (
                     resource, owner, epoch, expires_at, preferred, protocol
                 )
-                VALUES ($1, $2, 1, now() + make_interval(secs => $3), $4, $5)
+                SELECT $1, $2, 1, now() + make_interval(secs => $3), $4, $5
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM leases
+                    WHERE expires_at > now() AND protocol < $5
+                )
                 ON CONFLICT (resource) DO UPDATE
                 SET owner      = EXCLUDED.owner,
                     epoch      = CASE
@@ -176,8 +220,15 @@ class LeaseStore:
                     ),
                     protocol   = EXCLUDED.protocol,
                     updated_at = now()
-                WHERE leases.expires_at <= now()
-                   OR leases.owner = EXCLUDED.owner
+                WHERE (
+                        leases.expires_at <= now()
+                     OR leases.owner = EXCLUDED.owner
+                      )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM leases older
+                        WHERE older.expires_at > now()
+                          AND older.protocol < EXCLUDED.protocol
+                      )
                 RETURNING resource, owner, epoch, expires_at, preferred, protocol
                 """,
                 resource,
@@ -330,6 +381,26 @@ class LeaseStore:
             raise LeaseError(f"could not list leases for {owner!r}: {exc}") from exc
         return [_row_to_lease(r) for r in rows]
 
+    async def fleet_protocol_floor(self) -> int | None:
+        """Lowest ``protocol`` among LIVE leases, or ``None`` if none are held.
+
+        The observability half of the mixed-version gate: ``try_acquire``
+        enforces it silently (it can only answer yes or no), so a node
+        that claims nothing during a botched upgrade would otherwise look
+        identical to one whose peers simply hold every seat. Called once
+        per claim sweep, not per resource.
+
+        Raises :class:`LeaseError` when unreachable — an unknown floor
+        must not read as "nothing older is out there".
+        """
+        try:
+            value = await self._db.fetchval(
+                "SELECT MIN(protocol) FROM leases WHERE expires_at > now()"
+            )
+        except Exception as exc:
+            raise LeaseError(f"could not read fleet protocol floor: {exc}") from exc
+        return int(value) if value is not None else None
+
 
 class MemoryLeaseStore:
     """In-memory :class:`LeaseBackend` twin for tests and single-node runs.
@@ -357,6 +428,14 @@ class MemoryLeaseStore:
     ) -> Lease | None:
         _validate(resource, owner, ttl_seconds)
         now = self._now()
+        # Mixed-version gate — the twin of the ``NOT EXISTS`` guard in
+        # LeaseStore.try_acquire. Refuse while any live lease is held at
+        # an older protocol.
+        if any(
+            r["expires_at"] > now and int(r.get("protocol") or 1) < int(protocol)
+            for r in self._rows.values()
+        ):
+            return None
         row = self._rows.get(resource)
         if row is None:
             epoch = 1
@@ -419,3 +498,12 @@ class MemoryLeaseStore:
             for r in sorted(self._rows.values(), key=lambda r: str(r["resource"]))
             if r["owner"] == owner and r["expires_at"] > now
         ]
+
+    async def fleet_protocol_floor(self) -> int | None:
+        now = self._now()
+        live = [
+            int(r.get("protocol") or 1)
+            for r in self._rows.values()
+            if r["expires_at"] > now
+        ]
+        return min(live) if live else None
