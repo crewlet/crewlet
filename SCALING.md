@@ -1,10 +1,11 @@
 # Scaling Crewlet
 
-**Status:** analysis + proposed direction. Nothing here is implemented.
+**Status:** analysis + target-architecture decision. Nothing here is implemented.
 
 **Audience:** Crewlet maintainers. The operator-facing rule ("run exactly one
 engine") lives in [`docs/guides/deployment.md`](docs/guides/deployment.md#replica-count);
-this file explains *why* it exists and what it would take to lift it.
+this file explains *why* it exists and records the decided direction for
+lifting it. Breaking changes are in scope for the target design.
 
 ---
 
@@ -12,7 +13,7 @@ this file explains *why* it exists and what it would take to lift it.
 
 `crewlet run` must run as **exactly one process per company**. `crewlet run api`
 may run alongside it, but is also effectively single-instance today (see
-[The API half](#the-api-half)).
+[The wiring fork](#the-wiring-fork)).
 
 Nothing in the code enforces this and — until the change that added this file —
 nothing in the docs stated it. An operator who sets `replicas: 2` gets duplicate
@@ -50,44 +51,6 @@ distributed" — the mechanism has to be built, not swapped. Second, the same
 object also carries `current_task_id`, `working_task`, the token counters, the
 onboarding latch, and the `AWAITING_SANDBOX` state that gates the sandbox
 pause. A distributed lock replaces one of those five things.
-
-### Why Pulsar `Key_Shared` does not work
-
-Two independent reasons:
-
-1. **No message ever carries a key.** `PulsarEventQueue._send_once` is
-   `producer.send_async(data, callback)` (`src/crewlet/queue/pulsar.py:474`) —
-   no `partition_key` anywhere in the repo. Every message would hash to Pulsar's
-   `NONE_KEY` constant, which serializes **the entire org** onto one consumer.
-2. **There is no key dimension to spread.** The inbox is already
-   `crewlet.agent.{handle}.inbox` — one topic per seat. Key_Shared exists to
-   partition *within* a topic; here the partitioning has already happened at the
-   topic level.
-
-Key_Shared also reassigns key ranges on every consumer join/leave — precisely
-the window a multi-minute turn occupies. It gives per-key *ordering*, never
-*mutual exclusion across a long-running handler*. Those are different problems
-(see [Ordering vs. exclusion](#ordering-vs-exclusion)).
-
-### Why `Failover` does not work either
-
-The tempting one-line fix is to flip the per-seat inbox to a `Failover`
-subscription: Pulsar elects one active consumer per topic, the rest stand by.
-
-`_create_durable_consumer` (`src/crewlet/queue/pulsar.py:667`) never passes
-`consumer_name`, so the client generates a random one. Pulsar elects the active
-consumer by sorting on `(priorityLevel, consumerName)` — with random names, a
-newly joining replica **preempts a running one on a coin flip**, for every seat,
-on every deploy. On the switch Pulsar redelivers the old active's unacked
-messages to a replica whose `AgentInstance` is a separate `IDLE` object,
-reproducing exactly the duplicate turn it was introduced to prevent.
-
-Pinning a stable `consumer_name` makes election deterministic in the wrong
-direction: the lexicographically-first replica wins every seat and the rest are
-pure standby.
-
-`Failover` is a reasonable *locality hint* layered on top of an ownership
-mechanism. It is not the ownership mechanism.
 
 ### Ordering vs. exclusion
 
@@ -243,109 +206,400 @@ many replicas run it.
 
 ---
 
-## The API half
+## The wiring fork
 
-The standalone API is *already close to* horizontally scalable, and this is the
-strongest argument against merging the two processes.
+The embedded and standalone API are **two different implementations of the same
+surface**, and that fork is itself a bug factory:
 
-- **Standalone** `crewlet run api` uses
+- **Standalone** (`crewlet run api`) subscribes
   `subscribe_stream("crewlet.events.>", stream.ingest)` (`cli.py:1602`) — a
-  genuinely broadcast ephemeral consumer. Every API replica sees every event.
-- **Embedded** uses `add_publish_listener` (`engine.py:2710`), which fires only
-  on *this process's own* publishes.
+  genuinely broadcast consumer; every API process sees every event — and
+  refreshes its state via `attach_config_refresh`.
+- **Embedded** wires `add_publish_listener` (`engine.py:2710`) — which fires
+  only on *this process's own* publishes — plus `engine=self` and boot-time
+  snapshots of `agent_roles` / `org_data` / `tools_data` (`engine.py:2659-2740`).
 
-So merging the halves **regresses the dashboard** from "sees everything" to
-"sees 1/N", and drags the engine's in-process couplings (`app.state.engine`,
-read by `/health`; `engine._build_tools_data()`, read by `/tools`) into every
-replica.
-
-This also falsifies the claim in `docs/concepts/overview.md` that the halves
-"communicate only through Pulsar" — `create_app(engine=self, stream=stream,
-event_store=…, database=…)` (`engine.py:2713`) hands the API four live
-in-process object references. That claim has been corrected.
+All three live bugs found by the audit (standalone OTLP 503, the pgvector 1536
+bake, the publish-listener vs subscribe_stream divergence) exist **because**
+these two paths differ. Any target architecture must end with exactly one
+wiring — the broadcast one — regardless of where the API runs.
 
 ---
 
-## Mechanism comparison
+## Target architecture: the Crewlet Node
 
-| Option | Verdict |
+**Decision: merge.** One process type — the **node** — run as N replicas,
+homogeneous by default. This supersedes the earlier recommendation in this file
+(keep the split, scale the API alone), which was made under a
+no-breaking-changes premise. With breaking changes in scope, the calculus
+flips, and an adversarial design review (three red-teams + a judge, grounded in
+the code) confirmed it:
+
+- The lease / turn-claim / control-plane / shared-counter machinery is
+  **identical whether or not the API is merged** — every hard finding applies
+  to both options, so it discriminates nothing.
+- Merging **structurally deletes the wiring fork** (one codepath, the
+  broadcast one). Keeping the split keeps the embedded mode for the single-host
+  default, which keeps minting the bug class.
+- The split's own stated motivation — "webhooks keep arriving while the engine
+  restarts" — is served *better* by N ≥ 2 homogeneous nodes than by today's
+  1 + 1 split.
+- The asymmetry that decides it: **a node fleet can express the split topology
+  as configuration** (`node.roles`), but the split can never recover the
+  single-codepath property.
+
+### The node
+
+```mermaid
+flowchart TD
+    subgraph node1["node A  (roles: ingress, seats, workers)"]
+        I1["INGRESS<br/>webhooks · REST · dashboard · WS"]
+        S1["SEAT HOST<br/>seats: ceo, pm<br/>+ their MCP children"]
+        W1["WORKER HOST<br/>scheduler lease · waiter lease"]
+    end
+    subgraph node2["node B  (roles: ingress, seats, workers)"]
+        I2["INGRESS"]
+        S2["SEAT HOST<br/>seats: cto, eng"]
+        W2["WORKER HOST<br/>clustering lease"]
+    end
+    subgraph sat["satellite  (roles: seats · placement-pinned)"]
+        S3["SEAT HOST<br/>seat: on-prem-analyst<br/>MCP near internal systems"]
+    end
+    LB["load balancer"] --> I1
+    LB --> I2
+    PULSAR["Apache Pulsar"]
+    PG["PostgreSQL<br/>state of record · leases · claims · counters"]
+    I1 & I2 --> PULSAR
+    S1 & S2 & S3 <--> PULSAR
+    node1 & node2 & sat <--> PG
+```
+
+Every node runs up to three internal roles, restrictable via Tier A config:
+
+1. **Ingress** — HTTP/WS: webhooks, REST, dashboard. Stateless: reads PG + the
+   event store, publishes to Pulsar, and builds live state from the broadcast
+   event stream — the standalone wiring, now the *only* wiring. The
+   `add_publish_listener` feed, `engine=` reference, and boot-time
+   `agent_roles`/`org_data`/`tools_data` snapshots are deleted, not deprecated.
+2. **Seat host** — acquires per-seat leases and, for each owned seat, runs the
+   inbox consumer, the `AgentInstance`, its stdio MCP children, and its turns.
+3. **Worker host** — singleton duties (scheduler tick, skill clustering,
+   curator, sandbox waiter, tool-skills walk), each behind its own singleton
+   lease. Any node may hold them.
+
+The role restriction is a config statement over one binary — an
+ingress-restricted node runs the identical codepath minus lease claims, so the
+escape hatch does not resurrect the fork. It does *not* provide a
+credential-free DMZ: every node holds Tier A (DSN + keyring). If a hard
+compliance boundary ever requires an ingress that cannot decrypt company
+config, that is a *new, thinner* verify-HMAC-and-publish shim — deliberately
+less code than today's API — not a role-restricted node.
+
+### Remote seats (satellites)
+
+A first-class requirement, and it falls out of the lease design: **an agent can
+run as its own process on another machine while remaining part of the
+company.** A satellite is a node with `roles: [seats]` and a placement
+constraint — either the seat pins to the node (`role.placement.node: <node_id>`
+or a label selector) or the node restricts what it may claim.
+
+Why one would: the seat's MCP servers must run near an internal system, its
+credentials must not leave a network zone, or it needs special hardware. The
+lease table enforces placement (a constrained seat is only claimable by
+matching nodes); everything else already works because a seat's entire
+interface to the company is Pulsar (inbox, events, A2A wakes) + PG (leases,
+claims, sandbox rows, memory). A satellite needs no inbound connectivity and no
+node-to-node channel — which is exactly why A2A payloads must ride the durable
+queue (below), never an in-memory fast path that assumes colocation.
+
+A satellite carries Tier A (keyring, DSN, Pulsar URL). If the pinned node is
+down, the seat is down — that is the meaning of pinning, and the dashboard must
+say so rather than pretend the seat is idle.
+
+### Seat leases — the corrected mechanics
+
+A PG table, modelled on `try_claim_pass` with its two defects fixed
+(owner-predicated release; heartbeat renewal):
+
+```sql
+seat_lease(
+  resource     text PRIMARY KEY,   -- 'seat:{handle}' | 'worker:{duty}'
+  owner        text NOT NULL,      -- node_id (deployment-provided, stable)
+  epoch        bigint NOT NULL,    -- increments on EVERY ownership change: the fencing token
+  expires_at   timestamptz NOT NULL,
+  preferred    text DEFAULT ''     -- stickiness hint across deploys
+)
+```
+
+Corrections from the design review — each of these replaces something the
+naive design got wrong:
+
+- **Owner-only *Shared* subscription, not Exclusive.** The owner is the only
+  member of the seat's existing durable group, so single-consumer semantics
+  hold in steady state, the cursor survives handoff, and takeover attaches
+  instantly. Exclusive was rejected twice over: Pulsar's dead-letter policy is
+  inert under Exclusive (poison messages NAK-loop forever), and a *wedged but
+  alive* zombie — asyncio loop blocked while the C++ client's IO threads keep
+  answering broker keepalives — holds an Exclusive slot indefinitely, with up
+  to a full receiver queue of the seat's messages hostage in its prefetch.
+  Correctness against zombies comes from fencing, not the broker.
+- **Fencing must reach the writes.** The epoch is only a fencing token if
+  writes check it: `pending_sandbox_run` mutations, turn-claim transitions, and
+  budget updates carry `WHERE owner_epoch = $current`. A zombie's late write
+  bounces off the epoch instead of resurrecting a dead run.
+- **The heartbeat runs on a dedicated OS thread** with its own DB connection,
+  and it *self-fences*: if renewal fails or the loop is observed stalled past
+  TTL, the node kills its own seat work rather than trusting the lease it can
+  no longer prove. An event-loop stall must not silently mass-expire every
+  lease on the node while turns keep running.
+- **A lease-blocked delivery defers by republish-then-ack, never NAK.** The NAK
+  constants (`1000 ms` delay × `_INBOX_MAX_REDELIVER = 3`,
+  `queue/pulsar.py:87-101`) dead-letter a healthy message in three seconds of
+  ownership churn. The requeue-republish machinery the inbox batcher already
+  has (identity-preserving, zero accrued redeliveries) is the correct deferral
+  primitive.
+- **Takeover and boot are the same pipeline, strictly ordered:** acquire lease
+  → scan `pending_sandbox_run` for the seat → install pause state derived from
+  the DB rows (`sandbox_id` non-empty ⇔ paused), reconstruct
+  `AWAITING_SANDBOX` → attach the inbox consumer **last**. Attaching first
+  opens a window where the new owner runs interloper turns against a seat that
+  is mid-sandbox.
+- **Placement/rebalance is deliberately dumb:** greedy claim up to
+  `ceil(seats/N)` with the `preferred` hint for stickiness, and a claim-rate
+  limit so a node death does not trigger an MCP spawn storm on the survivors
+  (each takeover spawns that seat's stdio children). Rendezvous hashing and
+  the like are placement *hints* at most — the lease is the truth. Accepted
+  cost: rolling deploys may double-move some seats; the hint bounds it.
+
+### Turn claims — a state machine, not an insert
+
+The naive per-`(seat, trigger_event_id)` `INSERT … ON CONFLICT` claim has a
+fatal flaw the review caught: if the node dies one LLM round in, the
+redelivered trigger short-circuits on the claim row and the human's Slack
+message is *silently dropped* — at-least-once quietly becomes at-most-once for
+exactly the case redelivery exists for.
+
+The claim is therefore a state machine:
+
+```sql
+turn_claim(
+  seat          text,
+  trigger_id    uuid,
+  claimed_by    text,      -- node_id
+  owner_epoch   bigint,
+  state         text,      -- 'in_progress' | 'completed'
+  expires_at    timestamptz,
+  PRIMARY KEY (seat, trigger_id)
+)
+```
+
+- Redelivery short-circuits **only on `completed`**.
+- An `in_progress` claim whose epoch is dead (or expired) is **superseded** —
+  the new owner re-runs the turn. Duplicate side effects from the partially-run
+  first attempt are possible and documented; that window exists today for
+  force-stop and is the honest cost of at-least-once + non-transactional
+  external tools.
+- Turn failure deletes the claim in the same `finally` that defers the
+  delivery, preserving the retry contract.
+- **Sandbox resumes never take a turn claim** — `claim_for_resume` on the
+  pending row is already the at-most-once flip, and a turn claim on the
+  completion event would turn the coordinator's carefully built
+  un-claim-and-retry path into dead code.
+- The zombie window is additionally bounded inside the loop: the tool loop
+  checks local lease validity before each LLM round and before each
+  side-effect-bearing tool call. Exactly-once external side effects remain
+  impossible; the window shrinks to one round.
+
+### Sandbox control must be owner-routed
+
+The single fatal finding in the review: `SandboxRunStarted` / `Completed` ride
+engine-wide topics with **one** competing-consumer group
+(`sandbox/coordinator.py:58-60`). With N nodes, a completion lands on a
+non-owner with probability (N−1)/N — which then claims the resume flip,
+finds no local `AgentInstance`, logs `sandbox_resume_skipped` *without
+raising*, and settles the run to `done`: the suspended Execute conversation is
+destroyed, the box torn down, and the real owner's seat sits `AWAITING_SANDBOX`
+with a paused inbox forever. ("NAK if not mine" is not a patch — three wrong
+nodes dead-letter the completion.)
+
+Fix, structurally: completion and started signals route to the owner. Either a
+per-seat control topic (`crewlet.agent.{handle}.sandbox-control`) subscribed
+only by the lease owner, or — simpler — the waiter (a worker-host singleton)
+writes `completed` onto the pending row and each seat host claims completions
+for its own seats with an owner-gated SQL claim. Additionally
+`_dispatch_resume_execute` must **raise** when the agent is not local, so a
+misrouted claim reverts instead of settling. The pause reaper's
+compare-and-set gap (`waiter.py:159`; `set_status` without a status
+precondition) gets fixed by the same epoch-fenced predicates.
+
+### A2A — payloads ride the durable wakes
+
+The proposal to move `MemoryA2ABus` onto `non-persistent://` Pulsar topics was
+**rejected as unworkable** by the review: `a2a_ask` sends the brief
+milliseconds after opening the channel, the remote participant only starts
+consuming after its inbox wake delivers, and a non-persistent topic keeps no
+backlog — the opening brief is lost in the *common* case, not a race tail.
+(`_full_topic` also hardcodes `persistent://`, and per-channel topics leak one
+cached producer + one consumer thread per channel with no eviction hook.)
+
+The correct shape is already half-built: the A2A *wake* is a durable inbox
+event (`a2a/service.py:105` publishes to `crewlet.agent.{target}.inbox`).
+So: **carry the payloads on the durable queue** — the brief in the wake event,
+the reply on a durable response subject (or the requester's inbox) — and keep
+`asyncio.Queue` only as a same-node fast path *optimization* behind the same
+interface, never a correctness dependency. Channel bookkeeping
+(`A2AService._channels`, process-local today) moves to a PG table so open/close
+authorization works cross-node. This also removes the per-channel resource
+leak, and it is what makes satellites work with no direct connectivity.
+
+### Control plane — epochs, done carefully
+
+Every node must converge on config, and the review corrected four things about
+the naive "broadcast + fail-closed gate" design:
+
+1. **Activation epoch ≠ revision id.** The documented secret-rotation gesture
+   is *re-activating the unchanged revision* (`engine.py:594-598`) — a
+   reconcile loop keyed on revision id can never propagate it, leaving revoked
+   credentials live indefinitely on any node that missed the broadcast. The
+   epoch is a counter that increments on **every** activation, including
+   re-activation. Reconcile compares epochs.
+2. **The poll is authoritative; the event is a latency optimization.** Per-node
+   durable subscriptions orphan on crash (no cleanup path exists — the engine
+   deliberately never uses the Pulsar admin API), and `subscribe_stream` starts
+   at `Latest` and misses anything published while reconnecting. Use a
+   non-durable **Reader** for the fast path — no broker-side state to orphan —
+   backed by a ~15 s reconcile poll of the store. The `api-config` group gets
+   the identical treatment (the naive design fixed only `engine-config`).
+3. **Gate on fleet-applied, not on the raw store pointer.** A revision that
+   fails to apply fails identically on all N nodes (same code, same payload);
+   gating each node on `applied == store` turns today's graceful
+   rollback-and-keep-serving into a fleet-wide 503-everything outage with a
+   human as the only recovery. The gate compares against the latest revision
+   that *successfully applied* (the `ConfigRevisionApplied` outcome already
+   feeds a store-side status); a node whose apply failed with clean rollback
+   keeps serving the prior epoch and reports divergence.
+4. **Apply must not tear running turns.** `apply_config` swaps `self.org`,
+   clears `_role_mcp_tools`, and restarts shared MCP subprocesses while running
+   turns read them by reference — and rollback explicitly cannot restore MCP
+   processes (`engine.py:1028-1035`). So: turns pin an **immutable config
+   snapshot** (org + resolved tool surface) at turn start; restart-required
+   subsystems apply behind a per-seat drain (stop starting turns for affected
+   seats, wait, swap); a node restarts per-role MCP servers only for seats it
+   owns; and node applies are jittered so one config edit does not restart
+   every MCP server in the fleet simultaneously.
+
+Webhook ingress fails closed only on what it actually depends on: HMAC
+verification against **both current and prior secret during a bounded overlap
+window** (so rotation doesn't 401 half the fleet's deliveries), and 503 —
+never 200-drop — when genuinely unable to verify. Everything verified is
+enqueued to Pulsar regardless of the node's config staleness, because a publish
+is epoch-independent.
+
+One more rotation hole the review found: stdio MCP children capture resolved
+secrets in their spawn env, and the restart-diff compares the **raw** `${VAR}`
+spec (`engine.py:3917-3926`), which rotation doesn't change — so rotation never
+restarts them. The apply path must hash each server's *resolved* env and
+restart on resolved-value change.
+
+### Shared counters move to PG
+
+Unchanged from the audit's conclusions: budgets as one atomic conditional
+`UPDATE` (org + seat in one statement, replacing the in-memory
+check-then-rollback), webhook dedupe as `INSERT … ON CONFLICT DO NOTHING`
+claims keyed on provider delivery ids (which also finally gives GitHub/GitLab
+dedupe), credential cooldowns as wall-clock timestamps in PG so a 429 cools a
+key fleet-wide, OTLP tokens become stateless HMAC (any ingress node verifies),
+and `ConcurrencyController` stays per-node but its config value is understood
+as per-node (documented as such).
+
+### Deploys and drain
+
+The engine's pause-then-drain shutdown generalizes, with one correction: the
+naive "finish all turns, then release all leases" holds every seat hostage to
+the node's longest turn — and detached-sandbox turns are *uncapped*. So:
+
+- Readiness (`/ready`, distinct from `/health`) flips off first: the LB stops
+  sending HTTP, the node stops claiming leases.
+- **Each seat's lease releases as that seat goes idle** — peers pick seats up
+  one by one instead of waiting for the last turn.
+- A seat in `AWAITING_SANDBOX` releases **immediately**: its entire state is
+  the PG row, which is precisely what the suspend/resume design bought.
+- Node death is the same flow driven by TTL expiry instead of cooperation; the
+  in-flight trigger redelivers, and the turn-claim state machine decides
+  re-run vs short-circuit.
+
+`crewlet migrate` becomes an explicit step (advisory-locked on a held
+connection — the one place session-scoped release-on-disconnect is the *right*
+property); nodes verify schema version at boot and wait, never migrate.
+
+### Security prerequisite
+
+Blessing internet-facing homogeneous nodes requires closing a hole that is
+already indefensible today: bearer auth guards only `/config/*`, CORS is `*`,
+and `/events`, `/agents/{id}/memory`, and `/ws/stream` serve full LLM
+transcripts unauthenticated. Full-surface auth + CORS tightening ships
+**before** the topology change, not with it.
+
+### Honest limits
+
+- **Exactly-once external side effects do not exist.** The turn-claim +
+  per-round lease checks bound the duplicate window; they cannot close it. A
+  node death mid-turn may repeat a Slack post — same as today's force-stop, now
+  stated.
+- **A wedged-alive zombie** can act for up to one LLM round + one heartbeat
+  interval after losing its lease. Fencing bounds the damage to that window.
+- **Per-company singletons remain** — behind leases, so any node can host
+  them, but the scheduler tick, curator, clustering, and waiter are each one
+  logical instance. The scheduler tick additionally skips while its node's
+  applied epoch is stale (fire identity is org-derived, and a schedule rename
+  across an epoch boundary is a delete + create — dedup on the name cannot
+  survive it).
+
+---
+
+## Rejected mechanisms and alternatives
+
+| Option | Why rejected |
 |---|---|
-| **(a) Pulsar `Key_Shared`** | **Reject.** No key is ever set, and the inbox is already one topic per seat so there is no key dimension. Gives ordering, not exclusion. |
-| **(b) Pulsar `Failover` per inbox topic** | **Reject as correctness; keep as locality hint.** `consumer_name` is unset → election is a coin flip → a joining replica preempts a running turn. |
-| **(c) PG lease table with heartbeats** | **Adopt.** The only option that survives broker rebalance, gives a *fencing* answer to "do I still own this seat", and gates the non-inbox turn paths (scheduler, sandbox resume, A2A) that no broker mechanism touches. |
-| **(d) Stateless API + sharded engine (do *not* merge)** | **Adopt first.** The API is nearly there; the fix list is small and bounded. |
-| **(e) Full merge + consistent-hash seat ownership** | **Reject.** Needs a membership service that does not exist, churns on every rolling deploy, and does not address the control-plane class at all. |
-
-### Recommendation: (d), then (c)
-
-**Do not merge the processes.** Ship the API as the stateless, horizontally
-scalable half. Shard the *engine* by **seat ownership** on a PostgreSQL lease,
-with `Failover` as an optional locality hint layered on top once
-`consumer_name` is set deliberately — never as the invariant.
-
-Seat ownership, not request routing, is the right shard key: it is the only unit
-that makes the per-seat MCP subprocesses (class 2) placeable, and it collapses
-the per-subscription thread cost — `_create_durable_consumer` opens a dedicated
-single-thread executor per subscription (`queue/pulsar.py:679`), so under "every
-replica subscribes every seat" thread count scales with seats × replicas rather
-than with work.
-
-One trap the lease design must respect: `_start_working_or_wait` parks while
-**holding the Pulsar delivery unacked**, and the inbox ack timeout is 30 minutes
-(`pulsar.py:87`). A lease-blocked turn must therefore **NAK-and-defer, never
-park** — otherwise the trigger redelivers to the peer and produces the exact
-duplicate the lease exists to prevent. And NAK is not free: the negative-ack
-redelivery delay is 1000 ms against `_INBOX_MAX_REDELIVER = 3`, so three
-deferrals dead-letter a healthy event in three seconds. Both constants have to
-move together.
+| **Pulsar `Key_Shared`** | No message carries a key (`pulsar.py:474`), and the inbox is already one topic per seat — no key dimension exists. Gives ordering, not exclusion; ranges rebalance on consumer churn, exactly the window a multi-minute turn occupies. |
+| **Pulsar `Failover` per inbox** | `consumer_name` is unset, so election is a coin flip — a joining replica preempts a running turn. Pinning names makes the lexicographically-first node win every seat. At most a locality hint over leases. |
+| **Pulsar `Exclusive` per inbox** | DLQ policy inert under Exclusive; a wedged-alive zombie (C++ IO threads answer keepalives while the Python loop is blocked) holds the slot and its prefetch hostage indefinitely. |
+| **Consistent-hash seat placement** | Needs a membership service that doesn't exist; membership churns on every rolling deploy — mid-turn reassignment is the failure mode, not the feature. |
+| **A2A over `non-persistent://` topics** | The opening brief is sent before the remote consumer can exist and non-persistent topics keep no backlog — dropped in the common case. Payloads ride the durable inbox wakes instead. |
+| **Keep the split as the target** | Its two operational wins (independent deploy cadence, ingress crash isolation) are recoverable inside the node via per-seat drain release and `node.roles`; its cost — two wirings forever — is not recoverable from the other side. Would flip back if: a hard compliance need for a keyring-less DMZ ingress (build the thin shim then), or real orgs routinely running multi-hour sandbox turns *without* per-seat lease release (making rolling deploys drag), or the embedded-only `create_app` parameters surviving "for compatibility" — that quietly forfeits the merge's entire payoff. |
 
 ---
 
-## Prerequisites, in order
+## Migration path
 
-These are load-bearing and none of them exist today.
+Sequenced so every step is independently shippable and the fork dies early:
 
-0. **Instance identity.** A replica id that is *stable across restarts*, sourced
-   from the deployment (pod name / StatefulSet ordinal / an explicit Tier A
-   field). Roughly fifteen of the fixes above presuppose one. It must not be a
-   self-generated `uuid4` — that reproduces the `hook-{id(callback)}` orphaned-
-   subscription leak (`engine.py:3453`).
+1. **Foundations** — deployment-provided `node_id` (Tier A field; stable across
+   restarts — a self-generated uuid4 reproduces the `hook-{id(callback)}`
+   orphan-subscription leak); `Database.acquire()`/`transaction()` (asyncpg's
+   pool reset runs `pg_advisory_unlock_all()` on release, so every
+   advisory-lock idea is a silent no-op until this exists); `crewlet.db.leases`
+   with owner-predicated release + renewal; `crewlet migrate` as an explicit,
+   locked step.
+2. **Kill the fork** — every node wires the API the standalone way
+   (`subscribe_stream` + config refresh + store reads); delete
+   `add_publish_listener` feeding, `engine=`, and the boot-time snapshots;
+   give the API the OTLP receiver; webhooks fail closed (503, never 200-drop);
+   full-surface auth + CORS. This step alone fixes two of the three live bugs.
+3. **Shared counters** — budgets, dedupe claims, cooldowns, OTLP HMAC.
+4. **Control plane** — activation epoch, Reader + reconcile poll,
+   fleet-applied gating, per-turn config snapshots, resolved-env-hash MCP
+   restarts, dual-secret HMAC overlap.
+5. **Seat host** — leases, owner-only subscriptions, the takeover pipeline,
+   turn-claim state machine, owner-routed sandbox control, epoch-fenced PG
+   writes, per-seat drain release.
+6. **A2A on the durable queue** + channel state in PG.
+7. **Placement** — satellite nodes, `node.roles`, seat pinning; CLI converges
+   on `crewlet node` (aliases for `run`/`run api` through a deprecation
+   window).
 
-1. **A held-connection `Database` API.** `Database` exposes exactly `execute`,
-   `fetchrow`, `fetchval` (`db/client.py:54-68`), each acquiring and releasing a
-   pooled connection per statement. asyncpg's pool reset runs
-   `pg_advisory_unlock_all()` on release, so **every advisory-lock fix is a
-   silent no-op** and no migration file can be transactional. `acquire()` /
-   `transaction()` are a hard prerequisite.
-
-2. **A `crewlet.db.leases` module**, modelled on `try_claim_pass`, with two
-   defects fixed: an `owner` column so release is owner-predicated (today
-   `release_claim` has no owner check and can clear a successor's live lease),
-   and `renew(resource, owner, ttl)` for heartbeats. Prefer this over
-   `pg_advisory_lock` everywhere except the migrator — advisory locks have no
-   fencing token and no TTL, so a hung-but-connected holder blocks the fleet
-   forever. For the migrator, release-on-disconnect is the *right* property (a
-   SIGKILLed migrator must not wedge every future boot), so a real advisory lock
-   on a held connection is correct there.
-
-3. **A real control plane** — broadcast *plus* an interval reconcile against the
-   authoritative store, plus fail-closed behaviour on staleness.
-
-4. **Shared state for class 4** — budgets as an atomic conditional UPDATE,
-   webhook dedupe as `INSERT … ON CONFLICT DO NOTHING` keyed on provider
-   delivery ids (covering GitHub/GitLab, which have none today), rate limits and
-   credential cooldowns in shared storage, stateless HMAC OTLP tokens.
-
-5. **Only then** seat leases and per-agent exclusivity.
-
-### One fix to avoid
-
-A side-effect ledger keyed on `hash(trigger_event.id, tool_name,
-canonical(arguments))` is unsound: it swallows a legitimate repeat call within
-one turn, and adding a call ordinal breaks the redelivery case because a re-plan
-through a non-deterministic LLM produces different ordinals. The workable shape
-is a per-`(agent_handle, trigger_event.id)` **turn claim taken before planning**,
-so a redelivered trigger short-circuits rather than re-planning.
+Steps 1–4 are pure wins even if sharding never ships: they fix the live bugs,
+the silent webhook drop, and the rotation holes in today's topology.
 
 ---
 
