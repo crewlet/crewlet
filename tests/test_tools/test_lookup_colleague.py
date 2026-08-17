@@ -829,6 +829,42 @@ async def test_lookup_human_identity_block() -> None:
 
 
 @pytest.mark.asyncio
+async def test_human_reach_names_only_this_seats_surfaces() -> None:
+    """The hand-off line must name the surfaces the seat actually has.
+
+    A Mattermost + Plane org has neither Slack nor Confluence, so a
+    hardcoded "reach them on Slack or Confluence" would send the agent
+    hunting for a tool it was never given.
+    """
+    _, tool = _registry_and_tool()
+    seat = _human_seat(
+        contact={"mattermost_user_id": "founder", "plane_user_id": "u-1"}
+    )
+    reg = _Registry([], humans=[seat])
+    result = await tool.execute({"query": "sarah-chen"}, _ctx(reg))
+    assert result.success
+    out = result.output
+    assert "mattermost_id: founder" in out
+    assert "on mattermost or plane" in out
+    assert "Slack" not in out
+    assert "Confluence" not in out
+
+
+@pytest.mark.asyncio
+async def test_human_reach_stays_generic_when_nothing_resolves() -> None:
+    """A seat validates on a declared identity, but an unresolved
+    ``${VAR}`` renders nothing — so there is no surface to name and the
+    line must not invent one."""
+    _, tool = _registry_and_tool()
+    seat = _human_seat(contact={"plane_user_id": "${UNSET_FOUNDER_PLANE_ID}"})
+    reg = _Registry([], humans=[seat])
+    result = await tool.execute({"query": "sarah-chen"}, _ctx(reg))
+    assert result.success
+    assert "plane_id:" not in result.output
+    assert "on whichever surface the work lives" in result.output
+
+
+@pytest.mark.asyncio
 async def test_lookup_agent_seat_identity_block_carries_kind() -> None:
     _, tool = _registry_and_tool()
     reg = _Registry([_Agent("engineer", "Engineer", email="e@acme.com")])
