@@ -385,6 +385,27 @@ services:
       retries: 12
       start_period: 60s
 
+  # WHY NOT REUSE THE `postgres` SERVICE ABOVE? It is the same major (18)
+  # and would technically work, but three things make a separate instance
+  # the right call — the same conclusion plane-db reached:
+  #
+  #  1. It would silently do nothing for existing installs. Creating a
+  #     second database in that instance means an init script, and the
+  #     postgres image runs /docker-entrypoint-initdb.d ONLY against an
+  #     empty data directory. Anyone who has already run the quickstart
+  #     has a populated pg-data volume, so enabling this profile would
+  #     start a Mattermost pointed at a database nobody created.
+  #  2. It would couple two unrelated lifecycles. This profile is meant to
+  #     be disposable — `down -v` and re-bootstrap for a clean chat
+  #     instance. That same command against a shared volume would take
+  #     company_config, token_usage, agent_diary and the secret store with
+  #     it, which is exactly the loss the `postgres` comment warns about.
+  #  3. It would let Mattermost's supported-major matrix co-own the
+  #     engine's data volume. Today both want 18; the day they disagree,
+  #     the pinned half is the one holding every agent's memory.
+  #
+  # An idle postgres:18-alpine is tens of MB, so the sharing saves little
+  # and risks the one volume that is expensive to lose.
   mattermost-db:
     # Postgres 18, matching upstream's POSTGRES_IMAGE_TAG=18-alpine — the
     # major Mattermost tests against. Patches arrive on `docker compose
