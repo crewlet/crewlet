@@ -4,7 +4,7 @@
   "$defs": {
     "ApiAuthConfig": {
       "additionalProperties": false,
-      "description": "Bearer-token auth policy for ``/config/*`` routes.",
+      "description": "Bearer-token auth policy for the API.\n\nGuards **every** route except the ones that authenticate by other\nmeans or must be reachable to obtain a token at all: ``/health``,\n``/ready``, the dashboard shell and its static assets, ``/webhooks/*``\n(HMAC-verified per source) and ``/otlp/*`` (signed per-run token).\n\nIt did not always: auth covered only ``/config/*``, which left\n``/events``, ``/agents/{id}/memory`` and ``/ws/stream`` serving full\nLLM transcripts \u2014 prompts, tool arguments, diary entries \u2014 to anyone\nwho could reach the port.  Survivable behind a firewall, and not\nsomething to bless as the shape of an internet-facing deployment.",
       "properties": {
         "tokens": {
           "items": {
@@ -17,6 +17,18 @@
           "default": false,
           "title": "Disabled",
           "type": "boolean"
+        },
+        "allow_anonymous_read": {
+          "default": false,
+          "title": "Allow Anonymous Read",
+          "type": "boolean"
+        },
+        "allowed_origins": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Origins",
+          "type": "array"
         }
       },
       "title": "ApiAuthConfig",
@@ -60,7 +72,9 @@
           "$ref": "#/$defs/ApiAuthConfig",
           "default": {
             "tokens": [],
-            "disabled": false
+            "disabled": false,
+            "allow_anonymous_read": false,
+            "allowed_origins": []
           }
         }
       },
@@ -253,6 +267,8 @@
         "host": "0.0.0.0",
         "port": 0,
         "auth": {
+          "allow_anonymous_read": false,
+          "allowed_origins": [],
           "disabled": false,
           "tokens": []
         }

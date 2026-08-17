@@ -191,11 +191,53 @@ A revert creates a *new* revision whose payload equals a prior one — the audit
 
 ## Auth
 
-Every `/config/*` route requires `Authorization: Bearer <token>`. Tokens are listed in Tier A under `api.auth.tokens` and resolved from env vars at API startup. The matched token's `id` is recorded as `created_by` on each revision the request produces, so revision history carries meaningful attribution (`alice`, `ci-pipeline`, `ops`) rather than generic strings.
+**Every route requires `Authorization: Bearer <token>`**, with a small set of
+deliberate exemptions. Tokens are listed in Tier A under `api.auth.tokens` and
+resolved from env vars at API startup. The matched token's `id` is recorded as
+`created_by` on each revision the request produces, so revision history carries
+meaningful attribution (`alice`, `ci-pipeline`, `ops`) rather than generic
+strings.
 
-The auth middleware uses `hmac.compare_digest` for constant-time comparison. Failed attempts log at WARNING (never the candidate token value); successes log at DEBUG with `operator_id` + `route`.
+Served **without** a token, because they authenticate by other means or must be
+reachable to obtain one:
 
-For local development: `api.auth.disabled: true` opts out (loud WARNING at startup, attribution becomes `"anonymous"`). Never use in production.
+| Path | Why |
+|------|-----|
+| `/health`, `/ready` | Probes. An orchestrator has no token, and a liveness check that 401s is a liveness check that fails |
+| `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
+| `/otlp/*` | The signed per-run token in the path *is* the credential |
+| `/`, `/dashboard`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch |
+
+`/ws/stream` **is** guarded. Browsers can't set headers on a `WebSocket`, so it
+accepts `?token=…` as well as the `Authorization` header; prefer the header
+where a client can send one, since query strings tend to land in proxy access
+logs.
+
+> **This changed.** Auth previously covered only `/config/*`, which left
+> `/events`, `/agents/{id}/memory` and `/ws/stream` serving full LLM
+> transcripts — prompts, tool arguments, diary entries — to anyone who could
+> reach the port. If you run the dashboard, set a token in the UI when it
+> prompts; if you script against the API, add the header to your read calls
+> too.
+
+**Serving the API now requires an explicit decision.** Starting with no
+`api.auth.tokens` and no opt-out is refused at boot with a message naming the
+options, because silence used to mean "open":
+
+| Setting | Effect |
+|---------|--------|
+| `api.auth.tokens` | The normal path. Every guarded route needs a listed token |
+| `api.auth.allow_anonymous_read: true` | `GET`/`HEAD` outside `/config` serve without a token; writes and the whole `/config` surface still require one. For a network-isolated deployment whose dashboard should stay one click away. Logged loudly at startup |
+| `api.auth.disabled: true` | Local development only. Everything serves unauthenticated, attribution becomes `"anonymous"`, loud WARNING at startup |
+
+**CORS** defaults to same-origin. The dashboard is served by this process so it
+needs no entry; list any other browser origin explicitly in
+`api.auth.allowed_origins`. The previous `*` default let any site a logged-in
+operator happened to visit read every endpoint.
+
+The auth middleware uses `hmac.compare_digest` for constant-time comparison.
+Failed attempts log at WARNING (never the candidate token value); successes log
+at DEBUG with `operator_id` + `route`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 

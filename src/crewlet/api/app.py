@@ -134,10 +134,14 @@ def create_app(
         still work (they just see no engine events until one is wired
         in).
     """
+    auth_cfg = getattr(getattr(bootstrap, "api", None), "auth", None)
+    # Same-origin by default. ``*`` let any page a logged-in operator
+    # happened to visit read every endpoint this process serves.
+    allowed_origins = list(getattr(auth_cfg, "allowed_origins", None) or [])
     middleware: list[Middleware] = [
         Middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=allowed_origins,
             allow_methods=["*"],
             allow_headers=["*"],
         ),
@@ -150,14 +154,35 @@ def create_app(
 
     auth_tokens: dict[str, str] = {}
     auth_disabled = False
+    auth_anonymous_read = False
+    auth_enabled = False
     if company_config_store is not None:
         routes.extend(build_config_routes())
         routes.extend(build_config_entity_routes())
         routes.extend(build_config_audit_routes())
-        if bootstrap is not None:
-            auth_tokens = load_tokens(bootstrap)
-            auth_disabled = bootstrap.api.auth.disabled
-            middleware.append(Middleware(ApiAuthMiddleware))
+    if bootstrap is not None:
+        # Mounted whenever Tier A is present, not only alongside the
+        # config routes: the guarded surface is now the whole API, and
+        # ``/events`` / ``/agents/{id}/memory`` / ``/ws/stream`` carry
+        # full LLM transcripts regardless of whether a config store is
+        # wired.
+        auth_tokens = load_tokens(bootstrap)
+        auth_disabled = bootstrap.api.auth.disabled
+        auth_anonymous_read = bool(
+            getattr(bootstrap.api.auth, "allow_anonymous_read", False)
+        )
+        if auth_anonymous_read and not auth_disabled:
+            logger.warning(
+                "api_anonymous_read_enabled",
+                hint=(
+                    "api.auth.allow_anonymous_read is True — every read "
+                    "route, including LLM transcripts on /events and "
+                    "/agents/{id}/memory, serves without a token. Writes "
+                    "and /config/* still require one."
+                ),
+            )
+        auth_enabled = True
+        middleware.append(Middleware(ApiAuthMiddleware))
 
     @contextlib.asynccontextmanager
     async def _lifespan(app: Starlette) -> Any:
@@ -218,6 +243,10 @@ def create_app(
     )
     app.state.auth_tokens = auth_tokens
     app.state.auth_disabled = auth_disabled
+    app.state.auth_anonymous_read = auth_anonymous_read
+    # Whether ApiAuthMiddleware is mounted — the WebSocket handler checks
+    # this so it enforces exactly when the HTTP surface does.
+    app.state.auth_enabled = auth_enabled
     app.state.runtime = runtime
     # Names the process answering /health; see build_health_envelope.
     app.state.node_id = resolve_node_id(bootstrap)

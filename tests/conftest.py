@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from crewlet.config import (
+    ApiAuthConfig,
     ApiConfig,
     BootstrapConfig,
     BootstrapProvidersConfig,
@@ -19,8 +20,13 @@ from crewlet.config import (
 def make_bootstrap(**overrides: Any) -> BootstrapConfig:
     """Build a minimal Tier A bootstrap config for tests.
 
-    Defaults: memory knowledge backend, empty DSN, no auth (so
-    test apps don't get gated by the bearer middleware).
+    Defaults: memory knowledge backend, empty DSN, and auth explicitly
+    DISABLED so test apps aren't gated by the bearer middleware.
+
+    Explicit because serving the API now requires an auth decision:
+    tokens, ``disabled``, or ``allow_anonymous_read``. Silence used to
+    mean "open", which is how ``/events`` and ``/ws/stream`` ended up
+    serving LLM transcripts to anyone who could reach the port.
     """
     return BootstrapConfig(
         providers=BootstrapProvidersConfig(
@@ -28,7 +34,7 @@ def make_bootstrap(**overrides: Any) -> BootstrapConfig:
             database=DatabaseConfig(),
             knowledge=KnowledgeStoreConfig(type="memory"),
         ),
-        api=ApiConfig(),
+        api=ApiConfig(auth=ApiAuthConfig(disabled=True)),
         debug=False,
         **overrides,
     )

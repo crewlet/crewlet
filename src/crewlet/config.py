@@ -633,7 +633,19 @@ class ApiAuthTokenConfig(BaseModel):
 
 
 class ApiAuthConfig(BaseModel):
-    """Bearer-token auth policy for ``/config/*`` routes."""
+    """Bearer-token auth policy for the API.
+
+    Guards **every** route except the ones that authenticate by other
+    means or must be reachable to obtain a token at all: ``/health``,
+    ``/ready``, the dashboard shell and its static assets, ``/webhooks/*``
+    (HMAC-verified per source) and ``/otlp/*`` (signed per-run token).
+
+    It did not always: auth covered only ``/config/*``, which left
+    ``/events``, ``/agents/{id}/memory`` and ``/ws/stream`` serving full
+    LLM transcripts — prompts, tool arguments, diary entries — to anyone
+    who could reach the port.  Survivable behind a firewall, and not
+    something to bless as the shape of an internet-facing deployment.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -643,8 +655,27 @@ class ApiAuthConfig(BaseModel):
 
     disabled: bool = False
     """Local-development override.  When ``True``, the API serves
-    ``/config/*`` without auth and logs a loud startup warning.
+    every route without auth and logs a loud startup warning.
     Never use in production."""
+
+    allow_anonymous_read: bool = False
+    """Serve read-only routes (``GET`` / ``HEAD`` outside ``/config``)
+    without a token, while still requiring one for writes and for the
+    whole ``/config`` surface.
+
+    For a deployment already isolated at the network layer whose
+    dashboard should stay one click away.  It does expose LLM
+    transcripts to anyone who can reach the port, so it is opt-in and
+    logged at startup."""
+
+    allowed_origins: list[str] = Field(default_factory=list)
+    """Browser origins permitted by CORS, e.g.
+    ``["https://crewlet.example.com"]``.
+
+    Empty (the default) means **same-origin only** — the dashboard is
+    served by this process, so it needs no entry.  The previous default
+    was ``*``, which let any site a logged-in operator visited read
+    every unauthenticated endpoint."""
 
 
 class ApiConfig(BaseModel):

@@ -28,8 +28,34 @@ from crewlet._logging import get_logger
 logger = get_logger("api.auth")
 
 
-# Path prefix the middleware guards; bypass for everything else.
+# The config surface. Always guarded, and never eligible for
+# ``allow_anonymous_read`` — reading it exposes the whole company
+# document, and writing it changes the company.
 GUARDED_PREFIX = "/config"
+
+# Routes served without a bearer token, because they authenticate by
+# other means or because a client must reach them to obtain a token.
+#
+# - ``/health`` / ``/ready``: probes. An orchestrator has no token, and a
+#   liveness check that 401s is a liveness check that fails.
+# - ``/webhooks/``: every one verifies a provider HMAC before doing
+#   anything, which is a stronger check than a shared bearer token.
+#   Includes the Slack OAuth landing page, which a browser reaches
+#   mid-install with no token in hand.
+# - ``/otlp/``: the per-run signed token in the path IS the credential.
+# - the dashboard shell + its assets: the page that prompts for the
+#   token cannot itself require one. It ships no data — every byte it
+#   renders comes from an authenticated fetch.
+UNGUARDED_EXACT = frozenset({"/", "/dashboard", "/favicon.ico"})
+UNGUARDED_PREFIXES = ("/health", "/ready", "/webhooks/", "/otlp/", "/static/")
+
+# Methods treated as reads for ``allow_anonymous_read``.
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def is_unguarded_path(path: str) -> bool:
+    """Whether ``path`` is served without a bearer token."""
+    return path in UNGUARDED_EXACT or path.startswith(UNGUARDED_PREFIXES)
 
 
 class TokenLoadError(RuntimeError):
@@ -40,10 +66,12 @@ def load_tokens(bootstrap: Any) -> dict[str, str]:
     """Return the validated ``{operator_id: token}`` map.
 
     Fail-safe behaviour:
-    - When ``api.auth.disabled`` is True, returns ``{}`` (any
-      ``/config/*`` request is allowed).  Loud WARNING log.
-    - When ``api.auth.disabled`` is False and no tokens are listed,
-      raises :class:`TokenLoadError`.
+    - When ``api.auth.disabled`` is True, returns ``{}`` (every request
+      is allowed).  Loud WARNING log.
+    - When no tokens are listed and neither ``disabled`` nor
+      ``allow_anonymous_read`` is set, raises :class:`TokenLoadError`.
+      Serving the API requires an explicit auth decision: it carries
+      LLM transcripts, and silence used to mean "open".
     - When a token resolves to the empty string (e.g. the env var is
       unset), raises :class:`TokenLoadError`.
     - Duplicate ``id`` entries raise :class:`TokenLoadError`.
@@ -53,16 +81,24 @@ def load_tokens(bootstrap: Any) -> dict[str, str]:
         logger.warning(
             "api_auth_disabled",
             hint=(
-                "api.auth.disabled is True — /config/* serves without "
-                "authentication. Never use in production."
+                "api.auth.disabled is True — every route, including LLM "
+                "transcripts on /events and /agents/{id}/memory, serves "
+                "without authentication. Never use in production."
             ),
         )
         return {}
 
     if not auth.tokens:
+        if getattr(auth, "allow_anonymous_read", False):
+            # An explicit decision: reads are open, writes and /config
+            # are refused outright since no token can ever match.
+            return {}
         raise TokenLoadError(
-            "api.auth.tokens is empty.  Configure at least one bearer "
-            "token (or set api.auth.disabled: true for local dev)."
+            "api.auth.tokens is empty.  The API serves LLM transcripts "
+            "(/events, /agents/{id}/memory, /ws/stream), so it needs an "
+            "explicit decision: configure at least one bearer token, or "
+            "set api.auth.disabled: true (local dev) or "
+            "api.auth.allow_anonymous_read: true (network-isolated)."
         )
 
     seen_ids: dict[str, str] = {}
@@ -125,15 +161,37 @@ def check_bearer(request: Request) -> str | None:
     return resolve_operator(request.app, header[len("bearer ") :].strip())
 
 
+def requires_token(app_state: Any, *, path: str, method: str) -> bool:
+    """Whether this request must carry a valid bearer token.
+
+    Note what is deliberately NOT exempted: ``/events``,
+    ``/agents/{id}/memory`` and ``/ws/stream`` all serve full LLM
+    transcripts, and used to be open because auth was scoped to
+    ``/config``.
+    """
+    if is_unguarded_path(path):
+        return False
+    if path.startswith(GUARDED_PREFIX):
+        return True
+    if getattr(app_state, "auth_anonymous_read", False):
+        return method.upper() not in READ_METHODS
+    return True
+
+
 class ApiAuthMiddleware(BaseHTTPMiddleware):
-    """Mounted at the app root; only guards ``GUARDED_PREFIX`` paths."""
+    """Mounted at the app root; guards every route bar the exemptions.
+
+    HTTP only — Starlette's ``BaseHTTPMiddleware`` never sees a WebSocket
+    scope, so ``/ws/stream`` authenticates inside its own handler (see
+    :func:`crewlet.api.routes.stream.websocket_auth_failed`).
+    """
 
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
         path = request.url.path
-        if not path.startswith(GUARDED_PREFIX):
+        if not requires_token(request.app.state, path=path, method=request.method):
             return await call_next(request)
 
         operator_id = check_bearer(request)

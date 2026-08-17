@@ -11,6 +11,10 @@
 // surface documented in docs/reference/api-endpoints.md. The dashboard
 // simply no longer uses it.
 
+// It carries the stored bearer token like any other read: the API
+// guards its whole surface, and /stream/snapshot is on the guarded side.
+import { apiToken } from "./authToken.js";
+
 const BASE = location.origin;
 
 export const api = {
@@ -28,7 +32,11 @@ export const api = {
    */
   async snapshot() {
     try {
-      const response = await fetch(BASE + "/stream/snapshot");
+      const stored = apiToken();
+      const response = await fetch(
+        BASE + "/stream/snapshot",
+        stored ? { headers: { Authorization: "Bearer " + stored } } : undefined,
+      );
       if (!response.ok) return null;
       return await response.json();
     } catch {

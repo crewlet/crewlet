@@ -131,11 +131,22 @@ green; leases contract suite green on PG + memory.
 
 ---
 
-## Phase 2 — Kill the wiring fork (fixes live bug #3)
+## Phase 2 — Kill the wiring fork (fixes live bug #3) — DONE
 
 One API wiring — the broadcast one — regardless of where the API runs.
 This is the phase that permanently retires the bug class behind all three
 live bugs.
+
+Deviations from the plan as written, both discovered in implementation:
+
+- The `NodeStatus` provider became `NodeRuntime` and also carries the live
+  MCP tool surface, since `_build_tools_data()` was the fourth thing only
+  a co-located engine could answer. Still one injection point.
+- An engine with no config store (a programmatic embed) primes the app
+  through the *same* `_apply_payload_to_app` the refresh path uses, from
+  its in-memory config. Without it, dropping the parameters would have
+  left that deployment with no webhook secrets at all — one derivation,
+  two sources, rather than two derivations.
 
 ### 2.1 Rewire the embedded API to the standalone shape
 

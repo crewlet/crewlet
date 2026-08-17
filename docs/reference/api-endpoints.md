@@ -10,6 +10,12 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 
 | Method | Path | Description |
 |--------|------|-------------|
+> **Auth.** Every route below requires `Authorization: Bearer <token>` except
+> `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the dashboard shell
+> (`/`, `/dashboard`, `/static/*`). `/ws/stream` is guarded and also accepts
+> `?token=…`, since browsers cannot set headers on a WebSocket. See
+> [Configuration § Auth](../concepts/configuration.md#auth).
+
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |

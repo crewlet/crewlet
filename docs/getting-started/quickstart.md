@@ -290,9 +290,15 @@ agent go `Working`, step through **Plan → Execute → Review**, and return to
 UI. The same picture is available over the API:
 
 ```bash
-curl -s http://localhost:8000/agents | python3 -m json.tool
-curl -s http://localhost:8000/health
+# Reads are authenticated — reuse the founder token from step 3.
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
+  http://localhost:8000/agents | python3 -m json.tool
+curl -s http://localhost:8000/health     # probes stay open
 ```
+
+The dashboard prompts for the same token on first load and remembers it. See
+[Configuration § Auth](../concepts/configuration.md#auth) for the full rule and
+the `allow_anonymous_read` escape hatch.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting:

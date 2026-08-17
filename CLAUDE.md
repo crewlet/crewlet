@@ -623,7 +623,17 @@ src/crewlet/          # Main package
                       #   like GitLab; see docs/integrations/plane.md
   mcp/                # MCP integration (stdio + HTTP/SSE)
   timescaledb/        # TimescaleDB event store (observability, in main PG)
-  api/                # Standalone REST API + dashboard (Starlette) —
+  api/                # REST API + dashboard (Starlette). ONE wiring for
+                      #   embedded and standalone: state comes from the
+                      #   active config revision (config_refresh) and
+                      #   events from subscribe_stream — never a
+                      #   boot-time snapshot or a publish listener.
+                      #   runtime.py — NodeRuntime, the single seam for
+                      #   facts only a co-located engine can answer
+                      #   (in-flight turns, drain state, live MCP tools);
+                      #   auth guards EVERY route bar probes, webhooks
+                      #   (HMAC), /otlp (signed token) and the dashboard
+                      #   shell —
                       #   routes/ (per-domain handlers: agents, events,
                       #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
                       #     GitLab/Plane/Confluence/Forge inbound, incl.

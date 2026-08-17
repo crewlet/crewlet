@@ -35,6 +35,29 @@ export function tokenGate(what) {
     </div>`;
 }
 
+/** Whether an API result is an auth rejection. */
+export function isAuthError(result) {
+  return !!result && result._error === 401;
+}
+
+/**
+ * Show a one-time, page-level prompt when the API rejects our token.
+ *
+ * The whole API is guarded now, so a dashboard opened without a token
+ * gets 401s from its very first fetch. Without this it would render an
+ * empty shell and look broken rather than unauthenticated.
+ */
+let promptedOnce = false;
+export function ensureTokenForApi(onSet) {
+  if (promptedOnce) return;
+  promptedOnce = true;
+  promptForToken(() => {
+    promptedOnce = false;
+    if (onSet) onSet();
+    else location.reload();
+  });
+}
+
 /** The "that token was rejected" panel. */
 export function tokenRejected() {
   return `
