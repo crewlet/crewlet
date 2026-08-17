@@ -422,15 +422,35 @@ destroyed, the box torn down, and the real owner's seat sits `AWAITING_SANDBOX`
 with a paused inbox forever. ("NAK if not mine" is not a patch — three wrong
 nodes dead-letter the completion.)
 
-Fix, structurally: completion and started signals route to the owner. Either a
-per-seat control topic (`crewlet.agent.{handle}.sandbox-control`) subscribed
-only by the lease owner, or — simpler — the waiter (a worker-host singleton)
-writes `completed` onto the pending row and each seat host claims completions
-for its own seats with an owner-gated SQL claim. Additionally
-`_dispatch_resume_execute` must **raise** when the agent is not local, so a
-misrouted claim reverts instead of settling. The pause reaper's
+Fix, structurally: completion and started signals route to the owner, the same
+way webhooks already reach the right seat — the final hop is a **per-seat
+topic**, and routing emerges from who subscribes it, not from any "which node"
+computation. Two variants:
+
+- **A per-seat control topic** (`crewlet.agent.{handle}.sandbox-control`)
+  subscribed only by the lease owner. It cannot be the inbox itself: while a
+  seat is `AWAITING_SANDBOX` the owner keeps the inbox **paused** (the busy
+  gate — deliveries buffer on the broker until the job finishes), so a
+  completion riding the inbox would buffer behind the very pause it is
+  supposed to lift. Same pattern as the inbox, separate never-paused lane.
+- **No event at all** — the waiter (a worker-host singleton, already a poll
+  loop; it *is* the completion signal) writes `completed` onto the pending row,
+  and each seat host claims completions for its own seats with an owner-gated
+  SQL claim (`WHERE seat IN <my leases> AND owner_epoch = $mine`). Slightly
+  higher latency (bounded by the poll tick that already exists), strictly less
+  machinery.
+
+Additionally `_dispatch_resume_execute` must **raise** when the agent is not
+local, so a misrouted claim reverts instead of settling. The pause reaper's
 compare-and-set gap (`waiter.py:159`; `set_status` without a status
 precondition) gets fixed by the same epoch-fenced predicates.
+
+The generalizable rule this finding teaches: **any handler on a fleet-wide
+Shared group must be either a pure router or owner-gated before its first side
+effect.** `events/subscriptions.py` passes (resolve target, re-publish to the
+per-seat topic, no claims); the notification service's inbound handler passes;
+today's sandbox coordinator fails it — destructive at-most-once work before the
+locality check, and a swallow-instead-of-raise when the check fails.
 
 ### A2A — payloads ride the durable wakes
 
