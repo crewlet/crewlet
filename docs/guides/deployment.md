@@ -160,12 +160,26 @@ api:
 ```
 
 ```bash
+# Once, first: bring the schema up (safe to re-run; takes an advisory lock)
+crewlet migrate config.yaml
+
 # Terminal 1: run the engine (embedded API off — api.port: 0)
 crewlet run config.yaml
 
 # Terminal 2: run the API server (webhook receiver; binds port 8000 by default)
 crewlet run api config.yaml --host 0.0.0.0
 ```
+
+`crewlet migrate` is idempotent and safe to re-run. Both long-lived
+processes also still auto-migrate on boot, and starting them together is no
+longer a race: the run takes a PostgreSQL advisory lock, each migration file
+applies in its own transaction, and the embedding width is read from the
+active revision rather than guessed. Running the explicit step first is
+still recommended — it turns a schema change into an observable step instead
+of a side effect of whichever process started first. On a database with no
+company config yet, the run stops before the `vector(N)` migrations rather
+than guessing the width — see
+[the CLI reference](../reference/cli.md#the-embedding-width-and-why-a-run-can-stop-early).
 
 Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned company YAML is imported into the database separately (`crewlet config import` or `crewlet run --import-company`).
 
@@ -201,10 +215,8 @@ in-memory live-state projection and its own cached webhook HMAC secrets, so the
 dashboard shows a different picture per replica and a secret rotation 401s the
 fraction of deliveries that land on stale ones.
 
-Two processes must also not race the database migrator. Run `crewlet config
-import` (or `crewlet run --import-company`) to completion **before** starting
-the engine and API, rather than starting all three together — `migrate()` runs
-on every boot and takes no lock.
+Bring the schema up **before** starting either process, with
+[`crewlet migrate`](../reference/cli.md#crewlet-migrate).
 
 For the full analysis and the redesign path, see
 [`SCALING.md`](https://github.com/crewlet/crewlet/blob/main/SCALING.md).

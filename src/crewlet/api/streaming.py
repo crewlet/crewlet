@@ -42,6 +42,7 @@ from typing import Any
 from crewlet import __version__
 from crewlet._logging import get_logger
 from crewlet.api.live_state import EVENT_FEED_LIMIT, Change, LiveState
+from crewlet.config import DEFAULT_NODE_ID
 from crewlet.events.types import Event, event_failed
 
 logger = get_logger("api.streaming")
@@ -180,12 +181,18 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
     one, just with empty screens.  Precedence is
     ``shutting_down > unconfigured > ok``: a draining engine is draining
     first, whatever else is true of it.
+
+    ``node`` names the process that answered — the field that turns
+    "the config apply failed" into "the config apply failed on node-2"
+    once a load balancer is in front of more than one process, and the
+    only way a caller can tell which one it reached.
     """
     engine = getattr(app.state, "engine", None)
     stream = getattr(app.state, "stream", None)
     configured = bool(getattr(app.state, "configured", False))
     body: dict[str, Any] = {
         "status": "ok" if configured else "unconfigured",
+        "node": str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID),
         "configured": configured,
         "engine": engine is not None,
         "version": __version__,

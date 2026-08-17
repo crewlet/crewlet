@@ -182,6 +182,37 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # --- migrate ---
+    migrate_p = sub.add_parser(
+        "migrate",
+        help="Apply pending database migrations",
+    )
+    migrate_p.add_argument(
+        "config",
+        type=Path,
+        nargs="?",
+        default=Path("config.yaml"),
+        help="Path to the Tier A YAML config file (default: ./config.yaml)",
+    )
+    migrate_p.add_argument(
+        "--company",
+        type=Path,
+        default=None,
+        help=(
+            "Tier B company YAML to read the embedding width from, for a "
+            "database with no active revision yet. The pgvector columns "
+            "are fixed at creation and the sequence is forward-only, so "
+            "without a width the run stops before them (and says so) "
+            "rather than guessing"
+        ),
+    )
+    migrate_p.add_argument(
+        "--check",
+        action="store_true",
+        help="Report pending migrations and exit non-zero if any; apply nothing",
+    )
+    migrate_p.add_argument("--debug", action="store_true", help="Verbose logging")
+
     # --- schema ---
     schema_p = sub.add_parser(
         "schema",
@@ -780,11 +811,22 @@ def _build_api_parser() -> argparse.ArgumentParser:
 
 
 def _migration_vars(config: CompanyConfig) -> dict[str, str]:
-    """Build template vars for SQL migrations from config."""
-    dims = (
-        config.providers.embeddings.dimensions if config.providers.embeddings else 1536
-    )
-    return {"embedding_dimensions": str(dims)}
+    """Build template vars for SQL migrations from config.
+
+    A config with no embeddings provider declares no width, so this
+    returns an EMPTY dict and the migrator defers the pgvector
+    migrations.  Guessing 1536 here would be the same permanent,
+    irreversible corruption as guessing it for an unconfigured database:
+    the column width is fixed at creation and the sequence is
+    forward-only, so a founder who later adds a 3072-dimension model gets
+    a diary and episode store that raise on every insert — silently,
+    because ``ReflectEngine`` swallows the error.  Deferring costs
+    nothing: an org with no embeddings provider is not using those tables
+    yet, and the migrations apply the moment one is configured.
+    """
+    if config.providers.embeddings is None:
+        return {}
+    return {"embedding_dimensions": str(config.providers.embeddings.dimensions)}
 
 
 def _migration_vars_for_payload(
@@ -792,18 +834,20 @@ def _migration_vars_for_payload(
 ) -> dict[str, str]:
     """Migration template vars derived from a raw Tier B payload.
 
-    Returns the 1536 default when there is no active revision (fresh DB)
-    or the payload has no embeddings block.  Used by the two-phase
-    migrate so the pgvector columns are created at the active config's
-    embedding width rather than a hardcoded 1536 (a non-1536 model
-    otherwise mismatches the ``vector(N)`` column and every insert
-    raises).
+    Returns an EMPTY dict when there is no active revision, which tells
+    the migrator to stop before the pgvector migrations rather than guess
+    a width.  This is the fix for a silent, permanent data-shape
+    corruption: the width is baked into ``vector(N)`` at creation and the
+    sequence is forward-only, so a guessed 1536 against a 3072-dimension
+    model makes every ``agent_diary`` / ``episodes`` insert raise
+    forever — and ``ReflectEngine`` swallows the error, so the learning
+    subsystem just goes quiet.
 
     ``cipher`` decrypts an encrypted-document payload so the embedding
     dimensions can be read from the plaintext structure.
     """
     if payload is None:
-        return {"embedding_dimensions": "1536"}
+        return {}
     from crewlet.secrets import load_config
 
     # Decrypt the stored config so the embedding dimension is readable.
@@ -838,14 +882,15 @@ async def _connect_and_migrate_from_db(
     ``secret_values`` table before it falls back to ``os.environ``.  Both
     long-lived entry points (``run`` and ``api``) come through here, which
     is what keeps the engine and the API answering references identically.
+
+    Both entry points may call this concurrently: the run is serialized
+    behind an advisory lock, and the pgvector width is never guessed (an
+    absent width defers those migrations instead), so neither process can
+    win a race to bake the wrong column type.
     """
     from crewlet.db.client import Database
     from crewlet.db.company_config import CompanyConfigStore
-    from crewlet.db.migrator import (
-        COMPANY_CONFIG_MIGRATION,
-        SECRET_VALUES_MIGRATION,
-        migrate,
-    )
+    from crewlet.db.migrator import BOOTSTRAP_MIGRATIONS, migrate
     from crewlet.db.secret_values import load_secret_source
     from crewlet.secrets.resolver import install_secret_source
 
@@ -853,7 +898,7 @@ async def _connect_and_migrate_from_db(
         raise RuntimeError("providers.database.dsn is required in config.yaml")
     db = await Database.connect(bootstrap.providers.database.dsn)
 
-    await migrate(db, only={COMPANY_CONFIG_MIGRATION, SECRET_VALUES_MIGRATION})
+    await migrate(db, only=set(BOOTSTRAP_MIGRATIONS))
     store = CompanyConfigStore(db)
     active = await store.get_active()
 
@@ -1160,6 +1205,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         bootstrap = load_bootstrap_config(config_path)
     except Exception as exc:
         print(f"Error: invalid bootstrap config: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        _bind_node_identity(bootstrap)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     async def _run_engine() -> None:
@@ -1509,6 +1560,130 @@ def build_config_schema(tier: str) -> dict[str, Any]:
     }
 
 
+def _bind_node_identity(bootstrap: Any) -> str:
+    """Resolve this process's node id and bind it onto every log line.
+
+    Called by the long-lived entry points right after the Tier A config
+    loads.  With one process it is a constant label; with more than one it
+    is the difference between "the config apply failed" and "the config
+    apply failed on node-2".
+    """
+    import structlog
+
+    from crewlet.config import resolve_node_id
+
+    node_id = resolve_node_id(bootstrap)
+    structlog.contextvars.bind_contextvars(node=node_id)
+    return node_id
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Apply pending database migrations (the explicit schema step).
+
+    Recommended before starting any long-lived process.  ``crewlet run``
+    still auto-migrates for the single-host flow, but that convenience is
+    the thing that made three entry points race an unlocked, non-idempotent
+    DDL sequence — running this once, first, removes the race entirely.
+    """
+
+    async def _run() -> int:
+        from crewlet._env import load_env_file
+        from crewlet.config import load_bootstrap_config
+        from crewlet.db.client import Database
+        from crewlet.db.migrator import (
+            BOOTSTRAP_MIGRATIONS,
+            migrate,
+            pending_migrations,
+        )
+
+        # Same as every other entry point: Tier A resolves ${VAR} at load
+        # time, and the shipped examples put the DSN in
+        # ${CREWLET_DATABASE_DSN}. Without this, the first command the
+        # deployment guide tells an operator to run fails on a config
+        # `crewlet run` in the same directory loads fine.
+        load_env_file(args.config)
+        bootstrap = load_bootstrap_config(args.config)
+        if not bootstrap.providers.database.dsn:
+            print(
+                "Error: providers.database.dsn is required in the Tier A config",
+                file=sys.stderr,
+            )
+            return 1
+
+        db = await Database.connect(bootstrap.providers.database.dsn)
+        try:
+            # The bootstrap phase is dimension-independent and must exist
+            # before the active revision can be read at all.
+            if not args.check:
+                await migrate(db, only=set(BOOTSTRAP_MIGRATIONS))
+
+            template_vars = await _resolve_migration_vars(db, bootstrap, args.company)
+
+            if args.check:
+                pending = await pending_migrations(db, template_vars=template_vars)
+                if pending:
+                    print(f"{len(pending)} pending migration(s):", file=sys.stderr)
+                    for version in pending:
+                        print(f"  {version}", file=sys.stderr)
+                    return 1
+                print("schema up to date", file=sys.stderr)
+                return 0
+
+            applied = await migrate(db, template_vars=template_vars)
+            if applied:
+                print(f"applied {len(applied)} migration(s):", file=sys.stderr)
+                for version in applied:
+                    print(f"  {version}", file=sys.stderr)
+            else:
+                print("schema up to date", file=sys.stderr)
+
+            remaining = await pending_migrations(db, template_vars=template_vars)
+            if remaining:
+                print(
+                    f"\n{len(remaining)} migration(s) still pending: they size "
+                    f"their pgvector columns from the embedding width, which "
+                    f"no active company config declares yet.\nImport a company "
+                    f"(`crewlet config import company.yaml`) or pass "
+                    f"`--company company.yaml`, then re-run.",
+                    file=sys.stderr,
+                )
+            return 0
+        finally:
+            await db.close()
+
+    return asyncio.run(_run())
+
+
+async def _resolve_migration_vars(
+    db: Any, bootstrap: Any, company_path: Path | None
+) -> dict[str, str]:
+    """Migration template vars from the active revision, or ``--company``.
+
+    Returns an empty dict when neither is available — the migrator then
+    stops before the pgvector migrations rather than guessing a width.
+
+    Tolerates a database where ``company_config`` does not exist yet.
+    ``--check`` deliberately applies nothing, including the bootstrap
+    phase, so on a fresh database this read would otherwise raise
+    ``UndefinedTableError`` — a raw traceback in exactly the case the
+    flag exists for.
+    """
+    from crewlet.db.company_config import CompanyConfigStore
+    from crewlet.secrets import KeyringCipher
+
+    cipher = KeyringCipher.from_config(bootstrap.secrets)
+    active = None
+    if await db.fetchval("SELECT to_regclass('company_config')"):
+        active = await CompanyConfigStore(db).get_active()
+    if active is not None:
+        return _migration_vars_for_payload(active.payload, cipher)
+    if company_path is not None:
+        from crewlet.config import load_company_config
+
+        return _migration_vars(load_company_config(company_path))
+    return {}
+
+
 def cmd_schema(args: argparse.Namespace) -> int:
     """Print (or write) the JSON Schema for a config tier."""
     text = json.dumps(build_config_schema(args.tier), indent=2) + "\n"
@@ -1551,6 +1726,12 @@ def cmd_api(args: argparse.Namespace) -> int:
         print(f"Error: invalid bootstrap config: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        _bind_node_identity(bootstrap)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     # Queue backend from Tier A
     from crewlet.queue.pulsar import PulsarEventQueue
 
@@ -1577,8 +1758,11 @@ def cmd_api(args: argparse.Namespace) -> int:
     async def _run_api() -> None:
         import uvicorn
 
-        # Connect + two-phase migrate (pgvector columns sized from the
-        # active revision's embedding dimensions, not a hardcoded 1536).
+        # Connect + migrate. Safe to run concurrently with the engine:
+        # the run takes an advisory lock, and the pgvector width comes
+        # from the active revision or defers — it is never guessed, which
+        # is what made this call race the engine for the right to bake
+        # the wrong column type.
         db, company_config_store, _active, _ic = await _connect_and_migrate_from_db(
             bootstrap
         )
@@ -1804,6 +1988,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "run": cmd_run,
         "validate": cmd_validate,
+        "migrate": cmd_migrate,
         "schema": cmd_schema,
     }
 

@@ -103,12 +103,16 @@ operators except the migrator.
   connection** (the one place session-scoped release-on-disconnect is the
   *right* property — a SIGKILLed migrator must not wedge future boots), and
   applies each file inside one transaction.
-- **Two-phase dimension handling replaces the 1536 fallback** (`cli.py:796`):
-  dimension-independent migrations always run; the pgvector-width files
-  (`002_episodes.sql`, `007_agent_diary.sql`) run **only when an active
-  revision declares the embedding width**. `crewlet run api` never applies
-  them (it doesn't need those tables) — which alone ends the cold-start race
-  that bakes `vector(1536)` and silently kills the learning subsystem.
+- **Deferral replaces the 1536 fallback** (`cli.py:796`): the pgvector-width
+  files (`002_episodes.sql`, `007_agent_diary.sql`) run **only when a config
+  declares the embedding width**, and the run *stops* rather than skipping
+  ahead (later migrations touch objects they create). Applies to every path
+  that can supply a width — active revision, `--company`, `config import` —
+  so a company with no `providers.embeddings` block defers too instead of
+  baking 1536. Both processes may still auto-migrate; the lock makes that
+  safe, and nothing can guess a width any more. `Engine.apply_config`
+  completes the deferred tail once a config declares a width, so the
+  unconfigured-bootstrap flow ends with a full schema and no restart.
 - Repair migration `018_learning_health_repair.sql`: re-issues the canonical
   `learning_health` view definition, healing databases where the
   `005`/`009` `CREATE OR REPLACE VIEW` race applied them out of order.

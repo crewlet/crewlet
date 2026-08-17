@@ -11,6 +11,7 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet run [config]` | Read Tier A bootstrap (default `./config.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet run api <config>` | Start the standalone API server (same Tier A file; the positional is required — no `./config.yaml` fallback) |
 | `crewlet validate <config.yaml>` | Validate a Tier A or Tier B YAML and print a summary (`--json` for machine-readable errors) |
+| `crewlet migrate [config]` | Apply pending database migrations (Tier A file, default `./config.yaml`). Run this once before starting any process — `--check` reports pending work without applying it |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -363,6 +364,64 @@ With `--json`, the payload is `{"valid": bool, "tier": str, "errors": [{"path", 
 ```
 
 Exit code is `0` when valid, `1` otherwise (in both output modes).
+
+---
+
+## `crewlet migrate`
+
+Applies pending database migrations. This is the recommended first step of
+any deployment — run it to completion **before** starting the engine or the
+API.
+
+```bash
+crewlet migrate                          # uses ./config.yaml
+crewlet migrate /etc/crewlet/config.yaml
+crewlet migrate --check                  # report pending work, apply nothing
+crewlet migrate --company company.yaml   # supply the embedding width up front
+```
+
+| Flag | Description |
+|------|-------------|
+| `config` | Tier A YAML (positional, default `./config.yaml`) |
+| `--company PATH` | Tier B YAML to read the embedding width from, when no revision is active yet |
+| `--check` | List pending migrations and exit `1` if any; applies nothing |
+| `--debug` | Verbose logging |
+
+The whole run is serialized behind a PostgreSQL advisory lock and each
+migration file applies inside its own transaction, so concurrent callers
+wait rather than race, and a file is either fully applied and recorded or
+neither.
+
+### The embedding width, and why a run can stop early
+
+The `agent_diary` and `episodes` tables carry `vector(N)` columns whose
+width is fixed at creation, and the migration sequence is forward-only —
+so the width can never be changed afterwards. It is read from the active
+company config's `providers.embeddings.dimensions`.
+
+On a database with **no active revision yet**, that width is unknown, and
+`crewlet migrate` stops before those two migrations rather than guessing.
+It tells you so and exits `0`; the remaining migrations apply on the next
+run, once a company config exists:
+
+```bash
+crewlet config import company.yaml   # or: crewlet migrate --company company.yaml
+crewlet migrate                      # applies the rest
+```
+
+This is deliberate. A guessed width that disagrees with your embedding
+model makes every diary and episode write fail permanently, and the
+failure is swallowed — the [agent-learning subsystem](../concepts/agent-learning.md)
+simply goes quiet with nothing in the logs to explain it.
+
+`crewlet run` and `crewlet run api` both still auto-migrate on boot, so the
+single-host quickstart stays one command. That is now safe to do
+concurrently — the advisory lock serializes them, and neither can bake a
+guessed embedding width because the width is either read from the active
+revision or deferred. Running `crewlet migrate` first is still the
+recommendation for any multi-process deployment: it makes schema changes an
+explicit, observable step rather than a side effect of whichever process
+happened to start first.
 
 ---
 

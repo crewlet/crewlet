@@ -32,6 +32,7 @@ from crewlet.api.config_refresh import (
 from crewlet.api.config_routes import build_config_routes
 from crewlet.api.routes import build_routes
 from crewlet.api.streaming import StreamService, build_health_envelope
+from crewlet.config import resolve_node_id
 
 logger = get_logger("api.app")
 
@@ -220,6 +221,8 @@ def create_app(
     app.state.auth_tokens = auth_tokens
     app.state.auth_disabled = auth_disabled
     app.state.engine = engine
+    # Names the process answering /health; see build_health_envelope.
+    app.state.node_id = resolve_node_id(bootstrap)
     app.state.stream = stream
     # The service needs the app to build a snapshot and to attach each
     # role's handle to the spend rollup it pushes.

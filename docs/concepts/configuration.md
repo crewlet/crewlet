@@ -18,6 +18,9 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 ```yaml
 debug: false
 
+node:
+  id: "node-0"          # optional; see below
+
 providers:
   queue:
     type: pulsar
@@ -38,6 +41,24 @@ api:
         token: "${CREWLET_API_TOKEN_OPS}"
 ```
 
+#### `node.id`
+
+Names *this process* within the company. It labels every log line and the
+`/health` payload — the difference between "a config apply failed" and "the
+config apply failed on `node-2`" the moment more than one process is
+running, and the only way a caller behind a load balancer can tell which
+process answered.
+
+Resolution order: `node.id` (`${VAR}` references work here like anywhere
+in Tier A) → the `CREWLET_NODE_ID` environment variable → `node-0`. You do
+not need to set it to run a single engine.
+
+It must be **stable across restarts**, which is why it comes from the
+deployment rather than being generated per boot: anything the process
+registers under its identity would otherwise be orphaned on every restart.
+In Kubernetes use the pod name — a StatefulSet ordinal is ideal; under
+systemd, the host name.
+
 ### Tier B example (`company.yaml`)
 
 Everything that defines the company — see [examples/nimbus.company.yaml](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) for a complete reference.
@@ -51,7 +72,7 @@ The engine boots in this order:
 1. Read `config.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
 2. `configure_logging(level)`
 3. Connect to Pulsar + PostgreSQL
-4. Run migrations in two phases: first apply only the `company_config` table, read the active revision's `providers.embeddings.dimensions`, then apply the remaining migrations with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model rather than a hardcoded default. (`crewlet config import` sizes them from the config being imported.)
+4. Run migrations in two phases, serialized behind a PostgreSQL advisory lock so concurrent processes wait rather than race: first apply the self-contained bootstrap tables (`company_config`, `secret_values`, `leases`), read the active revision's `providers.embeddings.dimensions`, then apply the rest with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model. The width is **never guessed** — with no active revision the run stops before those migrations and they apply later, when a config declares one (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)). A company bootstrapped through the unconfigured state gets them applied as part of its first `apply_config`.
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 6. Subscribe the engine to `crewlet.config.revision_activated` on Pulsar
 7. `SELECT payload FROM company_config WHERE is_active = TRUE`
@@ -98,7 +119,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 
 | Route | Behaviour while unconfigured |
 |-------|------------------------------|
-| `GET /health` | `200 {"status": "unconfigured", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
+| `GET /health` | `200 {"status": "unconfigured", "node": "node-0", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |

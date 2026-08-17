@@ -7,13 +7,18 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from crewlet._logging import get_logger
-from crewlet.env_refs import ENV_VAR_PATTERN, env_var_reference
+from crewlet.env_refs import (
+    ENV_VAR_PATTERN,
+    env_var_reference,
+    has_env_reference,
+)
 from crewlet.notifications.typing_status import StatusPhrases, WorkingStatusMode
 from crewlet.org.hierarchy import get_effective_lead
 from crewlet.org.models import (
@@ -731,6 +736,55 @@ class SecretsConfig(BaseModel):
         return self
 
 
+NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+DEFAULT_NODE_ID = "node-0"
+
+
+class NodeConfig(BaseModel):
+    """Tier A identity of THIS process within the company.
+
+    Every Crewlet process has one.  Today it labels every log line and
+    the ``/health`` payload — already the difference between "a config
+    apply failed" and "the config apply failed on node-2" once more than
+    one process runs, and the only way a caller behind a load balancer
+    can tell which process answered.  It is also the
+    identity every future cross-process mechanism is keyed on (lease
+    owner, per-node subscription name); see ``SCALING.md``.
+
+    **It must be stable across restarts**, which is why it comes from the
+    deployment rather than being generated.  A fresh value per boot would
+    orphan whatever the previous incarnation registered under the old one
+    — the failure the ``hook-{id(callback)}`` subscription naming already
+    demonstrates.  In Kubernetes use the pod name (a StatefulSet ordinal
+    is ideal); under systemd, the host name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = ""
+    """This process's identity. Empty resolves via ``CREWLET_NODE_ID``,
+    then falls back to ``node-0`` (the single-process default, so nothing
+    has to be set to run one engine)."""
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, v: str) -> str:
+        # A ``${VAR}`` reference is validated after resolution, in
+        # ``resolve_node_id``.  Tier A substitutes references before
+        # model_validate on the normal load path, so this only matters
+        # for a config constructed programmatically — but rejecting the
+        # reference form here would make that path fail on a value the
+        # YAML path accepts.
+        if v and not has_env_reference(v) and not NODE_ID_PATTERN.match(v):
+            raise ValueError(
+                f"node.id {v!r} must start alphanumeric and contain only "
+                f"letters, digits, '.', '_' or '-' (max 64 chars) — it is "
+                f"used in log fields and broker subscription names"
+            )
+        return v
+
+
 class BootstrapConfig(BaseModel):
     """Tier A — ops-owned, on-disk, restart-only.
 
@@ -748,7 +802,65 @@ class BootstrapConfig(BaseModel):
     providers: BootstrapProvidersConfig = BootstrapProvidersConfig()
     api: ApiConfig = ApiConfig()
     secrets: SecretsConfig = SecretsConfig()
+    node: NodeConfig = NodeConfig()
     debug: bool = False
+
+
+def resolve_node_id(bootstrap: BootstrapConfig | None = None) -> str:
+    """Resolve this process's node id.
+
+    Precedence: ``node.id`` in the Tier A file, then the
+    ``CREWLET_NODE_ID`` environment variable (which is how a container
+    orchestrator injects a pod name without templating the config file),
+    then :data:`DEFAULT_NODE_ID`.
+
+    Resolved through :func:`resolve_env_scalar`, so ``node.id:
+    "${HOSTNAME}"`` works like every other Tier A reference.  An
+    environment value that fails validation is rejected here rather than
+    surfacing later as a malformed subscription name.
+    """
+    configured = bootstrap.node.id if bootstrap is not None else ""
+    value = resolve_env_scalar(configured) if configured else ""
+    if not value:
+        value = os.environ.get("CREWLET_NODE_ID", "").strip()
+    if not value:
+        return DEFAULT_NODE_ID
+    if not NODE_ID_PATTERN.match(value):
+        raise ValueError(
+            f"node id {value!r} must start alphanumeric and contain only "
+            f"letters, digits, '.', '_' or '-' (max 64 chars)"
+        )
+    return value
+
+
+_INCARNATION: str = ""
+
+
+def resolve_node_incarnation(bootstrap: BootstrapConfig | None = None) -> str:
+    """This process's unique holder identity: ``{node_id}:{random}``.
+
+    The counterpart to :func:`resolve_node_id`, and deliberately the
+    opposite property.  The node id is *stable across restarts* because
+    it names a placement — a pod, a host — and things registered under it
+    must survive a restart.  A lease holder needs the reverse: it names
+    one running incarnation, so that a replacement process is never
+    mistaken for its predecessor.
+
+    Conflating the two is a real hole rather than a nicety.  A lease is
+    renewable by its own owner string, so if a restarted pod reused the
+    identity of a predecessor still draining a long turn, both would hold
+    the seat at the same fencing epoch — and with the default id being
+    the shared constant ``node-0``, so would any two engines started
+    against one database.
+
+    Computed once per process and cached: two calls return the same
+    value, so a caller cannot accidentally fence itself out by
+    re-resolving.
+    """
+    global _INCARNATION  # noqa: PLW0603
+    if not _INCARNATION:
+        _INCARNATION = f"{resolve_node_id(bootstrap)}:{uuid4().hex[:8]}"
+    return _INCARNATION
 
 
 class TurnEngineConfig(BaseModel):

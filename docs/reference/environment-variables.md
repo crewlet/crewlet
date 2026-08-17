@@ -10,6 +10,7 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
+| `CREWLET_NODE_ID` | This process's identity, when `node.id` is unset in the Tier A file. Labels every log line, health payload, and config-apply event. Must be **stable across restarts**; defaults to `node-0` | Your orchestrator (Kubernetes pod name / StatefulSet ordinal, or the host name) |
 | `CREWLET_DATABASE_DSN` | PostgreSQL DSN the example Tier A configs reference (`providers.database.dsn`) | Your database (`postgresql://crewlet:crewlet@localhost:5432/crewlet` for the bundled compose) |
 | `CREWLET_PULSAR_URL` | Pulsar broker URL the example Tier A configs reference (`providers.queue.url`) | `pulsar://localhost:6650` for the bundled compose |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |

@@ -1,30 +1,117 @@
-"""Tests for the SQL migrator's ``only`` filter (two-phase migrate)."""
+"""Tests for the SQL migrator: phase filtering, dimension deferral,
+statement validation, and the advisory-locked transactional path."""
 
 from __future__ import annotations
 
+import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
-from crewlet.db.migrator import COMPANY_CONFIG_MIGRATION, migrate
+import pytest
+
+from crewlet.db.client import Database
+from crewlet.db.migrator import (
+    BOOTSTRAP_MIGRATIONS,
+    COMPANY_CONFIG_MIGRATION,
+    DIMENSION_MIGRATIONS,
+    MIGRATIONS_DIR,
+    MigrationError,
+    migrate,
+    pending_migrations,
+)
 
 
 class _RecordingDB:
-    """Minimal Database stand-in that records which migrations applied.
+    """Minimal SQLExecutor stand-in that records which migrations applied.
 
     The migrator issues raw ``db.execute`` calls; this captures the
     ``INSERT INTO schema_migrations`` versions to assert which files ran,
-    and returns ``[]`` for the "already applied" SELECT so every file is
-    pending.
+    plus every statement it was handed, and reports ``_already`` for the
+    "already applied" SELECT (empty by default, so every file is pending).
+
+    Not a :class:`~crewlet.db.client.Database`, so :func:`migrate` runs it
+    on the unguarded path — the lock/transaction behaviour is exercised
+    separately by :class:`_FakeDatabase`.
     """
 
     def __init__(self) -> None:
         self.applied: list[str] = []
+        self.statements: list[str] = []
+        self._already: set[str] = set()
+
+    def mark_applied(self, versions: list[str]) -> None:
+        """Persist a prior run's versions so the next call sees them."""
+        self._already.update(versions)
 
     async def execute(self, sql: str, *args: Any) -> Any:
         if sql.strip().startswith("SELECT version"):
-            return []
+            return [{"version": v} for v in sorted(self._already)]
+        self.statements.append(sql)
         if "INSERT INTO schema_migrations" in sql:
             self.applied.append(args[0])
+            self._already.add(args[0])
         return None
+
+    async def fetchrow(self, sql: str, *args: Any) -> Any:
+        raise AssertionError("unused")
+
+    async def fetchval(self, sql: str, *args: Any) -> Any:
+        if "to_regclass" in sql:
+            # The tracking table exists once anything has been applied.
+            return "schema_migrations" if self._already else None
+        raise AssertionError(f"unexpected fetchval: {sql}")
+
+
+class _FakeDatabase(Database):
+    """A :class:`Database` whose pool is faked, to observe lock/transaction use.
+
+    Subclasses the real class because :func:`migrate` dispatches on
+    ``isinstance(db, Database)`` to decide whether it may take the
+    advisory lock and open transactions.
+    """
+
+    def __init__(self, *, fail_on: str | None = None) -> None:
+        super().__init__()
+        self.applied: list[str] = []
+        self.locks: list[int] = []
+        self.unlocks: list[int] = []
+        self.transactions = 0
+        self.lock_available = True
+        self._already: set[str] = set()
+        self._fail_on = fail_on
+
+    async def execute(self, sql: str, *args: Any) -> Any:
+        if sql.strip().startswith("SELECT version"):
+            return [{"version": v} for v in sorted(self._already)]
+        if "INSERT INTO schema_migrations" in sql:
+            self.applied.append(args[0])
+            self._already.add(args[0])
+        return None
+
+    async def fetchval(self, sql: str, *args: Any) -> Any:
+        if "pg_try_advisory_lock" in sql:
+            self.locks.append(args[0])
+            return self.lock_available
+        if "pg_advisory_unlock" in sql:
+            self.unlocks.append(args[0])
+            return True
+        if "to_regclass" in sql:
+            return "schema_migrations" if self._already else None
+        if "pg_locks" in sql:
+            return "4242"
+        return None
+
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[Any]:
+        yield self
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[Any]:
+        self.transactions += 1
+        if self._fail_on and self._fail_on not in self._already:
+            raise RuntimeError("boom")
+        yield self
 
 
 async def test_migrate_only_restricts_to_named_migration() -> None:
@@ -118,5 +205,171 @@ def test_secret_values_is_in_the_boot_phase_one_set():
         mig_mod.migrate = orig_migrate
         cc_mod.CompanyConfigStore = orig_store
 
-    assert phase_one == [{COMPANY_CONFIG_MIGRATION, SECRET_VALUES_MIGRATION}]
+    assert phase_one == [set(BOOTSTRAP_MIGRATIONS)]
+    assert {COMPANY_CONFIG_MIGRATION, SECRET_VALUES_MIGRATION} <= phase_one[0]
     assert inspect.iscoroutinefunction(_connect_and_migrate_from_db)
+
+
+# ---------------------------------------------------------------------------
+# Dimension deferral — the fix for the silent pgvector-width corruption
+# ---------------------------------------------------------------------------
+
+
+async def test_run_stops_at_the_first_dimension_migration_without_a_width() -> None:
+    """No width means STOP, never guess.
+
+    ``vector(N)`` is fixed at creation and the sequence is forward-only,
+    so a guessed 1536 against a 3072-dim model makes every diary/episode
+    insert raise forever — swallowed by ReflectEngine, so the learning
+    subsystem just goes quiet.
+    """
+    db = _RecordingDB()
+    await migrate(db)
+
+    assert "001_initial.sql" in db.applied
+    assert not (set(db.applied) & DIMENSION_MIGRATIONS)
+
+
+async def test_deferral_stops_rather_than_skipping_ahead() -> None:
+    """Forward-only ordering means later files may touch earlier objects:
+    011 runs ``UPDATE episodes``, the table 002 creates. Skipping 002 and
+    continuing would fail — or record a version whose object never existed.
+    """
+    db = _RecordingDB()
+    await migrate(db)
+
+    assert "011_drop_ask_colleague_outcome.sql" not in db.applied
+    # Everything applied sorts before the first deferred migration.
+    first_deferred = min(DIMENSION_MIGRATIONS)
+    assert all(v < first_deferred for v in db.applied)
+
+
+async def test_supplying_a_width_completes_the_deferred_tail() -> None:
+    db = _RecordingDB()
+    await migrate(db)
+    deferred_run = list(db.applied)
+
+    db.mark_applied(deferred_run)
+    await migrate(db, template_vars={"embedding_dimensions": "3072"})
+
+    assert set(DIMENSION_MIGRATIONS) <= set(db.applied)
+    assert "011_drop_ask_colleague_outcome.sql" in db.applied
+    # Nothing was applied twice across the two runs.
+    assert len(db.applied) == len(set(db.applied))
+
+
+async def test_width_is_substituted_into_the_vector_column() -> None:
+    db = _RecordingDB()
+    await migrate(db, template_vars={"embedding_dimensions": "3072"})
+    assert any("vector(3072)" in sql for sql in db.statements)
+    assert not any("$embedding_dimensions" in sql for sql in db.statements)
+
+
+async def test_bootstrap_phase_is_dimension_independent() -> None:
+    """The API applies only this phase, so it must never be blocked by —
+    or contribute to — the pgvector width decision."""
+    db = _RecordingDB()
+    await migrate(db, only=set(BOOTSTRAP_MIGRATIONS))
+    assert set(db.applied) == set(BOOTSTRAP_MIGRATIONS)
+
+
+async def test_pending_migrations_reports_the_deferred_tail() -> None:
+    db = _RecordingDB()
+    applied = await migrate(db)
+    db.mark_applied(applied)
+
+    pending = await pending_migrations(db)
+    assert pending == []  # nothing more is applicable without a width
+
+    with_width = await pending_migrations(
+        db, template_vars={"embedding_dimensions": "1536"}
+    )
+    assert set(DIMENSION_MIGRATIONS) <= set(with_width)
+
+
+# ---------------------------------------------------------------------------
+# Statement validation
+# ---------------------------------------------------------------------------
+
+
+def test_check_sql_rejects_dollar_quoting() -> None:
+    from crewlet.db.migrator import _check_sql
+
+    with pytest.raises(MigrationError, match="dollar-quoted"):
+        _check_sql("099_x.sql", ["CREATE FUNCTION f() AS $$ SELECT 1; $$ LANGUAGE sql"])
+
+
+def test_check_sql_rejects_an_unsubstituted_template_var() -> None:
+    from crewlet.db.migrator import _check_sql
+
+    with pytest.raises(MigrationError, match="unsubstituted"):
+        _check_sql("099_x.sql", ["CREATE TABLE t (v vector($embedding_dimensions))"])
+
+
+def test_shipped_migrations_pass_validation_at_a_known_width() -> None:
+    """Every migration we ship must survive its own splitter."""
+    from crewlet.db.migrator import _check_sql, _split_sql
+
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        sql = path.read_text().replace("$embedding_dimensions", "1536")
+        _check_sql(path.name, _split_sql(sql))
+
+
+# ---------------------------------------------------------------------------
+# Advisory lock + per-file transactions
+# ---------------------------------------------------------------------------
+
+
+async def test_database_backed_run_takes_the_lock_and_wraps_each_file() -> None:
+    """Three entry points call migrate() and the split-deployment docs say
+    to start two of them together. The lock is what stops that being a race
+    over non-idempotent DDL."""
+    from crewlet.db.migrator import MIGRATION_LOCK_KEY
+
+    db = _FakeDatabase()
+    applied = await migrate(db, template_vars={"embedding_dimensions": "1536"})
+
+    assert db.locks == [MIGRATION_LOCK_KEY]
+    assert db.unlocks == [MIGRATION_LOCK_KEY]
+    # One transaction per applied file, and every file was applied inside one.
+    assert db.transactions == len(applied)
+
+
+async def test_lock_is_released_when_a_migration_fails() -> None:
+    """A failed migration must not wedge every future boot behind a lock
+    this process still holds."""
+    db = _FakeDatabase(fail_on="001_initial.sql")
+    with pytest.raises(RuntimeError, match="boom"):
+        await migrate(db, template_vars={"embedding_dimensions": "1536"})
+    assert db.unlocks == db.locks
+
+
+# ---------------------------------------------------------------------------
+# The learning_health repair
+# ---------------------------------------------------------------------------
+
+
+def test_repair_migration_matches_the_canonical_view_definition() -> None:
+    """018 exists to heal databases where racing migrators applied 005 and
+    009 out of order. It only works if it carries 009's definition
+    verbatim — so drift between the two is a build failure, not a
+    production mystery."""
+
+    def _view_sql(name: str) -> str:
+        text = (MIGRATIONS_DIR / name).read_text()
+        match = re.search(
+            r"CREATE OR REPLACE VIEW learning_health AS.*?;", text, re.DOTALL
+        )
+        assert match, f"{name} has no learning_health view"
+        return " ".join(match.group(0).split())
+
+    assert _view_sql("018_learning_health_repair.sql") == _view_sql(
+        "009_skill_curator.sql"
+    )
+
+
+def test_repair_migration_sorts_after_the_definitions_it_repairs() -> None:
+    ordered = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
+    assert ordered.index("018_learning_health_repair.sql") > ordered.index(
+        "009_skill_curator.sql"
+    )

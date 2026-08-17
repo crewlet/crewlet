@@ -245,6 +245,16 @@ src/crewlet/          # Main package
   a2a/                # Agent-to-agent bus (protocol, memory, service)
   db/                 # Database layer (asyncpg, migrations, token_usage,
                       #   deterministic agent-id derivation in agents.py;
+                      #   client.py — Database.acquire()/transaction()/
+                      #   advisory_lock() hold ONE connection, which is what
+                      #   makes session-scoped state work (asyncpg's pool
+                      #   reset runs pg_advisory_unlock_all on release, so a
+                      #   pool-path advisory lock is a silent no-op);
+                      #   leases.py — LeaseStore/MemoryLeaseStore, the
+                      #   cross-process ownership primitive: TTL lease +
+                      #   monotonic `epoch` fencing token, owner = a process
+                      #   INCARNATION (config.resolve_node_incarnation),
+                      #   release expires in place so the epoch never resets;
                       #   secret_values.py — SecretValueStore over the
                       #   encrypted secret store (per-row AAD binds the var
                       #   name; keyring REQUIRED, no plaintext mode) +

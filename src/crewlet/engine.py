@@ -573,6 +573,45 @@ class Engine:
         )
         return engine
 
+    async def _complete_deferred_migrations(self, new: Any) -> None:
+        """Apply migrations that were waiting on this config's embedding width.
+
+        The pgvector migrations bake ``vector(N)`` at creation and the
+        sequence is forward-only, so the migrator refuses to run them
+        until a config declares the width — which means a database
+        bootstrapped through the **unconfigured state** (boot the engine
+        with no revision, then ``PUT /config``) reaches this point with
+        ``episodes``, ``agent_diary``, ``scheduled_runs`` and
+        ``pending_sandbox_run`` still absent.  That is a first-class,
+        documented flow, and nothing else on it ever migrates: without
+        this the engine would spawn the whole org against a partial
+        schema and stay there until someone restarted it — onboarding
+        lookups raising every turn, every scheduler fire failing, and
+        detached sandbox runs unable to record the row they resume from.
+
+        Idempotent, advisory-lock-serialized, and a no-op once the schema
+        is complete, so it is safe on every activation.  Failure is
+        logged, not raised: a config apply that otherwise succeeded must
+        not be rolled back because the schema could not be advanced —
+        the next activation retries.
+        """
+        from crewlet.db.client import Database
+
+        if not isinstance(self.storage, Database):
+            return
+        try:
+            from crewlet.cli import _migration_vars
+            from crewlet.db.migrator import migrate
+
+            template_vars = _migration_vars(new)
+            if not template_vars:
+                return  # this config declares no width either
+            applied = await migrate(self.storage, template_vars=template_vars)
+            if applied:
+                logger.info("deferred_migrations_applied", versions=applied)
+        except Exception as exc:
+            logger.error("deferred_migrations_failed", error=str(exc))
+
     async def apply_config(self, new: Any) -> list[str]:
         """Apply a :class:`CompanyConfig` to this engine.
 
@@ -611,6 +650,7 @@ class Engine:
             # a rotated credential, and skipping the refresh there would
             # make that gesture silently do nothing.
             await refresh_secret_snapshot()
+            await self._complete_deferred_migrations(new)
             old = self._active_config
             if old is not None:
                 # No-op early-out: a re-activation of the current
