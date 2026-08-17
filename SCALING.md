@@ -562,10 +562,21 @@ transcripts unauthenticated. Full-surface auth + CORS tightening ships
 
 ### Honest limits
 
-- **Exactly-once external side effects do not exist.** The turn-claim +
-  per-round lease checks bound the duplicate window; they cannot close it. A
-  node death mid-turn may repeat a Slack post — same as today's force-stop, now
-  stated.
+- **Today's topology is the degenerate case of this design.** One node holding
+  every lease is the current engine plus bookkeeping. That gives every
+  component a guaranteed-workable floor: worse-than-assumed broker
+  measurements mean bigger constants (slower takeover), not a redesign; a hard
+  mixed-version problem means a documented stop-the-fleet upgrade, which is
+  today's restart behavior; a messy satellite × sandbox interaction means a
+  config rule forbidding the combination until solved; any subsystem that
+  proves harder than expected runs at N=1 behind a singleton lease with the
+  architecture unchanged. The design degrades toward today's behavior, never
+  toward broken.
+- **Exactly-once external side effects do not exist** — for this design or any
+  other that calls non-transactional external APIs at-least-once. The
+  turn-claim + per-round lease checks bound the duplicate window; they cannot
+  close it. A node death mid-turn may repeat a Slack post — the same window
+  today's engine has on force-stop and Pulsar redelivery, now stated.
 - **A wedged-alive zombie** can act for up to one LLM round + one heartbeat
   interval after losing its lease. Fencing bounds the damage to that window.
 - **Per-company singletons remain** — behind leases, so any node can host
