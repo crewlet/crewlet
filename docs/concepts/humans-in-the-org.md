@@ -34,6 +34,7 @@ units:
           - "Approvals and vendor decisions"
         contact:                  # how agents mention & reach her
           slack_user_id: U0123456789
+          mattermost_user_id: sarah.chen       # Mattermost username, not an ID
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
           github_login: sarahchen
           gitlab_username: sarahchen
@@ -49,6 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
+| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username** — the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID; normalized to lowercase |
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID — Jira assignments, Confluence `<ri:user>` mentions, webhook sender attribution |
 | `contact.github_login` | one identity | GitHub username — review requests, sender attribution |
 | `contact.gitlab_username` | one identity | GitLab username — assignment / review / mention routing + sender attribution |

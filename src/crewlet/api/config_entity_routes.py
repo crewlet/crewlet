@@ -507,8 +507,8 @@ async def put_learning(request: Request) -> JSONResponse:
 async def put_integration(request: Request) -> JSONResponse:
     """PUT /config/integrations/{kind} — replace one integration block.
 
-    ``kind`` is one of: ``jira``, ``confluence``, ``slack``, ``github``,
-    ``gitlab``, ``plane``.
+    ``kind`` is one of: ``jira``, ``confluence``, ``slack``,
+    ``mattermost``, ``github``, ``gitlab``, ``plane``.
     """
     kind = request.path_params["kind"]
     if kind not in {

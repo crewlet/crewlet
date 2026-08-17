@@ -1,6 +1,6 @@
 # Deployment
 
-Crewlet requires two infrastructure services: **Apache Pulsar** and **PostgreSQL** with the **TimescaleDB** and **pgvector** extensions. One database server holds everything — operational state (`token_usage`, Slack thread follows), the per-agent diary vector store (`agent_diary`, pgvector), the episodic vector store (`episodes`, pgvector), and the event store (`crewlet_events` TimescaleDB hypertable).
+Crewlet requires two infrastructure services: **Apache Pulsar** and **PostgreSQL** with the **TimescaleDB** and **pgvector** extensions. One database server holds everything — operational state (`token_usage`, `chat_thread_follows`), the per-agent diary vector store (`agent_diary`, pgvector), the episodic vector store (`episodes`, pgvector), and the event store (`crewlet_events` TimescaleDB hypertable).
 
 ---
 
