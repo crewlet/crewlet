@@ -2707,6 +2707,17 @@ class Engine:
             if self._plane_config is not None
             else None
         )
+        # Per-agent Slack signing secrets, so the embedded API can verify
+        # inbound Slack requests at the edge without reaching into the
+        # transport (the standalone API has no engine to reach into, and
+        # gets the same map from attach_config_refresh).
+        slack_signing_secrets = {
+            handle: app_cfg.signing_secret
+            for handle, app_cfg in getattr(
+                self._get_running_slack_transport(), "apps", {}
+            ).items()
+            if app_cfg.signing_secret
+        }
         forge_app_id = getattr(self, "_forge_app_id", "")
         bootstrap = getattr(self, "_bootstrap", None)
         store = getattr(self, "_company_config_store", None)
@@ -2734,6 +2745,7 @@ class Engine:
             github_webhook_secret=gh_secret,
             gitlab_signing_secret=gl_signing,
             plane_webhook_secret=pl_secret,
+            slack_signing_secrets=slack_signing_secrets,
             sandbox_otel_receiver=getattr(self, "_sandbox_otel_receiver", None),
             forge_app_id=forge_app_id,
             bootstrap=bootstrap,

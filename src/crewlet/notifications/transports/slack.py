@@ -455,8 +455,8 @@ class SlackTransport:
 
     # --- Webhook parsing utilities (used by API layer) ---
 
+    @staticmethod
     def verify_signature(
-        self,
         body_raw: str | bytes,
         headers: dict[str, str],
         signing_secret: str,
@@ -467,6 +467,12 @@ class SlackTransport:
         ``x-slack-signature`` against the request body and timestamp.
         Returns False if the signature is invalid or the timestamp is
         too old (> 5 minutes).
+
+        Static because it depends on nothing but its arguments, and the
+        API layer verifies at the webhook edge — before the payload is
+        persisted or broadcast — without having a transport instance to
+        hand.  One implementation, two callers: a second HMAC of the
+        same signature is how one of them quietly stops matching.
         """
         if not signing_secret:
             return False
