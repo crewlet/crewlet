@@ -13,10 +13,12 @@ A useful mental model: for each integration there is usually
    GitLab group, an E2B account. Crewlet never creates top-level tenancy for
    you.
 2. **Per-agent identities inside it** — service accounts, bot apps, tokens.
-   For Slack, Plane, and GitLab a provisioning CLI creates these
-   idempotently; for Atlassian and GitHub you create them by hand.
+   For Mattermost, Slack, Plane, and GitLab a provisioning CLI creates
+   these idempotently; for Atlassian and GitHub you create them by hand.
 3. **A webhook back to the engine** — so external activity wakes the right
    agent. Self-registered where the API allows it, manual where it doesn't.
+   Mattermost is the exception: it has no usable inbound webhook, so the
+   engine dials out instead and needs no reachable address at all.
 
 ---
 
@@ -183,7 +185,7 @@ github.com only (no self-hosted GitHub support in the integration):
 
 ---
 
-## Chat: Slack or Mattermost
+## Chat
 
 Chat is the human↔agent conversational surface (DMs, channels, escalations)
 and is also where the DACI [decision framework](../concepts/decision-framework.md)
@@ -198,13 +200,32 @@ seat carries whichever identities it needs.
 | Engine must be publicly reachable | yes — the Events API POSTs to it | **no** — the engine dials out |
 | Working status | free text, per turn phase | fixed *"is typing…"* (default off) |
 
-Pick **Mattermost** when the conversational surface has to live in your own
-infrastructure, or when you want provisioning to be a single non-interactive
-command. Pick **Slack** when the org already runs on it, or when the
-per-phase working indicator matters. Details:
-[Mattermost integration](../integrations/mattermost.md).
+Pick **Mattermost** unless you have a reason not to — it is what the bundled
+example runs on, and it is the only chat option with a local docker-compose
+loop in this repo, so it is the fastest one to see working. Pick **Slack**
+when the org already lives there, or when the per-phase working indicator
+matters enough to be worth an OAuth click per agent and a public URL.
 
-### Slack
+### Option A: Mattermost (self-hosted)
+
+1. **Run the Mattermost server yourself** (official Docker image; it needs
+   its own PostgreSQL) and **create the team** agents will live in. Crewlet
+   never creates top-level tenancy.
+2. **Declare each agent's identity in the company YAML** — one per-agent bot
+   token as a `${VAR}` placeholder under `role.integrations.mattermost`, and
+   the Mattermost MCP tool server in `mcp_servers`.
+3. **Provision the bots** with
+   [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
+   which creates one bot account per agent, adds it to the team and its
+   channels, and mints its access token into the `${VAR}` the YAML
+   references. The only thing you do by hand is generate one system-admin
+   token, once.
+
+Nothing needs to reach the engine from outside: it opens outbound websockets
+per seat rather than receiving webhooks, so no tunnel and no public URL.
+Details: [Mattermost integration](../integrations/mattermost.md).
+
+### Option B: Slack
 
 There is no self-hosted variant:
 
@@ -231,25 +252,6 @@ still works if you prefer it — see
 
 Details (scopes, Events API, thread routing, the working-status indicator):
 [Slack integration](../integrations/slack.md).
-
-### Mattermost
-
-1. **Run the Mattermost server yourself** (official Docker image; it needs
-   its own PostgreSQL) and **create the team** agents will live in. Crewlet
-   never creates top-level tenancy.
-2. **Declare each agent's identity in the company YAML** — one per-agent bot
-   token as a `${VAR}` placeholder under `role.integrations.mattermost`, and
-   the Mattermost MCP tool server in `mcp_servers`.
-3. **Provision the bots** with
-   [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
-   which creates one bot account per agent, adds it to the team and its
-   channels, and mints its access token into the `${VAR}` the YAML
-   references. The only thing you do by hand is generate one system-admin
-   token, once.
-
-Nothing needs to reach the engine from outside: it opens outbound websockets
-per seat rather than receiving webhooks, so no tunnel and no public URL.
-Details: [Mattermost integration](../integrations/mattermost.md).
 
 ---
 
@@ -285,9 +287,10 @@ the same network.
 
 The bundled **Nimbus example** (`examples/nimbus.company.yaml` +
 `examples/nimbus.config.yaml`) is a complete seven-seat reference wired for
-Plane + GitLab + Slack + E2B sandbox + an OpenAI-compatible LLM, with a
-fully-local loop: `docker compose --profile plane up -d`, then
-`scripts/plane-dev-bootstrap.sh`, then
+Plane + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible LLM, with a
+fully-local loop: `docker compose --profile plane --profile mattermost up -d`,
+then `scripts/plane-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
+then
 `crewlet run examples/nimbus.config.yaml --import-company
 examples/nimbus.company.yaml`. Reading it top to bottom is the fastest way to
 see every choice on this page made concretely — each block carries the

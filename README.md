@@ -9,7 +9,7 @@
 Crewlet is an open-source Python engine for orchestrating hierarchically organized
 AI agent companies. You describe a company in YAML — mission, org chart, roles,
 policies, integrations — and Crewlet runs it: one persistent agent per seat,
-planning and executing real work on Slack, your issue tracker, and your code host,
+planning and executing real work in chat, your issue tracker, and your code host,
 learning from what it did, and escalating to the humans in the org chart when stuck.
 
 [![PyPI](https://img.shields.io/pypi/v/crewlet?style=flat-square&color=7c56ff&label=pypi)](https://pypi.org/project/crewlet/)
@@ -80,12 +80,12 @@ surfaces you already use.</sub>
 
 ## How a turn works
 
-A trigger — a Slack message, a work-item webhook, a schedule — wakes exactly one
+A trigger — a chat message, a work-item webhook, a schedule — wakes exactly one
 agent, which runs a three-phase turn:
 
 ```mermaid
 flowchart LR
-    T["Trigger<br/><i>Slack · work item · schedule</i>"] --> P
+    T["Trigger<br/><i>chat · work item · schedule</i>"] --> P
     P["<b>Plan</b><br/>decide the steps,<br/>pick the tools"] --> E["<b>Execute</b><br/>tool loop, or a<br/>coding agent in a sandbox"]
     E --> R["<b>Review</b><br/>judge against the<br/>plan's success criteria"]
     R -->|done| S["Work shipped:<br/>comments, MRs, docs"]
@@ -150,7 +150,7 @@ The dashboard and webhook API come up with the engine. The full
 first turn with no integrations at all, then wiring in the real ones.
 
 > **Want the full picture first?** `examples/nimbus.company.yaml` is a complete
-> seven-seat reference company — Plane, GitLab, Slack, and a code sandbox wired
+> seven-seat reference company — Plane, GitLab, Mattermost, and a code sandbox wired
 > end-to-end, with the reasoning for every setting in comments.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
@@ -171,18 +171,23 @@ one has a hosted and a self-hosted path — see
 | **LLM** | [Anthropic](docs/getting-started/quickstart.md#llm-options), OpenAI, or **any OpenAI-compatible endpoint** — including your own vLLM / LiteLLM gateway |
 | **Tracker + knowledge base** | [Plane](docs/integrations/plane.md) (self-hosted, covers both) · [Jira](docs/integrations/jira.md) + [Confluence](docs/integrations/confluence.md) |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) · [GitHub](docs/integrations/github.md) |
-| **Chat** | [Slack](docs/integrations/slack.md) — one bot identity per agent |
+| **Chat** | [Mattermost](docs/integrations/mattermost.md) (self-hosted) · [Slack](docs/integrations/slack.md) — one bot identity per agent either way |
 | **Code sandbox** | [E2B cloud or self-hosted](docs/concepts/code-sandbox.md); Claude Code or OpenCode as the coding agent |
 
-For Slack, Plane, and GitLab, one command provisions the whole fleet — a Slack app
-or service account per seat, memberships, per-agent tokens minted into your config's
-own `${VAR}` references, and the webhooks:
+For Mattermost, Slack, Plane, and GitLab, one command provisions the whole fleet —
+a bot account or service account per seat, memberships, per-agent tokens minted into
+your config's own `${VAR}` references, and the webhooks:
 
 ```bash
-crewlet slack  provision company.yaml --base-url <url>
-crewlet plane  provision company.yaml --create-projects --webhook-url <url>
-crewlet gitlab provision company.yaml --webhook-url <url>
+crewlet mattermost provision company.yaml
+crewlet slack      provision company.yaml --base-url <url>
+crewlet plane      provision company.yaml --create-projects --webhook-url <url>
+crewlet gitlab     provision company.yaml --webhook-url <url>
 ```
+
+Mattermost takes no URL because nothing has to reach the engine: it holds one
+outbound websocket per agent seat instead of receiving webhooks, so that loop
+runs behind NAT with no tunnel.
 
 Add `--secret-store` and the minted credentials go straight into the encrypted
 [secret store](docs/concepts/secret-store.md) the engine reads `${VAR}` from —
@@ -194,7 +199,7 @@ no env file to source, no shell to be in.
 
 ```mermaid
 flowchart LR
-    EXT["<b>External surfaces</b><br/>Slack · Jira / Plane<br/>GitHub / GitLab"]
+    EXT["<b>External surfaces</b><br/>Mattermost / Slack · Jira / Plane<br/>GitHub / GitLab"]
     API["<b>REST API + dashboard</b><br/><i>embedded, or its<br/>own process</i>"]
     Q["<b>Apache Pulsar</b><br/><i>per-agent<br/>inbox topics</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
