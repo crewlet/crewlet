@@ -144,6 +144,13 @@ src/crewlet/          # Main package
   _env.py             # Shared .env loader for CLI entry points (run, api,
                       #   confluence/plane import + resync, gitlab/plane
                       #   provision) — load_env_file
+  config_resolution.py # Resolution FINGERPRINT — a keyed, per-process
+                      #   digest of what a payload's ${VAR} references
+                      #   currently resolve to. Half of apply_config's
+                      #   no-op check: re-activating an unchanged
+                      #   revision is the documented rotation gesture, so
+                      #   a payload-only comparison made it rebuild
+                      #   nothing. Never persisted or logged
   env_refs.py         # THE ${VAR} reference grammar — one compiled pattern
                       #   shared by config.py (substitution), secrets/
                       #   registry.py (skip-pointers-when-masking), org/

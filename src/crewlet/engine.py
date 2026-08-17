@@ -34,6 +34,7 @@ from crewlet.config import (
     register_slack_apps_from_org,
     resolve_env_vars,
 )
+from crewlet.config_resolution import resolution_fingerprint
 from crewlet.db.protocol import StorageBackend
 from crewlet.events.types import (
     Event,
@@ -338,6 +339,10 @@ class Engine:
         # the spawn cascade and by ``/health`` / dashboard for the
         # ``configured`` predicate.
         self._active_config: Any = None
+        # Fingerprint of what the active config's ${VAR} references
+        # resolved to when it was applied. Half of the no-op check —
+        # see crewlet.config_resolution.
+        self._active_resolution: str = ""
         # Secret-encryption keyring (Tier A ``secrets``).  ``None`` when
         # encryption is disabled; set by ``from_bootstrap``.  Used by
         # ``load_config`` to decrypt the whole config document in an
@@ -652,15 +657,39 @@ class Engine:
             await refresh_secret_snapshot()
             await self._complete_deferred_migrations(new)
             old = self._active_config
+            # What this payload's ``${VAR}`` references CURRENTLY resolve
+            # to.  Computed after ``refresh_secret_snapshot`` above, so a
+            # value just written to the secret store is already visible.
+            new_payload = new.model_dump()
+            fingerprint = resolution_fingerprint(new_payload)
             if old is not None:
                 # No-op early-out: a re-activation of the current
                 # revision (operator clicks revert-to-current, an idle
                 # PUT, etc.) would otherwise pay for the full snapshot
                 # capture + every subsystem's `if old.X != new.X`
                 # comparison.  Short-circuit before touching anything.
-                if old.model_dump() == new.model_dump():
+                #
+                # The FINGERPRINT is half of that comparison, and the
+                # half that used to be missing.  Re-activating an
+                # unchanged revision is the documented way to make a
+                # running engine pick up a rotated credential — and it is
+                # by definition a byte-identical payload, so keying the
+                # early-out on the payload alone made that gesture do
+                # nothing but swap the secret snapshot.  Every subsystem
+                # that captured a resolved value (an MCP child's spawn
+                # env, an LLM client, a transport header) kept the old
+                # one, indefinitely.
+                if (
+                    old.model_dump() == new_payload
+                    and fingerprint == self._active_resolution
+                ):
                     logger.info("apply_config_noop", org=new.name)
                     return []
+                if old.model_dump() == new_payload:
+                    logger.info("apply_config_rotation", org=new.name)
+                    applied_rotation = await self._apply_credential_rotation(new)
+                    self._active_resolution = fingerprint
+                    return applied_rotation
                 # Per-subsystem dispatch — each subsystem gets a
                 # handler; order matters (see
                 # ``_APPLY_DISPATCH_ORDER``).  Subsystems that
@@ -773,6 +802,7 @@ class Engine:
                     self.org, self.agent_pool, self.event_queue
                 )
                 self._active_config = new
+                self._active_resolution = fingerprint
                 logger.info(
                     "config_applied",
                     org=new.name,
@@ -842,6 +872,7 @@ class Engine:
             self._skill_variables = resolve_skill_variables(new)
             self._prompt_skill_registry.set_variables(self._skill_variables)
             self._active_config = new
+            self._active_resolution = fingerprint
 
             # If the engine is already running (i.e. the first
             # PUT /config arrived while we were idle in the
@@ -3982,6 +4013,83 @@ class Engine:
                 ),
             )
 
+    async def _apply_credential_rotation(self, cfg: Any) -> list[str]:
+        """Rebuild every subsystem that CAPTURED a resolved credential.
+
+        Reached when the config payload is byte-identical but its
+        ``${VAR}`` references now resolve differently — i.e. an operator
+        rotated a secret and re-activated the revision to pick it up.
+
+        The ordinary diff handlers cannot do this: every one of them
+        compares raw config (``old.providers.llm != new.providers.llm``,
+        ``old.mcp_servers != new.mcp_servers``, the role signature behind
+        ``_respawn_role_mcp``), and on this path all of those are equal by
+        construction. So the rebuild is unconditional for the subsystems
+        that hold a resolved value, and skipped entirely for those that
+        do not.
+
+        Best-effort per subsystem: a rotation that cannot rebuild one
+        transport must still reach the others, and must not roll the
+        engine back to a revision it is already running.
+        """
+        from crewlet.engine_builders import (
+            build_llm_providers,
+            build_notification_transports,
+        )
+
+        applied: list[str] = []
+
+        # LLM providers hold the key inside a constructed client.
+        try:
+            providers, provider_configs = build_llm_providers(cfg)
+            if providers:
+                self._llm_providers.clear()
+                self._llm_providers.update(providers)
+                self._llm_provider_configs.clear()
+                self._llm_provider_configs.update(provider_configs)
+                applied.append("providers")
+        except Exception as exc:
+            logger.error("rotation_providers_failed", error=str(exc))
+
+        # MCP children baked the resolved env into their spawn
+        # environment, so nothing short of a restart picks up a new one.
+        try:
+            configs = parse_mcp_servers(cfg.mcp_servers)
+            for name in list(configs):
+                await self._mcp_bridge.restart_server(name)
+            if configs:
+                applied.append("mcp_servers")
+        except Exception as exc:
+            logger.error("rotation_mcp_failed", error=str(exc))
+
+        # Per-role MCP children hold that seat's own credentials.
+        try:
+            respawned = 0
+            for agent in list(self.agent_pool.agents):
+                role = getattr(agent.definition, "role", None)
+                if role is not None and getattr(role, "mcp_env", None):
+                    await self._respawn_role_mcp(role)
+                    respawned += 1
+            if respawned:
+                applied.append("role_mcp")
+        except Exception as exc:
+            logger.error("rotation_role_mcp_failed", error=str(exc))
+
+        # Transports hold tokens in clients and headers.
+        try:
+            new_transports = (
+                build_notification_transports(cfg, storage=self.storage)
+                + self._custom_transports
+            )
+            if new_transports:
+                await self._apply_notification_transports_live(new_transports)
+                applied.append("transports")
+        except Exception as exc:
+            logger.error("rotation_transports_failed", error=str(exc))
+
+        logger.info("credential_rotation_applied", subsystems=applied)
+        return applied
+
     async def _apply_mcp_servers_live(
         self,
         old_configs: list[Any],
@@ -4003,9 +4111,21 @@ class Engine:
 
         # Removed: stop the running client + drop its tools.
         for name in old_by_name.keys() - new_by_name.keys():
+            # Capture the tool names BEFORE stopping — the bridge drops
+            # its own index inside stop_server, and until now nothing
+            # dropped them from the shared ToolRegistry. A server removed
+            # by a live config edit therefore kept its tools in every
+            # later turn's catalogue, dispatching to a stopped client
+            # forever: a soft `success=False` the model burns rounds
+            # retrying, with nothing in the logs to explain it.
+            doomed = [t.name for t in self.mcp_bridge.get_server_tools(name)]
             try:
                 await self.mcp_bridge.stop_server(name)
-                logger.info("mcp_server_stopped_live", server=name)
+                for tool_name in doomed:
+                    self.tool_registry.unregister(tool_name)
+                logger.info(
+                    "mcp_server_stopped_live", server=name, tools_dropped=len(doomed)
+                )
             except Exception as exc:
                 logger.warning("mcp_server_stop_failed", server=name, error=str(exc))
 

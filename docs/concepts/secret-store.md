@@ -131,6 +131,12 @@ store is a better home for it than a file someone has to remember to source.
 
 So `crewlet secrets set` on a live engine takes effect at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works.
 
+**What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. Re-activating an unchanged revision produces a byte-identical payload, so the engine now compares a **resolution fingerprint** alongside it: a digest of what the payload's `${VAR}` references currently resolve to. Same payload *and* same fingerprint is a true no-op; same payload with a moved fingerprint is a rotation, and the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild.
+
+The fingerprint is keyed with a per-process random key and never persisted or logged — a bare hash of a short credential would be offline-brute-forceable, which would make the mechanism a leak.
+
+> One surface this cannot reach: a **running code sandbox** received its credentials in the box's environment at launch, and no engine-side refresh reaches a live box. There the effective bound is the run's duration plus any clarification pause, not seconds. Tear the run down if a rotation is a revocation.
+
 ---
 
 ## Which one do I want?

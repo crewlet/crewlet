@@ -1464,3 +1464,95 @@ async def test_embedded_api_registers_a_runtime_for_live_engine_facts(
     finally:
         if engine._api_serve_task is not None:
             await engine._api_serve_task
+
+
+# ---------------------------------------------------------------------------
+# Credential rotation — re-activating an UNCHANGED revision
+# ---------------------------------------------------------------------------
+
+
+async def test_reactivating_an_unchanged_revision_rebuilds_on_rotation(
+    monkeypatch,
+) -> None:
+    """The documented rotation gesture must actually rebuild something.
+
+    `docs/concepts/secret-store.md` names "re-activate the unchanged
+    revision" as how you make a running engine pick up a rotated
+    credential. That payload is byte-identical by definition, so the
+    no-op early-out fired and the gesture did nothing but swap the secret
+    snapshot: MCP children kept the credential baked into their spawn
+    env, LLM providers kept the revoked key, transports kept the old
+    token — indefinitely.
+    """
+    monkeypatch.setenv("ROTATED_KEY", "old-secret")
+
+    company = CompanyConfig(
+        name="Acme",
+        providers={
+            "llm": {
+                "default": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "api_keys": ["${ROTATED_KEY}"],
+                }
+            }
+        },
+    )
+    engine = await make_engine(company=company)
+
+    rotations: list[str] = []
+
+    async def _spy() -> list[str]:
+        rotations.append("rebuilt")
+        return ["providers"]
+
+    monkeypatch.setattr(
+        engine, "_apply_credential_rotation", lambda _cfg: _spy(), raising=False
+    )
+
+    # Same payload, same resolved value: a genuine no-op.
+    assert await engine.apply_config(company) == []
+    assert rotations == []
+
+    # Same payload, DIFFERENT resolved value: a rotation.
+    monkeypatch.setenv("ROTATED_KEY", "new-secret")
+    applied = await engine.apply_config(company)
+
+    assert rotations == ["rebuilt"]
+    assert applied == ["providers"]
+
+
+async def test_rotation_records_the_new_fingerprint(monkeypatch) -> None:
+    """A rotation applied once must not re-apply on every later
+    activation — the node would restart its MCP children forever."""
+    monkeypatch.setenv("ROTATED_KEY", "old-secret")
+    company = CompanyConfig(
+        name="Acme",
+        providers={
+            "llm": {
+                "default": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "api_keys": ["${ROTATED_KEY}"],
+                }
+            }
+        },
+    )
+    engine = await make_engine(company=company)
+
+    calls: list[int] = []
+
+    async def _spy() -> list[str]:
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(
+        engine, "_apply_credential_rotation", lambda _cfg: _spy(), raising=False
+    )
+
+    monkeypatch.setenv("ROTATED_KEY", "new-secret")
+    await engine.apply_config(company)
+    await engine.apply_config(company)
+    await engine.apply_config(company)
+
+    assert len(calls) == 1

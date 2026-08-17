@@ -170,3 +170,30 @@ def test_build_availability_set_only_resolves_requested_names():
     registry.register(make_tool("b"), check_fn=_track("b"))
     build_availability_set(registry, CheckContext(), ["a"])
     assert calls == ["a"]
+
+
+def test_unregister_removes_a_tool_and_its_metadata() -> None:
+    """Registration used to be one-way: when a live config edit removed a
+    shared MCP server, the engine stopped its client but left the tools
+    in the registry, so they stayed in every later turn's catalogue and
+    dispatched to a dead client forever."""
+    from crewlet.tools.capabilities import ToolAnnotations
+
+    registry = ToolRegistry()
+    tool = make_tool("doomed")
+    registry.register(
+        tool,
+        check_fn=lambda _ctx: True,
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
+    assert registry.get("doomed") is not None
+
+    assert registry.unregister("doomed") is True
+
+    assert registry.get("doomed") is None
+    assert registry.annotations_for("doomed") is None
+    assert "doomed" not in [t.name for t in registry.list_tools()]
+
+
+def test_unregister_is_false_for_an_unknown_tool() -> None:
+    assert ToolRegistry().unregister("never-existed") is False

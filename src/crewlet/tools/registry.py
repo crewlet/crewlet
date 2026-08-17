@@ -92,6 +92,24 @@ class ToolRegistry:
             self._annotations[tool.name] = annotations
         logger.info("tool_registered", name=tool.name)
 
+    def unregister(self, tool_name: str) -> bool:
+        """Remove a tool and its check/annotation entries. ``True`` if present.
+
+        Needed because registration was one-way: when a live config edit
+        removed a shared MCP server, the engine stopped the server's
+        client but left its tools in the registry. They stayed in every
+        later turn's catalogue, and calling one dispatched to a stopped
+        client — a soft ``success=False`` the model burns rounds
+        retrying, with nothing in the logs to explain why a tool the
+        catalogue advertises never works.
+        """
+        existed = self._tools.pop(tool_name, None) is not None
+        self._check_fns.pop(tool_name, None)
+        self._annotations.pop(tool_name, None)
+        if existed:
+            logger.info("tool_unregistered", name=tool_name)
+        return existed
+
     def annotations_for(self, tool_name: str) -> ToolAnnotations | None:
         """Return the registered :class:`ToolAnnotations` for a builtin,
         or ``None`` when none were declared (treated as all-unknown)."""

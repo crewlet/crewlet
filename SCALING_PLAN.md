@@ -257,64 +257,161 @@ single-claim on each counter, against PG and the memory twins.
 
 ## Phase 4 — Control plane
 
-**Gate: second adversarial review of the gate semantics first** (partial
-apply — a revision succeeding on some nodes and failing on others).
+**Gate outcome: the design as written FAILED review** (one lens
+`redesign-needed`, two `implement-with-changes`). Three independent lenses
+found the same fatal flaw, plus three more. The revised design below is what
+gets built; the original is kept only where the gate endorsed it.
 
-### 4.1 Activation epochs
+### What the gate endorsed, unchanged
 
-- Migration `021_config_activation.sql`: a monotonically increasing
-  `activation_seq` that bumps on **every** activation — including
-  re-activation of an unchanged revision, which is the documented
-  secret-rotation gesture (`engine.py:594-598`). Epoch ≠ revision id, or
-  rotation never propagates. Plus `config_apply_status(node_id, epoch,
-  status, error)` fed by each node's apply outcome.
+- **4.1 activation epoch, not revision id.** Confirmed necessary: the
+  documented rotation gesture re-activates an *unchanged* revision, so a
+  reconcile keyed on revision id could never propagate it.
+- **Retiring BOTH competing groups** (`engine-config`, `api-config`).
+  Non-negotiable, and fixing only one leaves the two processes with
+  different rotation semantics — the current bug in miniature.
+- **Webhook rule**: verify HMAC, then enqueue regardless of config
+  staleness. Already matches the code's ordering.
+- **Not pinning the `PromptSkillRegistry`.** Its lock-free read contract and
+  mid-turn gating are deliberate; "completing" the pin would silently
+  disable the required-skill guard.
 
-### 4.2 Delivery: authoritative poll + Reader fast path
+### 4.A — The rotation path (fatal; also a LIVE bug)
 
-- Each node runs a ~15 s reconcile poll comparing its applied epoch to the
-  store's — the authoritative mechanism — plus a non-durable Pulsar
-  **Reader** on the config topic for latency (no broker-side state to
-  orphan on crash, unlike per-node durable subscriptions). The
-  competing-consumer groups `engine-config` (`engine.py:1144`) and
-  `api-config` (`api/config_refresh.py:361`) are both retired — the review
-  was explicit that fixing only one of them re-creates the bug.
+`apply_config` early-outs on `old.model_dump() == new.model_dump()`
+(`engine.py:647`) — which is *by definition* what re-activating an unchanged
+revision is. So the documented rotation gesture only swaps the secret
+snapshot: MCP children keep the credential they captured at spawn, LLM
+providers keep the revoked key, transports keep the old token. The API side
+re-resolves unconditionally, so the same gesture works there and is inert on
+the engine — which is why it went unnoticed.
 
-### 4.3 Fail-closed, gated on fleet-applied
+Fix: a **resolution fingerprint** — a process-local *keyed* digest
+(`blake2b` with a per-process random key) over the resolved value of every
+`${VAR}` the payload references. Stored beside `_active_config`; the
+early-out fires only when the raw payload **and** the fingerprint match.
+When only the fingerprint moved, the credential-bearing subsystems rebuild.
 
-- A node whose applied epoch lags refuses to *start new turns* and reports
-  divergence; the comparison target is the latest epoch that **successfully
-  applied** (from `config_apply_status`), not the raw store pointer — a
-  revision that fails apply on all nodes must leave the fleet serving the
-  prior config (today's rollback behavior, `engine.py:706-716`), not 503ing
-  everything.
-- Webhook ingress fails closed only on what it depends on: HMAC verification
-  checks current **and prior** secret during a bounded overlap window;
-  verified events are enqueued regardless of config staleness (a publish is
-  epoch-independent).
+The key is per-process and never persisted or logged: a bare SHA-256 of a
+short credential in a log line or a DB row is offline-brute-forceable, which
+would turn the fix into a leak.
 
-### 4.4 Non-tearing applies
+### 4.B — The gate: target ≠ action (fatal)
 
-- Turns pin an immutable config snapshot (org + resolved tool surface) in
-  `TurnContext` at turn start; `apply_config`'s restart-required subsystems
-  (MCP servers, transports) apply behind a per-seat drain; applies are
-  jittered across nodes; a node restarts per-role MCP servers only for seats
-  it owns (phase 5 tightens this to lease ownership).
-- MCP restart diffing moves from raw `${VAR}` spec comparison
-  (`engine.py:3917-3926`) to a hash of the **resolved** env/headers, so
-  rotation actually restarts children that captured the old secret at spawn
-  (`mcp/client.py:73`).
+"Lag behind the latest epoch applied *somewhere*" makes every **successful**
+rollout a fleet-wide outage: the first node to apply advances the target, so
+every peer is instantly "lagging" and sheds until its own apply finishes.
+The faster one node is, the longer everyone else is down.
 
-### 4.5 Secret snapshot
+Revised:
 
-- `refresh_secret_snapshot` triggers on epoch change (not revision change);
-  maximum staleness = poll interval + apply time (~seconds), acceptable for
-  revocation.
+- **Target** = the store's activation pointer, not any peer's status.
+- **Action** on a confirmed lag, where "confirmed" means this node recorded
+  `error` for that epoch *or* the lag persisted beyond `k` poll intervals
+  (k=3): peers healthy → **shed**; nobody applied it anywhere → **keep
+  serving** the prior epoch and raise divergence loudly; nobody has reported
+  yet → **wait**, never shed.
+- A node that has never applied anything (fresh/unconfigured) is a distinct
+  state from one that applied N and failed N+1.
+- Retry is **bounded**; a node that exhausts it goes `stuck` and fails
+  `/ready` rather than re-applying — and restarting MCP servers — every 15s
+  forever.
 
-**Exit criteria:** chaos tests — node offline during activation converges via
-poll within 15 s; bad-revision test keeps the fleet on the prior config with
-divergence visible; rotation test proves an MCP child restarts when its
-resolved credential changes; mid-apply turn test proves a running turn sees
-a consistent snapshot end-to-end.
+### 4.C — The gate's seam is the QUEUE, not the turn (fatal)
+
+Gating "new turns" is too late twice over:
+
+- A stale node still **consumes** inbound messages off the competing
+  `notification-svc-inbound` group. Slack HMAC verification happens
+  *consume-side* against that node's cached secret, and failure is a skip +
+  ack — so a rotated signing secret means the stale node silently eats half
+  the fleet's inbound messages.
+- Gating `run_turn` **permanently wedges** a seat whose sandbox run just
+  completed: the pending row is already flipped to `resumed`, the box
+  collected, the agent `AWAITING_SANDBOX` with its inbox paused, and nothing
+  reaps a `resumed` row in-process.
+
+Revised: gate at **trigger admission** (inbox / notification / task-assigned
+handlers and the scheduler tick), refusing by **republish-then-ack**, never
+NAK (3 × 1 s dead-letters a healthy event). Sandbox-driven turns — anything
+with `resume_state`, plus the clarification post — **bypass the gate
+unconditionally**: they are the tail of a turn this node already started, and
+refusing them destroys durable state rather than deferring it.
+
+This needs a new reversible `pause_subscription(topic, group)` on
+`EventQueue`: `pause_delivery` is process-wide and shutdown-only, and
+`unsubscribe` deletes the *broker-side* subscription and drops the whole
+group's backlog.
+
+### 4.D — Apply honesty (serious)
+
+`_rollback` is synchronous and cannot respawn MCP subprocesses; it also
+reinstalls **stopped** transport objects. So a node that fails an apply after
+the restart-required phase reports the prior epoch as fine while its tool
+surface is amputated and its inbound path is dead.
+
+Fix: a third outcome, **`degraded`** — recorded in `config_apply_status` and
+treated by the gate as *not* converged — for any failure after a
+restart-required subsystem was mutated.
+
+### 4.E — Per-seat drain belongs to phase 5
+
+There is no per-seat in-flight registry, and draining on `AgentState` is
+actively wrong: a seat parked on a detached sandbox stays `AWAITING_SANDBOX`
+for the whole run plus up to a 30-minute clarification pause, so one agent's
+pending question would block the apply and gate the entire node.
+
+Phase 4 ships a per-seat in-flight **counter** (incremented in `run_turn`,
+decremented in its existing `finally`) and drains on that with a hard 10s
+cap. "Only for seats it owns" moves verbatim to phase 5.1, where leases
+exist.
+
+### 4.F — Turn config pinning, scoped by what is actually pinnable
+
+Pin: the `TurnEngineConfig` snapshot (~18 accessors re-read it *per access*,
+so Plan can run under one round cap and Execute under another), the LLM
+provider maps (mutated in place by `clear()`+`update()`), `_role_mcp_tools`
+(read twice per turn from different places), and the `AgentDefinition`
+(reassigned in place by the org diff).
+
+Do **not** pin: the `PromptSkillRegistry` (see above), or the tool dispatch
+objects — pinning a catalogue does not pin a capability, since a pinned
+wrapper whose client was stopped just fails softly. Pinning buys consistent
+naming and limits across a turn, never guaranteed capability. That is what
+makes drain-before-stop load-bearing rather than optional.
+
+### 4.G — Corrections to the smaller clauses
+
+- **Jitter on applies is dropped** — it compounds 4.B's brownout. Jitter
+  stays only on the *poll interval* (±20%), to break lock-step after a
+  synchronized fleet restart.
+- **The dual-secret HMAC overlap is struck**: the prior revision's secret is
+  not reachable at verification time. Replaced with an operator procedure.
+- **Raw-vs-resolved diffing is systemic**, not MCP-specific: LLM providers,
+  sandbox, four integrations, extensions and per-role `mcp_env` all gate on
+  raw config while their builders resolve. The fingerprint covers them
+  uniformly.
+- **4.5's staleness bound is false for sandboxes** by orders of magnitude: a
+  live box holds resolved credentials for the run duration plus pause TTL.
+  Either drive the existing `reseed` path on a credential change, or record
+  the honest bound.
+
+### Live bugs found by the gate (pre-existing, fixed with this phase)
+
+1. **`ToolRegistry` has no `unregister`.** A shared MCP server removed by a
+   live config edit leaves its tools advertised in every later turn's
+   catalogue, dispatching to a dead client forever.
+2. **Rollback reinstalls stopped transports** — the node goes silently deaf
+   while reporting a healthy epoch.
+
+### Exit criteria (revised)
+
+The four original chaos tests miss every interleaving above. Add: rotation
+with an *unchanged* revision proves an MCP child restarts; epoch N succeeds
+on node A and fails on node B, so B gates, retries a bounded number of times,
+then fails `/ready` while A keeps serving; a sandbox completion on a gated
+node still resumes; a node that applied and then died does not gate its peers
+behind its stale row.
 
 ---
 
