@@ -232,8 +232,19 @@ units:
 ```
 
 When a budget is exceeded, the agent's turn stops immediately and a
-`BudgetExhausted` event is emitted. Budgets are per-engine-run (the in-memory
-counter resets on restart).
+`BudgetExhausted` event is emitted.
+
+Usage is **durable** — it is stored in PostgreSQL and survives restarts, and
+is shared by every process running the company. Reset it deliberately:
+
+```bash
+crewlet budgets show     # usage per scope
+crewlet budgets reset    # zero everything (or --scope agent:<id>)
+```
+
+(Usage used to reset on every engine start, which made a cap advisory in
+exactly the situation that motivates one — an agent burning budget in a
+crash loop.)
 
 ## 3. Run it
 

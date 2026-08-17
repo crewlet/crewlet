@@ -69,10 +69,10 @@ class _FractionalBudgetManager:
     parent_agent_remaining`` (or a flat cap when there is no agent budget).
 
     Exposes the same duck-typed surface ``llm_loop.consume_budget`` uses:
-    ``consume(agent_id, tokens)`` (awaitable), ``org_budget``,
-    ``get_agent_budget(agent_id)``. Tokens still flow through the real
-    manager for org/agent accounting; the wrapper just adds a per-call
-    ceiling.
+    ``spend(agent_id, tokens)`` (awaitable, returning a ``SpendOutcome``),
+    ``consume(...)``, ``org_budget``, ``get_agent_budget(agent_id)``.
+    Tokens still flow through the real manager for org/agent accounting
+    against the shared counter; the wrapper just adds a per-call ceiling.
 
     On cap breach the wrapper raises :class:`SubagentBudgetExceeded`
     rather than returning ``False`` -- that way ``llm_loop.consume_budget``
@@ -104,7 +104,7 @@ class _FractionalBudgetManager:
     def get_agent_budget(self, agent_id: str):  # type: ignore[override]
         return self._inner.get_agent_budget(agent_id)
 
-    async def consume(self, agent_id: str, tokens: int) -> bool:
+    async def spend(self, agent_id: str, tokens: int) -> Any:
         # Reserve under the lock *before* the inner await so a
         # concurrent child sees the reservation and can't also pass the
         # cap check.  The reservation is given back if the inner
@@ -127,11 +127,15 @@ class _FractionalBudgetManager:
                     f"> cap={self._max_subagent_tokens}"
                 )
             self._subagent_used += tokens
-        ok = await self._inner.consume(agent_id, tokens)
-        if not ok:
+        outcome = await self._inner.spend(agent_id, tokens)
+        if not outcome.ok:
             async with self._lock:
                 self._subagent_used -= tokens
-        return ok
+        return outcome
+
+    async def consume(self, agent_id: str, tokens: int) -> bool:
+        """Boolean form, matching :meth:`BudgetManager.consume`."""
+        return (await self.spend(agent_id, tokens)).ok
 
 
 def _subagent_budget_cap(

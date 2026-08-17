@@ -250,6 +250,14 @@ src/crewlet/          # Main package
                       #   makes session-scoped state work (asyncpg's pool
                       #   reset runs pg_advisory_unlock_all on release, so a
                       #   pool-path advisory lock is a silent no-op);
+                      #   budgets.py / deliveries.py / credentials.py /
+                      #   rate_limits.py — the SHARED COUNTERS: token
+                      #   budget usage (caps stay config-derived in
+                      #   memory, only usage is shared), inbound webhook
+                      #   dedupe (GitHub/GitLab had none at all),
+                      #   fleet-wide credential cooldowns, and the
+                      #   notification valve. Each ships a Postgres store
+                      #   + a memory twin under one contract suite;
                       #   leases.py — LeaseStore/MemoryLeaseStore, the
                       #   cross-process ownership primitive: TTL lease +
                       #   monotonic `epoch` fencing token, owner = a process

@@ -824,11 +824,13 @@ class Engine:
                 new.notification_coalesce_window_seconds
             )
             self._inbox_batch_options.max_batch = new.notification_coalesce_max_batch
-            self.budget_manager = BudgetManager(org_budget=new.token_budget)
-            # A new manager means a new meter; re-install the reporter's
-            # hook or every subsequent charge goes unreported.
-            if self._budget_reporter is not None:
-                self._budget_reporter.attach()
+            # Update the cap in place rather than rebuilding: a fresh
+            # BudgetManager would drop the shared usage store wired at
+            # boot, silently returning the fleet to per-process counters.
+            # It also keeps the meter — and therefore the reporter's hook
+            # — alive across an activation, so nothing has to re-attach.
+            # Per-agent caps are re-seeded by the org diff below.
+            self.budget_manager.update_org_budget(new.token_budget)
             self._turn_engine_config = new.turn_engine
             self._learning_config = new.learning
             self._scheduling_config = new.scheduling
@@ -1244,6 +1246,19 @@ class Engine:
             if hasattr(self.storage, "initialize"):
                 await self.storage.initialize()
 
+            # 1.5 Point the budget cascade at the shared counter. Token
+            # budgets are a company-wide question ("have we spent our
+            # 500k"), so the in-memory default is only correct for a
+            # single process — with peers, an org cap silently becomes
+            # N x the configured value.
+            from crewlet.db.budgets import PostgresBudgetUsageStore
+            from crewlet.db.client import Database
+
+            if isinstance(self.storage, Database):
+                self.budget_manager.set_usage_store(
+                    PostgresBudgetUsageStore(self.storage)
+                )
+
             # 2. Start event queue
             logger.info("start_step", step="2/8", action="start_queues")
             await self.event_queue.start()
@@ -1315,6 +1330,7 @@ class Engine:
         transports_dict: dict[str, Any] = {}
         for transport in self._pending_transports:
             transports_dict[transport.name] = transport
+        self._share_delivery_dedupe(transports_dict)
 
         # The org provider keeps human-seat resolution live across
         # hot reloads that swap ``self.org``.
@@ -4089,6 +4105,7 @@ class Engine:
                 )
 
         self.notification_service.transports = new_dict
+        self._share_delivery_dedupe(new_dict)
 
         # Re-seed routing state BEFORE starting anything: it is an INPUT
         # to ``start()``, not something a started transport acquires
@@ -4178,6 +4195,37 @@ class Engine:
             logger.info("jira_handles_refreshed_live")
         except Exception as exc:
             logger.error("jira_handle_refresh_failed", error=str(exc))
+
+    def _share_delivery_dedupe(self, transports: Any) -> None:
+        """Point every transport's delivery dedupe at the shared store.
+
+        Each transport derives its own dedupe key — what counts as "the
+        same delivery" is genuinely source-specific — but the STORE has
+        to be shared, or a provider retry that lands on a peer node is a
+        fresh delivery there and the agent answers twice.
+
+        No database means no peers to share with, so the per-process
+        default stands.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.deliveries import PostgresDeliveryDedupeStore
+
+        if not isinstance(self.storage, Database):
+            return
+        store = PostgresDeliveryDedupeStore(self.storage)
+        for transport in (transports or {}).values():
+            setter = getattr(transport, "set_delivery_dedupe", None)
+            if setter is not None:
+                setter(store)
+
+        # The notification valve shares the same reasoning: per-process
+        # counters multiply the limit by replica count and cannot see a
+        # loop that bounces between nodes.
+        service = getattr(self, "notification_service", None)
+        if service is not None:
+            from crewlet.db.rate_limits import PostgresRateLimitStore
+
+            service.set_rate_limit_store(PostgresRateLimitStore(self.storage))
 
     def _refresh_jira_routing(self, jira_transport: Any) -> None:
         """Re-seed a freshly-rebuilt JiraTransport's routing state.

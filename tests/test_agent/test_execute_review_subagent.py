@@ -1305,8 +1305,10 @@ async def test_subagent_reports_partial_tokens_on_budget_exhausted(registry):
 
             return _B()
 
-        async def consume(self, agent_id: str, tokens: int) -> bool:
-            return True
+        async def spend(self, agent_id: str, tokens: int):
+            from crewlet.db.budgets import SpendOutcome
+
+            return SpendOutcome(ok=True)
 
     # Patch the cap directly: we wrap _FractionalBudgetManager with
     # max_subagent_tokens=10 so a round reporting 25 tokens trips it
@@ -1391,12 +1393,14 @@ async def test_fractional_budget_manager_is_atomic_under_concurrency():
         def get_agent_budget(self, agent_id: str):  # pragma: no cover - unused
             return None
 
-        async def consume(self, agent_id: str, tokens: int) -> bool:
-            # Yield control mid-consume -- this is the await the
+        async def spend(self, agent_id: str, tokens: int):
+            # Yield control mid-spend -- this is the await the
             # wrapper straddles; a non-atomic wrapper would let the
             # other child slip through here.
+            from crewlet.db.budgets import SpendOutcome
+
             await asyncio.sleep(0)
-            return True
+            return SpendOutcome(ok=True)
 
     wrapper = _FractionalBudgetManager(_SlowInner(), max_subagent_tokens=1000)
 

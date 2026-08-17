@@ -37,11 +37,11 @@ import base64
 import hashlib
 import hmac
 import re
-import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
+from crewlet.db.deliveries import MemoryDeliveryDedupeStore
 from crewlet.notifications.protocol import InboundNotification, OutboundMessage
 
 if TYPE_CHECKING:
@@ -224,8 +224,7 @@ class ConfluenceTransport:
         self._confluence_token = config.token
         self._http_client: Any | None = None  # httpx.AsyncClient
         self._handle_registry: HandleRegistry | None = None
-        self._processed_events: dict[str, float] = {}
-        self._dedup_ttl = 300.0  # 5 minutes
+        self._dedupe: Any = MemoryDeliveryDedupeStore()
         self._space_key_leads: dict[str, list[str]] = {}
         self._notification_excluded_spaces: set[str] = set()
         self._index_callback: IndexCallback | None = None
@@ -333,7 +332,6 @@ class ConfluenceTransport:
 
     async def stop(self) -> None:
         """Stop and clean up resources."""
-        self._processed_events.clear()
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
@@ -495,11 +493,15 @@ class ConfluenceTransport:
         )
         return hmac.compare_digest(expected, signature)
 
-    def _dedup_event(self, body: dict[str, Any]) -> bool:
+    async def _dedup_event(self, body: dict[str, Any]) -> bool:
         """Check if this webhook event was already processed.
 
         Returns True if the event is a duplicate (should be skipped).
         Uses timestamp + page ID + event type as dedup key.
+
+        The key derivation is source-specific and stays here; the STORE
+        is shared (:mod:`crewlet.db.deliveries`), so a retry landing on a
+        peer node is recognised as the duplicate it is.
         """
         timestamp = str(body.get("timestamp", ""))
         page = body.get("page") or body.get("content") or {}
@@ -509,21 +511,20 @@ class ConfluenceTransport:
         )
         dedup_key = f"{timestamp}:{page_id}:{event_type}"
 
-        now = time.monotonic()
-
-        # Prune old entries
-        stale = [
-            k for k, t in self._processed_events.items() if now - t > self._dedup_ttl
-        ]
-        for k in stale:
-            del self._processed_events[k]
-
-        if dedup_key in self._processed_events:
+        claimed = await self._dedupe.claim("confluence", dedup_key)
+        if not claimed:
             logger.debug("duplicate_confluence_event_skipped", dedup_key=dedup_key)
-            return True
+        return not claimed
 
-        self._processed_events[dedup_key] = now
-        return False
+    def set_delivery_dedupe(self, store: Any) -> None:
+        """Point delivery dedupe at the shared store.
+
+        Called by the engine when a database is configured. The default
+        is per-process, which is correct for a single node and silently
+        wrong for two — the same retry reaching a peer would be a fresh
+        delivery there.
+        """
+        self._dedupe = store
 
     def _resolve_account_id(self, account_id: str) -> str | None:
         """Try to resolve an Atlassian account ID to an agent handle."""
@@ -587,7 +588,7 @@ class ConfluenceTransport:
         )
 
         # Deduplicate
-        if self._dedup_event(body):
+        if await self._dedup_event(body):
             return []
 
         # Identify trigger user — used to exclude them from routing

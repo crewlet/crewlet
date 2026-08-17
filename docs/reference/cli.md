@@ -12,6 +12,8 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet run api <config>` | Start the standalone API server (same Tier A file; the positional is required — no `./config.yaml` fallback) |
 | `crewlet validate <config.yaml>` | Validate a Tier A or Tier B YAML and print a summary (`--json` for machine-readable errors) |
 | `crewlet migrate [config]` | Apply pending database migrations (Tier A file, default `./config.yaml`). Run this once before starting any process — `--check` reports pending work without applying it |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) |
+| `crewlet budgets reset [config]` | Zero token usage — durable across restarts, so resetting is deliberate. `--scope` limits it to one scope |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -422,6 +424,25 @@ revision or deferred. Running `crewlet migrate` first is still the
 recommendation for any multi-process deployment: it makes schema changes an
 explicit, observable step rather than a side effect of whichever process
 happened to start first.
+
+---
+
+## `crewlet budgets`
+
+Token-budget usage is stored in PostgreSQL: it is shared by every process
+running the company (an in-memory counter would make an org cap of 500k
+into N x 500k) and it survives restarts.
+
+```bash
+crewlet budgets show                       # usage per scope
+crewlet budgets reset                      # zero every scope
+crewlet budgets reset --scope org          # just the org
+crewlet budgets reset --scope agent:<uuid> # just one seat
+```
+
+The **caps** are not stored here — they come from the active company
+config (`token_budget` on the org, `role.token_budget` on a seat), so
+every process derives the same numbers without coordinating.
 
 ---
 

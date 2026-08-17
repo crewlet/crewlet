@@ -33,6 +33,10 @@ from crewlet.api.config_routes import build_config_routes
 from crewlet.api.routes import build_routes
 from crewlet.api.streaming import StreamService, build_health_envelope
 from crewlet.config import resolve_node_id
+from crewlet.db.deliveries import (
+    MemoryDeliveryDedupeStore,
+    PostgresDeliveryDedupeStore,
+)
 
 logger = get_logger("api.app")
 
@@ -230,6 +234,14 @@ def create_app(
     # keyed by the handle the webhook URL path carries.
     app.state.slack_signing_secrets = dict(slack_signing_secrets or {})
     app.state.sandbox_otel_receiver = sandbox_otel_receiver
+    # Inbound delivery dedupe. Process-local until a database is wired;
+    # GitHub and GitLab had none at all before this, so every provider
+    # retry and every operator replay woke the agent again.
+    app.state.delivery_dedupe = (
+        PostgresDeliveryDedupeStore(database)
+        if database is not None
+        else MemoryDeliveryDedupeStore()
+    )
     app.state.forge_app_id = forge_app_id
     app.state.bootstrap = bootstrap
     app.state.company_config_store = company_config_store

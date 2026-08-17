@@ -203,9 +203,17 @@ denial tests on every route.
 
 ---
 
-## Phase 3 — Shared counters to PG
+## Phase 3 — Shared counters to PG — DONE
 
 Everything in-memory that a lock cannot fix ([`SCALING.md` § class 4](SCALING.md#4-shared-mutable-counters)).
+
+Deviation from the plan as written: budgets did **not** become one table
+of caps + usage. A cap is config — every process derives the same number
+from the same revision — so only *usage* is shared. Caps stay in memory,
+which also kept the setters synchronous and the engine's config-apply
+path unchanged. `BudgetManager` keeps a local usage *mirror* for the
+advisory readers (sub-agent slice sizing, the reflect engine's
+exhausted-check); enforcement never reads it.
 
 ### 3.1 Budgets
 

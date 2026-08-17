@@ -37,6 +37,7 @@ import httpx
 
 from crewlet._logging import get_logger
 from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
+from crewlet.db.deliveries import MemoryDeliveryDedupeStore
 from crewlet.notifications.handle import HandleRegistry
 from crewlet.notifications.protocol import (
     InboundNotification,
@@ -194,9 +195,7 @@ class SlackTransport:
         # Dedup ring: tracks recently processed (handle, channel, ts) to
         # avoid duplicate delivery when both message.channels and
         # app_mention are subscribed for the same Slack app.
-        self._recent_events: dict[str, float] = {}
-        self._dedup_ttl = 60.0
-        self._last_dedup_prune = 0.0
+        self._dedupe: Any = MemoryDeliveryDedupeStore()
         self.last_skip_reason: str = ""
 
     @property
@@ -231,6 +230,10 @@ class SlackTransport:
     def _get_app(self, handle: str) -> SlackAppConfig | None:
         """Get the Slack app config for an agent handle."""
         return self._apps.get(handle)
+
+    def set_delivery_dedupe(self, store: Any) -> None:
+        """Point delivery dedupe at the shared store (engine, with a DB)."""
+        self._dedupe = store
 
     def set_handle_registry(self, registry: HandleRegistry) -> None:
         """Set the handle registry for identity resolution."""
@@ -296,12 +299,9 @@ class SlackTransport:
             await self._typing_status.stop()
         except Exception as exc:
             logger.warning("typing_status_stop_failed", error=str(exc))
-        try:
-            if self._client is not None:
-                await self._client.aclose()
-                self._client = None
-        finally:
-            self._recent_events.clear()
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
         logger.info("transport_stopped")
 
     async def send(self, message: OutboundMessage) -> bool:
@@ -625,19 +625,16 @@ class SlackTransport:
         team = body.get("team_id", "")
 
         # --- Dedup ---
+        # Slack sends the same message twice by design when a bot has
+        # both `app_mention` and `message.channels` (the ring below is
+        # what collapses them), and retries on its own schedule. The key
+        # is source-specific; the STORE is shared, so a retry landing on
+        # a peer node is still recognised as a duplicate.
         dedup_key = f"{handle}:{channel}:{msg_ts}"
-        now = time.monotonic()
-        if dedup_key in self._recent_events:
+        if not await self._dedupe.claim("slack", dedup_key):
             logger.debug("dedup_hit", handle=handle, channel=channel, ts=msg_ts)
             self.last_skip_reason = "duplicate event (already processed)"
             return None
-        self._recent_events[dedup_key] = now
-        if now - self._last_dedup_prune >= self._dedup_ttl:
-            cutoff = now - self._dedup_ttl
-            self._recent_events = {
-                k: v for k, v in self._recent_events.items() if v > cutoff
-            }
-            self._last_dedup_prune = now
 
         # --- Thread routing ---
         follow_reason: ThreadFollowReason | None = None

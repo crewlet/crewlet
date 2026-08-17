@@ -213,6 +213,41 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     migrate_p.add_argument("--debug", action="store_true", help="Verbose logging")
 
+    # --- budgets ---
+    budgets_p = sub.add_parser(
+        "budgets",
+        help="Inspect or reset token-budget usage",
+    )
+    budgets_sub = budgets_p.add_subparsers(dest="budgets_command")
+
+    bud_show = budgets_sub.add_parser("show", help="Show token usage per scope")
+    bud_show.add_argument(
+        "config",
+        type=Path,
+        nargs="?",
+        default=Path("config.yaml"),
+        help="Path to the Tier A YAML config file (default: ./config.yaml)",
+    )
+    bud_show.add_argument("--debug", action="store_true", help="Verbose logging")
+
+    bud_reset = budgets_sub.add_parser(
+        "reset",
+        help="Zero token usage (usage is durable across restarts)",
+    )
+    bud_reset.add_argument(
+        "config",
+        type=Path,
+        nargs="?",
+        default=Path("config.yaml"),
+        help="Path to the Tier A YAML config file (default: ./config.yaml)",
+    )
+    bud_reset.add_argument(
+        "--scope",
+        default="",
+        help="Reset one scope ('org' or 'agent:<id>'); omit to reset every scope",
+    )
+    bud_reset.add_argument("--debug", action="store_true", help="Verbose logging")
+
     # --- schema ---
     schema_p = sub.add_parser(
         "schema",
@@ -1684,6 +1719,74 @@ async def _resolve_migration_vars(
     return {}
 
 
+async def _open_budget_store(args: argparse.Namespace) -> tuple[Any, Any]:
+    """Connect and return ``(db, PostgresBudgetUsageStore)``."""
+    from crewlet._env import load_env_file
+    from crewlet.config import load_bootstrap_config
+    from crewlet.db.budgets import PostgresBudgetUsageStore
+    from crewlet.db.client import Database
+
+    load_env_file(args.config)
+    bootstrap = load_bootstrap_config(args.config)
+    if not bootstrap.providers.database.dsn:
+        raise RuntimeError("providers.database.dsn is required in the Tier A config")
+    db = await Database.connect(bootstrap.providers.database.dsn)
+    return db, PostgresBudgetUsageStore(db)
+
+
+def cmd_budgets_show(args: argparse.Namespace) -> int:
+    """Print token usage per scope."""
+
+    async def _run() -> int:
+        db, _store = await _open_budget_store(args)
+        try:
+            rows = await db.execute(
+                "SELECT scope, used_tokens, updated_at FROM token_budget_usage "
+                "ORDER BY scope"
+            )
+        finally:
+            await db.close()
+        if not rows:
+            print("no token usage recorded", file=sys.stderr)
+            return 0
+        width = max(len(str(r["scope"])) for r in rows)
+        for row in rows:
+            print(f"{str(row['scope']):<{width}}  {int(row['used_tokens']):>12,}")
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_budgets_reset(args: argparse.Namespace) -> int:
+    """Zero token usage.
+
+    Usage is durable across restarts — it used to reset on every engine
+    start, which made a cap advisory in exactly the situation that
+    motivates one (an agent burning budget in a crash loop). Resetting is
+    therefore a deliberate act rather than a side effect of a restart.
+    """
+
+    async def _run() -> int:
+        db, store = await _open_budget_store(args)
+        try:
+            count = await store.reset(args.scope)
+        finally:
+            await db.close()
+        target = args.scope or "all scopes"
+        print(f"reset {count} scope(s) ({target})", file=sys.stderr)
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_schema(args: argparse.Namespace) -> int:
     """Print (or write) the JSON Schema for a config tier."""
     text = json.dumps(build_config_schema(args.tier), indent=2) + "\n"
@@ -1867,6 +1970,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+
+    if args.command == "budgets":
+        subcmd = getattr(args, "budgets_command", None)
+        if subcmd is None:
+            parser.print_help()
+            return 0
+        return {
+            "show": cmd_budgets_show,
+            "reset": cmd_budgets_reset,
+        }[subcmd](args)
 
     if args.command == "confluence":
         from crewlet.confluence.import_cli import (

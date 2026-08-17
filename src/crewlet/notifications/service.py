@@ -14,10 +14,10 @@ layer and parsed here via transport-specific logic.
 from __future__ import annotations
 
 import json
-import time
 from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
+from crewlet.db.rate_limits import MemoryRateLimitStore
 from crewlet.notifications.protocol import (
     InboundNotification,
     OutboundMessage,
@@ -74,6 +74,12 @@ class NotificationService:
         self._transports = transports
         self._handle_registry = handle_registry
         self._rate_limit = rate_limit
+        # Per-process by default; the engine hands over a shared store
+        # when a database is configured. A per-process valve multiplies
+        # the effective limit by replica count, and misses the pathology
+        # it exists for most completely — a notification loop bounces
+        # between nodes, so no single process sees enough of it to trip.
+        self._rate_store: Any = MemoryRateLimitStore()
         self._running = False
         self._subscribed = False
 
@@ -84,7 +90,6 @@ class NotificationService:
 
         # Rate limiting: max notifications per second per agent (0 = unlimited)
         # {agent_id: [timestamp, ...]}
-        self._rate_tracker: dict[str, list[float]] = {}
 
     def set_gitlab_config(self, gitlab_config: Any) -> None:
         """Wire (or clear) the GitLab integration config.
@@ -177,7 +182,6 @@ class NotificationService:
                     error=str(exc),
                 )
 
-        self._rate_tracker.clear()
         logger.info("notification_service_stopped")
 
     async def _handle_inbound(self, event: Event) -> None:
@@ -385,7 +389,7 @@ class NotificationService:
                 )
                 return
 
-        if not self._check_rate_limit(agent.id_str):
+        if not await self._check_rate_limit(agent.id_str):
             logger.warning(
                 "rate_limit_exceeded",
                 agent_id=agent.id_str,
@@ -774,27 +778,21 @@ class NotificationService:
                 error=str(exc),
             )
 
-    def _check_rate_limit(self, agent_id: str) -> bool:
-        """Check if the agent has exceeded the rate limit.
+    def set_rate_limit_store(self, store: Any) -> None:
+        """Point the valve at the shared counter (engine, with a DB)."""
+        self._rate_store = store
 
-        Uses a 1-second sliding window. Returns True if the
-        notification should be processed.
+    async def _check_rate_limit(self, agent_id: str) -> bool:
+        """Whether this agent is under its per-second notification cap.
+
+        Off by default, so the store is only consulted when an operator
+        has asked for the valve. Shared rather than per-process: the
+        limit is "N per agent per second" for the company, and a
+        notification loop is exactly the runaway that a per-process
+        counter cannot see.
         """
         if self._rate_limit <= 0:
             return True
-
-        now = time.monotonic()
-        window = 1.0
-
-        if agent_id not in self._rate_tracker:
-            self._rate_tracker[agent_id] = []
-
-        timestamps = self._rate_tracker[agent_id]
-        # Prune old entries
-        timestamps[:] = [t for t in timestamps if now - t < window]
-
-        if len(timestamps) >= self._rate_limit:
-            return False
-
-        timestamps.append(now)
-        return True
+        return await self._rate_store.allow(
+            f"notify:{agent_id}", limit=self._rate_limit, window_seconds=1.0
+        )

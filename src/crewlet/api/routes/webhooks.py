@@ -629,6 +629,28 @@ async def sandbox_otel(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+async def _claim_delivery(request: Request, source: str, key: str) -> bool:
+    """Claim an inbound delivery, or report it as already handled.
+
+    GitHub and GitLab had NO dedupe at all — not even the per-process
+    ring the other sources kept — so every retry, and every redelivery an
+    operator triggered from the provider UI, woke the agent again. Both
+    send a stable delivery id, which is exactly the identity this needs.
+
+    Fails open: a dedupe store that cannot be reached must not stop
+    inbound work. A duplicate is recoverable noise; a dropped delivery is
+    a message nobody ever answers.
+    """
+    store = getattr(request.app.state, "delivery_dedupe", None)
+    if store is None or not key:
+        return True
+    try:
+        return await store.claim(source, key)
+    except Exception:
+        logger.warning("delivery_dedupe_failed", source=source)
+        return True
+
+
 async def github_webhook(request: Request) -> JSONResponse:
     """POST /webhooks/github — publish to EventQueue."""
     body_raw = await request.body()
@@ -665,6 +687,11 @@ async def github_webhook(request: Request) -> JSONResponse:
         "webhook.github",
         attributes={"webhook.source": "github", "github.event": gh_event},
     ):
+        delivery_id = request.headers.get("x-github-delivery", "")
+        if not await _claim_delivery(request, "github", delivery_id):
+            logger.debug("github_delivery_duplicate", delivery_id=delivery_id)
+            return JSONResponse({"status": "duplicate"})
+
         logger.info("github_webhook_received", github_event=gh_event)
         github_summary = _build_github_summary(gh_event, body_data)
         await _log_event(
@@ -786,6 +813,16 @@ async def gitlab_webhook(request: Request) -> JSONResponse:
         "webhook.gitlab",
         attributes={"webhook.source": "gitlab", "gitlab.event": gl_event},
     ):
+        # GitLab 19.1+ Standard-Webhooks sends `webhook-id`; older
+        # deliveries carry `X-Gitlab-Event-UUID`. Either is a stable
+        # per-delivery identity.
+        delivery_id = request.headers.get(
+            "x-gitlab-event-uuid", ""
+        ) or request.headers.get("webhook-id", "")
+        if not await _claim_delivery(request, "gitlab", delivery_id):
+            logger.debug("gitlab_delivery_duplicate", delivery_id=delivery_id)
+            return JSONResponse({"status": "duplicate"})
+
         logger.info("gitlab_webhook_received", gitlab_event=gl_event)
         gitlab_summary = _build_gitlab_summary(gl_event, body_data)
         await _log_event(

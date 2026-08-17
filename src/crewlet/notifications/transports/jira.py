@@ -20,10 +20,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import time
 from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
+from crewlet.db.deliveries import MemoryDeliveryDedupeStore
 from crewlet.notifications.protocol import InboundNotification, OutboundMessage
 from crewlet.notifications.sources import parse_jira_webhook
 
@@ -52,9 +52,18 @@ class JiraTransport:
         self._jira_token = config.token
         self._http_client: Any | None = None  # httpx.AsyncClient
         self._handle_registry: HandleRegistry | None = None
-        self._processed_events: dict[str, float] = {}
-        self._dedup_ttl = 300.0  # 5 minutes
+        self._dedupe: Any = MemoryDeliveryDedupeStore()
         self._project_key_leads: dict[str, str] = {}
+
+    def set_delivery_dedupe(self, store: Any) -> None:
+        """Point delivery dedupe at the shared store.
+
+        Called by the engine when a database is configured. The default
+        is per-process, which is correct for a single node and silently
+        wrong for two — the same retry reaching a peer would be a fresh
+        delivery there.
+        """
+        self._dedupe = store
 
     def set_handle_registry(self, registry: HandleRegistry) -> None:
         """Set the handle registry for self-ignore checks."""
@@ -103,7 +112,6 @@ class JiraTransport:
 
     async def stop(self) -> None:
         """Stop and clean up resources."""
-        self._processed_events.clear()
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
@@ -160,11 +168,18 @@ class JiraTransport:
         )
         return hmac.compare_digest(expected, signature)
 
-    def _dedup_event(self, body: dict[str, Any]) -> bool:
+    async def _dedup_event(self, body: dict[str, Any]) -> bool:
         """Check if this webhook event was already processed.
 
         Returns True if the event is a duplicate (should be skipped).
         Uses timestamp + issue key + event type as dedup key.
+
+        The key derivation is source-specific and stays here; the STORE
+        is shared (see :mod:`crewlet.db.deliveries`), so a retry that
+        lands on a peer node is recognised as the duplicate it is. A
+        per-process ring could not do that — behind a load balancer the
+        same delivery was fresh to every node, so the agent woke twice
+        and could answer twice.
         """
         timestamp = str(body.get("timestamp", ""))
         issue = body.get("issue", {})
@@ -172,21 +187,10 @@ class JiraTransport:
         event_type = body.get("webhookEvent", "")
         dedup_key = f"{timestamp}:{issue_key}:{event_type}"
 
-        now = time.monotonic()
-
-        # Prune old entries
-        stale = [
-            k for k, t in self._processed_events.items() if now - t > self._dedup_ttl
-        ]
-        for k in stale:
-            del self._processed_events[k]
-
-        if dedup_key in self._processed_events:
+        claimed = await self._dedupe.claim("jira", dedup_key)
+        if not claimed:
             logger.debug("duplicate_jira_event_skipped", dedup_key=dedup_key)
-            return True
-
-        self._processed_events[dedup_key] = now
-        return False
+        return not claimed
 
     async def handle_webhook(
         self,
@@ -223,7 +227,7 @@ class JiraTransport:
                 return []
 
         # Deduplicate
-        if self._dedup_event(body):
+        if await self._dedup_event(body):
             return []
 
         # Identify trigger user — used to exclude them from the

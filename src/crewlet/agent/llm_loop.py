@@ -297,34 +297,21 @@ async def consume_budget(
 ) -> None:
     """Check and consume token budget. Raises ``RuntimeError`` on exhaustion.
 
-    Budget-type disambiguation (org vs. agent): if
-    ``BudgetManager.consume`` returns False, figure out which budget
-    would reject and publish a ``BudgetExhausted`` event naming it
-    before raising.
+    The spend names its own refusing scope: the check and the increment
+    happen in one statement against the shared counter, so which budget
+    said no comes back with the answer. Re-reading the caps afterwards to
+    work it out — as this did — is a read a peer's spend can invalidate
+    between the refusal and the report.
     """
     if budget_manager is None or total <= 0:
         return
-    budget_ok = await budget_manager.consume(agent.id_str, total)
-    if budget_ok:
+    outcome = await budget_manager.spend(agent.id_str, total)
+    if outcome.ok:
         return
 
-    org_b = budget_manager.org_budget
-    agent_budget = budget_manager.get_agent_budget(agent.id_str)
-    org_would_reject = (
-        org_b.max_tokens > 0 and org_b.used_tokens + total > org_b.max_tokens
-    )
-    if org_would_reject:
-        budget_type = "org"
-        used = org_b.used_tokens
-        limit = org_b.max_tokens
-    elif agent_budget is not None:
-        budget_type = "agent"
-        used = agent_budget.used_tokens
-        limit = agent_budget.max_tokens
-    else:
-        budget_type = "org"
-        used = org_b.used_tokens
-        limit = org_b.max_tokens
+    budget_type = outcome.rejected_scope or "org"
+    used = outcome.rejected_used
+    limit = outcome.rejected_limit
 
     logger.warning(
         "budget_exhausted",

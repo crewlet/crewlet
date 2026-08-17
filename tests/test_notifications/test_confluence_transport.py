@@ -61,13 +61,18 @@ async def test_send_not_supported() -> None:
     await transport.stop()
 
 
-async def test_stop_clears_dedup_state() -> None:
+async def test_dedupe_defaults_to_a_process_local_store() -> None:
+    """Correct for one process, and what the engine replaces with a
+    shared store the moment a database is configured — a retry landing on
+    a peer node would otherwise be a fresh delivery there."""
+    from crewlet.db.deliveries import MemoryDeliveryDedupeStore
+
     t = ConfluenceTransport(_CFG)
-    await t.start()
-    t._processed_events["some:key"] = 1.0
-    assert len(t._processed_events) == 1
-    await t.stop()
-    assert len(t._processed_events) == 0
+    assert isinstance(t._dedupe, MemoryDeliveryDedupeStore)
+
+    shared = MemoryDeliveryDedupeStore()
+    t.set_delivery_dedupe(shared)
+    assert t._dedupe is shared
 
 
 # --- Webhook signature verification ---
@@ -102,25 +107,25 @@ def test_verify_webhook_missing_header() -> None:
 # --- Event deduplication ---
 
 
-def test_dedup_first_event_not_duplicate() -> None:
+async def test_dedup_first_event_not_duplicate() -> None:
     t = ConfluenceTransport(_CFG)
     body = {"timestamp": 123, "page": {"id": "456"}, "event": "page_updated"}
-    assert not t._dedup_event(body)
+    assert not await t._dedup_event(body)
 
 
-def test_dedup_same_event_is_duplicate() -> None:
+async def test_dedup_same_event_is_duplicate() -> None:
     t = ConfluenceTransport(_CFG)
     body = {"timestamp": 123, "page": {"id": "456"}, "event": "page_updated"}
-    assert not t._dedup_event(body)
-    assert t._dedup_event(body)
+    assert not await t._dedup_event(body)
+    assert await t._dedup_event(body)
 
 
-def test_dedup_different_events_not_duplicate() -> None:
+async def test_dedup_different_events_not_duplicate() -> None:
     t = ConfluenceTransport(_CFG)
     body1 = {"timestamp": 123, "page": {"id": "456"}, "event": "page_updated"}
     body2 = {"timestamp": 789, "page": {"id": "012"}, "event": "page_created"}
-    assert not t._dedup_event(body1)
-    assert not t._dedup_event(body2)
+    assert not await t._dedup_event(body1)
+    assert not await t._dedup_event(body2)
 
 
 # --- parse_confluence_webhook ---
