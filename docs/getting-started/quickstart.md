@@ -381,6 +381,6 @@ each), then wire them in:
   --secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the full [Nimbus example](../../examples/) — a seven-seat company
-  with Plane + GitLab + Slack + sandbox wired end-to-end
+  with Plane + GitLab + Mattermost + sandbox wired end-to-end
 - Write [extensions](../guides/extensions.md) to hook into engine events
 - See the full [configuration reference](configuration.md) for all YAML options

@@ -11,10 +11,10 @@ it is how the two of you stay aligned.
 ## Channel — use A2A, keep it private
 
 Open the 1:1 over the **private A2A bus** with `a2a_ask`. A 1:1 is private,
-so it does **not** go on Slack or Plane — those are for things the whole team
+so it does **not** go in Mattermost or Plane — those are for things the whole team
 should see. (This is the one review-type conversation that belongs on A2A
 *because* it is private.) If your manager is a **human teammate**, they are
-not on the A2A bus: reach them in a Slack DM / thread instead, leave the full
+not on the A2A bus: reach them in a Mattermost DM / thread instead, leave the full
 context in your message, and end your turn — they reply asynchronously.
 
 Keep it tight: aim to **converge in about four exchanges**, then close the

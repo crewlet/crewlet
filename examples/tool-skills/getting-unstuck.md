@@ -2,7 +2,7 @@
 key: skill:getting_unstuck
 trigger:
   any_of:
-    - tool: slack_conversations_add_message
+    - tool: mattermost_post_message
     - mcp_server: plane
     - tool: a2a_ask
 phases: [plan, review]
@@ -32,7 +32,7 @@ Hand off on the surface where the problem already lives. The audit trail belongs
 | Where the problem lives | Where to hand off | How |
 |---|---|---|
 | Plane work item | Comment on the work item | Plane comment tool + @-mention your manager via the `platform_mentions` skill |
-| Slack thread | Reply in the thread | `slack_conversations_add_message` + `<@manager_slack_id>` |
+| Mattermost thread | Reply in the thread | `mattermost_post_message` with `root_id` set to the thread root + `@manager-username` |
 | Plane page review | Comment on the related work item | Plane comment tool + mention markup (Plane pages have no comments) |
 | Merge request | Comment on the MR / request review | Your code-host MCP comment tool + mention |
 | Cross-team coordination | Their team's channel | See `channel-discovery` skill |
@@ -52,7 +52,7 @@ A handoff message must include all four:
 # Anti-patterns
 
 - ❌ Asking for help without saying what you tried.
-- ❌ Asking the same person on multiple surfaces (Slack DM + work-item comment) — pick one.
+- ❌ Asking the same person on multiple surfaces (Mattermost DM + work-item comment) — pick one.
 - ❌ Pinging the team channel for a question only one person can answer — DM that person.
 - ❌ Using A2A for a complex / strategic question — the conversation disappears from any human surface.
 - ❌ Reaching for a colleague because you don't want to think harder.  Re-plan first.

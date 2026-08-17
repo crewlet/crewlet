@@ -251,9 +251,9 @@ scheduling:
 
 
 # Inbound / notification integrations — the non-tool side (engine/service
-# accounts for subscriber lookups + webhook routing, the Slack transport
-# marker, the GitLab and Plane webhook + provisioning config, outbound
-# transports).  The Plane/Slack/GitLab MCP *tool* servers are the
+# accounts for subscriber lookups + webhook routing, the Mattermost
+# websocket fleet, the GitLab and Plane webhook + provisioning config,
+# outbound transports).  The Plane/Mattermost/GitLab MCP *tool* servers are the
 # ``mcp_servers`` entries below.  This block is the inbound mirror of
 # ``mcp_servers`` (outbound tool actions).
 integrations:
@@ -283,55 +283,52 @@ integrations:
       projects: [LEAD, ENG, PROD, TS]
       token_expiry_days: 364
 
-  # Enable the outbound Slack transport.  Per-agent Slack app credentials
-  # live on ``role.integrations.slack`` below; the Slack MCP *tool* server
-  # is the ``slack`` entry under ``mcp_servers``.  The per-agent apps (and
-  # every ${SLACK_*} secret referenced below) can be created automatically:
-  # ``crewlet slack provision examples/nimbus.company.yaml --base-url
-  # https://your-server.com`` — see docs/integrations/slack.md.
+  # Chat.  Nimbus is a self-hosted stack — its tracker is Plane and its
+  # code host is GitLab — so its chat is Mattermost, running next to them
+  # in this repo's docker-compose.  Slack is equally supported and the
+  # config shape is nearly identical; see docs/integrations/slack.md to
+  # run this org on Slack instead.
   #
-  # ``typing_status`` drives the "<agent> is thinking…" working indicator an
-  # agent shows in a Slack thread while it reasons, cleared when it replies
-  # or decides to stay silent.  ``addressed`` (the default) shows it only
-  # when someone is actually waiting on THAT agent — a DM, a direct
-  # @mention, or a thread it already follows — which is what keeps a shared
-  # channel from lighting up one indicator per bot on every message.
-  # ``always`` covers every Slack-triggered turn; ``off`` disables it.
+  # Enabling this turns on BOTH directions: the outbound transport, and
+  # the inbound websocket fleet that holds one connection per agent seat.
+  # That is the structural difference from every other integration here —
+  # Mattermost has no usable inbound webhook, so nothing has to reach the
+  # engine.  This org runs behind NAT with no tunnel and no public URL.
   #
-  # ``status_phrases`` is the wording.  Each phase draws ONE line from its
-  # pool and holds it for that phase, so the indicator tracks the turn
-  # (plan → execute → review) instead of showing one generic label for
-  # minutes.  These replace the engine's Crewlet-branded built-ins with
-  # Nimbus's own; any phase left out keeps its built-in pool.
+  # Per-agent bot tokens live on ``role.integrations.mattermost`` below;
+  # the Mattermost MCP *tool* server is the ``mattermost`` entry under
+  # ``mcp_servers``.  The bot accounts and every ${MATTERMOST_TOKEN_*}
+  # secret referenced below are created automatically, with no OAuth click
+  # anywhere:
   #
-  # Keep every line generic to the PHASE.  The pick is arbitrary — nothing
-  # checks what the agent is actually doing — so a line naming real work
-  # ("is checking Plane...", "is reading the handbook...") claims something
-  # untrue most of the time it shows, and a reader who catches it stops
-  # trusting the indicator at all.
-  slack:
+  #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
+  #   crewlet mattermost provision examples/nimbus.company.yaml
+  #
+  # See docs/integrations/mattermost.md.
+  #
+  # ``typing_status`` drives the working indicator an agent shows while it
+  # reasons about a message, cleared when it replies or decides to stay
+  # silent.  ``addressed`` shows it only when someone is actually waiting
+  # on THAT agent — a DM, a direct @mention, or a thread it already
+  # follows — which is what keeps a shared channel from lighting up one
+  # indicator per bot on every message.  ``always`` covers every
+  # Mattermost-triggered turn; ``off`` (the default) disables it.
+  #
+  # There is deliberately no ``status_phrases`` here, unlike the Slack
+  # block this replaced: Mattermost renders a fixed client-side "is
+  # typing…" and has no API for the text, so any wording the engine
+  # supplied would never be shown.  The setting exists only under
+  # ``integrations.slack``.
+  mattermost:
+    enabled: true
+    url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
+    team: nimbus
     typing_status: addressed
-    status_phrases:
-      onboarding:
-        - "is getting nimbused in..."
-        - "is getting up to speed..."
-        - "is settling in..."
-        - "is finding its feet..."
-      plan:
-        - "is nimbusing..."
-        - "is thinking..."
-        - "is scheming..."
-        - "is mulling it over..."
-      execute:
-        - "is nimbusing it..."
-        - "is on the case..."
-        - "is cracking on..."
-        - "is making things happen..."
-      review:
-        - "is re-nimbusing..."
-        - "is double-checking..."
-        - "is marking its own homework..."
-        - "is sanity-checking..."
+    # Read ONLY by ``crewlet mattermost provision``; the engine ignores it.
+    provisioning:
+      username_prefix: ""          # handles are already agent-*, so a prefix would double it
+      channels: [town-square, engineering, product]
+      display_name_suffix: " (AI)"
 
   # GitLab on gitlab.com.  ``url`` is required; ``signing_secret`` is the
   # gitlab.com default (every gitlab.com hook is ≥ 19.1, so it signs with
@@ -380,7 +377,7 @@ integrations:
 # identity below, which is for webhook routing + writes, not reads.
 # See docs/concepts/knowledge-system.md.
 
-# All tool MCP servers live here.  Plane, Slack, and GitLab are
+# All tool MCP servers live here.  Plane, Mattermost, and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance
 # with credentials from ``role.mcp_env`` env vars (the plane server is the
 # official plane-mcp-server, keyed on PLANE_API_KEY; the gitlab server is
@@ -401,14 +398,19 @@ mcp_servers:
     env:
       PLANE_BASE_URL: "${PLANE_URL}"
       PLANE_WORKSPACE_SLUG: "nimbus"
-  - name: slack                              # per-agent token from role.mcp_env.slack
+  - name: mattermost                         # per-agent token from role.mcp_env.mattermost
+    # How an agent SENDS. The websocket fleet is inbound-only, so without
+    # this an agent receives a message, reasons about it, and then has no
+    # tool to answer with.  Pinned for the same reason as plane above: the
+    # enforced platform-mentions skill triggers on `mattermost_post_message`
+    # by name, and an unpinned rename would silently disarm it.
+    # MATTERMOST_TOKEN comes from each role's ``mcp_env.mattermost`` below.
     shared: false
-    command: npm
-    args: ["exec", "--yes", "--", "slack-mcp-server@latest", "--transport", "stdio"]
-    tool_prefix: "slack_"
+    command: uvx
+    args: ["mcp-server-mattermost==0.5.1"]
+    tool_prefix: "mattermost_"
     env:
-      SLACK_MCP_ADD_MESSAGE_TOOL: "true"
-      SLACK_MCP_ENABLED_TOOLS: "conversations_history,conversations_replies,conversations_add_message,reactions_add,reactions_remove,channels_list,usergroups_list,usergroups_me,usergroups_create,usergroups_update,usergroups_users_update,users_search"
+      MATTERMOST_URL: "${MATTERMOST_URL}"
   - name: gitlab                             # official glab CLI MCP server; per-agent token via role.mcp_env.gitlab
     # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
     # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
@@ -432,8 +434,8 @@ mcp_servers:
 # Root-level seats — above all units.  The founder is a HUMAN seat at
 # the top of the chart: agents know who she is (identity prompts say
 # "Reports to: Jane Founder (human)" for the CEO), the Agent CEO
-# escalates to her via its own Slack/Plane tools with an @-mention, and
-# her Plane/Slack/GitLab activity is attributed to her by name in agent
+# escalates to her via its own Mattermost/Plane tools with an @-mention,
+# and her Plane/Mattermost/GitLab activity is attributed to her by name in agent
 # prompts.  She manages only the top agent — lead inheritance handles
 # the rest of the tree.  The ``contact`` IDs are how agents mention and
 # reach her; the engine never messages her as itself.
@@ -448,7 +450,10 @@ roles:
       - "Unblock anything the Agent CEO escalates"
     manages: ["Agent CEO"]
     contact:
-      slack_user_id: U0FOUNDER
+      # Mattermost identifies people by username, not an opaque ID — this
+      # is the account you sign in as.  `founder` is what
+      # scripts/mattermost-dev-bootstrap.sh creates.
+      mattermost_user_id: founder
       # The local bootstrap (scripts/plane-dev-bootstrap.sh) writes this
       # var into .env.plane; against another instance, copy the UUID from
       # the provision report's member table.  An unset ref is a
@@ -514,12 +519,11 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_CEO}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_CEO}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CEO}"
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_CEO}"
-                signing_secret: "${SLACK_SIGNING_SECRET_CEO}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_CEO}"
             # Role-scoped recurring work: a weekday-morning Plane review.
             # Fires a TaskAssigned to the CEO's own inbox on the cron.
             schedules:
@@ -571,12 +575,11 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_CTO}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_CTO}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CTO}"
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_CTO}"
-                signing_secret: "${SLACK_SIGNING_SECRET_CTO}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_CTO}"
 
   - name: Product
     type: department
@@ -625,12 +628,11 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_PM}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_PM}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_PM}"
-                signing_secret: "${SLACK_SIGNING_SECRET_PM}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_PM}"
 
       - name: Developer Relations
         type: team
@@ -680,15 +682,14 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_DEVREL}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_DEVREL}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_DEVREL}"
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_DEVREL}"
                 GITLAB_HOST: gitlab.com
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_DEVREL}"
-                signing_secret: "${SLACK_SIGNING_SECRET_DEVREL}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_DEVREL}"
 
   - name: Engineering
     type: department
@@ -709,7 +710,7 @@ units:
           - name: daily-standup
             cron: "30 9 * * 1-5"
             task: >
-              Post your standup to the team Slack channel: what you shipped yesterday,
+              Post your standup to the team chat channel: what you shipped yesterday,
               what you're working on today, and any blockers. @-mention the CTO if
               you're blocked on a decision.
           # ``lead``: a single gather-and-summarize report, run by the unit's
@@ -725,14 +726,14 @@ units:
           # ``each`` again, but for coaching: every direct member runs its own
           # weekly 1:1 with its manager (the CTO).  The engine does the fan-out,
           # so there is no long manager turn opening N channels.  A 1:1 is
-          # private, so it runs over the A2A bus (a2a_ask) — NOT Slack/Plane; the
+          # private, so it runs over the A2A bus (a2a_ask) — NOT chat/Plane; the
           # post-turn learning loop persists the takeaways automatically.  See
           # the "Manager 1:1" playbook page (LEAD project) and docs/concepts/one-on-ones.md.
           - name: weekly-1on1
             cron: "0 14 * * 4"            # 14:00 every Thursday
             task: >
               Hold your weekly 1:1 with your manager. Open it over the private A2A
-              bus with a2a_ask (a 1:1 is private — do NOT use Slack or Plane): use
+              bus with a2a_ask (a 1:1 is private — do NOT use chat or Plane): use
               query_episodes to recall what you shipped and where you got stuck,
               walk your manager through it, ask for feedback, and note the action
               items you agree on. Follow the "Manager 1:1" playbook page (LEAD project).
@@ -780,8 +781,8 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_SWE}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_SWE}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
                 GITLAB_HOST: gitlab.com
@@ -796,7 +797,7 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [plane, slack, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [plane, mattermost, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -833,9 +834,8 @@ units:
                     exact version each repo's go.mod pins. Run `go build ./...`
                     and `go test ./...` before pushing.
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_SWE}"
-                signing_secret: "${SLACK_SIGNING_SECRET_SWE}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_SWE}"
 
           - name: Agent Frontend SWE
             goal: "Build and evolve the Nimbus Console and the marketing website — deliver the AI-services management UI (models, fine-tuning, datasets, jobs) the README promises today, and keep the console in lock-step with new nimbuscore endpoints"
@@ -872,8 +872,8 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_FE}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_FE}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"
                 GITLAB_HOST: gitlab.com
@@ -885,7 +885,7 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [plane, slack, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [plane, mattermost, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -911,9 +911,8 @@ units:
                     lint and test scripts before pushing; every new page needs
                     empty/loading/error states.
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_FE}"
-                signing_secret: "${SLACK_SIGNING_SECRET_FE}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_FE}"
 
           - name: Agent AI Systems Engineer
             goal: "Design and build the Phase-2 Nimbus AI framework — a Python-first, open-source framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving for AI/ML teams.  Own the framework's runtime, SDK, CLI, and cluster-side integration with nimbuscore"
@@ -953,8 +952,8 @@ units:
             mcp_env:
               plane:
                 PLANE_API_KEY: "${PLANE_TOKEN_AI}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_AI}"
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"
                 GITLAB_HOST: gitlab.com
@@ -967,7 +966,7 @@ units:
             sandbox:
               enabled: true
               mcp:                                # MCP surface inside the sandbox
-                servers: [plane, slack, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
+                servers: [plane, mattermost, tavily]   # the coding agent reads work items via Plane in-box; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every
                 # tool the listed servers expose (there is no per-tool allowlist:
                 # OpenCode has none, and claude-code runs bypassPermissions).
@@ -987,9 +986,8 @@ units:
                     runs the suite; run it before pushing. Ship a runnable
                     examples/ script with every public-surface change.
             integrations:
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_AI}"
-                signing_secret: "${SLACK_SIGNING_SECRET_AI}"
+              mattermost:
+                bot_token: "${MATTERMOST_TOKEN_AI}"
             # Role-scoped recurring work owned by this engineer — a role
             # schedule (not a unit schedule) is the right home for a task
             # pinned to one person.
