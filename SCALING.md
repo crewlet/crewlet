@@ -623,6 +623,58 @@ the silent webhook drop, and the rotation holes in today's topology.
 
 ---
 
+## Open questions before implementation
+
+The direction above is decided; these are the parts a paper design cannot
+settle, and each needs an answer before (or as part of) its migration phase.
+
+1. **Empirical Pulsar validation.** The takeover windows rest on asserted
+   broker behaviors, not measurements: session-death timing for a hard-killed
+   node, cursor continuity when the sole member of a Shared group detaches and
+   a new owner attaches, prefetch-hostage size (the client default
+   `receiver_queue_size=1000` is never set explicitly anywhere in the repo),
+   and Reader semantics on the config topic. Build a broker-integration
+   harness and measure before freezing the lease TTL and heartbeat constants.
+2. **Mixed-version fleets.** The design assumes a homogeneous protocol, but
+   upgrading the fleet itself puts a vN and a vN+1 node on the same lease
+   table and topics mid-rolling-deploy. Introducing the turn-claim or changing
+   the lease schema needs a compatibility story — a fleet-minimum-version gate
+   in the lease table (a node refuses to claim seats while an older-protocol
+   node holds any), or strictly additive schemas with behavior keyed on the
+   fleet minimum. Currently undesigned; the largest unexamined surface.
+3. **Test-backend parity.** `MemoryEventQueue`, the memory A2A bus, and the
+   sandbox fakes must model the new semantics (owner-only subscription,
+   per-topic pause, leases, claims) or the suite passes while only the
+   Pulsar/PG paths carry the real behavior. The silent
+   `MemoryPendingSandboxRunStore` fallback the audit found is the existing
+   shape of this trap — the memory backends must be semantic twins, and
+   no-PG/no-broker modes must refuse multi-node operation loudly.
+4. **Satellites × sandbox.** The satellite story is reviewed for inbox, A2A,
+   and config — not for the sandbox path. The waiter singleton runs on some
+   other node and must reach the sandbox provider (E2B cloud: fine;
+   self-hosted E2B inside the satellite's network zone: not), and
+   `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must point at ingress nodes, never the
+   satellite. Decide whether sandbox-enabled seats may be satellite-pinned, or
+   whether the waiter duty follows such seats.
+5. **The extension contract.** `ExtensionManager` runs `on_engine_start` on
+   every process, and extensions are public API. An extension must be able to
+   declare `scope: node | company`; company-scoped extensions run behind a
+   singleton lease, and the diff/unregister path must reach every node, not
+   only the one that received the activation.
+6. **Fleet observability.** `/health`, the drain pill, and "watch the
+   in-flight count converge" are per-node stories; behind a load balancer the
+   operator needs a fleet view — per-node in-flight, the lease table, and
+   divergence signals (a node whose applied epoch lags). The lease table is
+   the natural data source; the view is undesigned.
+7. **Second-order review.** The corrections in this doc were authored by the
+   review pass that found the flaws and are one review deep. Before
+   implementation, re-attack at minimum: the fleet-applied config gate's
+   partial-apply semantics (a revision that succeeds on some nodes and fails
+   on others), and the republish-deferral × coalescing × turn-claim
+   interaction inside an ownership-handoff window.
+
+---
+
 ## Pre-existing bugs surfaced by this audit
 
 These are **not** scaling bugs. They are live in the currently documented
