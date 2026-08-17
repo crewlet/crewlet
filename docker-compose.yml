@@ -285,6 +285,96 @@ services:
   # docs/integrations/gitlab.md § MCP tool server.)
 
   # ---------------------------------------------------------------------------
+  # Mattermost — self-hosted chat, for the Mattermost integration.
+  #
+  # Profile-gated like gitlab / plane:
+  #     docker compose --profile mattermost up -d --wait
+  #     scripts/mattermost-dev-bootstrap.sh
+  # The bootstrap creates the admin, the team and its channels, mints the
+  # system-admin token, and (with COMPANY= set) provisions the agent bots.
+  # Walkthrough: docs/integrations/mattermost.md § Local testing.
+  #
+  # NOTE the missing `extra_hosts: host.docker.internal` that gitlab and
+  # plane both need. Those two POST webhooks INTO the engine, so they must
+  # be able to resolve the host; Mattermost never calls the engine at all —
+  # the engine opens an outbound websocket per agent seat, because
+  # Mattermost has no usable inbound webhook (see the integration doc).
+  # That also means this stack works unchanged behind NAT, with no tunnel.
+  #
+  # Two settings below are load-bearing rather than convenience: both
+  # default to FALSE upstream, and `crewlet mattermost provision` cannot
+  # do its job without either — it creates bot accounts and mints their
+  # personal access tokens. Enabling them here is what makes the paved
+  # path one command instead of a System Console detour.
+  #
+  # RAM: ~500 MB for the app plus its postgres. No mem_limit, for the same
+  # reason the plane services have none — this is a small Go binary, not a
+  # multi-GB JVM/Rails process that can swap the host (pulsar / gitlab are
+  # the two that can, and they are the two that are capped).
+  # ---------------------------------------------------------------------------
+  mattermost:
+    image: mattermost/mattermost-team-edition:latest
+    profiles: [mattermost]
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: >-
+        postgres://mmuser:mmuser@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
+      # The address BROWSERS use to reach Mattermost, and what the server
+      # builds its own links from. Keep it in lock-step with the company
+      # config's ${MATTERMOST_URL} — same rule as PLANE_PUBLIC_URL above.
+      MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_PUBLIC_URL:-http://localhost:${MATTERMOST_LISTEN_PORT:-8065}}
+      # Required by `crewlet mattermost provision` (see the note above).
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      # Open the first-run signup so the bootstrap script can create the
+      # admin over the API. The FIRST user on a fresh install is promoted
+      # to system admin automatically, which is the account the
+      # provisioner authenticates as.
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
+    ports:
+      - "${MATTERMOST_LISTEN_PORT:-8065}:8065"
+    volumes:
+      - mattermost-config:/mattermost/config
+      - mattermost-data:/mattermost/data
+      - mattermost-logs:/mattermost/logs
+      - mattermost-plugins:/mattermost/plugins
+      - mattermost-client-plugins:/mattermost/client/plugins
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # /api/v4/system/ping is unauthenticated and answers only once the
+      # server has migrated and is serving.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8065/api/v4/system/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  mattermost-db:
+    # The MAJOR is pinned deliberately, like plane-db: an existing
+    # mattermost-pgdata volume will not open under a newer major without a
+    # pg_upgrade or dump/restore, and there is no feature here that wants
+    # one. Patches still arrive on `docker compose pull` via the floating
+    # minor tag.
+    image: postgres:15-alpine
+    profiles: [mattermost]
+    environment:
+      POSTGRES_USER: mmuser
+      POSTGRES_PASSWORD: mmuser
+      POSTGRES_DB: mattermost
+    volumes:
+      - mattermost-pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
   # Plane — self-hosted crewlet/plane fork for the Plane integration.
   #
   # Profile-gated like gitlab (one compose file for everything):
@@ -622,6 +712,12 @@ volumes:
   gitlab-config:
   gitlab-logs:
   gitlab-data:
+  mattermost-config:
+  mattermost-data:
+  mattermost-logs:
+  mattermost-plugins:
+  mattermost-client-plugins:
+  mattermost-pgdata:
   plane-pgdata:
   plane-redisdata:
   plane-uploads:

@@ -86,16 +86,24 @@ needed). The CLI works too, e.g.:
 docker compose exec pulsar bin/pulsar-admin topics list public/default
 ```
 
-Two optional **profiles** in the same compose file bring up local instances of
-the bigger integrations for end-to-end testing (neither starts by default):
+Optional **profiles** in the same compose file bring up local instances of
+the bigger integrations for end-to-end testing (none start by default):
 
 ```bash
-docker compose --profile plane up -d    # self-hosted Plane fork (tracker + knowledge base)
-docker compose --profile gitlab up -d   # local GitLab (code host)
+docker compose --profile plane up -d              # self-hosted Plane fork (tracker + knowledge base)
+docker compose --profile gitlab up -d             # local GitLab (code host)
+docker compose --profile mattermost up -d --wait  # self-hosted Mattermost (chat)
 ```
 
-See [Plane § Local testing](../integrations/plane.md#local-testing) and
-[GitLab § Local testing](../integrations/gitlab.md#local-testing).
+Each pairs with a bootstrap script under `scripts/` that seeds the instance
+and provisions the agent seats. See
+[Plane § Local testing](../integrations/plane.md#local-testing),
+[GitLab § Local testing](../integrations/gitlab.md#local-testing) and
+[Mattermost § Local testing](../integrations/mattermost.md#local-testing).
+
+(`--wait` is safe for the Mattermost profile — every service there has a
+healthcheck. Do not add it to the Plane profile: its migrator is a one-shot
+job whose clean exit `--wait` treats as a failure.)
 
 ### Bring your own infrastructure
 

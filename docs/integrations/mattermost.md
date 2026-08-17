@@ -368,34 +368,60 @@ roles:
 
 ---
 
-## Running Mattermost locally
+## Local testing
 
-The official image, with the PostgreSQL it needs:
+Mattermost ships in this repo's `docker-compose.yml` behind a profile, like
+GitLab and Plane — one compose file for everything, and `docker compose up`
+leaves it out:
 
-```yaml
-services:
-  mattermost:
-    image: mattermost/mattermost-team-edition:latest
-    ports: ["8065:8065"]
-    environment:
-      MM_SQLSETTINGS_DRIVERNAME: postgres
-      MM_SQLSETTINGS_DATASOURCE: >-
-        postgres://mmuser:mmuser@mattermost-db:5432/mattermost?sslmode=disable
-      MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
-    depends_on: [mattermost-db]
-
-  mattermost-db:
-    image: postgres:17
-    environment:
-      POSTGRES_USER: mmuser
-      POSTGRES_PASSWORD: mmuser
-      POSTGRES_DB: mattermost
+```bash
+docker compose --profile mattermost up -d --wait
+scripts/mattermost-dev-bootstrap.sh
 ```
 
-Then, once through the setup wizard: create the team, enable **bot account
-creation** and **personal access tokens** in
-System Console → Integrations, mint yourself an admin token, and run the
-provisioner. Point `integrations.mattermost.url` at `http://localhost:8065`.
+The bootstrap waits for the server, creates the admin account (the **first**
+user on a fresh install is auto-promoted to system admin — that is the
+account the provisioner authenticates as), mints its personal access token,
+creates the `nimbus` team and its channels, and writes `MATTERMOST_URL` +
+`MATTERMOST_ADMIN_TOKEN` into `.env`. Every step is idempotent, so re-run it
+freely.
+
+Provision the agent bots in the same run by pointing it at a company config:
+
+```bash
+COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
+```
+
+Then point the config at the instance and start the engine:
+
+```yaml
+integrations:
+  mattermost:
+    enabled: true
+    url: "${MATTERMOST_URL}"     # written by the bootstrap
+    team: nimbus
+```
+
+Two settings the compose service sets are load-bearing rather than
+convenience — both default to `false` upstream, and the provisioner cannot
+create bot accounts or mint their tokens without either:
+`ServiceSettings.EnableBotAccountCreation` and
+`ServiceSettings.EnableUserAccessTokens`. If you point Crewlet at a
+Mattermost you host yourself, enable both under
+**System Console → Integrations → Integration Management**.
+
+Unlike the GitLab and Plane loops, **nothing has to reach the engine**. Those
+two POST webhooks into it, so they need `host.docker.internal` and a
+reachable address; Mattermost never calls the engine at all. The whole loop
+works behind NAT with no tunnel.
+
+On a remote host, set `MATTERMOST_PUBLIC_URL` (both the compose file and the
+bootstrap read it) so the server's own links carry that address:
+
+```bash
+MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 docker compose --profile mattermost up -d --wait
+MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 scripts/mattermost-dev-bootstrap.sh
+```
 
 ---
 

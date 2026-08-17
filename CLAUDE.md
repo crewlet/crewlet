@@ -663,9 +663,10 @@ skills/               # FOUNDER-facing authoring skills for an AI
                       #   own agents load at runtime. See
                       #   docs/getting-started/ai-authoring.md
 scripts/              # Repository tooling — NOT shipped in the wheel
-                      #   (the sdist carries it). gitlab-dev-bootstrap.sh
-                      #   + plane-dev-bootstrap.sh stand up the local
-                      #   integration loops; release_metadata.py is the
+                      #   (the sdist carries it). gitlab-dev-bootstrap.sh,
+                      #   plane-dev-bootstrap.sh + mattermost-dev-bootstrap.sh
+                      #   stand up the local integration loops (each pairs
+                      #   with a profile-gated service in docker-compose.yml); release_metadata.py is the
                       #   version/tag logic the release
                       #   workflow runs on the tag, kept here rather than
                       #   inline in the YAML so tests/test_packaging can
