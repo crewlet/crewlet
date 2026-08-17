@@ -240,9 +240,10 @@ async def _run(args: Any, target: _ProvisionTarget, org: Any, raw: Any) -> int:
                     else "would mint"
                 )
                 username = (
-                    identity.get("username") or f"{_username_prefix(raw)}{role.handle}"
+                    identity.get("username")
+                    or f"{_username_prefix(raw)}{role.get_handle()}"
                 )
-                print(f"  {role.handle:<18} {username:<22} {state}: {token_vars}")
+                print(f"  {role.get_handle():<18} {username:<22} {state}: {token_vars}")
             return 0
 
         handles = (

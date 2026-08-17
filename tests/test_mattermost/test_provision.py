@@ -243,6 +243,54 @@ class TestReconcile:
         assert sink.flushed
 
     @pytest.mark.asyncio
+    async def test_auto_derived_handles_name_the_bots(self):
+        """A role that does not pin `handle:` still gets its derived one.
+
+        `Role.handle` is EMPTY unless the config sets it explicitly;
+        `get_handle()` is what derives `Agent PM` → `agent-pm`. Reading
+        the field instead named every bot `{prefix}` — so the first seat
+        created `agent-` and the second collided on the duplicate
+        username. Every other fixture here pins a handle, which is
+        exactly why that shipped unnoticed.
+        """
+        cfg = CompanyConfig.model_validate(
+            {
+                "name": "Acme",
+                "roles": [
+                    # No `handle:` — derived from the name, like the
+                    # Nimbus example and most real configs.
+                    {
+                        "name": "Agent PM",
+                        "integrations": {"mattermost": {"bot_token": "${MM_TOKEN_PM}"}},
+                    },
+                    {
+                        "name": "Agent SWE",
+                        "integrations": {
+                            "mattermost": {"bot_token": "${MM_TOKEN_SWE}"}
+                        },
+                    },
+                ],
+            }
+        )
+        client = FakeClient()
+        report = await provision(
+            client,
+            config_to_organization(cfg),
+            team="nimbus",
+            sink=FakeSink(),
+            username_prefix="agent-",
+        )
+        assert report.ok
+        assert [s.handle for s in report.seats] == ["agent-pm", "agent-swe"]
+        assert [b["username"] for b in client.created_bots] == [
+            "agent-agent-pm",
+            "agent-agent-swe",
+        ]
+        # ...and crucially, two DISTINCT usernames — the collision the
+        # raw-field read produced.
+        assert len({b["username"] for b in client.created_bots}) == 2
+
+    @pytest.mark.asyncio
     async def test_username_prefix_is_applied(self):
         client = FakeClient()
         await provision(

@@ -289,7 +289,11 @@ async def provision(
     existing_bots = {str(b.get("username") or ""): b for b in await client.list_bots()}
 
     for role in org.all_roles():
-        handle = role.handle
+        # get_handle(), NOT .handle: the raw field is EMPTY unless the
+        # config pins one explicitly, and the handle is what names the bot
+        # account. Reading the field would create every seat as
+        # "{prefix}" and collide on the second one.
+        handle = role.get_handle()
         if handles is not None and handle not in handles:
             continue
         if getattr(role, "is_human", False):
