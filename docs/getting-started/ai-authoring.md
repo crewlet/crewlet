@@ -80,7 +80,7 @@ cp .env.example .env && docker compose up -d      # Pulsar + PostgreSQL
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."                    # embeddings
-export SLACK_FOUNDER_USER_ID="U0FOUNDER"          # your Slack member ID
+export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
 ```
 
 ### 6. Run it
@@ -112,12 +112,13 @@ schedule once real work arrives.
 
 Now go back to the assistant:
 
-> Add Slack so the team can talk in channels and DM me.
+> Add Mattermost so the team can talk in channels and DM me.
 
 Pick your stack in [Choosing your stack](choosing-your-stack.md), create
-the accounts it names (the assistant writes config, it can't create a
-Slack app for you), then let it wire the config and re-validate. One
-integration per pass — a failure is then unambiguous.
+the accounts it names (the assistant writes config, it can't stand up a
+Mattermost server or create a Slack app for you), then let it wire the
+config and re-validate. One integration per pass — a failure is then
+unambiguous.
 
 Tier B is live-editable, so applying a change is
 `crewlet config import company.yaml --force`, no restart. Full worked
@@ -300,10 +301,11 @@ checkout, fetch it from
 
 ### What it can't do
 
-It writes config; it doesn't provision. Creating the Slack apps, the
-Plane workspace, the GitLab group, and the API keys is still your job —
-[Choosing your stack](choosing-your-stack.md) lists what you must create
-by hand for each. Once those exist,
+It writes config; it doesn't provision. Standing up the Mattermost server
+(or the Slack workspace), the Plane workspace, the GitLab group, and the
+API keys is still your job — [Choosing your stack](choosing-your-stack.md)
+lists what you must create by hand for each. Once those exist,
+[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
 [`crewlet plane provision`](../reference/cli.md#crewlet-plane-provision)
 and [`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision)
 mint the per-seat accounts and tokens into the `${VAR}` references the

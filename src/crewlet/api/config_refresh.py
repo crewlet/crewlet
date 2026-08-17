@@ -3,7 +3,8 @@ sync with the active ``company_config`` revision.
 
 The API process holds only serialised state (``app.state.org_data``,
 ``agent_roles``, ``tools_data``, ``github_webhook_secret``,
-``gitlab_signing_secret``, ``plane_webhook_secret``, ``forge_app_id``)
+``gitlab_signing_secret``, ``plane_webhook_secret``,
+``slack_signing_secrets``, ``forge_app_id``)
 and a cached ``configured`` flag.  None of it is
 refreshed automatically when a ``PUT /config`` writes a new
 revision — without this subscription the dashboard's ``/agents``
@@ -73,6 +74,51 @@ def _serialize_agent_roles(payload: dict[str, Any]) -> list[dict[str, Any]]:
         _scan_unit(u)
 
     return out
+
+
+def _slack_signing_secrets(payload: dict[str, Any]) -> dict[str, str]:
+    """``{handle: signing_secret}`` for every Slack-enabled agent seat.
+
+    Slack is the one inbound integration whose verification key is
+    **per-agent** (one Slack app per seat) rather than one org-wide
+    secret, which is why it needs a map here where GitHub / GitLab /
+    Plane each need a scalar.  Without it the API process — which can run
+    standalone, with no engine reference — has nothing to verify an
+    inbound Slack request against at the edge.
+
+    Handles are derived exactly as ``_serialize_agent_roles`` derives
+    them, so the map is keyed by the same handle the webhook URL path
+    carries.
+    """
+    from crewlet.config import _resolve_env_value
+    from crewlet.org.models import slugify
+
+    secrets: dict[str, str] = {}
+
+    def _emit(role: dict[str, Any]) -> None:
+        name = role.get("name", "")
+        if not name or role.get("kind") == "human":
+            return
+        identity = (role.get("integrations") or {}).get("slack") or {}
+        raw = identity.get("signing_secret") or ""
+        if not raw:
+            return
+        resolved = str(_resolve_env_value(raw))
+        if resolved:
+            secrets[role.get("handle") or slugify(name)] = resolved
+
+    def _scan_unit(unit: dict[str, Any]) -> None:
+        for role in unit.get("roles", []) or []:
+            _emit(role)
+        for child in unit.get("children", []) or []:
+            _scan_unit(child)
+
+    for role in payload.get("roles", []) or []:
+        _emit(role)
+    for unit in payload.get("units", []) or []:
+        _scan_unit(unit)
+
+    return secrets
 
 
 def _serialize_org_data(payload: dict[str, Any]) -> dict[str, Any]:
@@ -265,6 +311,7 @@ def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
     app.state.forge_app_id = str(_resolve_env_value(raw_forge))
     app.state.gitlab_signing_secret = str(_resolve_env_value(raw_gl_signing)) or None
     app.state.plane_webhook_secret = str(_resolve_env_value(raw_plane)) or None
+    app.state.slack_signing_secrets = _slack_signing_secrets(payload)
 
 
 async def subscribe_config_refresh(app: Any, store: Any, event_queue: Any) -> None:

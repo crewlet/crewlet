@@ -285,6 +285,154 @@ services:
   # docs/integrations/gitlab.md § MCP tool server.)
 
   # ---------------------------------------------------------------------------
+  # Mattermost — self-hosted chat, for the Mattermost integration.
+  #
+  # Profile-gated like gitlab / plane:
+  #     docker compose --profile mattermost up -d --wait
+  #     scripts/mattermost-dev-bootstrap.sh
+  # The bootstrap creates the admin, the team and its channels, mints the
+  # system-admin token, and (with COMPANY= set) provisions the agent bots.
+  # Walkthrough: docs/integrations/mattermost.md § Local testing.
+  #
+  # Shaped after upstream's own deployment compose
+  # (github.com/mattermost/docker) — same env var names, same volume mount
+  # points, same postgres major — with the divergences noted where they
+  # occur, so the two files can be diffed by anyone who knows that one.
+  #
+  # NOTE the missing `extra_hosts: host.docker.internal` that gitlab and
+  # plane both need. Those two POST webhooks INTO the engine, so they must
+  # be able to resolve the host; Mattermost never calls the engine at all —
+  # the engine opens an outbound websocket per agent seat, because
+  # Mattermost has no usable inbound webhook (see the integration doc).
+  # That also means this stack works unchanged behind NAT, with no tunnel.
+  #
+  # Three settings below are load-bearing rather than convenience. All
+  # three default to FALSE in the server's own config defaults
+  # (`model/config.go` SetDefaults), and the paved path needs each:
+  # `crewlet mattermost provision` creates bot accounts and mints their
+  # personal access tokens, and the bootstrap script creates the admin
+  # over the API. Setting them here is what makes the loop one command
+  # instead of a System Console detour.
+  #
+  # No mem_limit, for the same reason the plane services have none — this
+  # is a single Go binary, not a multi-GB JVM/Rails process that can swap
+  # the host (pulsar / gitlab are the two that can, and are the two capped).
+  # ---------------------------------------------------------------------------
+  mattermost:
+    # Team Edition, where upstream's env.example defaults to
+    # `mattermost-enterprise-edition` (unlicensed EE runs as Team Edition).
+    # Nothing this integration touches — bot accounts, personal access
+    # tokens, the websocket event API, threads — is an EE feature, so the
+    # smaller image is the honest choice. This is the OPPOSITE of the
+    # gitlab service above, which needs gitlab-EE precisely because a
+    # free-tier feature (service accounts) lives in EE-edition code.
+    #
+    # Floating tag, like every other service outside the `plane` profile;
+    # upstream pins an exact ESR (11.7.0 at time of writing) because it is
+    # a production deployment guide and this is a dev loop.
+    image: mattermost/mattermost-team-edition:latest
+    profiles: [mattermost]
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: >-
+        postgres://mmuser:mmuser@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
+      # The address BROWSERS use to reach Mattermost, and what the server
+      # builds its own links from. Keep it in lock-step with the company
+      # config's ${MATTERMOST_URL} — same rule as PLANE_PUBLIC_URL above.
+      MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_PUBLIC_URL:-http://localhost:${MATTERMOST_LISTEN_PORT:-8065}}
+      # Required by `crewlet mattermost provision` (see the note above).
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      # Opens first-run signup so the bootstrap can create the admin over
+      # the API. The FIRST user on a fresh install is promoted to system
+      # admin automatically — that is the account the provisioner uses.
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
+      # Required by the HEALTHCHECK below, which is the image's own and
+      # runs `mmctl ... --local` over a unix socket. Off by default, so
+      # without this the built-in check can never pass.
+      MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
+      # Mirrors upstream: the Bleve index directory is configured so the
+      # volume has a purpose, but indexing stays OFF until enabled in the
+      # System Console. Until then search runs against the database.
+      MM_BLEVESETTINGS_INDEXDIR: /mattermost/bleve-indexes
+    ports:
+      - "${MATTERMOST_LISTEN_PORT:-8065}:8065"
+    volumes:
+      - mattermost-config:/mattermost/config
+      - mattermost-data:/mattermost/data
+      - mattermost-logs:/mattermost/logs
+      - mattermost-plugins:/mattermost/plugins
+      - mattermost-client-plugins:/mattermost/client/plugins
+      - mattermost-bleve-indexes:/mattermost/bleve-indexes
+    depends_on:
+      mattermost-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # The image's OWN check (`HEALTHCHECK CMD mmctl system status
+      # --local`), restated here only to add a start_period — the built-in
+      # has none, so `up --wait` would fail during the first-boot
+      # migration. Same reason the gitlab service overrides its image's
+      # healthcheck above.
+      #
+      # It must be mmctl and not curl: the runtime stage of the image is
+      # `gcr.io/distroless/base-debian12`, which has no shell and no curl
+      # (curl exists only in the BUILDER stage), so a curl-based check
+      # could never run.
+      test: ["CMD", "/mattermost/bin/mmctl", "system", "status", "--local"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  # WHY NOT REUSE THE `postgres` SERVICE ABOVE? It is the same major (18)
+  # and would technically work, but three things make a separate instance
+  # the right call — the same conclusion plane-db reached:
+  #
+  #  1. It would silently do nothing for existing installs. Creating a
+  #     second database in that instance means an init script, and the
+  #     postgres image runs /docker-entrypoint-initdb.d ONLY against an
+  #     empty data directory. Anyone who has already run the quickstart
+  #     has a populated pg-data volume, so enabling this profile would
+  #     start a Mattermost pointed at a database nobody created.
+  #  2. It would couple two unrelated lifecycles. This profile is meant to
+  #     be disposable — `down -v` and re-bootstrap for a clean chat
+  #     instance. That same command against a shared volume would take
+  #     company_config, token_usage, agent_diary and the secret store with
+  #     it, which is exactly the loss the `postgres` comment warns about.
+  #  3. It would let Mattermost's supported-major matrix co-own the
+  #     engine's data volume. Today both want 18; the day they disagree,
+  #     the pinned half is the one holding every agent's memory.
+  #
+  # An idle postgres:18-alpine is tens of MB, so the sharing saves little
+  # and risks the one volume that is expensive to lose.
+  mattermost-db:
+    # Postgres 18, matching upstream's POSTGRES_IMAGE_TAG=18-alpine — the
+    # major Mattermost tests against. Patches arrive on `docker compose
+    # pull` via the floating minor tag; take a MAJOR bump deliberately,
+    # since an existing mattermost-pgdata volume will not open under a
+    # newer major without a pg_upgrade or dump/restore.
+    image: postgres:18-alpine
+    profiles: [mattermost]
+    environment:
+      POSTGRES_USER: mmuser
+      POSTGRES_PASSWORD: mmuser
+      POSTGRES_DB: mattermost
+    volumes:
+      # /var/lib/postgresql, NOT .../data — that is the mount point the
+      # pg18 image declares (PGDATA sits at /var/lib/postgresql/18/docker
+      # inside it), and what upstream's compose mounts. The core
+      # `postgres` service at the top of this file does the same.
+      - mattermost-pgdata:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
   # Plane — self-hosted crewlet/plane fork for the Plane integration.
   #
   # Profile-gated like gitlab (one compose file for everything):
@@ -622,6 +770,13 @@ volumes:
   gitlab-config:
   gitlab-logs:
   gitlab-data:
+  mattermost-config:
+  mattermost-data:
+  mattermost-logs:
+  mattermost-plugins:
+  mattermost-client-plugins:
+  mattermost-bleve-indexes:
+  mattermost-pgdata:
   plane-pgdata:
   plane-redisdata:
   plane-uploads:

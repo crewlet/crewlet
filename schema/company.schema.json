@@ -415,6 +415,11 @@
           "title": "Slack User Id",
           "type": "string"
         },
+        "mattermost_user_id": {
+          "default": "",
+          "title": "Mattermost User Id",
+          "type": "string"
+        },
         "atlassian_account_id": {
           "default": "",
           "title": "Atlassian Account Id",
@@ -469,6 +474,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/SlackConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mattermost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MattermostConfig"
             },
             {
               "type": "null"
@@ -884,6 +900,69 @@
         "name"
       ],
       "title": "MCPServerConfig",
+      "type": "object"
+    },
+    "MattermostConfig": {
+      "additionalProperties": false,
+      "description": "Organisation-level Mattermost integration.\n\nThe self-hosted, open-source chat backend.  Shaped like\n:class:`GitLabConfig` / :class:`PlaneConfig` \u2014 ``enabled`` plus a\nrequired ``url`` and ``team`` \u2014 with one structural difference that\nshapes the whole integration: **Mattermost has no usable inbound\nwebhook.**\n\nIts outgoing webhooks fire only in *public* channels (the server\ngates on ``ChannelTypeOpen``), and their payload carries no\n``root_id``, no channel type and no mention list \u2014 so DMs, private\nchannels and thread attribution are all unreachable through them.\nThe supported path for an external service is the **WebSocket event\nAPI**, authenticated as each bot.  The engine therefore holds one\nconnection per Mattermost-enabled agent seat\n(:mod:`crewlet.mattermost.events`) instead of receiving HTTP\ncallbacks, and there is no ``webhook_secret`` here to configure.\n\nThat also means an agent seat needs only **one** credential \u2014 the\nbot's personal access token drives the websocket, the REST calls and\nthe MCP tool server alike.\n\n``typing_status`` defaults to ``off``, unlike Slack's ``addressed``.\nMattermost's indicator has a fixed vocabulary (\"*is typing\u2026*\"), so it\nconveys only *busy* where Slack's carries the phase, and it has to be\nre-asserted every few seconds against Slack's 45 \u2014 a multi-minute\nturn costs one to two orders of magnitude more requests for strictly\nless information.  Operators who still want it opt in; the per-phase\n``status_phrases`` setting has deliberately no analogue here, because\nno text this backend accepts would ever be rendered.\n\nThe Mattermost *tool* server is declared in ``mcp_servers`` as a\n``shared: false`` server; each agent supplies the same token in\n``role.mcp_env.mattermost``.  See ``docs/integrations/mattermost.md``.\n\nExample YAML::\n\n    integrations:\n      mattermost:\n        enabled: true\n        url: \"https://chat.nimbus.example\"   # instance base URL (required)\n        team: nimbus                         # team slug (required)\n        typing_status: off                   # off (default) | addressed | always\n        provisioning:          # consumed ONLY by the CLI, ignored by\n                               #   the engine\n          username_prefix: \"\"  # e.g. \"agent-\" if humans share the server\n          channels: [town-square, engineering]   # channels every bot joins\n          display_name_suffix: \" (AI)\"\n\n    mcp_servers:\n      - name: mattermost\n        shared: false\n        command: uvx\n        args: [\"mcp-server-mattermost\"]\n        env:\n          MATTERMOST_URL: \"https://chat.nimbus.example\"\n        tool_prefix: \"mattermost_\"\n\n    roles:\n      - name: Agent SWE\n        integrations:\n          mattermost:\n            bot_token: \"${MATTERMOST_TOKEN_SWE}\"\n            channel: engineering\n        mcp_env:\n          mattermost:\n            MATTERMOST_TOKEN: \"${MATTERMOST_TOKEN_SWE}\"   # same token",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "team": {
+          "default": "",
+          "title": "Team",
+          "type": "string"
+        },
+        "typing_status": {
+          "$ref": "#/$defs/WorkingStatusMode",
+          "default": "off"
+        },
+        "provisioning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MattermostProvisioningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "MattermostConfig",
+      "type": "object"
+    },
+    "MattermostProvisioningConfig": {
+      "additionalProperties": false,
+      "description": "Inputs for ``crewlet mattermost provision`` \u2014 consumed by the CLI\nonly.  The engine never reads this block; it must parse so a\nprovisioning-ready config validates today.",
+      "properties": {
+        "username_prefix": {
+          "default": "",
+          "title": "Username Prefix",
+          "type": "string"
+        },
+        "channels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Channels",
+          "type": "array"
+        },
+        "display_name_suffix": {
+          "default": "",
+          "title": "Display Name Suffix",
+          "type": "string"
+        }
+      },
+      "title": "MattermostProvisioningConfig",
       "type": "object"
     },
     "OrgUnitConfig": {
@@ -1460,6 +1539,17 @@
           ],
           "default": null
         },
+        "mattermost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoleMattermostIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "jira": {
           "anyOf": [
             {
@@ -1505,6 +1595,29 @@
       ],
       "title": "RoleKind",
       "type": "string"
+    },
+    "RoleMattermostIdentity": {
+      "additionalProperties": false,
+      "description": "Per-agent Mattermost identity (one bot account per agent).\n\nUnlike Slack, a seat needs exactly **one** credential: the bot's\npersonal access token authenticates the inbound websocket, the\noutbound REST calls and the Mattermost MCP server alike.  There is no\nsigning secret because there is no inbound webhook to verify \u2014 see\n:class:`MattermostConfig`.\n\nName the same ``${VAR}`` here and under\n``role.mcp_env.mattermost.MATTERMOST_TOKEN``: two consumers, one\nsecret, minted once by ``crewlet mattermost provision``.",
+      "properties": {
+        "bot_token": {
+          "default": "",
+          "title": "Bot Token",
+          "type": "string"
+        },
+        "username": {
+          "default": "",
+          "title": "Username",
+          "type": "string"
+        },
+        "channel": {
+          "default": "",
+          "title": "Channel",
+          "type": "string"
+        }
+      },
+      "title": "RoleMattermostIdentity",
+      "type": "object"
     },
     "RolePhaseLLMConfig": {
       "additionalProperties": false,
@@ -2103,7 +2216,7 @@
       "description": "Organisation-level Slack configuration.\n\nEvery *credential* is per-agent (``role.integrations.slack``); this\nblock is the transport-enable marker plus the genuinely org-wide\nSlack behaviour \u2014 ``typing_status`` and ``status_phrases``.\nDeclaring this section under the top-level ``integrations`` block\n(even as ``slack: {}``) turns on the outbound\n:class:`SlackTransport` and per-agent webhook routing; omit it to\ndisable Slack entirely.\n\n``typing_status`` controls the \"*<agent> is thinking\u2026*\" working\nindicator an agent shows while it reasons about a Slack message (see\n:mod:`crewlet.notifications.typing_status`):\n\n- ``addressed`` (default) \u2014 only when a human is plausibly waiting on\n  this agent: a DM / group DM, a direct ``@mention``, or a thread the\n  agent already follows.\n- ``always`` \u2014 on every Slack-triggered turn, including passive\n  top-level channel messages and ``@here`` broadcasts.\n- ``off`` \u2014 disabled.\n\n``status_phrases`` replaces the words it shows \u2014 see\n:class:`SlackStatusPhrases`.\n\nThe Slack *tool* server is declared separately in ``mcp_servers``\n(name it ``slack``, ``shared: false``).  A Slack-enabled agent needs\nits bot token in **two** places \u2014 they are two different consumers:\nthe transport identity (``role.integrations.slack``, whose\n``signing_secret`` also verifies inbound webhooks) and the Slack MCP\nsubprocess (``role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN``).  Both\nreference the same ``${VAR}``, so there is no secret duplication.\nSee ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      slack:\n        typing_status: addressed   # addressed | always | off\n        status_phrases:            # optional \u2014 built-ins otherwise\n          plan: [\"is nimbusing...\"]\n\n    mcp_servers:\n      - name: slack\n        shared: false\n        command: npm\n        args: [\"exec\", \"--yes\", \"--\", \"slack-mcp-server@latest\",\n               \"--transport\", \"stdio\"]\n        tool_prefix: \"slack_\"\n\n    roles:\n      - name: Engineer\n        integrations:                 # per-agent transport identity\n          slack:\n            bot_token: \"${SLACK_BOT_TOKEN_ENGINEER}\"\n            signing_secret: \"${SLACK_SIGNING_SECRET_ENGINEER}\"\n        mcp_env:                       # Slack MCP server identity\n          slack:\n            SLACK_MCP_XOXB_TOKEN: \"${SLACK_BOT_TOKEN_ENGINEER}\"",
       "properties": {
         "typing_status": {
-          "$ref": "#/$defs/SlackTypingStatusMode",
+          "$ref": "#/$defs/WorkingStatusMode",
           "default": "addressed"
         },
         "status_phrases": {
@@ -2155,16 +2268,6 @@
       },
       "title": "SlackStatusPhrases",
       "type": "object"
-    },
-    "SlackTypingStatusMode": {
-      "description": "When an agent shows a working status on Slack.\n\n``addressed`` (the default) covers exactly the cases where a human is\nplausibly waiting on *this* agent: a DM or group DM, a direct\n``@mention``, or a thread the agent already follows.  A broadcast\n(``@here`` / ``@channel``) and a passive top-level channel message are\ndeliberately excluded \u2014 every bot in the channel is woken by those, and\nthe Slack triage prompt tells most of them to stay silent, so lighting\nup N indicators would be noise rather than signal.\n\n``always`` shows it on every Slack-triggered turn (useful for a\nsingle-agent workspace); ``off`` disables the feature entirely.",
-      "enum": [
-        "off",
-        "addressed",
-        "always"
-      ],
-      "title": "SlackTypingStatusMode",
-      "type": "string"
     },
     "TurnEngineConfig": {
       "additionalProperties": false,
@@ -2311,6 +2414,16 @@
       },
       "title": "UnitIntegrationsConfig",
       "type": "object"
+    },
+    "WorkingStatusMode": {
+      "description": "When an agent shows a working status on a chat backend.\n\n``addressed`` (the default) covers exactly the cases where a human is\nplausibly waiting on *this* agent: a DM or group DM, a direct\n``@mention``, or a thread the agent already follows.  A broadcast\n(``@here`` / ``@channel``) and a passive top-level channel message are\ndeliberately excluded \u2014 every bot in the channel is woken by those, and\nthe chat triage prompt tells most of them to stay silent, so lighting\nup N indicators would be noise rather than signal.\n\n``always`` shows it on every chat-triggered turn (useful for a\nsingle-agent workspace); ``off`` disables the feature entirely.",
+      "enum": [
+        "off",
+        "addressed",
+        "always"
+      ],
+      "title": "WorkingStatusMode",
+      "type": "string"
     }
   },
   "additionalProperties": false,

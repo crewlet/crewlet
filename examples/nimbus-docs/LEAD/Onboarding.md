@@ -42,7 +42,7 @@ explicit lead and inherits the PM from the parent Product department.
 | Channel | What for |
 |---|---|
 | **Plane** | Work items *and* pages, one project per department (see below). Work items: all backlog items — epics, stories, tasks. Every piece of work has a work item. Pages: architecture decisions (ADRs), runbooks, meeting notes, competitive analysis, this onboarding content. |
-| **Slack** | Real-time coordination, manager handoffs via `@`-mention. One bot identity per agent. |
+| **Mattermost** | Real-time coordination, manager handoffs via `@`-mention. One bot identity per agent, self-hosted alongside Plane and GitLab. |
 | **GitLab** | All code. Each engineer's PAT is scoped to the repos their role owns (see the [Repo Ownership](Repo-Ownership) page). |
 
 ### Per-department Plane projects
@@ -77,14 +77,14 @@ onboarding for the teams in that project.
 
 ## Kickoff convention
 
-The founder kicks off new product phases by Slack-messaging the **CEO**.
+The founder kicks off new product phases by messaging the **CEO** in Mattermost.
 The CEO drafts a strategy note, files a Phase-N kickoff epic, and
-briefs the PM and CTO via Slack or a work-item mention. From there the
+briefs the PM and CTO in Mattermost or via a work-item mention. From there the
 cascade runs on its own through Plane webhooks (PM creates stories → CTO
 assigns to engineers → engineers ship → DevRel writes docs).
 
 There is currently no autonomous "agents wake themselves up" behaviour —
-a single founder Slack ping starts the chain.
+a single founder message in Mattermost starts the chain.
 
 ## Repos at a glance
 
@@ -128,7 +128,7 @@ matrix and cross-repo coordination rules.
   boundaries.
 - **Hand off cleanly.** When you need help, reach out to the right
   colleague on the surface where the work lives (a work-item comment, a
-  Slack mention, or `a2a_ask`) with what you tried, options you see,
+  Mattermost mention, or `a2a_ask`) with what you tried, options you see,
   your recommendation, and urgency. Never hand a naked problem.
 
 ---
@@ -157,7 +157,7 @@ department (Product) but reports up to the CEO.
 | Product direction (what to build, when) | CEO | Strategy-note page; epic in `LEAD` |
 | Technical architecture (how to build it) | CTO | ADR page (`Architecture Decisions` parent page), linked from the epic |
 | Backlog prioritisation (within product direction) | PM | Backlog ordering in Plane |
-| Cross-team trade-off (budget, scope, partnerships) | CEO | Resolved via Slack/Plane after the CTO and PM lay out the trade-off |
+| Cross-team trade-off (budget, scope, partnerships) | CEO | Resolved in Mattermost or Plane after the CTO and PM lay out the trade-off |
 
 If a decision is taking longer than two days, it's an escalation, not a
 deliberation. Drive it to a conclusion in writing.
@@ -169,12 +169,12 @@ blocked, they reach out to their manager on the surface where the work
 lives:
 
 - Code blocker → comment on the work item with an `@`-mention of the manager
-- Strategic blocker → Slack message to the manager's bot
+- Strategic blocker → Mattermost message to the manager's bot
 - Time-critical sync → A2A (agent-to-agent) request
 
 You hold the same surface accountable. When an engineer pings the CTO
 via a Plane comment, respond on the work item. When the CTO pings the
-CEO via Slack for a go/no-go, respond in the same thread.
+CEO in Mattermost for a go/no-go, respond in the same thread.
 
 ### ADR / strategy-note conventions
 
@@ -187,17 +187,17 @@ CEO via Slack for a go/no-go, respond in the same thread.
 - **CEO — Strategy notes.** Parent page: `Strategy` in the LEAD
   project. Title format: `<Quarter or initiative>: <subject>`.
   Sections: where we are, where we're going, what changes, who's
-  affected. Pin in `#general` Slack when first published.
+  affected. Pin in the `town-square` channel when first published.
 
 ### Kickoff playbook for a new phase
 
-The founder Slack-messages the CEO to launch a new phase (today: Phase 2
+The founder messages the CEO in Mattermost to launch a new phase (today: Phase 2
 AI framework). On receipt:
 
 1. **CEO** — read the founder's brief, search for any prior strategy
    notes (LEAD project), draft a Phase-N kickoff note. File an epic in
    `LEAD` (`Phase N: <product line>`) and link the note.
-2. **CEO** — Slack-mention the CTO and PM with the epic link and the
+2. **CEO** — mention the CTO and PM in Mattermost with the epic link and the
    key trade-off you're calling. Ask both for a draft plan within 48
    hours.
 3. **CTO** — open an ADR page (ENG project) for the top-level

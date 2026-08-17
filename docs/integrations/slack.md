@@ -229,10 +229,18 @@ identity.
 
 1. Human posts in a channel where the bot is present
 2. Slack sends webhook to `https://your-server.com/webhooks/slack/{handle}`
-3. API publishes to `crewlet.notifications.inbound` on the EventQueue
-4. NotificationService resolves handle → agent
-5. Publishes to `crewlet.agent.{handle}.inbox`
-6. Agent handler fires
+3. The API verifies the `x-slack-signature` HMAC **at the edge** against
+   that handle's signing secret and returns `401` on failure — before the
+   payload is persisted, streamed to dashboards, or enqueued. The
+   transport verifies again before acting on it; the edge check is what
+   keeps an unauthenticated request out of the event log and off the
+   dashboard. (If the API process has no signing secrets loaded at all —
+   a company with no Slack seats — it defers to the transport rather than
+   rejecting.)
+4. API publishes to `crewlet.notifications.inbound` on the EventQueue
+5. NotificationService resolves handle → agent
+6. Publishes to `crewlet.agent.{handle}.inbox`
+7. Agent handler fires
 
 #### Which events wake an agent
 
@@ -412,7 +420,7 @@ By default, agents only receive thread replies in threads they are **following**
 3. **Outbound participation** — the agent sends a reply in the thread
 4. **Outbound send** — the agent sends a reply via ``SlackTransport.send()``
 
-Thread tracking state is persisted in PostgreSQL (``slack_thread_follows`` table) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
+Thread tracking state is persisted in PostgreSQL (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
 
 Disable thread routing:
 

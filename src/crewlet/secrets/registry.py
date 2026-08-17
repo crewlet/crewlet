@@ -34,9 +34,10 @@ Secret locations:
 - shared ``mcp_servers[*].env`` / ``.headers`` — free-form dicts, so only
   secret-hinted keys (``*_TOKEN``, ``Authorization``) are masked
   (:func:`_looks_secret`)
-- every ``mcp_env.<server>.<var>`` and per-role ``integrations.slack`` /
-  ``slack`` bot-token / signing-secret, on every root role and every
-  role / unit nested to any depth under ``units``
+- every ``mcp_env.<server>.<var>`` and every per-role chat-transport
+  credential — ``integrations.{slack,mattermost}`` and their
+  loader-materialised ``{slack,mattermost}`` forms — on every root role
+  and every role / unit nested to any depth under ``units``
 
 A value that is still a ``${VAR}`` reference is treated as *not* a
 secret-at-rest (it is an inert env-var pointer) and is left visible by
@@ -142,7 +143,17 @@ def pointer_set(payload: Any, pointer: str, value: Any) -> None:
 
 # ── structural secret-path spec ───────────────────────────────────────
 
-_SLACK_SECRET_FIELDS = ("bot_token", "signing_secret")
+#: Per-chat-backend secret fields on a role's transport identity, in both
+#: the authored (``integrations.<backend>``) and loader-materialised
+#: (``<backend>``) shapes.  A map rather than a Slack-only constant:
+#: every chat backend puts credentials in the same place, and a field
+#: missing from here renders UNREDACTED in the dashboard's config view.
+#: Non-secret fields (``channel``, ``username``) are deliberately absent
+#: — masking them would make the config unreadable for no gain.
+_CHAT_SECRET_FIELDS: dict[str, tuple[str, ...]] = {
+    "slack": ("bot_token", "signing_secret"),
+    "mattermost": ("bot_token",),
+}
 
 
 def _emit_mcp_env(mcp_env: Any, base: str, out: list[str]) -> None:
@@ -156,31 +167,35 @@ def _emit_mcp_env(mcp_env: Any, base: str, out: list[str]) -> None:
             out.append(f"{base}/{_escape(str(server))}/{_escape(str(var))}")
 
 
-def _emit_slack_creds(container: Mapping[str, Any], base: str, out: list[str]) -> None:
-    """Slack transport creds live at ``integrations.slack`` (authored form)
-    and ``slack`` (loader-materialised form) — cover both, channel excluded."""
-    for parent in (
-        container.get("integrations"),
-        container,
-    ):
-        if not isinstance(parent, Mapping):
-            continue
-        slack = parent.get("slack")
-        if not isinstance(slack, Mapping):
-            continue
-        prefix = (
-            f"{base}/integrations/slack" if parent is not container else f"{base}/slack"
-        )
-        for field in _SLACK_SECRET_FIELDS:
-            if field in slack:
-                out.append(f"{prefix}/{field}")
+def _emit_chat_creds(container: Mapping[str, Any], base: str, out: list[str]) -> None:
+    """Chat transport creds live at ``integrations.<backend>`` (authored
+    form) and ``<backend>`` (loader-materialised form) — cover both, for
+    every backend in :data:`_CHAT_SECRET_FIELDS`."""
+    for backend, fields in _CHAT_SECRET_FIELDS.items():
+        for parent in (
+            container.get("integrations"),
+            container,
+        ):
+            if not isinstance(parent, Mapping):
+                continue
+            identity = parent.get(backend)
+            if not isinstance(identity, Mapping):
+                continue
+            prefix = (
+                f"{base}/integrations/{backend}"
+                if parent is not container
+                else f"{base}/{backend}"
+            )
+            for field in fields:
+                if field in identity:
+                    out.append(f"{prefix}/{field}")
 
 
 def _emit_role(role: Any, base: str, out: list[str]) -> None:
     if not isinstance(role, Mapping):
         return
     _emit_mcp_env(role.get("mcp_env"), f"{base}/mcp_env", out)
-    _emit_slack_creds(role, base, out)
+    _emit_chat_creds(role, base, out)
 
 
 def _emit_roles(roles: Any, base: str, out: list[str]) -> None:
@@ -244,7 +259,7 @@ def _emit_integrations(payload: Mapping[str, Any], out: list[str]) -> None:
     # Note: org-level ``integrations.slack`` carries no secrets — it is the
     # transport enable-marker plus the non-sensitive ``typing_status`` mode
     # (``SlackConfig``, ``extra="forbid"``); every Slack credential is
-    # per-role and covered by ``_emit_slack_creds``.
+    # per-role and covered by ``_emit_chat_creds``.
     for section, fields in (
         ("jira", ("token", "webhook_secret")),
         ("confluence", ("token", "webhook_secret")),

@@ -405,8 +405,25 @@ async def jira_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+def _verify_slack_signature(
+    body_raw: bytes,
+    headers: dict[str, str],
+    signing_secret: str,
+) -> bool:
+    """Verify Slack's ``x-slack-signature`` over the raw request body.
+
+    Delegates to the transport's implementation so the edge check and the
+    engine-side check can never diverge on the wire format or the replay
+    window — two independent HMAC implementations for one signature is
+    how one of them quietly stops matching.
+    """
+    from crewlet.notifications.transports.slack import SlackTransport
+
+    return SlackTransport.verify_signature(body_raw, headers, signing_secret)
+
+
 async def slack_webhook(request: Request) -> JSONResponse:
-    """POST /webhooks/slack/{handle} — publish to EventQueue."""
+    """POST /webhooks/slack/{handle} — verify, then publish to EventQueue."""
     handle = request.path_params["handle"]
     body_raw = await request.body()
     body_data = _parse_json_object(body_raw)
@@ -422,6 +439,28 @@ async def slack_webhook(request: Request) -> JSONResponse:
     )
     if dropped is not None:
         return dropped
+
+    # Verify BEFORE anything is persisted or broadcast.  The transport
+    # re-verifies later (it is the component that must not act on an
+    # unverified payload), but everything between here and there —
+    # writing the event store row, fanning the payload out to every
+    # connected dashboard websocket, enqueueing on Pulsar — happened
+    # unconditionally, so an unauthenticated POST could pollute the
+    # event log and inject content into the dashboard without ever
+    # waking an agent.  github / gitlab / plane all 401 at the route;
+    # Slack now does too.
+    #
+    # It is a MAP rather than a scalar because Slack's key is per-agent
+    # (one app per seat), and the handle comes from the URL path.
+    signing_secrets = getattr(request.app.state, "slack_signing_secrets", None)
+    if signing_secrets:
+        secret = signing_secrets.get(handle, "")
+        if not secret:
+            logger.warning("slack_webhook_unknown_handle", handle=handle)
+            return JSONResponse({"error": "unknown handle"}, status_code=401)
+        if not _verify_slack_signature(body_raw, dict(request.headers), secret):
+            logger.warning("slack_webhook_signature_invalid", handle=handle)
+            return JSONResponse({"error": "invalid signature"}, status_code=401)
 
     with tracer.start_as_current_span(
         "webhook.slack",

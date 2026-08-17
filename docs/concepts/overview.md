@@ -13,7 +13,7 @@ Crewlet enables a founder to design a company structure, define its mission, and
 The framework models the same structures found in real companies:
 
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
-- **Communication** — channels, direct messages, and external tools (Slack, the work-item tracker, the code host)
+- **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — integrated with external PM tools (Jira, Plane, GitHub/GitLab issues)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
 - **Knowledge** — query-time knowledge-base search (Confluence or Plane) for shared docs + per-agent private diary (pgvector — hybrid vector ∪ recency candidate selection)
@@ -55,7 +55,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 ```mermaid
 flowchart TD
-    EXT["<b>External surfaces</b><br/>Slack · Jira / Plane · GitHub / GitLab"]
+    EXT["<b>External surfaces</b><br/>Slack / Mattermost · Jira / Plane · GitHub / GitLab"]
     subgraph proc["crewlet run — one process by default"]
         direction TB
         API["<b>API + dashboard</b><br/>webhook routes · REST · /config/* · live event stream"]
@@ -176,6 +176,10 @@ src/crewlet/
 ├── slack/                # Slack app provisioning (`crewlet slack provision`):
 │                         #   canonical per-agent app manifest + App Manifest
 │                         #   API client + OAuth install + .env/ledger writing
+├── mattermost/           # Mattermost — self-hosted OSS chat: REST client,
+│                         #   the per-seat websocket event fleet (Mattermost
+│                         #   has no usable inbound webhook), and
+│                         #   `crewlet mattermost provision`
 ├── tools/                # Agent tool system (builtins + A2A tools)
 ├── github/               # GitHub integration (per-role remote MCP)
 ├── gitlab/               # GitLab integration (async REST client + the

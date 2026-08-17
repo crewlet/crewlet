@@ -93,7 +93,9 @@ roles:
     kind: human
     manages: [CEO]
     contact:
-      slack_user_id: "${SLACK_FOUNDER_USER_ID}"   # your Slack member ID
+      # One identity per surface you connect. Swap this for
+      # `slack_user_id` (a `U…` member ID) if Slack is your chat.
+      mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}"   # your chat username
 
   - name: CEO
     handle: ceo                 # see the note under this block — set these now
@@ -239,7 +241,7 @@ counter resets on restart).
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."          # embeddings
-export SLACK_FOUNDER_USER_ID="U0FOUNDER"  # your Slack member ID (the human seat)
+export MATTERMOST_FOUNDER_USERNAME="you"  # your chat username (the human seat)
 ```
 
 Validate the Tier B YAML first (this reads no environment — `${VAR}`
@@ -318,7 +320,10 @@ The standalone API exposes the same REST endpoints, webhook handlers
 (`/webhooks/jira`, `/webhooks/slack/{handle}`, `/webhooks/github`,
 `/webhooks/gitlab`, `/webhooks/plane`, `/webhooks/confluence`,
 `/webhooks/forge`), and the `/config/*` CRUD surface (see
-[API Endpoints](../reference/api-endpoints.md)).
+[API Endpoints](../reference/api-endpoints.md)). Mattermost is deliberately
+absent from that list — it has no usable inbound webhook, so the **engine**
+holds one outbound websocket per agent seat instead, and its inbound path
+does not go through the API process at all.
 
 ## Programmatic setup
 
@@ -346,13 +351,21 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect [Slack](../integrations/slack.md) so agents collaborate in channels
-  and you can DM them — write the `${SLACK_*}` placeholders into each role's
-  `integrations.slack`, then let
-  [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision)
-  create one app per agent and fill them in:
+- Connect chat so agents collaborate in channels and you can DM them. If
+  your company already runs on [Slack](../integrations/slack.md), use it —
+  the agents land where the conversations already happen, under the
+  workspace admin and compliance setup you already have. It needs a public
+  URL for its Events API and one OAuth **Allow** click per agent:
   ```bash
   crewlet slack provision company.yaml --base-url https://your-server.com
+  ```
+  To try chat on this machine first,
+  [Mattermost](../integrations/mattermost.md) ships in this repo's
+  `docker-compose.yml` and needs no account, no public URL and no clicks:
+  ```bash
+  docker compose --profile mattermost up -d --wait
+  scripts/mattermost-dev-bootstrap.sh
+  crewlet mattermost provision company.yaml
   ```
 - Connect a work-item tracker — self-hosted [Plane](../integrations/plane.md)
   (also ships a full local docker-compose loop), or
@@ -367,8 +380,9 @@ each), then wire them in:
   merge requests
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
-  surface you connect (`slack_user_id`, `plane_user_id`, `gitlab_username`,
-  …) so escalations land in your DMs and agents recognise your activity
+  surface you connect (`mattermost_user_id`, `plane_user_id`,
+  `gitlab_username`, …) so escalations land in your DMs and agents recognise
+  your activity
 - Encrypt your config at rest — add a Tier A keyring (`crewlet secrets keygen`)
   and run `crewlet config seal` so the **entire** company config is stored
   encrypted in the DB as one opaque blob. See
@@ -381,6 +395,6 @@ each), then wire them in:
   --secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the full [Nimbus example](../../examples/) — a seven-seat company
-  with Plane + GitLab + Slack + sandbox wired end-to-end
+  with Plane + GitLab + Mattermost + sandbox wired end-to-end
 - Write [extensions](../guides/extensions.md) to hook into engine events
 - See the full [configuration reference](configuration.md) for all YAML options

@@ -6,7 +6,8 @@ description: >
   schedules, integrations) and the Tier A config.yaml bootstrap. Use
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
-  (Plane, Jira, Confluence, Slack, GitLab, GitHub, the code sandbox), or
+  (Plane, Jira, Confluence, Mattermost, Slack, GitLab, GitHub, the code
+  sandbox), or
   when they hand you a company.yaml to review, fix, or explain.
 ---
 
@@ -143,7 +144,7 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/getting-started/quickstart) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with Plane + GitLab + Slack + sandbox.
+  a complete seven-seat company with Plane + GitLab + Mattermost + sandbox.
 
 ## Invariants
 
@@ -193,14 +194,14 @@ members, and a child unit with no `lead` inherits its parent's.
 
 **Put the founder in the chart.** A human seat at the root, above the
 top agent, so escalation terminates at a person and agents recognise
-their activity on Slack / the tracker / the code host:
+their activity in chat / the tracker / the code host:
 
 ```yaml
 roles:
   - name: Jane Founder
     kind: human
     manages: [CEO]
-    contact: { slack_user_id: "${SLACK_FOUNDER_USER_ID}" }
+    contact: { mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}" }
 ```
 
 `kind: human` seats are addressable but never spawned: no runtime, no

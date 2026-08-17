@@ -18,6 +18,9 @@ from crewlet.notifications.notification_prompts.confluence import (
 from crewlet.notifications.notification_prompts.github import GitHubNotificationPrompt
 from crewlet.notifications.notification_prompts.gitlab import GitLabNotificationPrompt
 from crewlet.notifications.notification_prompts.jira import JiraNotificationPrompt
+from crewlet.notifications.notification_prompts.mattermost import (
+    MattermostNotificationPrompt,
+)
 from crewlet.notifications.notification_prompts.plane import PlaneNotificationPrompt
 from crewlet.notifications.notification_prompts.slack import SlackNotificationPrompt
 
@@ -30,6 +33,7 @@ _PROMPTS: dict[str, NotificationPrompt] = {
     "jira": JiraNotificationPrompt(),
     "confluence": ConfluenceNotificationPrompt(),
     "slack": SlackNotificationPrompt(),
+    "mattermost": MattermostNotificationPrompt(),
     "github": GitHubNotificationPrompt(),
     "gitlab": GitLabNotificationPrompt(),
     "plane": PlaneNotificationPrompt(),
@@ -99,6 +103,7 @@ __all__ = [
     "GitHubNotificationPrompt",
     "GitLabNotificationPrompt",
     "JiraNotificationPrompt",
+    "MattermostNotificationPrompt",
     "PlaneNotificationPrompt",
     "SlackNotificationPrompt",
     "build_notification_prompt",

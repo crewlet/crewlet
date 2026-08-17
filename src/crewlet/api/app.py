@@ -66,6 +66,7 @@ def create_app(
     github_webhook_secret: str | None = None,
     gitlab_signing_secret: str | None = None,
     plane_webhook_secret: str | None = None,
+    slack_signing_secrets: dict[str, str] | None = None,
     sandbox_otel_receiver: Any = None,
     forge_app_id: str = "",
     bootstrap: Any = None,
@@ -106,6 +107,13 @@ def create_app(
     plane_webhook_secret:
         HMAC key for ``POST /webhooks/plane`` signature verification
         (``X-Plane-Signature``).  ``None`` → the endpoint returns 500.
+    slack_signing_secrets:
+        ``{handle: signing_secret}`` for Slack-enabled agent seats, used
+        to verify inbound Slack webhooks at the edge.  Slack is the only
+        inbound integration whose key is **per-agent** rather than
+        org-wide — one Slack app per seat — so this is a map where the
+        others are scalars.  Populated by ``attach_config_refresh`` in
+        the standalone API process.
     bootstrap:
         Optional :class:`BootstrapConfig` (Tier A).  When supplied,
         auth tokens are loaded from ``bootstrap.api.auth`` and
@@ -188,6 +196,10 @@ def create_app(
     app.state.github_webhook_secret = github_webhook_secret
     app.state.gitlab_signing_secret = gitlab_signing_secret
     app.state.plane_webhook_secret = plane_webhook_secret
+    # Per-AGENT, unlike every other inbound secret: one Slack app per
+    # seat means one signing secret per seat, so the edge needs a map
+    # keyed by the handle the webhook URL path carries.
+    app.state.slack_signing_secrets = dict(slack_signing_secrets or {})
     app.state.sandbox_otel_receiver = sandbox_otel_receiver
     app.state.forge_app_id = forge_app_id
     app.state.bootstrap = bootstrap

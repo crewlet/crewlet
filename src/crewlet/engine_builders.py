@@ -215,8 +215,8 @@ def build_notification_transports(
 
     if cfg.integrations.slack is not None:
         try:
+            from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
             from crewlet.db.client import Database
-            from crewlet.db.slack_thread_follows import SlackThreadFollowRepository
             from crewlet.notifications.transports.slack import SlackTransport
 
             if not isinstance(storage, Database):
@@ -224,7 +224,7 @@ def build_notification_transports(
                     "Slack thread routing requires a PostgreSQL database"
                 )
 
-            thread_follow_repo = SlackThreadFollowRepository(storage)
+            thread_follow_repo = ChatThreadFollowRepository(storage)
             transports.append(
                 SlackTransport(
                     thread_follow_repo=thread_follow_repo,
@@ -240,6 +240,37 @@ def build_notification_transports(
             )
         except ImportError:
             logger.warning("slack_transport_missing_deps")
+
+    mattermost_cfg = cfg.integrations.mattermost
+    if mattermost_cfg is not None and mattermost_cfg.enabled:
+        try:
+            from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
+            from crewlet.db.client import Database
+            from crewlet.notifications.transports.mattermost import (
+                MattermostTransport,
+            )
+
+            if not isinstance(storage, Database):
+                raise RuntimeError(
+                    "Mattermost thread routing requires a PostgreSQL database"
+                )
+
+            transports.append(
+                MattermostTransport(
+                    base_url=mattermost_cfg.url,
+                    team=mattermost_cfg.team,
+                    thread_follow_repo=ChatThreadFollowRepository(storage),
+                    typing_status_mode=mattermost_cfg.typing_status,
+                )
+            )
+            logger.info(
+                "mattermost_transport_created",
+                url=mattermost_cfg.url,
+                team=mattermost_cfg.team,
+                typing_status=mattermost_cfg.typing_status.value,
+            )
+        except ImportError:
+            logger.warning("mattermost_transport_missing_deps")
 
     return transports
 

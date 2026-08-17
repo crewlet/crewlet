@@ -34,6 +34,7 @@ units:
           - "Approvals and vendor decisions"
         contact:                  # how agents mention & reach her
           slack_user_id: U0123456789
+          mattermost_user_id: sarah.chen       # Mattermost username, not an ID
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
           github_login: sarahchen
           gitlab_username: sarahchen
@@ -49,6 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
+| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username** — the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID; normalized to lowercase |
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID — Jira assignments, Confluence `<ri:user>` mentions, webhook sender attribution |
 | `contact.github_login` | one identity | GitHub username — review requests, sender attribution |
 | `contact.gitlab_username` | one identity | GitLab username — assignment / review / mention routing + sender attribution |
@@ -159,11 +161,14 @@ A human seat is the natural **terminus** of an escalation chain, and an
 agent reaches one exactly as it reaches any colleague — with its **own
 colleague-surface tools** during Execute, never via the engine:
 
-- **Slack** — the agent DMs the human's member ID with its own
-  `slack_conversations_postMessage` tool, `<@…>`-mention prefixed. The
-  human's reply lands on the agent's Slack app and re-enters through the
-  normal webhook → inbox pipeline, so the answer goes back to the agent
-  that asked.
+- **Chat (Slack / Mattermost)** — the agent DMs the human's member ID
+  (or username) with its own chat tool, mention-prefixed. The engine
+  never names that tool: the deployed MCP server's names are not
+  knowable here, so the prompts describe the *capability* and the LLM
+  picks the match from its catalogue (see
+  [Tool Capabilities](tool-capabilities.md)). The human's reply lands on
+  the agent's own bot identity and re-enters through the normal inbound
+  pipeline, so the answer goes back to the agent that asked.
 - **Jira / Confluence / GitHub** — the agent comments / requests review
   with its own tools and the mention markup; the target is the artifact
   (issue / page / PR), the human is mentioned in the body.

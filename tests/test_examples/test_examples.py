@@ -211,7 +211,8 @@ def test_bundled_tool_skills_parse() -> None:
     leaf_tools = {leaf.tool for leaf in mentions.trigger.any_of}
     assert None not in leaf_tools, "platform_mentions must not use server-wide leaves"
     assert leaf_tools == {
-        "slack_conversations_add_message",
+        "mattermost_post_message",
+        "mattermost_update_message",
         "create_work_item_comment",
         "update_work_item_comment",
         "create_work_item",

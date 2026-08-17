@@ -71,6 +71,14 @@ def _safe_for_display(value: str, *, max_len: int = _DISPLAY_MAX_LEN) -> str:
     return collapsed
 
 
+def _join_surfaces(names: list[str]) -> str:
+    """Render transport names as an English list: "a", "a or b", "a, b or c"."""
+    labels = [name.replace("_", " ") for name in names]
+    if len(labels) == 1:
+        return labels[0]
+    return f"{', '.join(labels[:-1])} or {labels[-1]}"
+
+
 @dataclass(frozen=True)
 class _Candidate:
     """One ranked candidate produced by ``_resolve_colleague_candidates``."""
@@ -487,6 +495,7 @@ async def _lookup_colleague(
     if match.kind == "human":
         # The candidate carries its resolved party — no re-resolution.
         seat = getattr(match.party, "role", None)
+        surfaces: list[str] = []
         if seat is not None:
             lines.append(f"name: {_safe_for_display(seat.name)}")
             # What the person owns — the routing context.  Longer cap
@@ -508,14 +517,24 @@ async def _lookup_colleague(
             if seat.contact is not None:
                 for transport, external_id in seat.contact.resolved_identities():
                     lines.append(f"{transport}_id: {external_id}")
+                    surfaces.append(transport)
             if seat.availability:
                 lines.append(f"availability: {_safe_for_display(seat.availability)}")
         lines.append("")
+        # Name the surfaces THIS seat actually has rather than a fixed
+        # stack: an org on Mattermost + Plane has neither Slack nor
+        # Confluence, and naming a tool the agent cannot call sends it
+        # hunting for one.  The ``<transport>_id:`` rows above are the
+        # same list, so the two can never disagree.
+        where = (
+            f"on {_join_surfaces(surfaces)}"
+            if surfaces
+            else "on whichever surface the work lives"
+        )
         lines.append(
-            "Human teammate — not on the A2A bus. Reach them with a "
-            "Slack mention or a Jira/Confluence comment, include the "
-            "context they need, and end your turn; they reply "
-            "asynchronously and their reply will re-trigger you."
+            f"Human teammate — not on the A2A bus. Mention or message them "
+            f"{where}, include the context they need, and end your turn; "
+            "they reply asynchronously and their reply will re-trigger you."
         )
     else:
         agent = registry.resolve_handle(handle)

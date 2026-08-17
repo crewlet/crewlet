@@ -128,7 +128,7 @@ async def _set_typing_phase(session: Any, phase: str) -> None:
     try:
         await session.set_phase(phase)
     except Exception:
-        logger.exception("slack_typing_status_phase_failed", phase=phase)
+        logger.exception("working_status_phase_failed", phase=phase)
 
 
 async def _end_typing(session: Any, *, keep_alive: bool = False) -> None:
@@ -138,7 +138,7 @@ async def _end_typing(session: Any, *, keep_alive: bool = False) -> None:
     try:
         await session.end(keep_alive=keep_alive)
     except Exception:
-        logger.exception("slack_typing_status_end_failed")
+        logger.exception("working_status_end_failed")
 
 
 class ShutdownDraining(RuntimeError):
@@ -561,16 +561,23 @@ class TurnEngine:
                     "shutdown"
                 )
 
-    # ----- Slack working status ---------------------------------------
+    # ----- chat working status -----------------------------------------
 
     async def _begin_typing_status(self, turn: TurnContext) -> Any:
-        """Raise the "is thinking…" indicator for a Slack-triggered turn.
+        """Raise the "is thinking…" indicator for a chat-triggered turn.
 
         Returns a session handle, or ``None`` when there is nothing to
-        drive — no Slack transport, a non-Slack trigger, or the mode is
+        drive — the trigger did not come from a chat backend, that
+        backend's transport is not configured, or the mode is
         ``addressed`` and nobody addressed this agent.  Opened BEFORE the
         agent / concurrency gates so a human who pinged a busy agent sees
         feedback while the turn is still queuing, not only once it runs.
+
+        The backend is read from the trigger's own ``transport`` metadata
+        key — the same discriminator the driver re-checks — rather than
+        being hardcoded, so a company running Slack and Mattermost side
+        by side raises each indicator on the backend the message actually
+        arrived on.
 
         The ``liveness`` probe is the safety net: the heartbeat drops the
         indicator within one refresh interval if the agent stops being
@@ -581,20 +588,24 @@ class TurnEngine:
         if service is None:
             return None
         try:
-            driver = getattr(service.transports.get("slack"), "typing_status", None)
+            metadata = turn.notification_metadata or {}
+            backend = str(metadata.get("transport") or "")
+            if not backend:
+                return None
+            driver = getattr(service.transports.get(backend), "typing_status", None)
             if driver is None:
                 return None
             agent = turn.agent
             return await driver.begin(
                 handle=agent.handle,
                 turn_id=turn.turn_id,
-                metadata=turn.notification_metadata,
+                metadata=metadata,
                 liveness=lambda: (
                     agent.state in (AgentState.WORKING, AgentState.AWAITING_SANDBOX)
                 ),
             )
         except Exception:
-            logger.exception("slack_typing_status_begin_failed", turn_id=turn.turn_id)
+            logger.exception("working_status_begin_failed", turn_id=turn.turn_id)
             return None
 
     # ----- public validator registration ------------------------------

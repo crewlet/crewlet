@@ -1,44 +1,57 @@
-"""Slack working-status indicator — "is thinking…" while an agent reasons.
+"""Working-status indicator — "is thinking…" while an agent reasons.
 
-Slack has no public API for a bot to raise the classic ``user_typing``
-signal (that lived on the RTM API, which granular-permission apps cannot
-use — see `slackapi/bolt-js#885
-<https://github.com/slackapi/bolt-js/issues/885>`_).  The supported
-mechanism for an app is **``assistant.threads.setStatus``**, which renders
-a working-state line ("*Agent SWE is thinking…*") under the thread's
-composer.  Since `March 2026
-<https://docs.slack.dev/changelog/2026/03/05/set-status-scope-update/>`_ it
-accepts the plain ``chat:write`` bot scope, so it works for ordinary
-channel apps — every Slack-enabled Crewlet agent already holds that scope
-(see ``docs/integrations/slack.md``), and no app-manifest change is needed.
+An agent turn takes minutes.  Without a signal, the human who posted sees
+nothing until the reply lands and cannot tell "the bot is working" from
+"the bot is dead".  Every chat backend offers *some* way to close that
+gap, but they differ in one way that matters enough to be modelled
+explicitly: **whether the indicator carries text.**
 
-Two properties of the Slack method shape everything here:
+- **Slack** renders free text via `assistant.threads.setStatus
+  <https://docs.slack.dev/reference/methods/assistant.threads.setStatus/>`_
+  ("*Agent SWE is crewleting…*").  Slack has no public ``user_typing`` API
+  for granular apps (`slackapi/bolt-js#885
+  <https://github.com/slackapi/bolt-js/issues/885>`_), and since `March
+  2026 <https://docs.slack.dev/changelog/2026/03/05/set-status-scope-update/>`_
+  ``setStatus`` accepts the plain ``chat:write`` scope every Slack-enabled
+  agent already holds.
+- **Mattermost** offers only the composer typing indicator, whose wording
+  is fixed by the client.  The engine can raise it, but not say anything
+  with it.
 
-- **A set status expires after 2 minutes.**  A Crewlet turn (Plan →
-  Execute → Review, plus ``self_iterate`` loops and detached sandbox
-  runs) routinely runs longer, so a session keeps a heartbeat task that
-  re-asserts the status well inside that window.
-- **Slack clears the status when the app posts into the thread.**  That
-  covers the "agent replied" half of the lifecycle for free.  The "agent
-  gave up" half — the planner decided the message wasn't addressed to it,
-  the turn failed, the budget ran out — has no Slack-side signal, so the
-  session always clears explicitly (``status=""``) when the turn ends.
+A backend advertises which it is through
+:attr:`StatusPoster.supports_status_text`.  When text is unsupported the
+phrase machinery below is inert — the session still runs, keeping the
+indicator alive, but phase changes stop costing a request, because there
+is nothing about them the reader could see.
+
+Two properties of every backend's mechanism shape the lifecycle:
+
+- **A raised status expires.**  Slack drops one after 2 minutes;
+  Mattermost's is shorter still.  So a session keeps a heartbeat task
+  that re-asserts well inside that window, at the poster's own
+  :attr:`~StatusPoster.status_refresh_interval`.
+- **Posting into the conversation clears it.**  That covers the "agent
+  replied" half of the lifecycle for free.  The "agent gave up" half —
+  the planner decided the message wasn't addressed to it, the turn
+  failed, the budget ran out — has no backend-side signal, so the session
+  always clears explicitly when the turn ends.
 
 Lifecycle owner is the :class:`~crewlet.agent.turn.TurnEngine`: it opens a
-session when a Slack-triggered turn starts and closes it when the turn
+session when a chat-triggered turn starts and closes it when the turn
 ends, updating the text at each phase boundary.  A turn that SUSPENDS for
 a detached sandbox run holds its session open — the same ``turn_id``
 resumes when the coding job completes, and the human is still waiting.
 
-Sessions are keyed by ``(handle, channel, thread_ts)`` and reference-counted
-by ``turn_id``, so two turns for the same agent in the same thread (a
-suspend/resume pair, or a queued follow-up) share one heartbeat and the
-status clears only when the last one finishes.
+Sessions are keyed by ``(handle, channel, thread_id)`` and
+reference-counted by ``turn_id``, so two turns for the same agent in the
+same thread (a suspend/resume pair, or a queued follow-up) share one
+heartbeat and the status clears only when the last one finishes.
 
 The words themselves come from :class:`StatusPhrases` — a pool per phase,
 drawn from deterministically so a turn's line is stable while it holds a
 phase and changes when it moves on.  Companies override the pools via
-``integrations.slack.status_phrases``.
+``integrations.slack.status_phrases``; backends that cannot render text
+expose no such setting.
 """
 
 from __future__ import annotations
@@ -63,6 +76,9 @@ logger = get_logger("notifications.typing_status")
 # expiry).  Cost is ~1.3 requests/minute per in-flight conversation against
 # Slack's 600/minute per-app-per-team limit, so even a fully saturated
 # engine (dozens of concurrent turns) stays two orders of magnitude clear.
+#
+# This is the DEFAULT and Slack's value; a poster whose backend expires
+# faster advertises its own via ``StatusPoster.status_refresh_interval``.
 REFRESH_INTERVAL_SECONDS = 45.0
 
 # Backstop for a session whose owner never closed it — realistically an
@@ -70,14 +86,20 @@ REFRESH_INTERVAL_SECONDS = 45.0
 # The liveness probe below is the primary guard (it fires within one
 # refresh of the agent going idle); this cap bounds the pathological case
 # where the agent stays *busy* forever.  One hour is far longer than any
-# real Slack-triggered turn (a multi-tool Plan → Execute → Review is
+# real chat-triggered turn (a multi-tool Plan → Execute → Review is
 # minutes; a detached coding run is bounded by the agent's token budget)
 # and short enough that a leak self-heals inside a working session.
 MAX_SESSION_SECONDS = 3600.0
 
-# Per-phase pools of status text.  Slack renders each line suffixed to
-# the app's name, so they read as "Agent SWE is crewleting…" — hence the
-# leading "is".
+#: Normalised channel kinds that mean "this is a direct conversation".
+#: Covers both vocabularies the engine sees: Slack's ``im`` / ``mpim`` and
+#: Mattermost's single-letter channel types ``D`` (direct) / ``G`` (group).
+#: Membership here is what makes a message count as *addressed* without a
+#: mention — in a DM there is nobody else it could be for.
+DIRECT_CHANNEL_TYPES = frozenset({"im", "mpim", "D", "G"})
+
+# Per-phase pools of status text.  Rendered suffixed to the agent's name,
+# so they read as "Agent SWE is crewleting…" — hence the leading "is".
 #
 # A *pool* rather than one fixed string per phase, because this line is
 # the only thing a waiting human sees for minutes at a time.  Drawing a
@@ -86,7 +108,7 @@ MAX_SESSION_SECONDS = 3600.0
 # generic label that could equally mean "wedged", and a turn that loops
 # back through Plan via ``self_iterate`` visibly starts over rather than
 # re-showing the identical text.  Within a phase the line is stable — the
-# 45 s heartbeat re-asserts the same words, so nothing flickers.
+# heartbeat re-asserts the same words, so nothing flickers.
 #
 # The ``"default"`` pool covers any phase name not listed here; the
 # engine only drives the four above, so it is a guard, not a path.
@@ -210,18 +232,18 @@ class StatusPhrases:
         return pool[(int.from_bytes(digest, "big") + rotation) % len(pool)]
 
 
-class SlackTypingStatusMode(StrEnum):
-    """When an agent shows a working status on Slack.
+class WorkingStatusMode(StrEnum):
+    """When an agent shows a working status on a chat backend.
 
     ``addressed`` (the default) covers exactly the cases where a human is
     plausibly waiting on *this* agent: a DM or group DM, a direct
     ``@mention``, or a thread the agent already follows.  A broadcast
     (``@here`` / ``@channel``) and a passive top-level channel message are
     deliberately excluded — every bot in the channel is woken by those, and
-    the Slack triage prompt tells most of them to stay silent, so lighting
+    the chat triage prompt tells most of them to stay silent, so lighting
     up N indicators would be noise rather than signal.
 
-    ``always`` shows it on every Slack-triggered turn (useful for a
+    ``always`` shows it on every chat-triggered turn (useful for a
     single-agent workspace); ``off`` disables the feature entirely.
     """
 
@@ -231,11 +253,11 @@ class SlackTypingStatusMode(StrEnum):
 
 
 @dataclass(frozen=True)
-class SlackConversation:
-    """The Slack thread a status belongs to."""
+class ChatConversation:
+    """The thread a status belongs to, on whichever backend raised it."""
 
     channel: str
-    thread_ts: str
+    thread_id: str
 
 
 def _field(metadata: Mapping[str, Any], key: str) -> str:
@@ -251,45 +273,67 @@ def _field(metadata: Mapping[str, Any], key: str) -> str:
     return "" if value is None else str(value)
 
 
-def slack_conversation(
+def chat_conversation(
     metadata: Mapping[str, Any] | None,
-) -> SlackConversation | None:
-    """Resolve the Slack thread a turn's trigger metadata points at.
+    backend: str,
+) -> ChatConversation | None:
+    """Resolve the thread a turn's trigger metadata points at, for *backend*.
 
-    Returns ``None`` for any non-Slack trigger.  The discriminator is the
-    ``transport`` key the Slack transport stamps on every notification it
-    parses — it survives inbox coalescing (the merged event mirrors the
-    latest constituent's metadata) and the detached-sandbox round trip
-    (the pending run stores the originating ``notification_metadata``), so
-    a resumed turn resolves the same conversation as its kick-off.
+    Returns ``None`` for a trigger that did not come from *backend*.  The
+    discriminator is the ``transport`` key every chat transport stamps on
+    the notifications it parses — it survives inbox coalescing (the merged
+    event mirrors the latest constituent's metadata) and the
+    detached-sandbox round trip (the pending run stores the originating
+    ``notification_metadata``), so a resumed turn resolves the same
+    conversation as its kick-off.
 
-    ``assistant.threads.setStatus`` needs a ``thread_ts``.  For a
-    top-level message no thread exists yet, so the message's own ``ts`` is
-    the anchor — the same value the Slack prompt tells the agent to reply
-    under, which is what makes the status appear where the reply will land.
+    Raising a status needs a thread anchor.  For a top-level message no
+    thread exists yet, so the message's own id is the anchor — the same
+    value the chat prompt tells the agent to reply under, which is what
+    makes the status appear where the reply will land.
     """
     if not metadata:
         return None
-    if _field(metadata, "transport") != "slack":
+    if _field(metadata, "transport") != backend:
         return None
     channel = _field(metadata, "channel")
     anchor = _field(metadata, "thread_ts") or _field(metadata, "ts")
     if not channel or not anchor:
         return None
-    return SlackConversation(channel=channel, thread_ts=anchor)
+    return ChatConversation(channel=channel, thread_id=anchor)
 
 
-def agent_is_addressed(metadata: Mapping[str, Any]) -> bool:
+def agent_is_addressed(
+    metadata: Mapping[str, Any],
+    *,
+    dm_channel_id_prefix: str = "",
+) -> bool:
     """Is a human plausibly waiting on THIS agent for this message?
 
-    True for a DM / group DM, a direct ``@mention`` (which is also how an
-    ``app_mention`` event arrives), and a thread the agent already
-    follows.  False for a passive top-level channel message and for
-    collective addresses (``@here`` / ``@channel``) — see
-    :class:`SlackTypingStatusMode`.
+    True for a DM / group DM, a direct ``@mention``, and a thread the
+    agent already follows.  False for a passive top-level channel message
+    and for collective addresses (``@here`` / ``@channel`` / ``@all``) —
+    see :class:`WorkingStatusMode`.
+
+    Primarily metadata-driven: every chat transport normalises its own
+    channel-kind vocabulary into ``channel_type``
+    (:data:`DIRECT_CHANNEL_TYPES` spans them all), so this does not need
+    to know any backend's id conventions.
+
+    ``dm_channel_id_prefix`` is the belt-and-braces fallback for the one
+    backend that has a meaningful one: a Slack channel id beginning
+    ``D`` is always a DM, which still resolves correctly if metadata
+    reaches here without ``channel_type`` at all.  It is **opt-in per
+    backend** and must stay empty for backends whose channel ids are
+    opaque — Mattermost's are 26-char alphanumerics, so a prefix test
+    there would mark arbitrary public channels as direct messages and
+    raise indicators for traffic nobody addressed to this agent.
     """
-    channel = _field(metadata, "channel")
-    if _field(metadata, "channel_type") in ("im", "mpim") or channel.startswith("D"):
+    if _field(metadata, "channel_type") in DIRECT_CHANNEL_TYPES:
+        return True
+    if dm_channel_id_prefix and _field(metadata, "channel").startswith(
+        dm_channel_id_prefix
+    ):
         return True
     if _field(metadata, "thread_follow_reason") == "mention":
         return True
@@ -297,16 +341,31 @@ def agent_is_addressed(metadata: Mapping[str, Any]) -> bool:
 
 
 @runtime_checkable
-class SlackStatusPoster(Protocol):
-    """The one Slack Web API call this module needs.
+class StatusPoster(Protocol):
+    """The backend call this module drives, plus what it can express.
 
-    Implemented by :class:`~crewlet.notifications.transports.slack.SlackTransport`,
-    which owns the per-agent bot tokens.  Never raises — a failed call
-    returns ``False`` and the status simply expires on Slack's side.
+    Implemented by each chat transport, which owns the per-agent
+    credentials.  ``set_status`` never raises — a failed call returns
+    ``False`` and the status simply expires on the backend's side.
     """
 
+    status_backend: str
+    """Transport name (``"slack"``, ``"mattermost"``) — matched against
+    the ``transport`` key on a trigger's metadata."""
+
+    supports_status_text: bool
+    """Whether ``status`` is rendered.  ``False`` for a fixed-vocabulary
+    typing indicator, which makes the phrase pools inert."""
+
+    status_refresh_interval: float
+    """Seconds between heartbeats, sized to this backend's expiry."""
+
+    dm_channel_id_prefix: str
+    """Channel-id prefix that unambiguously marks a DM on this backend,
+    or ``""`` when its ids are opaque.  See :func:`agent_is_addressed`."""
+
     async def set_status(
-        self, handle: str, channel: str, thread_ts: str, status: str
+        self, handle: str, channel: str, thread_id: str, status: str
     ) -> bool: ...
 
 
@@ -323,7 +382,7 @@ class _Session:
     """
 
     handle: str
-    conversation: SlackConversation
+    conversation: ChatConversation
     owners: set[str]
     seed: str
     phase: str
@@ -334,22 +393,22 @@ class _Session:
     task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
-class SlackTypingSession:
+class WorkingStatusSession:
     """A single turn's claim on a conversation's status indicator.
 
-    Returned by :meth:`SlackTypingStatus.begin`; the turn engine holds it
+    Returned by :meth:`WorkingStatusDriver.begin`; the turn engine holds it
     for the life of the turn.  Every method is best-effort and never
     raises — a broken indicator must not fail an agent turn.
     """
 
-    def __init__(self, manager: SlackTypingStatus, key: _Key, turn_id: str) -> None:
+    def __init__(self, manager: WorkingStatusDriver, key: _Key, turn_id: str) -> None:
         self._manager = manager
         self._key = key
         self._turn_id = turn_id
 
     @property
-    def conversation(self) -> SlackConversation:
-        return SlackConversation(channel=self._key[1], thread_ts=self._key[2])
+    def conversation(self) -> ChatConversation:
+        return ChatConversation(channel=self._key[1], thread_id=self._key[2])
 
     async def set_phase(self, phase: str) -> None:
         """Swap the status text as the turn moves between phases."""
@@ -366,34 +425,51 @@ class SlackTypingSession:
         await self._manager._end(self._key, self._turn_id, keep_alive=keep_alive)
 
 
-class SlackTypingStatus:
-    """Drives ``assistant.threads.setStatus`` for in-flight agent turns.
+class WorkingStatusDriver:
+    """Drives one chat backend's working indicator for in-flight turns.
 
-    Owned by the :class:`~crewlet.notifications.transports.slack.SlackTransport`
-    (which holds the per-agent bot tokens and the HTTP client), so its
-    heartbeats are torn down with the transport on shutdown or a live
-    config swap.
+    Owned by the transport (which holds the per-agent credentials and the
+    HTTP client), so its heartbeats are torn down with the transport on
+    shutdown or a live config swap.
     """
 
     def __init__(
         self,
-        poster: SlackStatusPoster,
-        mode: SlackTypingStatusMode = SlackTypingStatusMode.ADDRESSED,
+        poster: StatusPoster,
+        mode: WorkingStatusMode = WorkingStatusMode.ADDRESSED,
         *,
         phrases: StatusPhrases | None = None,
-        refresh_interval: float = REFRESH_INTERVAL_SECONDS,
+        refresh_interval: float | None = None,
         max_session_seconds: float = MAX_SESSION_SECONDS,
     ) -> None:
         self._poster = poster
         self._mode = mode
         self._phrases = phrases if phrases is not None else StatusPhrases()
-        self._refresh_interval = refresh_interval
+        # The poster's own cadence wins unless a caller pins one (tests,
+        # or an operator working around a backend quirk): the interval is
+        # a property of how fast that backend expires a status, and the
+        # poster is what knows.
+        self._refresh_interval = (
+            refresh_interval
+            if refresh_interval is not None
+            else getattr(poster, "status_refresh_interval", REFRESH_INTERVAL_SECONDS)
+        )
         self._max_session_seconds = max_session_seconds
         self._sessions: dict[_Key, _Session] = {}
         self._lock = asyncio.Lock()
 
     @property
-    def mode(self) -> SlackTypingStatusMode:
+    def backend(self) -> str:
+        """The chat backend this driver raises indicators on."""
+        return getattr(self._poster, "status_backend", "")
+
+    @property
+    def supports_status_text(self) -> bool:
+        """Whether this backend renders the phrase text at all."""
+        return bool(getattr(self._poster, "supports_status_text", True))
+
+    @property
+    def mode(self) -> WorkingStatusMode:
         return self._mode
 
     @property
@@ -402,9 +478,25 @@ class SlackTypingStatus:
         return self._phrases
 
     @property
-    def active_conversations(self) -> list[SlackConversation]:
+    def refresh_interval(self) -> float:
+        """Seconds between heartbeats for this backend."""
+        return self._refresh_interval
+
+    @property
+    def active_conversations(self) -> list[ChatConversation]:
         """Conversations currently showing a status (for tests / debug)."""
         return [s.conversation for s in self._sessions.values()]
+
+    def _initial_status(self, phase: str, seed: str) -> str:
+        """The text a new session opens with.
+
+        Empty on a backend that cannot render text — there is nothing to
+        say, and a phrase drawn but never shown would only mislead a
+        reader of the logs.
+        """
+        if not self.supports_status_text:
+            return ""
+        return self._phrases.pick(phase, seed=seed, rotation=0)
 
     async def begin(
         self,
@@ -414,33 +506,35 @@ class SlackTypingStatus:
         metadata: Mapping[str, Any] | None,
         liveness: Callable[[], bool] | None = None,
         phase: str = "plan",
-    ) -> SlackTypingSession | None:
+    ) -> WorkingStatusSession | None:
         """Open (or join) the status session for a turn's conversation.
 
         Returns ``None`` — meaning "nothing to drive" — when the feature
-        is off, the trigger isn't a Slack message, or the mode is
+        is off, the trigger isn't from this backend, or the mode is
         ``addressed`` and nobody addressed this agent.  ``liveness`` is
         polled by the heartbeat so an indicator can't outlive a busy agent
         by more than one refresh interval, even if the owning turn dies
-        without calling :meth:`SlackTypingSession.end`.
+        without calling :meth:`WorkingStatusSession.end`.
         """
-        if self._mode is SlackTypingStatusMode.OFF or not handle:
+        if self._mode is WorkingStatusMode.OFF or not handle:
             return None
-        conversation = slack_conversation(metadata)
+        conversation = chat_conversation(metadata, self.backend)
         if conversation is None:
             return None
-        assert metadata is not None  # slack_conversation rejects None
-        if self._mode is SlackTypingStatusMode.ADDRESSED and not agent_is_addressed(
-            metadata
+        assert metadata is not None  # chat_conversation rejects None
+        if self._mode is WorkingStatusMode.ADDRESSED and not agent_is_addressed(
+            metadata,
+            dm_channel_id_prefix=getattr(self._poster, "dm_channel_id_prefix", ""),
         ):
             logger.debug(
-                "slack_typing_status_not_addressed",
+                "working_status_not_addressed",
+                backend=self.backend,
                 handle=handle,
                 channel=conversation.channel,
             )
             return None
 
-        key = (handle, conversation.channel, conversation.thread_ts)
+        key = (handle, conversation.channel, conversation.thread_id)
         async with self._lock:
             session = self._sessions.get(key)
             if session is None:
@@ -450,7 +544,7 @@ class SlackTypingStatus:
                 # indicator rather than a fresh turn.
                 seed = (
                     f"{handle}|{conversation.channel}|"
-                    f"{conversation.thread_ts}|{turn_id}"
+                    f"{conversation.thread_id}|{turn_id}"
                 )
                 session = _Session(
                     handle=handle,
@@ -458,20 +552,21 @@ class SlackTypingStatus:
                     owners={turn_id},
                     seed=seed,
                     phase=phase,
-                    status=self._phrases.pick(phase, seed=seed, rotation=0),
+                    status=self._initial_status(phase, seed),
                     started_at=time.monotonic(),
                     liveness=liveness if liveness is not None else (lambda: True),
                 )
                 self._sessions[key] = session
                 session.task = asyncio.create_task(
                     self._refresh_loop(key, session),
-                    name=f"slack-typing-{handle}",
+                    name=f"{self.backend or 'chat'}-working-status-{handle}",
                 )
                 logger.info(
-                    "slack_typing_status_started",
+                    "working_status_started",
+                    backend=self.backend,
                     handle=handle,
                     channel=conversation.channel,
-                    thread_ts=conversation.thread_ts,
+                    thread_id=conversation.thread_id,
                     turn_id=turn_id,
                 )
             else:
@@ -481,7 +576,7 @@ class SlackTypingStatus:
                     session.liveness = liveness
             current = session.status
         await self._post(session, current)
-        return SlackTypingSession(self, key, turn_id)
+        return WorkingStatusSession(self, key, turn_id)
 
     async def stop(self) -> None:
         """Cancel every heartbeat and clear every live status.
@@ -502,15 +597,22 @@ class SlackTypingStatus:
         """Move *session* to *phase*, drawing its next line.
 
         Returns ``False`` — nothing to post — when the session is already
-        in that phase.  The guard is on the *phase*, not the rendered
-        text: with a pool behind each phase, re-picking for the same
-        phase would swap the words for no reason a reader could see.
+        in that phase, or when the backend cannot render text at all (the
+        heartbeat is already keeping the indicator up, and re-posting on
+        a boundary nobody can see is a wasted request against a
+        typing-indicator rate limit).
+
+        The guard is on the *phase*, not the rendered text: with a pool
+        behind each phase, re-picking for the same phase would swap the
+        words for no reason a reader could see.
 
         Caller holds the lock.
         """
         if session.phase == phase:
             return False
         session.phase = phase
+        if not self.supports_status_text:
+            return False
         session.rotation += 1
         session.status = self._phrases.pick(
             phase, seed=session.seed, rotation=session.rotation
@@ -527,7 +629,7 @@ class SlackTypingStatus:
 
     async def _end(self, key: _Key, turn_id: str, *, keep_alive: bool) -> None:
         if keep_alive:
-            logger.debug("slack_typing_status_held", turn_id=turn_id)
+            logger.debug("working_status_held", turn_id=turn_id)
             return
         async with self._lock:
             session = self._sessions.get(key)
@@ -538,16 +640,17 @@ class SlackTypingStatus:
                 return
             del self._sessions[key]
         logger.info(
-            "slack_typing_status_cleared",
+            "working_status_cleared",
+            backend=self.backend,
             handle=session.handle,
             channel=session.conversation.channel,
-            thread_ts=session.conversation.thread_ts,
+            thread_id=session.conversation.thread_id,
             turn_id=turn_id,
         )
         await self._finish(session, cancel=True)
 
     async def _finish(self, session: _Session, *, cancel: bool) -> None:
-        """Stop a session's heartbeat and clear its Slack status."""
+        """Stop a session's heartbeat and clear its status."""
         task = session.task
         if cancel and task is not None and task is not asyncio.current_task():
             task.cancel()
@@ -558,8 +661,8 @@ class SlackTypingStatus:
     async def _refresh_loop(self, key: _Key, session: _Session) -> None:
         """Re-assert the status until the session ends.
 
-        Slack drops a status after two minutes, and clears it outright the
-        moment the agent posts into the thread — so the same loop that
+        Every backend drops a status after a while, and clears it outright
+        the moment the agent posts into the thread — so the same loop that
         keeps a long turn's indicator alive is also what brings it back
         after a mid-turn reply while later phases are still running.
         """
@@ -571,7 +674,8 @@ class SlackTypingStatus:
                 elapsed = time.monotonic() - session.started_at
                 if elapsed >= self._max_session_seconds:
                     logger.warning(
-                        "slack_typing_status_expired",
+                        "working_status_expired",
+                        backend=self.backend,
                         handle=session.handle,
                         channel=session.conversation.channel,
                         elapsed_seconds=round(elapsed, 1),
@@ -581,7 +685,8 @@ class SlackTypingStatus:
                     return
                 if not session.liveness():
                     logger.info(
-                        "slack_typing_status_abandoned",
+                        "working_status_abandoned",
+                        backend=self.backend,
                         handle=session.handle,
                         channel=session.conversation.channel,
                         owners=sorted(session.owners),
@@ -593,9 +698,10 @@ class SlackTypingStatus:
             raise
         except Exception:
             # A crashed heartbeat must not take the agent down with it;
-            # the status simply expires on Slack's side within 2 minutes.
+            # the status simply expires on the backend's side.
             logger.exception(
-                "slack_typing_status_refresh_failed",
+                "working_status_refresh_failed",
+                backend=self.backend,
                 handle=session.handle,
                 channel=session.conversation.channel,
             )
@@ -612,12 +718,13 @@ class SlackTypingStatus:
             ok = await self._poster.set_status(
                 session.handle,
                 session.conversation.channel,
-                session.conversation.thread_ts,
+                session.conversation.thread_id,
                 status,
             )
         except Exception as exc:
             logger.warning(
-                "slack_typing_status_post_failed",
+                "working_status_post_failed",
+                backend=self.backend,
                 handle=session.handle,
                 channel=session.conversation.channel,
                 error=str(exc),
@@ -625,7 +732,25 @@ class SlackTypingStatus:
             return
         if not ok:
             logger.debug(
-                "slack_typing_status_post_rejected",
+                "working_status_post_rejected",
+                backend=self.backend,
                 handle=session.handle,
                 channel=session.conversation.channel,
             )
+
+
+__all__ = [
+    "DEFAULT_PHASE",
+    "DIRECT_CHANNEL_TYPES",
+    "MAX_SESSION_SECONDS",
+    "PHASE_PHRASES",
+    "REFRESH_INTERVAL_SECONDS",
+    "ChatConversation",
+    "StatusPhrases",
+    "StatusPoster",
+    "WorkingStatusDriver",
+    "WorkingStatusMode",
+    "WorkingStatusSession",
+    "agent_is_addressed",
+    "chat_conversation",
+]

@@ -34,6 +34,24 @@ if TYPE_CHECKING:
 
 logger = get_logger("notifications.handle")
 
+#: Companion namespaces to consult when a transport's own namespace does
+#: not resolve an external id.
+#:
+#: Chat backends register an agent's identity under TWO keys, because the
+#: two halves of the system see different identifiers: inbound payloads
+#: name a poster by *bot/user id*, while humans and MCP tools address the
+#: same seat by *member id* or *username*.  Registering both and falling
+#: back here is what lets a fellow agent's message be annotated the same
+#: way a human's is.
+#:
+#: A per-backend list rather than a hardcoded ``if transport == "slack"``:
+#: every chat backend needs the same split, and a second ``if`` is how
+#: this silently stops covering the third one.
+_BOT_ID_NAMESPACES: dict[str, tuple[str, ...]] = {
+    "slack": ("slack_bot",),
+    "mattermost": ("mattermost_bot",),
+}
+
 _VALID_HANDLE_RE = HANDLE_RE
 
 
@@ -365,17 +383,21 @@ class HandleRegistry:
         webhook hot path (sender attribution per changelog line), so
         no org walks here.
 
-        Slack identity spans two namespaces: human member IDs under
-        ``slack``, agent *bot user* IDs under ``slack_bot`` (resolved
-        by the transport's ``auth.test`` loop) — consult both so a
-        fellow agent's Slack message annotates the same way a human's
-        does.
+        Chat identity spans two namespaces per backend: human member IDs
+        under the transport's own name, agent *bot* IDs under its
+        ``_bot`` companion (registered by each transport's identity
+        resolution at start).  Both are consulted so a fellow agent's
+        message annotates the same way a human's does — see
+        :data:`_BOT_ID_NAMESPACES`.
         """
         if not external_id:
             return None
         handle = self._external_to_handle.get(transport_name, {}).get(external_id, "")
-        if not handle and transport_name == "slack":
-            handle = self._external_to_handle.get("slack_bot", {}).get(external_id, "")
+        if not handle:
+            for alias in _BOT_ID_NAMESPACES.get(transport_name, ()):
+                handle = self._external_to_handle.get(alias, {}).get(external_id, "")
+                if handle:
+                    break
         if handle:
             return self.resolve_party(handle)
         return None

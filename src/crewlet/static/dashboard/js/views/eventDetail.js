@@ -129,6 +129,20 @@ export function createEventDetailView({ api, navigate, params }) {
       ]);
       if (e.text)
         specific += `<div class="block-label">Message</div><pre class="code">${esc(e.text)}</pre>`;
+    } else if (source === "mattermost") {
+      // Mattermost events arrive from the websocket fleet, not a webhook,
+      // so the post is nested rather than at the envelope root.
+      const post = body.post || {};
+      specific = kv([
+        ["Event", body.event],
+        ["Channel", body.channel_name || post.channel_id],
+        ["Type", body.channel_type],
+        ["User", body.sender_name || post.user_id],
+        ["Thread", post.root_id],
+        ["Replayed", body.replayed ? "yes (reconnect backfill)" : ""],
+      ]);
+      if (post.message)
+        specific += `<div class="block-label">Message</div><pre class="code">${esc(post.message)}</pre>`;
     } else if (source === "github") {
       const pr = body.pull_request;
       const issue = body.issue;

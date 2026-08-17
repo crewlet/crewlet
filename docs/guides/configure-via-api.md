@@ -195,7 +195,7 @@ curl -X PUT $CREWLET_URL/config/learning \
 
 > **Note:** Learning is the one subsystem that does NOT live-restart. The new config is stored for the next engine restart; running `ReflectEngine` / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then. A WARNING is logged.
 
-### 2.6 Integrations (Plane, Slack, GitLab)
+### 2.6 Integrations (Plane, Mattermost, GitLab)
 
 Each route sets `integrations.<kind>` (the route does the nesting; the body is the bare config block). These carry only **non-tool** config — the MCP tool servers are declared under `mcp_servers` ([section 2.7](#27-mcp-servers)), and the org-wide knowledge read scope lives in the `knowledge` block (set via the full PUT; Nimbus deliberately omits it — reads are membership-bound, see the comment in the example YAML).
 
@@ -222,11 +222,24 @@ curl -X PUT $CREWLET_URL/config/integrations/plane \
     }
   }'
 
-# Slack (marker — enables the transport; per-agent bot tokens live on each
-# role's `integrations.slack` block + `mcp_env.slack`, see section 2.9)
-curl -X PUT $CREWLET_URL/config/integrations/slack \
+# Mattermost — enables BOTH the outbound transport and the inbound
+# websocket fleet (one connection per agent seat). Per-agent bot tokens
+# live on each role's `integrations.mattermost` block + `mcp_env.mattermost`,
+# see section 2.9. The `provisioning` sub-block is read only by
+# `crewlet mattermost provision`, never the engine.
+curl -X PUT $CREWLET_URL/config/integrations/mattermost \
   -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{
+    "enabled": true,
+    "url": "https://chat.nimbus.example",
+    "team": "nimbus",
+    "typing_status": "addressed",
+    "provisioning": {
+      "username_prefix": "",
+      "channels": ["town-square", "engineering", "product"],
+      "display_name_suffix": " (AI)"
+    }
+  }'
 
 # GitLab (the code host) — webhook + engine-read side; the `provisioning`
 # sub-block is read only by `crewlet gitlab provision`, never the engine.
@@ -252,11 +265,11 @@ curl -X PUT $CREWLET_URL/config/integrations/gitlab \
   }'
 ```
 
-The Plane/Slack/GitLab MCP *tool* servers are declared under `mcp_servers` ([section 2.7](#27-mcp-servers)), not here — each is a per-agent stdio template (`shared: false`) whose credentials come from role `mcp_env`. Changing one server's env there (e.g. a new `PLANE_BASE_URL`) restarts only that server via `_respawn_role_mcp`, not unrelated ones like `tavily`.
+The Plane/Mattermost/GitLab MCP *tool* servers are declared under `mcp_servers` ([section 2.7](#27-mcp-servers)), not here — each is a per-agent stdio template (`shared: false`) whose credentials come from role `mcp_env`. Changing one server's env there (e.g. a new `PLANE_BASE_URL`) restarts only that server via `_respawn_role_mcp`, not unrelated ones like `tavily`.
 
 ### 2.7 MCP servers
 
-The roles in [section 2.9](#29-roles) reference three per-agent stdio templates (`plane`, `slack`, `gitlab`) plus the shared `tavily` — declare them all, or the role `mcp_env` blocks point at servers the engine doesn't know:
+The roles in [section 2.9](#29-roles) reference three per-agent stdio templates (`plane`, `mattermost`, `gitlab`) plus the shared `tavily` — declare them all, or the role `mcp_env` blocks point at servers the engine doesn't know:
 
 ```bash
 # List
@@ -279,18 +292,17 @@ curl -X POST $CREWLET_URL/config/mcp-servers \
     }
   }'
 
-# Slack — per-agent token from role mcp_env.slack
+# Mattermost — per-agent token from role mcp_env.mattermost
 curl -X POST $CREWLET_URL/config/mcp-servers \
   -H "$AUTH" -H "Content-Type: application/json" \
   -d '{
-    "name": "slack",
+    "name": "mattermost",
     "shared": false,
-    "command": "npm",
-    "args": ["exec", "--yes", "--", "slack-mcp-server@latest", "--transport", "stdio"],
-    "tool_prefix": "slack_",
+    "command": "uvx",
+    "args": ["mcp-server-mattermost==0.5.1"],
+    "tool_prefix": "mattermost_",
     "env": {
-      "SLACK_MCP_ADD_MESSAGE_TOOL": "true",
-      "SLACK_MCP_ENABLED_TOOLS": "conversations_history,conversations_replies,conversations_add_message,reactions_add,reactions_remove,channels_list,usergroups_list,usergroups_me,usergroups_create,usergroups_update,usergroups_users_update,users_search"
+      "MATTERMOST_URL": "${MATTERMOST_URL}"
     }
   }'
 
@@ -427,7 +439,7 @@ curl -s $CREWLET_URL/config/units/Leadership -H "$AUTH" | jq
 curl -s $CREWLET_URL/config/roles -H "$AUTH" | jq
 ```
 
-Each `POST /config/roles` body carries a `unit: <name>` reference; the engine resolves it at build time, drops the role inside the named unit, and inherits any unit-level `mcp_env` so per-agent MCP instances spawn with the right credentials. (The unit's Plane project *identity* — for webhook routing and as the team write home — lives on the unit's `integrations.plane.project`, not on the role, and is **not** what scopes knowledge reads.) Per-agent tool credentials go in the role's `mcp_env` (keyed by server name): every seat carries `mcp_env.plane.PLANE_API_KEY` (its provisioned Plane service-account token) and `mcp_env.slack.SLACK_MCP_XOXB_TOKEN`; the GitLab-facing seats add `mcp_env.gitlab.GITLAB_TOKEN` for the `glab` stdio server. The Slack **transport** identity goes in the role's `integrations.slack` block. A Slack-enabled role names the same bot token in both `integrations.slack.bot_token` and `mcp_env.slack.SLACK_MCP_XOXB_TOKEN` — two consumers, one secret. Bodies below mirror `examples/nimbus.company.yaml` — keep them verbatim or trim long responsibilities / behavioural-guidelines lists to taste. (For brevity the bodies below omit the example's role `schedules:` and the three engineering seats' `sandbox:` blocks — take those verbatim from the YAML if you want the scheduled reviews and the code-runtime sandbox.)
+Each `POST /config/roles` body carries a `unit: <name>` reference; the engine resolves it at build time, drops the role inside the named unit, and inherits any unit-level `mcp_env` so per-agent MCP instances spawn with the right credentials. (The unit's Plane project *identity* — for webhook routing and as the team write home — lives on the unit's `integrations.plane.project`, not on the role, and is **not** what scopes knowledge reads.) Per-agent tool credentials go in the role's `mcp_env` (keyed by server name): every seat carries `mcp_env.plane.PLANE_API_KEY` (its provisioned Plane service-account token) and `mcp_env.mattermost.MATTERMOST_TOKEN`; the GitLab-facing seats add `mcp_env.gitlab.GITLAB_TOKEN` for the `glab` stdio server. The Mattermost **transport** identity goes in the role's `integrations.mattermost` block. A Mattermost-enabled role names the same bot token in both `integrations.mattermost.bot_token` and `mcp_env.mattermost.MATTERMOST_TOKEN` — three consumers (websocket, REST, MCP), one secret. Bodies below mirror `examples/nimbus.company.yaml` — keep them verbatim or trim long responsibilities / behavioural-guidelines lists to taste. (For brevity the bodies below omit the example's role `schedules:` and the three engineering seats' `sandbox:` blocks — take those verbatim from the YAML if you want the scheduled reviews and the code-runtime sandbox.)
 
 **Agent CEO** — Leadership / Executives:
 
@@ -460,17 +472,16 @@ curl -X POST $CREWLET_URL/config/roles \
       "When documenting strategic decisions or company-wide announcements, publish them as Plane pages in the LEAD project so all team members can reference them — every agent'"'"'s `## Relevant knowledge` search runs as their own Plane user, so anyone with access to the LEAD project will surface it."
     ],
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_CEO}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_CEO}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_CEO}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_CEO}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_CEO}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_CEO}"
       }
     }
   }'
@@ -487,17 +498,16 @@ curl -X POST $CREWLET_URL/config/roles \
     "goal": "Own Nimbus'"'"'s technical architecture and engineering execution — make architecture decisions, break down epics into actionable engineering tasks, assign work to the SWE team, manage sprints, and ensure the platform is built with the right patterns for scale, observability, and extensibility",
     "manages": ["Agent SWE", "Agent Frontend SWE", "Agent AI Systems Engineer"],
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_CTO}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_CTO}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_CTO}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_CTO}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_CTO}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_CTO}"
       }
     }
   }'
@@ -514,17 +524,16 @@ curl -X POST $CREWLET_URL/config/roles \
     "manages": ["Agent DevRel"],
     "goal": "Drive Nimbus'"'"'s product strategy by researching the composable infrastructure and AI-framework markets, proposing high-impact user stories across both the control plane and the Phase-2 framework, and maintaining a prioritized Plane backlog aligned with Nimbus'"'"'s two-phase vision",
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_PM}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_PM}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_PM}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_PM}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_PM}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_PM}"
       }
     }
   }'
@@ -540,17 +549,16 @@ curl -X POST $CREWLET_URL/config/roles \
     "unit": "Developer Relations",
     "goal": "Make the Nimbus platform — both the control plane and the Phase-2 AI framework — discoverable, learnable, and adoptable. Own developer-facing documentation, tutorials, runnable examples, and the public narrative on the website blog so an external developer can go from \"never heard of Nimbus\" to \"running a distributed job in 10 minutes\"",
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_DEVREL}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_DEVREL}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_DEVREL}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_DEVREL}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_DEVREL}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_DEVREL}"
       },
       "gitlab": {
         "GITLAB_TOKEN": "${GITLAB_TOKEN_DEVREL}",
@@ -571,17 +579,16 @@ curl -X POST $CREWLET_URL/config/roles \
     "email": "agent-swe@nimbus.example",
     "goal": "Pick up the assigned Plane work items and implement production-grade Go features for Nimbus'"'"'s control plane (nimbuscore, nimbusk0s), write comprehensive tests, and ship clean, reviewable code that meets acceptance criteria — while keeping work-item status, worklogs, and comments up to date throughout the lifecycle of every task",
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_SWE}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_SWE}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_SWE}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_SWE}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_SWE}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_SWE}"
       },
       "gitlab": {
         "GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}",
@@ -601,17 +608,16 @@ curl -X POST $CREWLET_URL/config/roles \
     "unit": "Core",
     "goal": "Build and evolve the Nimbus Console and the marketing website — deliver the AI-services management UI (models, fine-tuning, datasets, jobs) the README promises today, and keep the console in lock-step with new nimbuscore endpoints",
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_FE}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_FE}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_FE}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_FE}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_FE}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_FE}"
       },
       "gitlab": {
         "GITLAB_TOKEN": "${GITLAB_TOKEN_FE}",
@@ -631,17 +637,16 @@ curl -X POST $CREWLET_URL/config/roles \
     "unit": "Core",
     "goal": "Design and build the Phase-2 Nimbus AI framework — a Python-first, open-source framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving for AI/ML teams. Own the framework'"'"'s runtime, SDK, CLI, and cluster-side integration with nimbuscore",
     "integrations": {
-      "slack": {
-        "bot_token": "${SLACK_BOT_TOKEN_AI}",
-        "signing_secret": "${SLACK_SIGNING_SECRET_AI}"
+      "mattermost": {
+        "bot_token": "${MATTERMOST_TOKEN_AI}"
       }
     },
     "mcp_env": {
       "plane": {
         "PLANE_API_KEY": "${PLANE_TOKEN_AI}"
       },
-      "slack": {
-        "SLACK_MCP_XOXB_TOKEN": "${SLACK_BOT_TOKEN_AI}"
+      "mattermost": {
+        "MATTERMOST_TOKEN": "${MATTERMOST_TOKEN_AI}"
       },
       "gitlab": {
         "GITLAB_TOKEN": "${GITLAB_TOKEN_AI}",
@@ -660,7 +665,7 @@ curl -s $CREWLET_URL/config/roles/agent-ceo -H "$AUTH" | jq
 # curl -X DELETE $CREWLET_URL/config/roles/agent-ceo -H "$AUTH"
 ```
 
-`POST /config/roles` spawns one new agent and (when the `unit:` reference resolves) triggers a per-role MCP server spawn for it: a `plane-mcp-server` instance with the role's own `mcp_env.plane.PLANE_API_KEY`, a Slack MCP with the per-agent `mcp_env.slack.SLACK_MCP_XOXB_TOKEN`, and a `glab mcp serve` instance when `mcp_env.gitlab.GITLAB_TOKEN` is set. `DELETE` terminates the agent and stops its per-role MCP instances. `PUT` swaps the `AgentDefinition` in place — the next turn renders the new prompts.
+`POST /config/roles` spawns one new agent and (when the `unit:` reference resolves) triggers a per-role MCP server spawn for it: a `plane-mcp-server` instance with the role's own `mcp_env.plane.PLANE_API_KEY`, a Mattermost MCP with the per-agent `mcp_env.mattermost.MATTERMOST_TOKEN`, and a `glab mcp serve` instance when `mcp_env.gitlab.GITLAB_TOKEN` is set. `DELETE` terminates the agent and stops its per-role MCP instances. `PUT` swaps the `AgentDefinition` in place — the next turn renders the new prompts.
 
 ### 2.10 Budgets
 

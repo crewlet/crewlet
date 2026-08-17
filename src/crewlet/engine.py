@@ -27,6 +27,7 @@ from crewlet.config import (
     register_github_accounts_from_org,
     register_gitlab_accounts_from_org,
     register_jira_accounts_from_org,
+    register_mattermost_bots_from_org,
     register_plane_accounts_from_org,
     register_slack_apps_from_org,
     resolve_env_vars,
@@ -1282,6 +1283,18 @@ class Engine:
         if isinstance(slack_transport, SlackTransport):
             slack_transport.set_handle_registry(self.handle_registry)
             register_slack_apps_from_org(slack_transport, self.org)
+
+        # Register per-agent Mattermost bots from role configs.  Unlike
+        # every other transport this one also needs the event queue: it
+        # owns the inbound websocket fleet, so it is a PRODUCER of
+        # inbound events rather than only a consumer of outbound ones.
+        from crewlet.notifications.transports.mattermost import MattermostTransport
+
+        mattermost_transport = transports_dict.get("mattermost")
+        if isinstance(mattermost_transport, MattermostTransport):
+            mattermost_transport.set_handle_registry(self.handle_registry)
+            mattermost_transport.set_event_queue(self.event_queue)
+            register_mattermost_bots_from_org(mattermost_transport, self.org)
 
         from crewlet.notifications.transports.jira import JiraTransport
 
@@ -2694,6 +2707,17 @@ class Engine:
             if self._plane_config is not None
             else None
         )
+        # Per-agent Slack signing secrets, so the embedded API can verify
+        # inbound Slack requests at the edge without reaching into the
+        # transport (the standalone API has no engine to reach into, and
+        # gets the same map from attach_config_refresh).
+        slack_signing_secrets = {
+            handle: app_cfg.signing_secret
+            for handle, app_cfg in getattr(
+                self._get_running_slack_transport(), "apps", {}
+            ).items()
+            if app_cfg.signing_secret
+        }
         forge_app_id = getattr(self, "_forge_app_id", "")
         bootstrap = getattr(self, "_bootstrap", None)
         store = getattr(self, "_company_config_store", None)
@@ -2721,6 +2745,7 @@ class Engine:
             github_webhook_secret=gh_secret,
             gitlab_signing_secret=gl_signing,
             plane_webhook_secret=pl_secret,
+            slack_signing_secrets=slack_signing_secrets,
             sandbox_otel_receiver=getattr(self, "_sandbox_otel_receiver", None),
             forge_app_id=forge_app_id,
             bootstrap=bootstrap,
@@ -4020,6 +4045,11 @@ class Engine:
         # drops until the engine is restarted.
         if "slack" in new_dict and old_dict.get("slack") is not new_dict["slack"]:
             self._refresh_slack_apps()
+        if (
+            "mattermost" in new_dict
+            and old_dict.get("mattermost") is not new_dict["mattermost"]
+        ):
+            self._refresh_mattermost_bots()
         self._reseed_notification_routing()
         # The per-transport refreshers above only run for transports
         # PRESENT in the new dict — when the knowledge backend was
@@ -4593,6 +4623,79 @@ class Engine:
         except Exception as exc:
             logger.error("slack_app_register_failed", role=role.name, error=str(exc))
 
+    def _get_running_mattermost_transport(self) -> Any:
+        """Return the running ``MattermostTransport`` or ``None``."""
+        if self.notification_service is None:
+            return None
+        from crewlet.notifications.transports.mattermost import MattermostTransport
+
+        transport = self.notification_service.transports.get("mattermost")
+        if not isinstance(transport, MattermostTransport):
+            return None
+        return transport
+
+    def _refresh_mattermost_bots(self) -> None:
+        """Re-register per-agent bots on a rebuilt MattermostTransport.
+
+        A fresh transport starts with an empty bot map AND no websocket
+        fleet, so without this a live integrations PUT leaves Mattermost
+        entirely deaf until a restart.  The queue has to be re-supplied
+        too: the fleet is started from ``transport.start()``, which the
+        notification service calls right after this.
+        """
+        transport = self._get_running_mattermost_transport()
+        if transport is None:
+            return
+        if self.handle_registry is not None:
+            transport.set_handle_registry(self.handle_registry)
+        transport.set_event_queue(self.event_queue)
+        try:
+            register_mattermost_bots_from_org(transport, self.org)
+            logger.info("mattermost_bots_refreshed_live")
+        except Exception as exc:
+            logger.error("mattermost_bots_refresh_failed", error=str(exc))
+
+    async def _register_role_mattermost_bot(self, role: Any) -> None:
+        """Register one role's Mattermost bot on the running transport.
+
+        Used from the ``_apply_org_diff`` role-add branch, where the new
+        role is not yet in ``self.org`` so ``_refresh_mattermost_bots``
+        would miss it.  Registering here also opens that seat's websocket
+        immediately — the fleet starts a connection for any seat
+        registered while it is running — so a live-added agent is
+        reachable on its first turn rather than after the next restart.
+        """
+        transport = self._get_running_mattermost_transport()
+        if transport is None or not role.mattermost:
+            return
+        from crewlet.notifications.transports.mattermost import MattermostBotConfig
+
+        if self.handle_registry is not None:
+            transport.set_handle_registry(self.handle_registry)
+        resolved = resolve_env_vars(role.mattermost)
+        bot_token = resolved.get("bot_token", "")
+        handle = role.get_handle()
+        if not bot_token:
+            logger.warning("mattermost_bot_token_empty", role=role.name)
+            return
+        try:
+            transport.register_bot(
+                handle,
+                MattermostBotConfig(
+                    bot_token=bot_token,
+                    username=resolved.get("username", "") or handle,
+                    channel=resolved.get("channel", ""),
+                ),
+            )
+            fleet = transport.fleet
+            if fleet is not None:
+                await fleet.register_seat(handle, bot_token)
+            logger.info("mattermost_bot_registered_live", handle=handle, role=role.name)
+        except Exception as exc:
+            logger.error(
+                "mattermost_bot_register_failed", role=role.name, error=str(exc)
+            )
+
     async def _refresh_github_handles(self, new: Any) -> None:
         """Re-register GitHub usernames from the org for webhook routing."""
         if self.handle_registry is None or self.mcp_bridge is None:
@@ -5092,6 +5195,7 @@ class Engine:
         if self._tier_b_done:
             await self._respawn_role_mcp(role)
             self._register_role_slack_app(role)
+            await self._register_role_mattermost_bot(role)
 
     async def _decommission_role_live(self, role_name: str, old_org: Any) -> None:
         """Tear down a role's agent instance + per-role MCP (apply_config path).

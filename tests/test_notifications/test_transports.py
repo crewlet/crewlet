@@ -29,17 +29,17 @@ class _MemoryThreadFollowRepo:
     """In-memory repo for tests."""
 
     def __init__(self) -> None:
-        self._store: dict[tuple[str, str, str], str] = {}
+        self._store: dict[tuple[str, str, str, str], str] = {}
 
     async def upsert(
-        self, handle: str, channel: str, thread_ts: str, reason: str
+        self, backend: str, handle: str, channel: str, thread_id: str, reason: str
     ) -> None:
-        self._store[(handle, channel, thread_ts)] = reason
+        self._store[(backend, handle, channel, thread_id)] = reason
 
     async def is_following(
-        self, handle: str, channel: str, thread_ts: str
+        self, backend: str, handle: str, channel: str, thread_id: str
     ) -> str | None:
-        return self._store.get((handle, channel, thread_ts))
+        return self._store.get((backend, handle, channel, thread_id))
 
 
 def _make_registry_parts():

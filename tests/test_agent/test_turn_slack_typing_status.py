@@ -21,8 +21,8 @@ from crewlet.agent.turn import TurnEngine
 from crewlet.events.types import ExternalNotification
 from crewlet.notifications.typing_status import (
     PHASE_PHRASES,
-    SlackTypingStatus,
-    SlackTypingStatusMode,
+    WorkingStatusDriver,
+    WorkingStatusMode,
 )
 from crewlet.org.models import Organization, OrgUnit, Role
 from crewlet.providers.llm.protocol import Completion, ToolCall
@@ -48,13 +48,18 @@ class _QueueStub:
 
 
 class _FakePoster:
+    status_backend = "slack"
+    supports_status_text = True
+    status_refresh_interval = 45.0
+    dm_channel_id_prefix = "D"
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
 
     async def set_status(
-        self, handle: str, channel: str, thread_ts: str, status: str
+        self, handle: str, channel: str, thread_id: str, status: str
     ) -> bool:
-        self.calls.append((handle, channel, thread_ts, status))
+        self.calls.append((handle, channel, thread_id, status))
         return True
 
     @property
@@ -67,9 +72,9 @@ class _SlackTransportStub:
 
     name = "slack"
 
-    def __init__(self, mode: SlackTypingStatusMode = SlackTypingStatusMode.ADDRESSED):
+    def __init__(self, mode: WorkingStatusMode = WorkingStatusMode.ADDRESSED):
         self.poster = _FakePoster()
-        self.typing_status = SlackTypingStatus(self.poster, mode)
+        self.typing_status = WorkingStatusDriver(self.poster, mode)
 
 
 class _ServiceStub:
@@ -199,7 +204,7 @@ async def test_passive_channel_message_shows_nothing_in_addressed_mode() -> None
 
 async def test_always_mode_covers_a_passive_channel_message() -> None:
     agent = _mk_agent()
-    transport = _SlackTransportStub(SlackTypingStatusMode.ALWAYS)
+    transport = _SlackTransportStub(WorkingStatusMode.ALWAYS)
     engine = _mk_engine(transport)
     passive = {k: v for k, v in SLACK_META.items() if k != "thread_follow_reason"}
 

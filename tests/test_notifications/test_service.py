@@ -615,9 +615,17 @@ async def test_inbound_slack_body_enriched_with_prompt(bus, pool):
     # Body must contain the original message text.
     assert "Hey engineer, can you update the report?" in event.body
     # Body must carry Slack-specific enrichment from the prompt builder
-    # (mention format + reaction tool pointer).
+    # (mention format + the message reference to act on).
     assert "<@USER_ID>" in event.body
-    assert "slack_reactions_add" in event.body
+    assert "Message id:" in event.body
+    # ...and must NOT name a third-party tool.  ``docs/concepts/
+    # tool-capabilities.md`` is explicit that engine prompts describe the
+    # capability and let the LLM map it to whatever its MCP server
+    # actually registered — the deployed server's names are not knowable
+    # here, and a guess that does not resolve is worse than no name at
+    # all (the turn engine's own comments cite this exact string as the
+    # canonical wrong guess).
+    assert "slack_reactions_add" not in event.body
     # Body must contain channel + timestamp context.
     assert "C001" in event.body
     assert "1234567890.000100" in event.body

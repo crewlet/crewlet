@@ -440,6 +440,20 @@ src/crewlet/          # Main package
                       #   per-role gate is role.sandbox, engine provider is
                       #   providers.sandbox (see docs/concepts/code-sandbox.md)
   notifications/      # External notification system (outbound transports;
+                      #   transports/chat_threads.py — BACKEND-NEUTRAL thread
+                      #   follow model (ChatThreadTracker + MentionGrammar);
+                      #   each backend supplies only its mention grammar
+                      #   (slack_threads.py `<@U123>` markup vs
+                      #   mattermost_threads.py literal @username) and its
+                      #   thread-id shape. Rows live in chat_thread_follows,
+                      #   keyed by `backend` — thread ids are unique only
+                      #   WITHIN a backend;
+                      #   typing_status.py — backend-neutral WorkingStatusDriver
+                      #   over a StatusPoster protocol; a poster declares its
+                      #   backend, its refresh cadence (sized to that backend's
+                      #   expiry) and supports_status_text: Slack renders free
+                      #   text, a plain typing indicator does not, and where it
+                      #   does not the phrase pools go inert;
                       #   coalesce.py — conversation keys + digest merging
                       #   for inbox batching; handle.py — party-level
                       #   HandleRegistry over agents ∪ human seats
@@ -469,6 +483,28 @@ src/crewlet/          # Main package
                       #   pools (PHASE_PHRASES / StatusPhrases), one line
                       #   drawn per phase and held for it, overridden by
                       #   integrations.slack.status_phrases)
+  mattermost/         # Mattermost integration (self-hosted OSS chat) —
+                      #   client.py (async REST: bots, tokens, teams,
+                      #   channels, posts, typing, the since= backfill read),
+                      #   events.py (MattermostEventFleet — ONE WEBSOCKET PER
+                      #     AGENT SEAT, because Mattermost has no usable
+                      #     inbound webhook: outgoing webhooks fire only in
+                      #     public channels and carry no root_id / channel
+                      #     type / mentions. Republishes each post onto the
+                      #     standard raw_webhook envelope so everything
+                      #     downstream stays webhook-shaped. Mattermost
+                      #     replays nothing on reconnect, so each seat keeps a
+                      #     cursor and re-reads its channels over the gap,
+                      #     bounded to 15 min — a blip, not an outage),
+                      #   provision.py + provision_cli.py (`crewlet mattermost
+                      #     provision` — Plane/GitLab shape, NOT Slack's: no
+                      #     manifest, no ledger, no OAuth click, because an
+                      #     admin token mints a bot's PAT directly).
+                      #   Engine-side (MattermostConfig, MattermostTransport,
+                      #   its prompt, identity registration) lives in
+                      #   config/notifications like GitLab; the transport OWNS
+                      #   the fleet so a live config swap rebuilds both.
+                      #   See docs/integrations/mattermost.md
   slack/              # Slack app provisioning — `crewlet slack provision`
                       #   (one-app-per-agent automation via Slack's App
                       #   Manifest APIs): manifest.py (canonical BOT_SCOPES/
@@ -627,9 +663,10 @@ skills/               # FOUNDER-facing authoring skills for an AI
                       #   own agents load at runtime. See
                       #   docs/getting-started/ai-authoring.md
 scripts/              # Repository tooling — NOT shipped in the wheel
-                      #   (the sdist carries it). gitlab-dev-bootstrap.sh
-                      #   + plane-dev-bootstrap.sh stand up the local
-                      #   integration loops; release_metadata.py is the
+                      #   (the sdist carries it). gitlab-dev-bootstrap.sh,
+                      #   plane-dev-bootstrap.sh + mattermost-dev-bootstrap.sh
+                      #   stand up the local integration loops (each pairs
+                      #   with a profile-gated service in docker-compose.yml); release_metadata.py is the
                       #   version/tag logic the release
                       #   workflow runs on the tag, kept here rather than
                       #   inline in the YAML so tests/test_packaging can
@@ -695,7 +732,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 4. **Task Engine** — ExecutionTracker, external PM tool integration
 5. **Decision Framework** — DACI behavioral guidance (via Slack channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL or Plane page search, one backend per org) + per-agent `agent_diary` (pgvector)
-7. **Communication** — external channels (Slack) + ephemeral A2A Bus
+7. **Communication** — external chat (Slack or Mattermost, or both) + ephemeral A2A Bus
 8. **Notification Service** — EventQueue-based, outbound-only transports
 9. **Provider Layer** — pluggable LLM, embeddings. Includes the `cli-agent` LLM type: a locally installed coding CLI driven on the operator's subscription instead of an API key, with per-seat filesystem isolation and an in-prompt tool-call envelope (see `docs/concepts/subscription-llm-backends.md`)
 10. **Database** — PostgreSQL (token_usage, agent_diary + episodes via pgvector)
