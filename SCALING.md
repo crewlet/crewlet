@@ -603,7 +603,10 @@ transcripts unauthenticated. Full-surface auth + CORS tightening ships
 
 ## Migration path
 
-Sequenced so every step is independently shippable and the fork dies early:
+The full phase-by-phase implementation plan — file-level work items, schema
+migrations, tests, exit criteria, and the release mapping — is
+[`SCALING_PLAN.md`](SCALING_PLAN.md). In outline, sequenced so every step is
+independently shippable and the fork dies early:
 
 1. **Foundations** — deployment-provided `node_id` (Tier A field; stable across
    restarts — a self-generated uuid4 reproduces the `hook-{id(callback)}`
