@@ -185,7 +185,14 @@ src/crewlet/          # Main package
                       #   integration's module
   org/                # Organization model (hierarchy, roles; Role.kind
                       #   agent|human — human seats are addressable,
-                      #   never spawned; see docs/concepts/humans-in-the-org.md)
+                      #   never spawned; see docs/concepts/humans-in-the-org.md.
+                      #   models.py also owns SEAT IDENTITY —
+                      #   agent_id_for / agent_seat_by_handle /
+                      #   agent_seat_by_id: derive_agent_id is a uuid5 over
+                      #   (org name, handle), so any node recovers any seat
+                      #   from an id with no DB and no live instance. That
+                      #   derivation + its inverse is what lets routing
+                      #   address a seat this process is not running)
   agent/              # Agent runtime (definition, instance, pool, turn engine)
                       #   definition.py, instance.py, pool.py, memory.py,
                       #   turn.py (TurnEngine; resume_state re-enters Execute
@@ -248,7 +255,15 @@ src/crewlet/          # Main package
                       #   BatchOptions — batched key-partitioned inbox delivery;
                       #   unsubscribe(topic, group) tears down a durable group
                       #   consumer + its broker subscription — used by live
-                      #   role decommission)
+                      #   role decommission; topics.py — THE subject
+                      #   grammar: agent_inbox_topic(handle) is the one
+                      #   definition of crewlet.agent.{handle}.inbox,
+                      #   which nine call sites used to f-string by hand.
+                      #   A producer and a consumer that disagree about a
+                      #   topic name never raise — the publish lands in a
+                      #   topic nobody reads. Imports nothing from crewlet;
+                      #   tests/test_queue/test_topics fails the build on a
+                      #   new hand-built f-string)
   a2a/                # Agent-to-agent bus (protocol, memory, service)
   db/                 # Database layer (asyncpg, migrations, token_usage,
                       #   deterministic agent-id derivation in agents.py;
@@ -347,7 +362,15 @@ src/crewlet/          # Main package
                       #   cron.py (5-field evaluator), scheduler.py (tick loop
                       #   + describe_schedules projection for the dashboard
                       #   /schedules view), store.py (scheduled_runs ledger)
-  events/             # Event types, routing (subscriptions via EventQueue)
+  events/             # Event types, routing (subscriptions via EventQueue).
+                      #   subscriptions.py resolves every recipient from
+                      #   the ORG — role name or derived agent id → seat →
+                      #   inbox — never from the local agent pool. Each
+                      #   crewlet.events.* topic has ONE fleet-wide
+                      #   consumer group, so the node that wins a delivery
+                      #   is rarely the node running the recipient, and a
+                      #   pool miss was a terminal drop (warn + ack), not
+                      #   a retry
   knowledge/          # Shared-knowledge read — protocol.py (KnowledgeSearcher
                       #   Protocol + KnowledgeHit + AUTO_DRAFTED_PARENT/
                       #   AUTO_DRAFT_TITLE_PREFIX, the one seam the Plan

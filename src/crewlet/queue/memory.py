@@ -17,6 +17,7 @@ from crewlet.queue.protocol import (
     order_partitions_oldest_first,
     partition_by_key,
 )
+from crewlet.queue.topics import AGENT_INBOX_SUFFIX
 
 logger = get_logger("queue.memory")
 
@@ -100,7 +101,7 @@ class MemoryEventQueue:
         if not self._running:
             raise RuntimeError("MemoryEventQueue is not started")
         self._history.append(event)
-        if topic.endswith(".inbound") or topic.endswith(".inbox"):
+        if topic.endswith(".inbound") or topic.endswith(AGENT_INBOX_SUFFIX):
             logger.info("event_published", topic=topic, event_type=event.type)
         else:
             logger.debug("event_published", topic=topic, event_type=event.type)

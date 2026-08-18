@@ -411,6 +411,34 @@ class TestOrgDerivedResolution:
         assert human.inbox_topic == "" and human.agent_id is None
         assert agent.inbox_topic and agent.agent_id is not None
 
+    def test_agent_id_resolution_covers_unspawned_seats(self):
+        """The reverse derivation, which is what the internal routing
+        paths use: they carry an agent id, not a handle."""
+        registry = self._registry_with_unspawned_seat()
+        from crewlet.db.agents import derive_agent_id
+
+        wanted = str(derive_agent_id("TestCo", "designer"))
+        party = registry.resolve_party_agent_id(wanted)
+        assert party is not None
+        assert party.handle == "designer"
+        assert party.is_local is False
+
+    async def test_agent_id_resolution_prefers_a_live_instance(self):
+        bus = MemoryEventQueue()
+        await bus.start()
+        pool = AgentPool(bus)
+        org = _make_org(Role(name="Engineer", goal="build"))
+        registry = HandleRegistry(pool, org_provider=lambda: org)
+        (agent,) = await pool.spawn_from_org(org)
+
+        party = registry.resolve_party_agent_id(agent.id_str)
+        assert party is not None and party.agent is agent
+
+    def test_agent_id_resolution_rejects_unknown_and_empty(self):
+        registry = self._registry_with_unspawned_seat()
+        assert registry.resolve_party_agent_id("") is None
+        assert registry.resolve_party_agent_id("not-an-id") is None
+
     def test_an_unknown_handle_still_resolves_to_nothing(self):
         assert self._registry_with_unspawned_seat().resolve_party("nobody") is None
 

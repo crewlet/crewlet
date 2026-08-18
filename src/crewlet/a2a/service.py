@@ -15,6 +15,7 @@ from crewlet.events.types import (
     Event,
 )
 from crewlet.queue.protocol import EventQueue
+from crewlet.queue.topics import agent_inbox_topic
 
 logger = get_logger("a2a.service")
 
@@ -102,7 +103,7 @@ class A2AService:
             delegation_chain=chain,
             parent_turn_id=parent_turn_id,
         )
-        await self._queue.publish(f"crewlet.agent.{target}.inbox", wake_event)
+        await self._queue.publish(agent_inbox_topic(target), wake_event)
 
         opened_event = A2AChannelOpened(
             source=requester,
@@ -197,7 +198,7 @@ class A2AService:
                     "sender": sender,
                 },
             )
-            await self._queue.publish(f"crewlet.agent.{recipient}.inbox", wake_event)
+            await self._queue.publish(agent_inbox_topic(recipient), wake_event)
 
         logger.info(
             "message_sent",

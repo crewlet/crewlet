@@ -59,6 +59,7 @@ from crewlet.queue.protocol import (
     partition_by_key,
 )
 from crewlet.queue.serialization import deserialize_event, serialize_event
+from crewlet.queue.topics import AGENT_INBOX_SUFFIX
 
 logger = get_logger("queue.pulsar")
 
@@ -563,7 +564,7 @@ class PulsarEventQueue:
                 )
                 await asyncio.sleep(_PUBLISH_RETRY_BASE_DELAY * (2**attempt))
 
-        if topic.endswith(".inbound") or topic.endswith(".inbox"):
+        if topic.endswith(".inbound") or topic.endswith(AGENT_INBOX_SUFFIX):
             logger.info("event_published", topic=topic, event_type=event.type)
         else:
             logger.debug("event_published", topic=topic, event_type=event.type)

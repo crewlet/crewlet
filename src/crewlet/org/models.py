@@ -1254,6 +1254,56 @@ class Organization(BaseModel):
                 return found
         return None
 
+    # ----- seat identity ------------------------------------------- #
+    #
+    # An agent seat's runtime identity is *derived* from the org, never
+    # looked up in a process: ``derive_agent_id`` is a ``uuid5`` over
+    # ``(org name, handle)``, so every node computes the same id for the
+    # same seat with no database and no running instance.  These three
+    # helpers are that derivation and its inverse, in one place, so
+    # routing code can answer "which seat is this event for?" without
+    # asking whether the seat happens to be running locally.
+
+    def agent_id_for(self, role: Role) -> str:
+        """The derived agent id for ``role``; ``""`` for a human seat.
+
+        Human seats are addressable but never spawned, so they have no
+        agent id — see ``docs/concepts/humans-in-the-org.md``.
+        """
+        from crewlet.db.agents import derive_agent_id
+
+        if role.kind != RoleKind.AGENT:
+            return ""
+        handle = role.get_handle()
+        if not handle or not self.name:
+            return ""
+        return str(derive_agent_id(self.name, handle))
+
+    def agent_seat_by_handle(self, handle: str) -> Role | None:
+        """Find the agent seat whose handle is ``handle``."""
+        if not handle:
+            return None
+        for role in self.all_roles():
+            if role.kind == RoleKind.AGENT and role.get_handle() == handle:
+                return role
+        return None
+
+    def agent_seat_by_id(self, agent_id: str) -> Role | None:
+        """Find the agent seat whose derived id is ``agent_id``.
+
+        The inverse of :meth:`agent_id_for`.  Linear in seat count with
+        a ``uuid5`` per seat, which is why it is the *fallback* on
+        routing paths that also carry a role name or a handle.
+        """
+        if not agent_id or not self.name:
+            return None
+        for role in self.all_roles():
+            if role.kind != RoleKind.AGENT:
+                continue
+            if self.agent_id_for(role) == agent_id:
+                return role
+        return None
+
     def get_unit(self, name: str) -> OrgUnit | None:
         """Find a unit by name anywhere in the org tree."""
         for unit in self.units:

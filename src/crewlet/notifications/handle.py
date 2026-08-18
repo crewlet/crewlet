@@ -27,6 +27,7 @@ from uuid import UUID
 
 from crewlet._logging import get_logger
 from crewlet.org.models import HANDLE_RE, Role, RoleKind
+from crewlet.queue.topics import agent_inbox_topic
 
 if TYPE_CHECKING:
     from crewlet.agent.instance import AgentInstance
@@ -121,9 +122,9 @@ class ResolvedParty:
     @property
     def inbox_topic(self) -> str:
         """The seat's inbox subject. Empty for human seats, which have none."""
-        if self.kind == RoleKind.HUMAN or not self.handle:
+        if self.kind == RoleKind.HUMAN:
             return ""
-        return f"crewlet.agent.{self.handle}.inbox"
+        return agent_inbox_topic(self.handle)
 
 
 class HandleRegistry:
@@ -446,6 +447,35 @@ class HandleRegistry:
             if seat.name == role_name:
                 return self._party_from_human(seat)
         return None
+
+    def resolve_party_agent_id(self, agent_id: str) -> ResolvedParty | None:
+        """Resolve an agent id to a party.
+
+        The inverse of :func:`~crewlet.db.agents.derive_agent_id`: that
+        is a ``uuid5`` over ``(org name, handle)``, so every process can
+        recompute the id of every agent seat and answer this with no
+        database and no live instance.  Internal events carry an agent
+        id rather than a handle (``TaskAssigned``, ``ExternalNotification``),
+        and looking that id up in the local pool made routing depend on
+        where the seat happened to be running.
+
+        Human seats have no agent id, so they never match here — a
+        caller that needs to distinguish "human recipient" from
+        "unknown recipient" has to ask the org by role or handle.
+        """
+        if not agent_id:
+            return None
+        from crewlet.agent.instance import AgentState
+
+        wanted = str(agent_id)
+        for agent in self._pool.agents:
+            if agent.id_str == wanted and agent.state != AgentState.TERMINATED:
+                return self._party_from_agent(agent)
+        org = self._org()
+        if org is None:
+            return None
+        seat = org.agent_seat_by_id(wanted)
+        return self._party_from_agent_seat(seat) if seat is not None else None
 
     def resolve_party_email(self, email: str) -> ResolvedParty | None:
         """Resolve an email to a party.

@@ -31,6 +31,8 @@ Routing is two-stage: events are first published to internal topics (e.g., `crew
 
 Handlers read the org through a provider on every event (never a captured snapshot), so a hot reload that swaps `engine.org` — including seat-kind flips — re-routes immediately.
 
+**Routing is an org function, not a process-local one.** Every handler resolves its recipient from the live organization — a role name, or an agent id, to a seat, and a seat to its inbox subject — and never from the local agent pool. Each `crewlet.events.*` topic has ONE fleet-wide consumer group, so whichever node wins a delivery is the node that has to route it; that node usually is not the one running the recipient. This works because agent ids are *derived* rather than assigned: `Organization.agent_id_for(role)` is a `uuid5` over the org name and the seat's handle, so every node computes the same id for the same seat, and `Organization.agent_seat_by_id` / `agent_seat_by_handle` invert it with no database and no live instance. The inbox subject itself has one definition, `crewlet.queue.topics.agent_inbox_topic` — a producer and a consumer that disagree about a topic name do not raise, they just stop talking to each other.
+
 When the resolved target is a **[human seat](humans-in-the-org.md)**, the event is skipped: a human has no inbox and no turn to wake, and the engine never sends as itself. These internal events route to agents only; the human is notified natively by the PM tool / Slack where the work lives (and agents reach humans through their own colleague-surface tools with an @-mention). Inbound external-surface webhooks addressed to a human are likewise recorded as an info-level skip, not an undeliverable warning.
 
 ---

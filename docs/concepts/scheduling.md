@@ -129,6 +129,14 @@ units:
 A **role** schedule always runs as that role (its `target` is ignored). A
 **unit** schedule resolves its runner(s) from `target`.
 
+Runners are resolved from the **org**, never from the agents running in
+the ticking process. A fire is addressed to the runner seat's inbox and
+consumed by whichever node owns that seat — which is rarely the node
+whose tick won the ledger claim. The seat's agent id comes from
+`Organization.agent_id_for`, the same `uuid5` over `(org name, handle)`
+every node derives, so the `TaskAssigned` a scheduler publishes names
+exactly the identity the turn will run under.
+
 > **Schedules are not inherited.** Unlike `lead` and `slack_channel`, a
 > schedule on a department does **not** cascade to child units — that
 > would silently multiply a standup across every squad. Declare schedules

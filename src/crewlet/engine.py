@@ -53,6 +53,7 @@ from crewlet.observability import ObservabilityManager
 from crewlet.org.models import Organization
 from crewlet.providers.llm.protocol import LLMProvider
 from crewlet.queue.protocol import BatchOptions, EventQueue
+from crewlet.queue.topics import agent_inbox_topic
 from crewlet.secrets.resolver import refresh_secret_snapshot
 from crewlet.task.delegation import DelegationHandler
 from crewlet.task.tracker import ExecutionTracker
@@ -1320,7 +1321,7 @@ class Engine:
         if shed == was_shed:
             return
 
-        topics = [f"crewlet.agent.{a.handle}.inbox" for a in self.agent_pool.agents]
+        topics = [agent_inbox_topic(a.handle) for a in self.agent_pool.agents]
         topics.append("crewlet.notifications.inbound")
         for topic in topics:
             try:
@@ -2432,7 +2433,6 @@ class Engine:
             if isinstance(self.storage, Database):
                 self._scheduler = Scheduler(
                     event_queue=self.event_queue,
-                    agent_pool=self.agent_pool,
                     org_provider=lambda: self.org,
                     store=ScheduledRunStore(self.storage),
                     default_timezone=sched_cfg.default_timezone,
@@ -2563,7 +2563,6 @@ class Engine:
         # hot reloads — including seat-kind flips — re-route correctly.
         self._cancel_deadline_timers = await setup_subscriptions(
             self.event_queue,
-            self.agent_pool,
             lambda: self.org,
         )
 
@@ -2596,7 +2595,7 @@ class Engine:
         if agent.handle in self._subscribed_inboxes:
             return
         await self.event_queue.subscribe_batch(
-            topic=f"crewlet.agent.{agent.handle}.inbox",
+            topic=agent_inbox_topic(agent.handle),
             group=f"agent-{agent.handle}",
             handler=self._make_agent_handler(agent),
             batch_key=conversation_key,
@@ -2633,9 +2632,7 @@ class Engine:
             # every inbox once the first provider lands and the engine can
             # actually run turns.
             if self.turn_engine is None:
-                await self.event_queue.pause_topic(
-                    f"crewlet.agent.{agent.handle}.inbox"
-                )
+                await self.event_queue.pause_topic(agent_inbox_topic(agent.handle))
                 await self._requeue_inbox_events(agent, events)
                 return
             # Busy on a detached sandbox job: park (requeue + ack) rather
@@ -2875,7 +2872,7 @@ class Engine:
         twice (requeued copy + redelivered original), and the handler's
         same-id dedupe collapses them when they next arrive together.
         """
-        topic = f"crewlet.agent.{agent.handle}.inbox"
+        topic = agent_inbox_topic(agent.handle)
         for event in events:
             await self.event_queue.publish(topic, event)
         logger.info(
@@ -5646,7 +5643,7 @@ class Engine:
             # Events that arrived while there was NO turn engine were parked
             # (topic paused + requeued by the inbox handler) — now that
             # turns can run, let them flow. No-op for never-paused topics.
-            await self.event_queue.resume_topic(f"crewlet.agent.{agent.handle}.inbox")
+            await self.event_queue.resume_topic(agent_inbox_topic(agent.handle))
             logger.info(
                 "agent_inbox_subscribed_live",
                 handle=agent.handle,
@@ -5871,7 +5868,7 @@ class Engine:
             if agent.handle in self._subscribed_inboxes:
                 try:
                     await self.event_queue.unsubscribe(
-                        f"crewlet.agent.{agent.handle}.inbox",
+                        agent_inbox_topic(agent.handle),
                         f"agent-{agent.handle}",
                     )
                 except Exception:

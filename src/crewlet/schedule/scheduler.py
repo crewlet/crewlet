@@ -54,6 +54,7 @@ from crewlet.org.models import (
     Schedule,
     ScheduleTarget,
 )
+from crewlet.queue.topics import agent_inbox_topic
 from crewlet.schedule.cron import (
     CronExpr,
     iter_fire_times,
@@ -97,7 +98,6 @@ class Scheduler:
         self,
         *,
         event_queue: Any,
-        agent_pool: Any,
         org_provider: Callable[[], Organization],
         store: ScheduledRunStoreProtocol,
         default_timezone: str = "UTC",
@@ -108,7 +108,6 @@ class Scheduler:
         admits: Callable[[], bool] | None = None,
     ) -> None:
         self._event_queue = event_queue
-        self._agent_pool = agent_pool
         self._org_provider = org_provider
         # Config posture gate (``Engine.admits_triggers``).  A schedule's
         # fire identity is derived from the ORG — its name, cron and
@@ -342,10 +341,21 @@ class Scheduler:
         fire_time_utc: datetime,
         tz: ZoneInfo,
     ) -> bool:
-        agent = self._agent_pool.get_by_handle(handle)
-        if agent is None:
-            # No live agent to run it — don't claim, so a later tick after
-            # the agent spawns could still pick up a future fire.
+        # Resolve the runner from the ORG, not from the local agent pool.
+        # A schedule fires into the seat's inbox, and the node that owns
+        # that seat consumes it — which is usually not the node whose
+        # tick won the claim.  Asking the pool made a fire conditional on
+        # the runner happening to run *here*: it warned
+        # ``schedule_runner_not_found``, refused to claim, and every
+        # other node's tick reached the same conclusion, so the schedule
+        # simply never ran.  The org knows the seat regardless.
+        org = self._org_provider()
+        seat = org.agent_seat_by_handle(handle)
+        if seat is None:
+            # The handle names no agent seat in the current org — a
+            # decommissioned role, or a config edit that landed between
+            # runner resolution and the fire.  Don't claim: a later tick
+            # against a corrected org should still be able to fire.
             logger.warning(
                 "schedule_runner_not_found",
                 handle=handle,
@@ -353,6 +363,7 @@ class Scheduler:
                 scope_id=scope_id,
             )
             return False
+        agent_id = org.agent_id_for(seat)
 
         fire_label = _fire_label(fire_time_utc, tz)
         # Each dispatched run gets its OWN trace (a fresh root span, detached
@@ -394,8 +405,8 @@ class Scheduler:
             event = TaskAssigned(
                 source="scheduler",
                 task_id=run_id,
-                agent_id=agent.id_str,
-                role=agent.role_name,
+                agent_id=agent_id,
+                role=seat.name,
                 payload={
                     "task_description": schedule.task,
                     "scheduled": True,
@@ -407,9 +418,7 @@ class Scheduler:
                 },
             )
             try:
-                await self._event_queue.publish(
-                    f"crewlet.agent.{agent.handle}.inbox", event
-                )
+                await self._event_queue.publish(agent_inbox_topic(handle), event)
             except Exception:
                 logger.exception(
                     "schedule_publish_failed", schedule=schedule.name, handle=handle

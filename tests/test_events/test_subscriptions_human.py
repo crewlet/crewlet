@@ -12,9 +12,6 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from crewlet.agent.definition import AgentDefinition
-from crewlet.agent.instance import AgentInstance
-from crewlet.agent.pool import AgentPool
 from crewlet.events.subscriptions import setup_subscriptions
 from crewlet.events.types import (
     Event,
@@ -25,6 +22,7 @@ from crewlet.events.types import (
 )
 from crewlet.org.models import Organization, OrgUnit, Role
 from crewlet.queue.memory import MemoryEventQueue
+from crewlet.queue.topics import agent_inbox_topic
 
 
 def _make_org() -> Organization:
@@ -63,35 +61,22 @@ async def queue() -> MemoryEventQueue:
     await q.stop()
 
 
-@pytest_asyncio.fixture
-async def pool(queue: MemoryEventQueue, org: Organization) -> AgentPool:
-    pool = AgentPool(queue)
-    for role in org.all_roles():
-        if role.is_human:
-            continue
-        defn = AgentDefinition(role=role, org=org)
-        agent = AgentInstance(defn, handle=role.get_handle())
-        agent.activate()
-        pool.add_agent(agent)
-    return pool
-
-
 async def _inbox(queue: MemoryEventQueue, handle: str) -> list[Event]:
     received: list[Event] = []
 
     async def capture(event: Event) -> None:
         received.append(event)
 
-    await queue.subscribe(f"crewlet.agent.{handle}.inbox", "test", capture)
+    await queue.subscribe(agent_inbox_topic(handle), "test", capture)
     return received
 
 
 @pytest.mark.asyncio
-async def test_task_created_human_lead_routes_to_target_agents(queue, pool, org):
+async def test_task_created_human_lead_routes_to_target_agents(queue, org):
     """With a human lead, the task falls through to the target role's
     own agents — no engine push to the human, no crash."""
     dev_inbox = await _inbox(queue, "developer")
-    await setup_subscriptions(queue, pool, lambda: org)
+    await setup_subscriptions(queue, lambda: org)
 
     await queue.publish(
         "crewlet.events.task_created",
@@ -104,11 +89,11 @@ async def test_task_created_human_lead_routes_to_target_agents(queue, pool, org)
 
 
 @pytest.mark.asyncio
-async def test_task_created_no_target_skips_human_top_manager(queue, pool, org):
+async def test_task_created_no_target_skips_human_top_manager(queue, org):
     """A no-target task reaches agent top-managers only; a human
     top-level seat is skipped (it has no inbox)."""
     human_inbox = await _inbox(queue, "sarah-chen")
-    await setup_subscriptions(queue, pool, lambda: org)
+    await setup_subscriptions(queue, lambda: org)
 
     await queue.publish(
         "crewlet.events.task_created",
@@ -119,11 +104,11 @@ async def test_task_created_no_target_skips_human_top_manager(queue, pool, org):
 
 
 @pytest.mark.asyncio
-async def test_task_assigned_human_skipped(queue, pool, org):
+async def test_task_assigned_human_skipped(queue, org):
     """TaskAssigned naming a human seat is dropped quietly — no inbox,
     no crash (human assignment is the PM tool's job)."""
     human_inbox = await _inbox(queue, "sarah-chen")
-    await setup_subscriptions(queue, pool, lambda: org)
+    await setup_subscriptions(queue, lambda: org)
 
     await queue.publish(
         "crewlet.events.task_assigned",
@@ -134,25 +119,30 @@ async def test_task_assigned_human_skipped(queue, pool, org):
 
 
 @pytest.mark.asyncio
-async def test_task_completed_human_manager_skipped(queue, pool, org):
+async def test_task_completed_human_manager_skipped(queue, org):
     """An agent completing under a human manager routes nowhere — the
     human sees the work natively; no inbox publish, no crash."""
     human_inbox = await _inbox(queue, "sarah-chen")
-    await setup_subscriptions(queue, pool, lambda: org)
+    await setup_subscriptions(queue, lambda: org)
 
-    dev = pool.get_by_handle("developer")
+    dev = org.get_role("developer")
     await queue.publish(
         "crewlet.events.task_completed",
-        TaskCompleted(source="test", task_id="t4", agent_id=dev.id_str, result="done"),
+        TaskCompleted(
+            source="test",
+            task_id="t4",
+            agent_id=org.agent_id_for(dev),
+            result="done",
+        ),
     )
 
     assert human_inbox == []
 
 
 @pytest.mark.asyncio
-async def test_task_delegated_human_skipped(queue, pool, org):
+async def test_task_delegated_human_skipped(queue, org):
     human_inbox = await _inbox(queue, "sarah-chen")
-    await setup_subscriptions(queue, pool, lambda: org)
+    await setup_subscriptions(queue, lambda: org)
 
     await queue.publish(
         "crewlet.events.task_delegated",
@@ -168,16 +158,19 @@ async def test_task_delegated_human_skipped(queue, pool, org):
 
 
 @pytest.mark.asyncio
-async def test_agent_routing_unaffected_by_human_seats(queue, pool, org):
+async def test_agent_routing_unaffected_by_human_seats(queue, org):
     """The agent inbox path still works in a mixed org."""
-    dev = pool.get_by_handle("developer")
-    dev_inbox = await _inbox(queue, dev.handle)
-    await setup_subscriptions(queue, pool, lambda: org)
+    dev = org.get_role("developer")
+    dev_inbox = await _inbox(queue, dev.get_handle())
+    await setup_subscriptions(queue, lambda: org)
 
     await queue.publish(
         "crewlet.events.task_assigned",
         TaskAssigned(
-            source="test", task_id="t6", agent_id=dev.id_str, role="developer"
+            source="test",
+            task_id="t6",
+            agent_id=org.agent_id_for(dev),
+            role="developer",
         ),
     )
 

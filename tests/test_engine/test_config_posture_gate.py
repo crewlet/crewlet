@@ -311,7 +311,6 @@ async def test_scheduler_tick_is_skipped_while_shedding() -> None:
 
     scheduler = Scheduler(
         event_queue=_Queue(),
-        agent_pool=None,
         org_provider=lambda: (_ for _ in ()).throw(
             AssertionError("org must not be read while shedding")
         ),
