@@ -17,18 +17,16 @@ from crewlet.mattermost.client import (
 
 
 def _client(handler, *, token: str = "tok") -> MattermostClient:
-    """A client whose transport is a scripted handler."""
-    client = MattermostClient("https://chat.example", token)
-    client._client = httpx.AsyncClient(
-        base_url="https://chat.example/api/v4",
-        headers=(
-            {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            if token
-            else {"Content-Type": "application/json"}
-        ),
-        transport=httpx.MockTransport(handler),
+    """A client whose transport is a scripted handler.
+
+    Injected through the real constructor so tests drive the real
+    ``_request`` path — retries, status classification, redirect
+    detection — rather than a stand-in that would assert nothing about
+    it.
+    """
+    return MattermostClient(
+        "https://chat.example", token, transport=httpx.MockTransport(handler)
     )
-    return client
 
 
 # --- the URL contract -----------------------------------------------------
@@ -111,12 +109,7 @@ class TestAuthHeader:
             seen.append(request)
             return httpx.Response(200, json={"status": "OK"})
 
-        client = MattermostClient("https://chat.example", "")
-        client._client = httpx.AsyncClient(
-            base_url="https://chat.example/api/v4",
-            headers={"Content-Type": "application/json"},
-            transport=httpx.MockTransport(handler),
-        )
+        client = _client(handler, token="")
         try:
             await client.ping()
         finally:
@@ -212,3 +205,349 @@ class TestClientConfig:
             assert await client.site_url() == ""
         finally:
             await client.close()
+
+
+# --- failure funnelling ---------------------------------------------------
+
+
+class TestTransportErrors:
+    """Every caller catches ``MattermostError`` and nothing else, so a raw
+    httpx exception does not degrade one call — it aborts the sequence the
+    call sits in. One connect blip while the transport resolved bot
+    identities at boot skipped opening the websocket fleet for the life of
+    the process."""
+
+    @pytest.mark.asyncio
+    async def test_a_connect_failure_is_a_mattermost_error(self, monkeypatch):
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("all connection attempts failed")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError) as caught:
+                await client.me()
+        finally:
+            await client.close()
+        assert caught.value.status == 0
+        assert "transport error" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_status_zero_does_not_trip_the_not_found_guards(self, monkeypatch):
+        """``exc.status in (403, 404)`` guards must not read "unreachable"
+        as "absent" and report a missing channel."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("boom")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError):
+                await client.get_channel("c1")
+        finally:
+            await client.close()
+
+
+class TestRetries:
+    @pytest.mark.asyncio
+    async def test_429_is_waited_out_and_retried(self, monkeypatch):
+        slept: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            slept.append(delay)
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "2"}, text="slow")
+            return httpx.Response(200, json={"id": "u1"})
+
+        client = _client(handler)
+        try:
+            assert await client.me() == {"id": "u1"}
+        finally:
+            await client.close()
+        assert slept == [2.0], "the server's own Retry-After must win"
+
+    @pytest.mark.asyncio
+    async def test_503_is_retried(self, monkeypatch):
+        """The docker-compose case: the container is up and still
+        migrating."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return httpx.Response(503, text="starting up")
+            return httpx.Response(200, json={"status": "OK"})
+
+        client = _client(handler)
+        try:
+            assert await client.ping() == {"status": "OK"}
+        finally:
+            await client.close()
+        assert calls["n"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_4xx_is_not_retried(self):
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(401, text="Invalid session")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError):
+                await client.me()
+        finally:
+            await client.close()
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_the_retry_budget_is_bounded(self, monkeypatch):
+        """A reconnect backfill walks every channel serially — it must not
+        stall the seat behind a server that is simply down."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(503, text="down")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError):
+                await client.ping()
+        finally:
+            await client.close()
+        assert calls["n"] < 10
+
+
+class TestRedirects:
+    @pytest.mark.asyncio
+    async def test_a_redirect_names_the_location_and_the_fix(self):
+        """Following it would send the bearer token to whatever host the
+        redirect names; the same misconfiguration also hands the websocket
+        a plaintext ws:// URL, and nothing else would name the cause."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(301, headers={"Location": "https://chat.example/"})
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError) as caught:
+                await client.me()
+        finally:
+            await client.close()
+        assert "https://chat.example/" in str(caught.value)
+        assert "integrations.mattermost.url" in str(caught.value)
+
+
+class TestClosedClient:
+    @pytest.mark.asyncio
+    async def test_a_closed_client_refuses_rather_than_rebuilds(self):
+        """Rebuilding would deliver a message through a transport the
+        engine believes it tore down, from a pool nothing will close."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"id": "p1"})
+
+        client = _client(handler)
+        await client.close()
+        with pytest.raises(MattermostError) as caught:
+            await client.create_post("c1", "hi")
+        assert "closed" in str(caught.value)
+
+
+# --- endpoint correctness -------------------------------------------------
+
+
+class TestPostsSince:
+    """``since=`` is UpdateAt-based, and UpdateAt is bumped by things that
+    are not content — a reaction touches the post, deleting a reply
+    touches the thread root. Replaying those wakes an agent to re-answer
+    a message it already answered."""
+
+    @staticmethod
+    def _payload(posts: dict[str, dict]) -> dict:
+        return {"order": list(reversed(list(posts))), "posts": posts}
+
+    @pytest.mark.asyncio
+    async def test_only_new_or_edited_posts_are_replayed(self):
+        since = 1000
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.params["since"] == str(since)
+            return httpx.Response(
+                200,
+                json=self._payload(
+                    {
+                        "old": {"id": "old", "create_at": 500, "update_at": 1500},
+                        "new": {"id": "new", "create_at": 1200, "update_at": 1200},
+                        "edited": {
+                            "id": "edited",
+                            "create_at": 500,
+                            "edit_at": 1300,
+                            "update_at": 1300,
+                        },
+                        "gone": {
+                            "id": "gone",
+                            "create_at": 1100,
+                            "delete_at": 1400,
+                            "update_at": 1400,
+                        },
+                    }
+                ),
+            )
+
+        client = _client(handler)
+        try:
+            posts = await client.posts_since("c1", since)
+        finally:
+            await client.close()
+        # Ordering is asserted by the next test; what matters here is
+        # WHICH posts survive the filter.
+        assert sorted(p["id"] for p in posts) == ["edited", "new"]
+
+    @pytest.mark.asyncio
+    async def test_results_are_oldest_first(self):
+        """The fleet replays in order, so a newest-first list would show a
+        conversation backwards."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "order": ["b", "a"],
+                    "posts": {
+                        "a": {"id": "a", "create_at": 1100},
+                        "b": {"id": "b", "create_at": 1200},
+                    },
+                },
+            )
+
+        client = _client(handler)
+        try:
+            posts = await client.posts_since("c1", 1000)
+        finally:
+            await client.close()
+        assert [p["id"] for p in posts] == ["a", "b"]
+
+
+class TestServerLimits:
+    @pytest.mark.asyncio
+    async def test_it_calls_the_route_that_exists(self):
+        """``/limits/users`` has never existed; the real route is
+        ``/limits/server``, and the 404 was swallowed — so the
+        provisioner's headroom note never printed on any server."""
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            return httpx.Response(
+                200, json={"maxUsersLimit": 250, "activeUserCount": 12}
+            )
+
+        client = _client(handler)
+        try:
+            limits = await client.server_limits()
+        finally:
+            await client.close()
+        assert seen == ["/api/v4/limits/server"]
+        assert limits["activeUserCount"] == 12
+
+    @pytest.mark.asyncio
+    async def test_an_old_server_reports_nothing_rather_than_failing(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, text="not found")
+
+        client = _client(handler)
+        try:
+            assert await client.server_limits() == {}
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_a_bad_credential_is_not_swallowed(self):
+        """A 401 means the operator token is wrong — a provisioner that
+        shrugged at that would go on to make writes it cannot make."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, text="Invalid session")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError):
+                await client.server_limits()
+        finally:
+            await client.close()
+
+
+class TestCreatePost:
+    @pytest.mark.asyncio
+    async def test_it_carries_an_idempotency_key(self):
+        """Mattermost deduplicates a create by ``pending_post_id``; without
+        one, a retried send double-posts into a human's thread."""
+        bodies: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            bodies.append(_json.loads(request.content))
+            return httpx.Response(201, json={"id": "p1"})
+
+        client = _client(handler)
+        try:
+            await client.create_post("c1", "hello", root_id="r1")
+        finally:
+            await client.close()
+        assert bodies[0]["pending_post_id"]
+        assert bodies[0]["root_id"] == "r1"
+
+    @pytest.mark.asyncio
+    async def test_a_retry_reuses_the_same_key(self, monkeypatch):
+        """The key only prevents a double post if it survives the retry."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        bodies: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            bodies.append(_json.loads(request.content))
+            if len(bodies) == 1:
+                return httpx.Response(503, text="restarting")
+            return httpx.Response(201, json={"id": "p1"})
+
+        client = _client(handler)
+        try:
+            await client.create_post("c1", "hello")
+        finally:
+            await client.close()
+        assert len(bodies) == 2
+        assert bodies[0]["pending_post_id"] == bodies[1]["pending_post_id"]

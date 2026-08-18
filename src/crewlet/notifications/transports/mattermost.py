@@ -437,7 +437,16 @@ class MattermostTransport:
             # trigger was a reply; for a top-level message it is the
             # message's own id, which is also the thread the agent will
             # reply under.
-            await client.publish_typing(channel, parent_id=thread_id)
+            #
+            # The deadline is this driver's own heartbeat: a call still in
+            # flight when the next beat is due is raising an indicator
+            # that beat is about to raise anyway, so waiting on it only
+            # holds a pool connection the agent's real calls need.
+            await client.publish_typing(
+                channel,
+                parent_id=thread_id,
+                timeout=self.status_refresh_interval,
+            )
         except MattermostError as exc:
             logger.warning("mattermost_typing_failed", handle=handle, error=str(exc))
             return False

@@ -15,6 +15,8 @@ No SDK dependency.  See ``docs/integrations/mattermost.md``.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -22,6 +24,7 @@ from typing import Any
 import httpx
 
 from crewlet._logging import get_logger
+from crewlet.providers.errors import parse_retry_after
 
 logger = get_logger("mattermost.client")
 
@@ -46,6 +49,45 @@ CHANNEL_GROUP = "G"
 #: the ``DIRECT_CHANNEL_TYPES`` half of
 #: :mod:`crewlet.notifications.typing_status` for this backend.
 DIRECT_CHANNEL_TYPES = frozenset({CHANNEL_DIRECT, CHANNEL_GROUP})
+
+#: Status codes worth retrying.  429 is the rate limiter (Mattermost
+#: sends ``Retry-After`` with it); 502/503/504 are a proxy or a server
+#: mid-restart, which is the docker-compose case where the container is
+#: up but still migrating.  Every other 4xx is the caller's fault and
+#: every other 5xx is not going to change on a second try.
+_RETRY_STATUSES = frozenset({429, 502, 503, 504})
+
+#: Total wall clock one call may spend waiting out retries, mirroring
+#: ``slack/api.py``'s budgeted wait rather than inventing a second
+#: pattern.  Ten seconds absorbs a proxy hiccup, a brief 429 and a
+#: server finishing a restart, and deliberately stops short of waiting
+#: out an outage: every caller here is already on a retry loop of its own
+#: (the fleet's reconnect backoff, the scheduler, an operator re-running
+#: a command), so a longer budget would not rescue anything — it would
+#: only turn a server that is simply down into a stall repeated once per
+#: seat, and a reconnect backfill walks every channel serially.
+_RETRY_BUDGET_SECONDS = 10.0
+
+#: Delay used when a retryable response carries no ``Retry-After``.
+#: Doubles per attempt, capped by the budget above.
+_RETRY_BASE_DELAY_SECONDS = 1.0
+
+#: Default per-phase timeouts.  A single scalar would give a cosmetic
+#: typing POST the same deadline as a bulk backfill read: connect is the
+#: fast failure an unreachable host should produce, read is sized to a
+#: backfill page, and pool acquisition must not silently absorb
+#: contention between the fleet's serial reads.
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_READ_TIMEOUT_SECONDS = 15.0
+_WRITE_TIMEOUT_SECONDS = 10.0
+_POOL_TIMEOUT_SECONDS = 5.0
+
+#: Deadline for the typing indicator's POST.  It is re-asserted every
+#: ``TimeBetweenUserTypingUpdatesMilliseconds`` (5 s by default), so a
+#: call that outlives the next heartbeat is raising an indicator that is
+#: already stale — better to drop it than to hold a pool connection the
+#: same client's real work needs.
+TYPING_TIMEOUT_SECONDS = 5.0
 
 #: Fallback for ``TimeBetweenUserTypingUpdatesMilliseconds`` when the
 #: server's client config cannot be read.  5 000 ms is Mattermost's own
@@ -119,6 +161,15 @@ class MattermostError(Exception):
 
     Carries the method, path and status so a failure is actionable
     without turning on request logging.
+
+    ``status == 0`` means the request never reached the server — a
+    connect failure, a timeout, a dropped connection.  Every transport
+    failure is funnelled through this type deliberately: callers all
+    catch ``MattermostError`` and nothing else, so an escaping
+    ``httpx.ConnectError`` did not degrade a single call, it aborted
+    whatever sequence the call sat in.  One connect blip while the
+    transport resolved bot identities at boot was enough to skip opening
+    the websocket fleet for the entire life of the process.
     """
 
     def __init__(
@@ -156,12 +207,20 @@ class MattermostClient:
         base_url: str,
         token: str,
         *,
-        timeout: float = 15.0,
+        timeout: httpx.Timeout | float | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = normalize_base_url(base_url)
         self._token = token
-        self._timeout = timeout
+        self._timeout = timeout or httpx.Timeout(
+            connect=_CONNECT_TIMEOUT_SECONDS,
+            read=_READ_TIMEOUT_SECONDS,
+            write=_WRITE_TIMEOUT_SECONDS,
+            pool=_POOL_TIMEOUT_SECONDS,
+        )
+        self._transport = transport
         self._client: httpx.AsyncClient | None = None
+        self._closed = False
 
     @property
     def base_url(self) -> str:
@@ -169,6 +228,13 @@ class MattermostClient:
         return self._base_url
 
     def _http(self) -> httpx.AsyncClient:
+        if self._closed:
+            # Rebuilding here would be worse than failing: the caller
+            # believes this client's credentials were released, and a
+            # fresh pool nothing will ever close would quietly deliver
+            # the request anyway — a message sent by a transport the
+            # engine has torn down.
+            raise MattermostError("client is closed", status=0)
         if self._client is None:
             headers = {"Content-Type": "application/json"}
             if self._token:
@@ -177,11 +243,13 @@ class MattermostClient:
                 base_url=f"{self._base_url}/api/v4",
                 headers=headers,
                 timeout=self._timeout,
+                transport=self._transport,
             )
         return self._client
 
     async def close(self) -> None:
-        """Release the underlying HTTP client."""
+        """Release the underlying HTTP client, permanently."""
+        self._closed = True
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -203,23 +271,123 @@ class MattermostClient:
         *,
         params: dict[str, Any] | None = None,
         json: Any | None = None,
+        timeout: httpx.Timeout | float | None = None,
     ) -> Any:
-        resp = await self._http().request(method, path, params=params, json=json)
-        if resp.status_code < 200 or resp.status_code >= 300:
-            # Cap the UNTRUSTED raw body at the boundary it enters — a
-            # proxy can echo megabytes of HTML into an error page.
-            raise MattermostError(
-                self._redact(resp.text)[:300],
-                method=method,
-                path=path,
-                status=resp.status_code,
-            )
-        if not resp.content:
+        """One API call, with every failure mode funnelled into one type.
+
+        Retries the handful of statuses that mean "ask again" — the rate
+        limiter, and a proxy or server mid-restart — honouring
+        ``Retry-After`` where the server sends one, within a wall-clock
+        budget.  A retry is safe for the reads this client makes, and
+        safe for the one write it makes because
+        :meth:`create_post` carries the idempotency key Mattermost
+        deduplicates on.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _RETRY_BUDGET_SECONDS
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                resp = await self._http().request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    **({"timeout": timeout} if timeout is not None else {}),
+                )
+            except httpx.HTTPError as exc:
+                # status=0: the request never reached the server. Callers
+                # only catch MattermostError, so letting httpx through
+                # here aborts whole sequences rather than one call.
+                delay = self._retry_delay(attempt, None, loop, deadline)
+                if delay is None:
+                    raise MattermostError(
+                        f"transport error: {exc}",
+                        method=method,
+                        path=path,
+                        status=0,
+                    ) from exc
+                logger.warning(
+                    "mattermost_request_retry",
+                    method=method,
+                    path=path,
+                    reason=type(exc).__name__,
+                    delay=round(delay, 2),
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code in _RETRY_STATUSES:
+                raw = resp.headers.get("retry-after", "")
+                hinted = parse_retry_after(raw) if raw else None
+                delay = self._retry_delay(attempt, hinted, loop, deadline)
+                if delay is not None:
+                    logger.warning(
+                        "mattermost_request_retry",
+                        method=method,
+                        path=path,
+                        status=resp.status_code,
+                        delay=round(delay, 2),
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+            if 300 <= resp.status_code < 400:
+                # A redirect usually means the configured URL is not the
+                # one the server answers on (http:// in front of a
+                # TLS-terminating proxy is the common case). Following it
+                # would send the bearer token to whatever host it names,
+                # so say what happened instead — the same mistake also
+                # gives the websocket a plaintext ws:// URL, and nothing
+                # else would name the cause.
+                location = resp.headers.get("location", "")
+                raise MattermostError(
+                    f"redirected to {location or '(no Location header)'} — "
+                    "set integrations.mattermost.url to the address the "
+                    "server actually answers on, so the REST client and "
+                    "the websocket both use it",
+                    method=method,
+                    path=path,
+                    status=resp.status_code,
+                )
+            if resp.status_code < 200 or resp.status_code >= 300:
+                # Cap the UNTRUSTED raw body at the boundary it enters — a
+                # proxy can echo megabytes of HTML into an error page.
+                raise MattermostError(
+                    self._redact(resp.text)[:300],
+                    method=method,
+                    path=path,
+                    status=resp.status_code,
+                )
+            if not resp.content:
+                return None
+            try:
+                return resp.json()
+            except ValueError:
+                return None
+
+    @staticmethod
+    def _retry_delay(
+        attempt: int,
+        hinted: float | None,
+        loop: asyncio.AbstractEventLoop,
+        deadline: float,
+    ) -> float | None:
+        """How long to wait before retry *attempt*; ``None`` to give up.
+
+        The server's own ``Retry-After`` wins when it sends one — it
+        knows when its limiter resets — and the exponential fallback
+        covers the transport failures and proxies that do not.
+        """
+        delay = (
+            hinted
+            if hinted is not None
+            else _RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+        )
+        if loop.time() + delay > deadline:
             return None
-        try:
-            return resp.json()
-        except ValueError:
-            return None
+        return delay
 
     # ----- liveness ----------------------------------------------------
 
@@ -294,12 +462,17 @@ class MattermostClient:
     async def client_config(self) -> dict[str, Any]:
         """The server's **client** configuration, as a browser sees it.
 
-        ``/config/client?format=old`` needs no authentication and returns
-        exactly the settings the web app is handed — including
-        ``SiteURL``, which is what every browser and plugin builds its
-        absolute URLs from.  Reading the same document the browser reads
-        is the point: an admin-side config read can report a value the
-        clients never see.
+        ``/config/client?format=old`` is what the web app is handed, so
+        reading it reads the value the BROWSER will act on rather than
+        the one an admin API might report.
+
+        Authentication changes what comes back: an unauthenticated read
+        gets the **limited** client config (``SiteURL`` and the
+        sign-in-page settings), an authenticated one gets the full
+        superset.  ``SiteURL`` is in both, which is what lets a health
+        check compare it with no credential at all; per-feature settings
+        like ``TimeBetweenUserTypingUpdatesMilliseconds`` are only in the
+        authenticated form.
 
         Returns an empty dict when the server refuses the read, so a
         caller can degrade rather than fail.
@@ -405,42 +578,90 @@ class MattermostClient:
         message: str,
         *,
         root_id: str = "",
+        pending_post_id: str = "",
     ) -> dict[str, Any]:
-        """Post a message, optionally as a reply in *root_id*'s thread."""
-        payload: dict[str, Any] = {"channel_id": channel_id, "message": message}
+        """Post a message, optionally as a reply in *root_id*'s thread.
+
+        Carries a ``pending_post_id``, which is Mattermost's own
+        idempotency key: the server deduplicates a create whose pending
+        id it has already seen within its caching window
+        (``App.deduplicateCreatePost``).  This is the only write this
+        client makes, and without the key a retry — of the transport
+        retry above, or of an operator re-running something — would
+        double-post an agent's reply into a human's thread.  It is
+        generated once per call, so every retry of *this* send reuses it;
+        pass one in to make a send idempotent across a wider scope.
+        """
+        payload: dict[str, Any] = {
+            "channel_id": channel_id,
+            "message": message,
+            "pending_post_id": pending_post_id or uuid.uuid4().hex,
+        }
         if root_id:
             payload["root_id"] = root_id
         return await self._request("POST", "/posts", json=payload)
 
     async def posts_since(self, channel_id: str, since_ms: int) -> list[dict[str, Any]]:
-        """Posts in a channel created or updated since *since_ms*.
+        """Posts in a channel with **new or changed content** since *since_ms*.
 
         The reconnect-gap primitive.  Mattermost's websocket replays
         nothing after a disconnect, so the fleet re-reads each channel it
         was watching from the last post it saw.  Returned oldest-first,
         which is the order the fleet must replay them in.
+
+        The server's ``since=`` is ``UpdateAt``-based, and ``UpdateAt`` is
+        bumped by things that are not content: adding or removing a
+        reaction touches the post, and deleting a reply touches the
+        thread's root.  Replaying those would wake an agent to re-answer
+        a message it has already answered — a full LLM turn per 👍 landing
+        during a reconnect.  So the filter is on the two fields that mean
+        the content itself is new: ``create_at`` (a new post) and
+        ``edit_at`` (the message was actually edited).  Deleted posts are
+        dropped here rather than downstream, since ``since=`` returns
+        them as tombstones.
         """
         data = await self._request(
             "GET", f"/channels/{channel_id}/posts", params={"since": since_ms}
         )
         order = list((data or {}).get("order") or [])
         posts = (data or {}).get("posts") or {}
+        replayable = []
         # ``order`` is newest-first; the caller replays chronologically.
-        return [posts[pid] for pid in reversed(order) if pid in posts]
+        for post_id in reversed(order):
+            post = posts.get(post_id)
+            if not isinstance(post, dict) or post.get("delete_at"):
+                continue
+            created = int(post.get("create_at") or 0)
+            edited = int(post.get("edit_at") or 0)
+            if created > since_ms or edited > since_ms:
+                replayable.append(post)
+        return replayable
 
     # ----- typing indicator --------------------------------------------
 
-    async def publish_typing(self, channel_id: str, *, parent_id: str = "") -> None:
+    async def publish_typing(
+        self,
+        channel_id: str,
+        *,
+        parent_id: str = "",
+        timeout: float = TYPING_TIMEOUT_SECONDS,
+    ) -> None:
         """Raise the composer typing indicator for this client's user.
 
         Thread-scoped when *parent_id* is set.  Fixed vocabulary: the
         wording is the client's, so nothing can be said with it beyond
         "this user is typing".
+
+        Given a deadline of its own, shorter than every other call's: it
+        is re-asserted on a few-second heartbeat, so a call that outlives
+        the next beat is pure backlog — the indicator it would have
+        raised is already stale, and holding a connection for it starves
+        the pool the same client's real work uses.
         """
         payload: dict[str, Any] = {"channel_id": channel_id}
         if parent_id:
             payload["parent_id"] = parent_id
-        await self._request("POST", "/users/me/typing", json=payload)
+        await self._request("POST", "/users/me/typing", json=payload, timeout=timeout)
 
     # ----- bots + tokens (provisioning) ---------------------------------
 
@@ -543,9 +764,13 @@ class MattermostClient:
         endpoint; an empty dict means "no limit reported".
         """
         try:
-            return await self._request("GET", "/limits/users") or {}
+            return await self._request("GET", "/limits/server") or {}
         except MattermostError as exc:
-            if exc.status in (401, 403, 404, 501):
+            # 403: an older build refusing a non-admin. 404/501: a server
+            # predating the route. A 401 is NOT swallowed — it means the
+            # operator credential is bad, and a provisioner that shrugged
+            # at that would go on to make writes it cannot make.
+            if exc.status in (403, 404, 501):
                 return {}
             raise
 
@@ -556,6 +781,7 @@ __all__ = [
     "CHANNEL_OPEN",
     "CHANNEL_PRIVATE",
     "DEFAULT_TYPING_THROTTLE_MS",
+    "TYPING_TIMEOUT_SECONDS",
     "DIRECT_CHANNEL_TYPES",
     "MattermostClient",
     "MattermostError",
