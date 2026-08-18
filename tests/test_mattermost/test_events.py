@@ -611,6 +611,9 @@ class _BackfillClient:
             raise MattermostError("channel unreadable", status=403)
         return list(self._posts.get(channel_id, []))
 
+    async def get_user(self, user_id: str) -> dict[str, Any] | None:
+        return {"id": user_id, "username": "alice"}
+
 
 def _post(post_id: str, *, channel: str = "c1", create_at: int = 1700000500000):
     return {
@@ -929,3 +932,81 @@ class TestConcurrentDrain:
         await fleet._pump_frames(self._Socket([]), inbox)
 
         assert inbox.get_nowait() is events_module._SOCKET_CLOSED
+
+
+class TestSeatRestart:
+    @pytest.mark.asyncio
+    async def test_a_loop_that_escapes_is_restarted(self):
+        """The loop catches everything it expects, so an escape is a bug —
+        and logging it while walking away leaves the seat deaf, still
+        listed as registered, until the process restarts."""
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        starts = 0
+
+        async def _explode(_seat: Any) -> None:
+            nonlocal starts
+            starts += 1
+            raise RuntimeError("escaped")
+
+        fleet._seat_loop = _explode  # type: ignore[method-assign]
+        fleet._running = True
+        fleet._start_seat("engineer")
+        for _ in range(40):
+            await asyncio.sleep(0)
+
+        assert starts > 1
+        await fleet.stop()
+
+    @pytest.mark.asyncio
+    async def test_restarts_are_bounded(self):
+        """Restarting a bug forever is a spin, not a recovery."""
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        starts = 0
+
+        async def _explode(_seat: Any) -> None:
+            nonlocal starts
+            starts += 1
+            raise RuntimeError("escaped")
+
+        fleet._seat_loop = _explode  # type: ignore[method-assign]
+        fleet._running = True
+        fleet._start_seat("engineer")
+        for _ in range(80):
+            await asyncio.sleep(0)
+
+        assert starts <= events_module._MAX_SEAT_RESTARTS + 1
+        await fleet.stop()
+
+
+class TestBackfilledSender:
+    @pytest.mark.asyncio
+    async def test_a_replayed_post_carries_a_username(self):
+        """A live event carries ``sender_name``; a REST re-read does not,
+        so the agent was handed a 26-character id as the sender."""
+
+        class _Client(_BackfillClient):
+            def __init__(self) -> None:
+                super().__init__(posts={"c1": [_post("p1")]})
+                self.lookups: list[str] = []
+
+            async def get_user(self, user_id: str):
+                self.lookups.append(user_id)
+                return {"id": user_id, "username": "alice"}
+
+        queue = _QueueStub()
+        fleet = _fleet(queue)
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        seat.user_id = BOT_ID
+        seat.last_event_ms = 1700000000000
+        client = _Client()
+        fleet._clients["engineer"] = client
+
+        await fleet._backfill(seat)
+
+        assert queue.published[0][1].payload["body"]["sender_name"] == "alice"
+        # A second replayed post from the same person costs no second call.
+        await fleet._username_for(seat, "humanid0000000000000000000")
+        assert len(client.lookups) == 1

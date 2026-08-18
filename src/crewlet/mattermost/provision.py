@@ -47,6 +47,21 @@ TOKEN_DESCRIPTION = "crewlet-engine"
 #: same reason.
 BOT_DESCRIPTION = "Crewlet agent seat"
 
+#: Keys in ``role.mcp_env.mattermost`` that name the seat's CREDENTIAL.
+#: Everything else there (a URL, a team) is configuration, and minting a
+#: token into it would replace an operator's value with a secret.
+#: ``MATTERMOST_TOKEN`` is what ``mcp-server-mattermost`` reads and what
+#: the docs use; the others are the names its forks answer to.
+_TOKEN_ENV_KEYS = frozenset(
+    {
+        "MATTERMOST_TOKEN",
+        "MATTERMOST_API_TOKEN",
+        "MATTERMOST_ACCESS_TOKEN",
+        "MATTERMOST_BOT_TOKEN",
+        "MATTERMOST_PERSONAL_ACCESS_TOKEN",
+    }
+)
+
 
 class MattermostProvisionAborted(RuntimeError):
     """Preflight refused to mutate anything.
@@ -72,13 +87,21 @@ def seat_token_vars(role: Any) -> list[str]:
     Reads the *materialised* ``role.mattermost`` dict, because that is
     what the runtime :class:`~crewlet.org.models.Role` carries; the
     authored ``integrations`` block exists only on the config model.
+
+    Only the **credential** keys are scanned, not every value in
+    ``mcp_env.mattermost``.  That block legitimately carries other
+    references — a ``MATTERMOST_URL``, a team name — and minting a bot's
+    personal access token into one of those would overwrite an operator's
+    URL with a secret, in the env file, silently.
     """
     scan: dict[str, str] = {}
     identity = dict(getattr(role, "mattermost", None) or {})
     if identity.get("bot_token"):
         scan["__identity_bot_token__"] = identity["bot_token"]
-    mcp_env = getattr(role, "mcp_env", None) or {}
-    scan.update(dict(mcp_env.get("mattermost") or {}))
+    mcp_env = dict((getattr(role, "mcp_env", None) or {}).get("mattermost") or {})
+    for key, value in mcp_env.items():
+        if key.upper() in _TOKEN_ENV_KEYS:
+            scan[key] = value
     return referenced_env_vars(scan)
 
 
@@ -188,7 +211,14 @@ async def _preflight(
     # consumes it.  Report the human headroom anyway: an operator whose
     # workspace is near the wall wants to know before they invite people,
     # not after the server refuses.
-    limits = await client.server_limits()
+    try:
+        limits = await client.server_limits()
+    except MattermostError as exc:
+        # Informational only. A reconcile that refused to run because a
+        # headroom NOTE could not be fetched would be refusing over
+        # nothing.
+        logger.debug("mattermost_limits_read_failed", error=str(exc))
+        limits = {}
     max_users = limits.get("maxUsersLimit") or limits.get("max_users_limit")
     active = limits.get("activeUserCount") or limits.get("active_user_count")
     if max_users:
@@ -330,6 +360,7 @@ async def _ensure_membership(
     user_id: str,
     channel_names: list[str],
     result: SeatResult,
+    channel_ids: dict[str, str] | None = None,
 ) -> None:
     """Put the bot in the team and its channels.
 
@@ -358,9 +389,14 @@ async def _ensure_membership(
             ) from exc
 
     failures: list[str] = []
+    resolved = channel_ids if channel_ids is not None else {}
     for name in channel_names:
-        channel = await client.get_channel_by_name(team_id, name)
-        channel_id = str((channel or {}).get("id") or "")
+        if name in resolved:
+            channel_id = resolved[name]
+        else:
+            channel = await client.get_channel_by_name(team_id, name)
+            channel_id = str((channel or {}).get("id") or "")
+            resolved[name] = channel_id
         if not channel_id:
             # Not a note: a bot receives nothing from a channel it is not
             # in, so a configured channel that does not exist is a seat
@@ -516,6 +552,23 @@ async def _reconcile_seats(
     handles: set[str] | None,
 ) -> None:
     """The per-seat loop, split out so aborting it still flushes."""
+    if handles is not None:
+        known = {r.get_handle() for r in org.all_roles()}
+        unknown = sorted(handles - known)
+        if unknown:
+            # Silently provisioning nothing looks identical to a clean
+            # run, and the operator's typo survives into the next one.
+            raise MattermostProvisionAborted(
+                "--handles names seats that are not in this config: "
+                + ", ".join(unknown)
+            )
+
+    # Channel names resolve to the same ids for every seat, so resolve
+    # each once: a fleet of twenty seats otherwise re-reads the same
+    # channel list twenty times, and a channel that does not exist is
+    # rediscovered per seat instead of reported once.
+    channel_ids: dict[str, str] = {}
+
     for role in org.all_roles():
         # get_handle(), NOT .handle: the raw field is EMPTY unless the
         # config pins one explicitly, and the handle is what names the bot
@@ -574,6 +627,7 @@ async def _reconcile_seats(
                 user_id=user_id,
                 channel_names=channel_names,
                 result=result,
+                channel_ids=channel_ids,
             )
 
             await _ensure_token(

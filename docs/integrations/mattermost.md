@@ -745,20 +745,25 @@ If a bot stays silent, check in this order:
    tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
 
-Three settings the compose service sets are load-bearing rather than
-convenience. All three default to `false` in the server's own config
-defaults, and the paved path needs each:
+Two settings the compose service sets are load-bearing rather than
+convenience. Both default to `false` in the server's own config defaults,
+and the paved path needs each:
 
 | Setting | Needed by |
 |---|---|
 | `ServiceSettings.EnableBotAccountCreation` | `crewlet mattermost provision` — creating the bot accounts |
 | `ServiceSettings.EnableUserAccessTokens` | `crewlet mattermost provision` — minting their tokens |
-| `TeamSettings.EnableOpenServer` | the bootstrap script — creating the admin over the API |
 
-If you point Crewlet at a Mattermost you host yourself, enable the first two
-under **System Console → Integrations → Integration Management** (the third
-is only needed for the scripted first-run signup — create the admin by hand
-instead and you can leave it closed).
+`TeamSettings.EnableOpenServer` is deliberately **not** set. The bootstrap
+creates its admin over the API without it — Mattermost always allows the
+first account on an empty install — and turning it on would leave public
+signup enabled permanently, since an `MM_*` variable cannot be switched off
+from the System Console.
+
+If you point Crewlet at a Mattermost you host yourself, enable both under
+**System Console → Integrations → Integration Management**;
+`crewlet mattermost provision` refuses to start without them rather than
+half-provisioning the fleet.
 
 Unlike the GitLab and Plane loops, **nothing has to reach the engine**. Those
 two POST webhooks into it, so they need `host.docker.internal` and a

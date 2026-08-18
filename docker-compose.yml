@@ -306,13 +306,12 @@ services:
   # Mattermost has no usable inbound webhook (see the integration doc).
   # That also means this stack works unchanged behind NAT, with no tunnel.
   #
-  # Three settings below are load-bearing rather than convenience. All
-  # three default to FALSE in the server's own config defaults
+  # Two settings below are load-bearing rather than convenience. Both
+  # default to FALSE in the server's own config defaults
   # (`model/config.go` SetDefaults), and the paved path needs each:
   # `crewlet mattermost provision` creates bot accounts and mints their
-  # personal access tokens, and the bootstrap script creates the admin
-  # over the API. Setting them here is what makes the loop one command
-  # instead of a System Console detour.
+  # personal access tokens. Setting them here is what makes the loop one
+  # command instead of a System Console detour.
   #
   # No mem_limit, for the same reason the plane services have none — this
   # is a single Go binary, not a multi-GB JVM/Rails process that can swap
@@ -360,10 +359,17 @@ services:
       # Required by `crewlet mattermost provision` (see the note above).
       MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
       MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
-      # Opens first-run signup so the bootstrap can create the admin over
-      # the API. The FIRST user on a fresh install is promoted to system
-      # admin automatically — that is the account the provisioner uses.
-      MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
+      # NOT set: MM_TEAMSETTINGS_ENABLEOPENSERVER. The bootstrap creates
+      # the admin over the API and does not need it — Mattermost always
+      # allows the FIRST account on an empty install (the refusal is
+      # `!IsFirstUserAccount() && !EnableOpenServer`), and that first user
+      # is promoted to system admin automatically, which is the account
+      # the provisioner authenticates as. Setting it would leave open
+      # signup on permanently AND unfixably: an MM_* variable outranks
+      # stored config, so the System Console cannot turn it back off. This
+      # stack publishes a port and its admin password is a documented
+      # literal, so on any host reachable by more than its owner that is a
+      # stranger's account away from a foothold.
       # Required by the HEALTHCHECK below, which is the image's own and
       # runs `mmctl ... --local` over a unix socket. Off by default, so
       # without this the built-in check can never pass.

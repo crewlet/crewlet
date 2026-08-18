@@ -45,12 +45,13 @@ from crewlet._logging import get_logger
 from crewlet.events.types import Event
 from crewlet.mattermost.client import MattermostClient, MattermostError
 
-logger = get_logger("mattermost.events")
+# The topic every inbound integration publishes onto — imported from the
+# notification service rather than restated, because a publisher and a
+# consumer disagreeing about this string is a fleet that connects, reads,
+# publishes, and wakes nobody.
+from crewlet.notifications.service import INBOUND_TOPIC
 
-#: The topic every inbound integration publishes onto.  Imported lazily
-#: in :meth:`_publish` to keep this module importable without the queue
-#: package configured.
-INBOUND_TOPIC = "crewlet.notifications.inbound"
+logger = get_logger("mattermost.events")
 
 #: Backoff schedule between reconnect attempts, in seconds.  Capped
 #: rather than unbounded-exponential: a seat that cannot connect is a
@@ -120,6 +121,34 @@ _AUTH_TIMEOUT = 20.0
 #: echoes it back as ``seq_reply``, which is how the ack is identified.
 _AUTH_SEQ = 1
 
+#: Largest websocket frame this fleet will accept, mirroring the server's
+#: own ``model.SocketMaxMessageSizeKb`` (256 KB) with room to spare.  It
+#: was ``None`` — no limit at all — which makes the process's memory a
+#: function of whatever the far end sends: a corrupted length prefix or a
+#: hostile server is an OOM rather than a dropped connection.  Mattermost
+#: never sends a bigger frame, so a seat that trips this has a problem
+#: worth failing on.
+_MAX_FRAME_BYTES = 1024 * 1024
+
+#: Overall deadline for the authentication handshake, distinct from the
+#: per-frame read timeout: a server that keeps sending frames without
+#: ever acknowledging the challenge would otherwise hold a seat in the
+#: handshake indefinitely, buffering every frame it sent.
+_AUTH_DEADLINE = 60.0
+
+#: How many pre-acknowledgement frames to keep.  They are replayed after
+#: the backfill so a post arriving in the same batch as the ack is not
+#: lost; an unbounded list would let a chatty server grow it without
+#: limit while the ack never comes.
+_MAX_EARLY_FRAMES = 512
+
+#: How many times a seat loop may be restarted after escaping its own
+#: error handling.  The loop catches every exception it expects, so an
+#: escape is a defect rather than a transient — a few restarts cover a
+#: genuinely one-off failure, and stopping after that turns an infinite
+#: spin into one loud, findable log line.
+_MAX_SEAT_RESTARTS = 5
+
 #: Sentinel queued by the frame pump when the socket closes, so the
 #: consumer ends instead of waiting forever on a dead connection.
 _SOCKET_CLOSED = object()
@@ -164,6 +193,10 @@ class _SeatState:
     seen_posts: list[str] = field(default_factory=list)
     seen_lookup: set[str] = field(default_factory=set)
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: How many times this seat's loop has been restarted after escaping
+    #: its own error handling.  Bounded: the loop catches everything, so
+    #: an escape is a bug, and restarting a bug forever is a spin.
+    restarts: int = 0
     #: ``time.monotonic()`` at the moment this connection started reading
     #: LIVE traffic — set once the handshake, identity read and backfill
     #: are behind it.  ``None`` until then, and reset on every attempt.
@@ -237,8 +270,15 @@ async def await_authentication(
     arrives in the same batch as the ack is not dropped.
     """
     early: list[Any] = []
+    deadline = asyncio.get_running_loop().time() + _AUTH_DEADLINE
     while True:
-        raw = await asyncio.wait_for(socket.recv(), timeout=timeout)
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise MattermostAuthError(
+                f"no authentication reply for {handle or 'seat'} within "
+                f"{_AUTH_DEADLINE:.0f}s"
+            )
+        raw = await asyncio.wait_for(socket.recv(), timeout=min(timeout, remaining))
         try:
             frame = json.loads(raw)
         except (TypeError, ValueError):
@@ -259,7 +299,8 @@ async def await_authentication(
             # Success is also signalled unsolicited, and can land before
             # the status reply.
             return early
-        early.append(raw)
+        if len(early) < _MAX_EARLY_FRAMES:
+            early.append(raw)
 
 
 class MattermostEventFleet:
@@ -291,6 +332,8 @@ class MattermostEventFleet:
         self._clients: dict[str, MattermostClient] = {}
         self._team_id = ""
         self._running = False
+        #: user id → username, for backfilled posts (see _username_for).
+        self._usernames: dict[str, str] = {}
 
     # ----- registration -------------------------------------------------
 
@@ -351,7 +394,25 @@ class MattermostEventFleet:
 
     async def start(self) -> None:
         """Resolve the team, then open every registered seat's socket."""
+        # Fail here, not per seat: without the extra installed, every
+        # connection attempt raises ImportError inside the retry loop, so
+        # the fleet looks like a server that will not answer rather than a
+        # missing dependency.
+        try:
+            import websockets  # noqa: F401
+        except ImportError as exc:  # pragma: no cover - install-time state
+            raise RuntimeError(
+                "the Mattermost integration needs the `websockets` package "
+                "(install crewlet[mattermost])"
+            ) from exc
+
         self._running = True
+        # stop() releases every HTTP client; a fleet started again would
+        # otherwise have none, and each seat would silently skip identity
+        # resolution and backfill for the life of the process.
+        for handle, seat in self._seats.items():
+            if handle not in self._clients:
+                self._clients[handle] = MattermostClient(self._base_url, seat.token)
         for handle in list(self._seats):
             self._start_seat(handle)
         logger.info(
@@ -400,15 +461,35 @@ class MattermostEventFleet:
         task.add_done_callback(lambda t: self._seat_task_finished(handle, t))
 
     def _seat_task_finished(self, handle: str, task: asyncio.Task[None]) -> None:
-        """Log a seat loop that ended for any reason other than shutdown."""
+        """Restart a seat loop that ended for any reason but shutdown.
+
+        The loop is not supposed to end while the fleet runs, so reaching
+        here means something escaped it.  Logging and walking away leaves
+        that seat deaf until the process restarts — with the fleet still
+        reporting it as registered — so it is logged AND restarted.
+        """
         if task.cancelled() or not self._running:
             return
         exc = task.exception()
+        seat = self._seats.get(handle)
+        if seat is None:
+            return
+        seat.restarts += 1
         logger.error(
             "mattermost_seat_loop_exited",
             handle=handle,
             error=str(exc) if exc else "returned",
+            restarts=seat.restarts,
         )
+        if seat.restarts > _MAX_SEAT_RESTARTS:
+            logger.error(
+                "mattermost_seat_abandoned",
+                handle=handle,
+                restarts=seat.restarts,
+                impact="this seat receives nothing until the engine restarts",
+            )
+            return
+        self._start_seat(handle)
 
     def _cancel_task(self, handle: str) -> asyncio.Task[None] | None:
         """Cancel a seat's task and hand it back for awaiting."""
@@ -500,7 +581,7 @@ class MattermostEventFleet:
             self._websocket_url,
             ping_interval=_PING_INTERVAL,
             ping_timeout=_PING_TIMEOUT,
-            max_size=None,
+            max_size=_MAX_FRAME_BYTES,
         ) as socket:
             await send_authentication_challenge(socket, seat.token)
             early = await self._await_authentication(seat, socket)
@@ -650,6 +731,9 @@ class MattermostEventFleet:
                     channel_name=str(channel.get("name") or ""),
                     mentions=[],
                     replayed=True,
+                    sender_name=await self._username_for(
+                        seat, str(post.get("user_id") or "")
+                    ),
                 ):
                     replayed += 1
         if replayed:
@@ -673,6 +757,32 @@ class MattermostEventFleet:
         """
         if not seat.last_event_ms:
             seat.last_event_ms = await self._now_ms(seat)
+
+    async def _username_for(self, seat: _SeatState, user_id: str) -> str:
+        """The poster's username, for a post read back over REST.
+
+        A live event carries ``sender_name``; a backfilled one does not,
+        so without this the agent is handed a 26-character id as the
+        sender — in its prompt, in its thread-follow grammar, and in the
+        dashboard. Cached per fleet: a gap replay is mostly a handful of
+        people, and the same ids recur across channels.
+        """
+        if not user_id:
+            return ""
+        cached = self._usernames.get(user_id)
+        if cached is not None:
+            return cached
+        client = self._clients.get(seat.handle)
+        if client is None:
+            return ""
+        try:
+            user = await client.get_user(user_id)
+        except MattermostError as exc:
+            logger.debug("mattermost_username_unresolved", user=user_id, error=str(exc))
+            return ""
+        username = str((user or {}).get("username") or "")
+        self._usernames[user_id] = username
+        return username
 
     async def _now_ms(self, seat: _SeatState) -> int:
         """ "Now", on the clock the post timestamps are stamped by.

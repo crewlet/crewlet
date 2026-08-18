@@ -774,3 +774,50 @@ class TestDecommission:
             sink=FakeSink(),
         )
         assert report.seats == []
+
+
+class TestSeatScanPrecision:
+    def test_only_credential_keys_are_minted_into(self):
+        """`mcp_env.mattermost` legitimately carries a URL; minting the
+        bot's token into it would overwrite an operator's value with a
+        secret, in the env file, silently."""
+        cfg = CompanyConfig.model_validate(
+            {
+                "name": "Acme",
+                "roles": [
+                    {
+                        "name": "Engineer",
+                        "handle": "engineer",
+                        "integrations": {
+                            "mattermost": {"bot_token": "${MM_TOKEN_ENGINEER}"}
+                        },
+                        "mcp_env": {
+                            "mattermost": {
+                                "MATTERMOST_TOKEN": "${MM_TOKEN_ENGINEER}",
+                                "MATTERMOST_URL": "${MATTERMOST_URL}",
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+        org = config_to_organization(cfg)
+        role = next(iter(org.all_roles()))
+
+        assert seat_token_vars(role) == ["MM_TOKEN_ENGINEER"]
+
+
+class TestHandleFilter:
+    @pytest.mark.asyncio
+    async def test_an_unknown_handle_aborts_rather_than_doing_nothing(self):
+        """Provisioning nothing looks identical to a clean run, and the
+        typo survives into the next one."""
+        client = FakeClient()
+        with pytest.raises(MattermostProvisionAborted, match="not in this config"):
+            await provision(
+                client,
+                _org(bot_token="${MM_TOKEN_ENGINEER}"),
+                team="nimbus",
+                sink=FakeSink(),
+                handles={"nobody"},
+            )
