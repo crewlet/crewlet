@@ -470,14 +470,14 @@ Creates (or updates) **one Mattermost bot account per Mattermost-enabled agent s
 
 Unlike the Slack provisioner there is **no app manifest, no local ledger and no OAuth click**: Mattermost is its own directory, so a seat is found by looking up a deterministic username and the reconcile is stateless. The one manual prerequisite is a **system-admin personal access token** (`--admin-token`, or `$MATTERMOST_ADMIN_TOKEN`) — creating bot accounts and minting their tokens both require system-admin rights, and an admin must first enable personal access tokens in System Console → Integrations.
 
-A preflight aborts before touching anything if the credential is not a system admin or the team does not exist — a half-provisioned fleet is worse than a refusal. It also reports the server's active-**human**-user headroom; bot accounts are excluded from that cap, so agent seats do not consume it.
+A preflight aborts before touching anything if the run cannot finish: the credential is not a system admin, the team does not exist, `ServiceSettings.EnableBotAccountCreation` or `ServiceSettings.EnableUserAccessTokens` is off (both default to false on a fresh install, and both fail *after* every bot has been created and joined), or the server's [Site URL](../integrations/mattermost.md#the-site-url) is a loopback address while the server is reached at a real one — which would silently cost every browser its live updates. A half-provisioned fleet is worse than a refusal. It also reports the server's active-**human**-user headroom; bot accounts are excluded from that cap, so agent seats do not consume it.
 
 | Flag | Description |
 |------|-------------|
 | `--admin-token TOKEN` | System-admin personal access token (default: `$MATTERMOST_ADMIN_TOKEN`). |
 | `--handles a,b` | Comma-separated agent handles to provision (default: all Mattermost-enabled seats). |
-| `--decommission a,b` | Disable these handles' bot accounts and revoke their tokens instead of provisioning. Accounts keep their history and can be re-enabled by a later run — but the revoked token is gone, so a restored seat is minted a fresh one. |
-| `--dry-run` | Print the plan (which seats would mint which vars); create and modify nothing. |
+| `--decommission a,b` | Disable these handles' bot accounts and revoke their tokens instead of provisioning. The account is disabled first (that is what stops the seat acting), then each token is revoked on its own, so one failure costs one token rather than the whole seat; anything left over is named in the outcome and exits non-zero. Accounts keep their history and can be re-enabled by a later run, which mints a fresh token. |
+| `--dry-run` | Print the plan (which seats would mint which vars); create and modify nothing. Applies to `--decommission` too. |
 | `--secret-store` | Write minted tokens into the encrypted [`secret_values`](../concepts/secret-store.md) table instead of an env file. Needs a Tier A keyring + DSN (`--bootstrap` / `--dsn`). |
 | `--env-file PATH` | The env file minted tokens are written to (default `.env`). Ignored with `--secret-store`. |
 | `--bootstrap PATH` / `--dsn DSN` | Tier A bootstrap YAML (default `./config.yaml`) supplying the DB DSN + keyring for `--secret-store`, or an explicit DSN override. |

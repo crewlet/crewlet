@@ -537,6 +537,27 @@ class MattermostClient:
         )
         return list(result or [])
 
+    async def get_channel_member(
+        self, channel_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        """The membership row, or ``None`` when the user is not a member.
+
+        Membership is verified rather than inferred from an add's status
+        code: Mattermost answers an add for an existing member with
+        success, so a 400 or 409 there is a REAL failure — an archived
+        channel, a guest restriction, a group-constrained team — and
+        reading it as "already joined" reports a bot into a channel it
+        cannot hear.
+        """
+        try:
+            return await self._request(
+                "GET", f"/channels/{channel_id}/members/{user_id}"
+            )
+        except MattermostError as exc:
+            if exc.status in (403, 404):
+                return None
+            raise
+
     async def add_channel_member(self, channel_id: str, user_id: str) -> dict[str, Any]:
         """Add a user to a channel (idempotent server-side)."""
         return await self._request(
@@ -557,6 +578,18 @@ class MattermostClient:
         """Fetch a team by its URL name; ``None`` when absent."""
         try:
             return await self._request("GET", f"/teams/name/{name}")
+        except MattermostError as exc:
+            if exc.status in (403, 404):
+                return None
+            raise
+
+    async def get_team_member(
+        self, team_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        """The team-membership row, or ``None``.  See
+        :meth:`get_channel_member` for why this is verified, not inferred."""
+        try:
+            return await self._request("GET", f"/teams/{team_id}/members/{user_id}")
         except MattermostError as exc:
             if exc.status in (403, 404):
                 return None
@@ -749,6 +782,16 @@ class MattermostClient:
         return await self._request(
             "PUT", f"/users/{user_id}/roles", json={"roles": roles}
         )
+
+    async def server_config(self) -> dict[str, Any]:
+        """The full (sanitized) server config — system-admin only.
+
+        Read by the provisioning preflight for the two settings the whole
+        run depends on.  Sanitized by the server, so no secret comes
+        back; still never logged, because "sanitized" is the server's
+        judgement rather than this client's.
+        """
+        return await self._request("GET", "/config") or {}
 
     # ----- server limits (provisioning preflight) ------------------------
 

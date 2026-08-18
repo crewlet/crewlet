@@ -9,7 +9,9 @@ import pytest
 from crewlet.config import CompanyConfig, config_to_organization
 from crewlet.mattermost.client import MattermostError
 from crewlet.mattermost.provision import (
+    TOKEN_DESCRIPTION,
     MattermostProvisionAborted,
+    decommission,
     provision,
     seat_token_vars,
 )
@@ -53,11 +55,22 @@ class FakeClient:
         self._channels = dict(channels or {})
         self.created_bots: list[dict[str, Any]] = []
         self.enabled: list[str] = []
+        self.disabled: list[str] = []
         self.patched: list[tuple[str, dict[str, Any]]] = []
         self.team_adds: list[str] = []
         self.channel_adds: list[tuple[str, str]] = []
         self.tokens_created: list[str] = []
+        self.revoked: list[str] = []
         self._next_token = 0
+        #: Tokens the bot already holds, per user id.
+        self.existing_tokens: dict[str, list[dict[str, Any]]] = {}
+        #: Server settings the preflight reads.
+        self.service_settings: dict[str, Any] = {
+            "EnableBotAccountCreation": True,
+            "EnableUserAccessTokens": True,
+            "SiteURL": "https://chat.example",
+        }
+        self.base_url = "https://chat.example"
 
     async def me(self) -> dict[str, Any]:
         return {"id": "adminid", "roles": self._roles}
@@ -67,6 +80,34 @@ class FakeClient:
 
     async def server_limits(self) -> dict[str, Any]:
         return {"maxUsersLimit": 250, "activeUserCount": 12}
+
+    async def server_config(self) -> dict[str, Any]:
+        return {"ServiceSettings": dict(self.service_settings)}
+
+    async def site_url(self) -> str:
+        return str(self.service_settings.get("SiteURL") or "")
+
+    async def get_team_member(
+        self, team_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        return {"user_id": user_id} if user_id in self.team_adds else None
+
+    async def get_channel_member(
+        self, channel_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        return (
+            {"user_id": user_id} if (channel_id, user_id) in self.channel_adds else None
+        )
+
+    async def list_user_access_tokens(self, user_id: str) -> list[dict[str, Any]]:
+        return list(self.existing_tokens.get(user_id, []))
+
+    async def revoke_user_access_token(self, token_id: str) -> None:
+        self.revoked.append(token_id)
+
+    async def disable_bot(self, bot_user_id: str) -> dict[str, Any]:
+        self.disabled.append(bot_user_id)
+        return {"user_id": bot_user_id}
 
     async def list_bots(self) -> list[dict[str, Any]]:
         return list(self._bots)
@@ -319,6 +360,9 @@ class TestReconcile:
         """Mattermost returns a token's value once — re-minting would
         strand the live credential rather than replace it."""
         client = FakeClient()
+        client.existing_tokens["user-engineer"] = [
+            {"id": "t1", "description": TOKEN_DESCRIPTION, "is_active": True}
+        ]
         sink = FakeSink({"MM_TOKEN_ENGINEER": "already-there"})
         report = await provision(
             client,
@@ -394,7 +438,11 @@ class TestReconcile:
         assert any("display name" in n for n in report.seats[0].notes)
 
     @pytest.mark.asyncio
-    async def test_missing_channel_is_noted_not_fatal(self):
+    async def test_a_missing_channel_fails_the_seat(self):
+        """Channel membership is what makes the websocket deliver
+        anything, so a configured channel that does not exist is a seat
+        that will be deaf where the operator expects it to listen — not a
+        note under a clean, zero-exit report."""
         client = FakeClient(channels={})
         report = await provision(
             client,
@@ -402,8 +450,211 @@ class TestReconcile:
             team="nimbus",
             sink=FakeSink(),
         )
+        assert not report.ok
+        assert "does not exist" in (report.seats[0].error or "")
+
+    @pytest.mark.asyncio
+    async def test_a_revoked_token_is_reminted(self):
+        """`--decommission` revokes the token but leaves the ${VAR}
+        holding its dead value, so the documented recovery — "re-enabled
+        by a later provision run" — used to restore a bot that could not
+        authenticate, silently."""
+        client = FakeClient(
+            bots=[
+                {
+                    "username": "engineer",
+                    "user_id": "user-engineer",
+                    "display_name": "Engineer",
+                    "delete_at": 1700000000000,
+                }
+            ]
+        )
+        client.existing_tokens["user-engineer"] = []
+        sink = FakeSink({"MM_TOKEN_ENGINEER": "revoked-value"})
+
+        report = await provision(
+            client,
+            _org(bot_token="${MM_TOKEN_ENGINEER}"),
+            team="nimbus",
+            sink=sink,
+        )
+
         assert report.ok
-        assert any("not found" in n for n in report.seats[0].notes)
+        assert report.seats[0].bot_action == "re-enabled"
+        assert report.seats[0].token_action == "minted"
+        assert sink.values["MM_TOKEN_ENGINEER"] != "revoked-value"
+
+    @pytest.mark.asyncio
+    async def test_an_inactive_token_does_not_count_as_provisioned(self):
+        client = FakeClient()
+        client.existing_tokens["user-engineer"] = [
+            {"id": "t1", "description": TOKEN_DESCRIPTION, "is_active": False}
+        ]
+        sink = FakeSink({"MM_TOKEN_ENGINEER": "stale"})
+
+        report = await provision(
+            client, _org(bot_token="${MM_TOKEN_ENGINEER}"), team="nimbus", sink=sink
+        )
+
+        assert report.seats[0].token_action == "minted"
+
+    @pytest.mark.asyncio
+    async def test_a_token_that_cannot_be_persisted_is_revoked(self):
+        """A minted token whose value is lost is a live, unknown,
+        non-expiring credential on the account — and the next run mints
+        another one indistinguishable from it."""
+
+        class _FailingSink(FakeSink):
+            async def record(self, var: str, token: str) -> None:
+                raise OSError("read-only file system")
+
+        client = FakeClient()
+        report = await provision(
+            client,
+            _org(bot_token="${MM_TOKEN_ENGINEER}"),
+            team="nimbus",
+            sink=_FailingSink(),
+        )
+
+        assert not report.ok
+        assert client.revoked == ["tok-id-1"]
+
+    @pytest.mark.asyncio
+    async def test_a_membership_failure_is_verified_before_it_is_believed(self):
+        """Mattermost answers an add for an existing member with success,
+        so a 4xx is a real failure — reading it as "already joined"
+        reported bots into channels they could not hear."""
+
+        class _RefusingClient(FakeClient):
+            async def add_channel_member(self, channel_id, user_id):
+                raise MattermostError("archived channel", status=400)
+
+        client = _RefusingClient(channels={"engineering": "chan-eng"})
+        report = await provision(
+            client,
+            _org(bot_token="${MM_TOKEN_ENGINEER}"),
+            team="nimbus",
+            sink=FakeSink(),
+            default_channels=["engineering"],
+        )
+
+        assert not report.ok
+        assert "engineering" in (report.seats[0].error or "")
+
+
+class TestPreflightRequirements:
+    @pytest.mark.asyncio
+    async def test_disabled_access_tokens_abort_before_any_write(self):
+        """Both settings default to false on a fresh install and fail
+        LATE: every bot gets created and joined, and only then does the
+        mint fail — the half-provisioned fleet preflight exists for."""
+        client = FakeClient()
+        client.service_settings["EnableUserAccessTokens"] = False
+
+        with pytest.raises(MattermostProvisionAborted, match="Personal Access"):
+            await provision(
+                client,
+                _org(bot_token="${MM_TOKEN_ENGINEER}"),
+                team="nimbus",
+                sink=FakeSink(),
+            )
+        assert client.created_bots == []
+
+    @pytest.mark.asyncio
+    async def test_disabled_bot_creation_aborts(self):
+        client = FakeClient()
+        client.service_settings["EnableBotAccountCreation"] = False
+
+        with pytest.raises(MattermostProvisionAborted, match="Bot Accounts"):
+            await provision(
+                client,
+                _org(bot_token="${MM_TOKEN_ENGINEER}"),
+                team="nimbus",
+                sink=FakeSink(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_loopback_site_url_aborts(self):
+        """This is the only command that runs against the server with a
+        system-admin token, and it runs first — so it is where a Site URL
+        that will blind every browser has to be caught."""
+        client = FakeClient()
+        client.service_settings["SiteURL"] = "http://localhost:8065"
+
+        with pytest.raises(MattermostProvisionAborted, match="SiteURL"):
+            await provision(
+                client,
+                _org(bot_token="${MM_TOKEN_ENGINEER}"),
+                team="nimbus",
+                sink=FakeSink(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_another_address_is_a_note_not_an_abort(self):
+        """An operator may legitimately reach the server by a second
+        name."""
+        client = FakeClient()
+        client.service_settings["SiteURL"] = "https://chat.internal"
+
+        report = await provision(
+            client,
+            _org(bot_token="${MM_TOKEN_ENGINEER}"),
+            team="nimbus",
+            sink=FakeSink(),
+        )
+
+        assert report.ok
+        assert any("SiteURL" in n for n in report.notes)
+
+
+class TestDecommission:
+    @pytest.mark.asyncio
+    async def test_dry_run_changes_nothing(self):
+        """`--dry-run` used to be checked AFTER this ran, so rehearsing a
+        decommission with the documented safety flag irreversibly revoked
+        every token and disabled every bot."""
+        client = FakeClient(bots=[{"username": "engineer", "user_id": "user-engineer"}])
+        client.existing_tokens["user-engineer"] = [{"id": "t1"}]
+
+        outcomes = await decommission(client, ["engineer"], dry_run=True)
+
+        assert client.disabled == []
+        assert client.revoked == []
+        assert "would disable" in outcomes[0][1]
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_username_is_still_found(self):
+        """Provisioning honoured `username:`; decommissioning did not, so
+        those seats reported `absent` while the bot stayed enabled."""
+        client = FakeClient(bots=[{"username": "custom-bot", "user_id": "user-custom"}])
+        org = _org(bot_token="${MM_TOKEN_ENGINEER}", username="custom-bot")
+
+        outcomes = await decommission(client, ["engineer"], org=org)
+
+        assert outcomes == [("engineer", "disabled")]
+        assert client.disabled == ["user-custom"]
+
+    @pytest.mark.asyncio
+    async def test_the_bot_is_disabled_before_its_tokens_are_revoked(self):
+        """Deactivating the account is the fast kill; revoking first meant
+        one dead token could abandon the handle with the bot still live."""
+
+        class _PartialClient(FakeClient):
+            async def revoke_user_access_token(self, token_id: str) -> None:
+                if token_id == "t1":
+                    raise MattermostError("already inactive", status=400)
+                await super().revoke_user_access_token(token_id)
+
+        client = _PartialClient(
+            bots=[{"username": "engineer", "user_id": "user-engineer"}]
+        )
+        client.existing_tokens["user-engineer"] = [{"id": "t1"}, {"id": "t2"}]
+
+        outcomes = await decommission(client, ["engineer"])
+
+        assert client.disabled == ["user-engineer"]
+        assert client.revoked == ["t2"]
+        assert "still active" in outcomes[0][1]
 
     @pytest.mark.asyncio
     async def test_literal_credentials_are_skipped_not_failed(self):

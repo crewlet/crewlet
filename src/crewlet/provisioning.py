@@ -175,7 +175,19 @@ class EnvFileSink:
 
 
 class PrintSink:
-    """Print ``export VAR=token`` for each minted token; env-only reads."""
+    """Print ``export VAR=token`` for each minted token; env-only reads.
+
+    Write-through like every other sink in this module, and for the same
+    reason: a minted token is live on its account the moment it is
+    returned and its value is never retrievable again, so anything that
+    holds it back until a later flush loses it outright if the run dies
+    in between.  Buffering also made this the one sink that broke the
+    module's own stated invariant — "every sink here persists inside
+    ``record``".  For this sink "persist" is the operator reading it, so
+    the line is printed as it is minted; the report is written to stdout
+    too, so it interleaves, which is the honest ordering rather than a
+    tidy one that can be lost.
+    """
 
     def __init__(self) -> None:
         self._recorded: list[tuple[str, str]] = []
@@ -185,10 +197,10 @@ class PrintSink:
 
     async def record(self, var: str, token: str) -> None:
         self._recorded.append((var, token))
+        print(f"export {var}={token}")
 
     async def flush(self) -> None:
-        for var, token in self._recorded:
-            print(f"export {var}={token}")
+        return None
 
 
 class SecretStoreSink:

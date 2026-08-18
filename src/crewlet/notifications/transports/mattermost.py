@@ -355,6 +355,21 @@ class MattermostTransport:
             if not user_id:
                 continue
             self._user_ids[handle] = user_id
+            # The SERVER is authoritative about the bot's name. The
+            # config value is a guess — the provisioner may have applied
+            # `provisioning.username_prefix`, or the account may have
+            # been renamed or created by hand — and that name is what the
+            # agent is told to answer to, what it writes when it mentions
+            # itself, and what the backfill's text grammar matches. A
+            # wrong one silently breaks all three.
+            if username and username != self._bots[handle].username:
+                logger.info(
+                    "mattermost_username_corrected",
+                    handle=handle,
+                    configured=self._bots[handle].username,
+                    actual=username,
+                )
+                self._bots[handle].username = username
             if self._handle_registry is not None:
                 # Two namespaces, same seat: payloads identify a poster by
                 # user id, while humans and the MCP tools address a bot by

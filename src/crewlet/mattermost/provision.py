@@ -29,7 +29,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from crewlet._logging import get_logger
-from crewlet.mattermost.client import MattermostClient, MattermostError
+from crewlet.mattermost.client import (
+    MattermostClient,
+    MattermostError,
+    site_urls_match,
+)
 from crewlet.provisioning import TokenSink, referenced_env_vars, sole_env_var
 
 logger = get_logger("mattermost.provision")
@@ -76,6 +80,37 @@ def seat_token_vars(role: Any) -> list[str]:
     mcp_env = getattr(role, "mcp_env", None) or {}
     scan.update(dict(mcp_env.get("mattermost") or {}))
     return referenced_env_vars(scan)
+
+
+def seat_username(role: Any, username_prefix: str = "") -> str:
+    """The Mattermost account name for *role*'s bot.
+
+    ONE derivation, shared by provisioning and decommissioning — they
+    disagreed before, so a seat with an explicit ``username`` could be
+    created and then never found again by ``--decommission``, which
+    reported it ``absent`` while the bot stayed enabled with a live
+    token.
+
+    ``${VAR}`` references are resolved here, the same way the engine
+    resolves them: only ``bot_token`` stays raw, because its reference
+    *is* the minting contract.  An unresolved one would otherwise create
+    a bot literally named ``${MM_USERNAME_SWE}``.
+    """
+    from crewlet.config import resolve_env_scalar
+
+    identity = dict(getattr(role, "mattermost", None) or {})
+    explicit = resolve_env_scalar(str(identity.get("username") or "")).strip()
+    if explicit:
+        return explicit
+    return f"{username_prefix}{role.get_handle()}"
+
+
+def seat_channel(role: Any) -> str:
+    """The seat's configured default channel name, ``${VAR}`` resolved."""
+    from crewlet.config import resolve_env_scalar
+
+    identity = dict(getattr(role, "mattermost", None) or {})
+    return resolve_env_scalar(str(identity.get("channel") or "")).strip()
 
 
 @dataclass
@@ -146,6 +181,9 @@ async def _preflight(
             "(the provisioner never creates top-level tenancy)"
         )
 
+    await _check_required_settings(client)
+    await _check_site_url(client, report)
+
     # Bots are excluded from the active-user cap, so an agent fleet never
     # consumes it.  Report the human headroom anyway: an operator whose
     # workspace is near the wall wants to know before they invite people,
@@ -161,6 +199,97 @@ async def _preflight(
         )
 
     return team_id
+
+
+async def _check_required_settings(client: MattermostClient) -> None:
+    """Refuse to start when the server cannot do what the run needs.
+
+    Both settings default to **false** on a fresh install, and both fail
+    late: with personal access tokens disabled, every seat creates its
+    bot, joins its channels, and only then fails at the mint — the
+    half-provisioned fleet this preflight exists to prevent, with an
+    error naming an API path instead of the toggle to flip.
+    """
+    try:
+        config = await client.server_config()
+    except MattermostError as exc:
+        # A server that will not hand over its config is not necessarily
+        # broken (a proxy, a restricted admin role); the run can still
+        # proceed and fail per seat with a real error.
+        logger.debug("mattermost_config_read_failed", error=str(exc))
+        return
+    service = dict(config.get("ServiceSettings") or {})
+    required = [
+        (
+            "EnableBotAccountCreation",
+            "creating the bot accounts",
+            "System Console → Integrations → Bot Accounts",
+        ),
+        (
+            "EnableUserAccessTokens",
+            "minting their access tokens",
+            "System Console → Integrations → Integration Management → "
+            "Enable Personal Access Tokens",
+        ),
+    ]
+    missing = [
+        f"ServiceSettings.{name} is off, which {why} needs — enable it under {where}"
+        for name, why, where in required
+        if service.get(name) is False
+    ]
+    if missing:
+        raise MattermostProvisionAborted("; ".join(missing))
+
+
+async def _check_site_url(client: MattermostClient, report: ProvisionReport) -> None:
+    """Report — or refuse — a Site URL that will break every browser.
+
+    This command is the only one in the product that runs against the
+    server holding a system-admin token, and it runs *first*, so it is
+    where a wrong ``ServiceSettings.SiteURL`` should be caught. Mattermost
+    accepts a websocket upgrade only from a browser whose ``Origin``
+    matches SiteURL exactly, and the engine — which sends no ``Origin`` —
+    is exempt: provisioning succeeds, agents reply, and only the humans'
+    clients are blind, with nothing anywhere naming the cause.
+
+    A loopback SiteURL on a server reached at a real address is wrong for
+    every browser except one sitting on that host, so that combination
+    aborts.  Any other mismatch is a note: an operator may legitimately
+    reach the server by a second name.
+    """
+    try:
+        reported = await client.site_url()
+    except MattermostError as exc:
+        logger.debug("mattermost_site_url_read_failed", error=str(exc))
+        return
+    configured = client.base_url
+    if not reported or site_urls_match(configured, reported):
+        return
+
+    from urllib.parse import urlparse
+
+    reported_host = (urlparse(reported).hostname or "").lower()
+    configured_host = (urlparse(configured).hostname or "").lower()
+    loopback = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+    if reported_host in loopback and configured_host not in loopback:
+        raise MattermostProvisionAborted(
+            f"the server reports SiteURL {reported}, but it is reached here "
+            f"at {configured}. Mattermost accepts a websocket upgrade only "
+            "from a browser whose Origin matches SiteURL exactly, so with a "
+            "loopback SiteURL every browser loses live updates and has to "
+            "refresh to see new messages — and its plugins request "
+            f"{reported} from the reader's own machine. Set "
+            "MM_SERVICESETTINGS_SITEURL (compose: MATTERMOST_PUBLIC_URL) to "
+            "the address people type and recreate the container; an "
+            "environment-managed setting cannot be changed from the System "
+            "Console or the API. Provisioning would otherwise succeed and "
+            "leave you to find this in a browser console."
+        )
+    report.notes.append(
+        f"the server's SiteURL is {reported}, not {configured}. Browsers on "
+        "any address other than SiteURL lose live updates; verify with "
+        "`crewlet mattermost doctor`."
+    )
 
 
 async def _ensure_bot(
@@ -213,25 +342,41 @@ async def _ensure_membership(
         await client.add_team_member(team_id, user_id)
         result.team = "added"
     except MattermostError as exc:
-        if exc.status in (400, 409):
+        # Mattermost answers an add for an EXISTING member with success,
+        # so a 4xx here is a real failure — not-in-the-team, a
+        # group-constrained team, a guest restriction. Verify instead of
+        # guessing: reading it as "already joined" reports a seat into a
+        # team it never joined.
+        if await client.get_team_member(team_id, user_id):
             result.team = "exists"
         else:
-            raise
+            raise MattermostError(
+                f"could not join team: {exc}",
+                method=exc.method,
+                path=exc.path,
+                status=exc.status,
+            ) from exc
 
+    failures: list[str] = []
     for name in channel_names:
         channel = await client.get_channel_by_name(team_id, name)
         channel_id = str((channel or {}).get("id") or "")
         if not channel_id:
-            result.notes.append(f"channel {name!r} not found — skipped")
+            # Not a note: a bot receives nothing from a channel it is not
+            # in, so a configured channel that does not exist is a seat
+            # that will be deaf where the operator expects it to listen.
+            failures.append(f"channel {name!r} does not exist in this team")
             continue
         try:
             await client.add_channel_member(channel_id, user_id)
             result.channels.append(name)
         except MattermostError as exc:
-            if exc.status in (400, 409):
+            if await client.get_channel_member(channel_id, user_id):
                 result.channels.append(name)
             else:
-                result.notes.append(f"channel {name!r}: {exc}")
+                failures.append(f"channel {name!r}: {exc}")
+    if failures:
+        raise MattermostError("; ".join(failures))
 
 
 async def _ensure_token(
@@ -244,26 +389,70 @@ async def _ensure_token(
 ) -> None:
     """Mint the seat's access token into its ``${VAR}``s.
 
-    A var that already carries a value counts as provisioned: Mattermost
-    returns a token's value exactly once, so re-minting would strand the
-    live credential rather than replace it.
+    "Already provisioned" is a claim about two places, and the sink is
+    only one of them.  A ``${VAR}`` that still carries a value whose
+    token has since been REVOKED — by ``--decommission``, by an admin in
+    the System Console, by a restore from an older env file — used to
+    read as provisioned, so the documented recovery ("a later provision
+    run re-enables it") re-enabled a bot and left it holding a dead
+    credential: silent, and fixable only by hand-editing the env file.
+    So the server is consulted too, and a seat with no live token of ours
+    is re-minted regardless of what the sink says.
+
+    Mattermost returns a token's value exactly once, which is why a
+    seat that HAS both is never re-minted: that would strand the live
+    credential rather than replace it.
     """
     unset = [var for var in token_vars if not sink.existing(var)]
-    if not unset:
+    if not unset and await _has_live_token(client, user_id):
         result.token_action = "exists"
         return
+    if not unset:
+        result.notes.append(
+            "the recorded token is no longer active on the server — minting a fresh one"
+        )
+        unset = list(token_vars)
 
     created = await client.create_user_access_token(user_id, TOKEN_DESCRIPTION)
     token = str((created or {}).get("token") or "")
+    token_id = str((created or {}).get("id") or "")
     if not token:
         raise MattermostError("token creation returned no token value")
 
     # Write-through before anything else can fail: the value is
     # unretrievable from here on, so the window between "minted" and
     # "persisted" is a window in which a crash orphans a live credential.
-    for var in unset:
-        await sink.record(var, token)
+    # If the persist fails anyway, revoke what was just minted rather
+    # than leave a live, unknown, non-expiring credential on the account
+    # — the next run would mint another, indistinguishable from it.
+    try:
+        for var in unset:
+            await sink.record(var, token)
+    except BaseException:
+        if token_id:
+            try:
+                await client.revoke_user_access_token(token_id)
+                logger.warning("mattermost_unpersisted_token_revoked", user=user_id)
+            except Exception:
+                logger.exception("mattermost_token_revoke_failed", user=user_id)
+        raise
     result.token_action = "minted"
+
+
+async def _has_live_token(client: MattermostClient, user_id: str) -> bool:
+    """Whether the bot still holds an active token this tool minted."""
+    try:
+        tokens = await client.list_user_access_tokens(user_id)
+    except MattermostError as exc:
+        # Unknowable is not the same as absent: minting on a read failure
+        # would strand the credential the config already carries.
+        logger.debug("mattermost_token_list_failed", user=user_id, error=str(exc))
+        return True
+    return any(
+        str(t.get("description") or "") == TOKEN_DESCRIPTION
+        and t.get("is_active", True)
+        for t in tokens
+    )
 
 
 async def provision(
@@ -288,6 +477,45 @@ async def provision(
 
     existing_bots = {str(b.get("username") or ""): b for b in await client.list_bots()}
 
+    try:
+        await _reconcile_seats(
+            client,
+            org,
+            report=report,
+            sink=sink,
+            existing_bots=existing_bots,
+            username_prefix=username_prefix,
+            display_name_suffix=display_name_suffix,
+            default_channels=default_channels,
+            handles=handles,
+        )
+    except BaseException:
+        # Flush what was minted before re-raising — the same
+        # flush-on-abort wrapper the Plane and GitLab provisioners use.
+        # A Ctrl-C after the first mint would otherwise lose credentials
+        # that are already live on their accounts and unretrievable.
+        try:
+            await sink.flush()
+        except Exception:
+            logger.exception("mattermost_sink_flush_failed")
+        raise
+    await sink.flush()
+    return report
+
+
+async def _reconcile_seats(
+    client: MattermostClient,
+    org: Any,
+    *,
+    report: ProvisionReport,
+    sink: TokenSink,
+    existing_bots: dict[str, dict[str, Any]],
+    username_prefix: str,
+    display_name_suffix: str,
+    default_channels: list[str] | None,
+    handles: set[str] | None,
+) -> None:
+    """The per-seat loop, split out so aborting it still flushes."""
     for role in org.all_roles():
         # get_handle(), NOT .handle: the raw field is EMPTY unless the
         # config pins one explicitly, and the handle is what names the bot
@@ -320,7 +548,7 @@ async def provision(
             )
             continue
 
-        username = identity.get("username") or f"{username_prefix}{handle}"
+        username = seat_username(role, username_prefix)
         result = SeatResult(handle=handle, username=username, token_vars=token_vars)
         report.seats.append(result)
 
@@ -337,9 +565,9 @@ async def provision(
             result.user_id = user_id
 
             channel_names = list(default_channels or [])
-            seat_channel = identity.get("channel", "")
-            if seat_channel and seat_channel not in channel_names:
-                channel_names.append(seat_channel)
+            own_channel = seat_channel(role)
+            if own_channel and own_channel not in channel_names:
+                channel_names.append(own_channel)
             await _ensure_membership(
                 client,
                 team_id=report.team_id,
@@ -365,41 +593,95 @@ async def provision(
             result.error = str(exc)
             logger.exception("mattermost_seat_failed", handle=handle)
 
-    await sink.flush()
-    return report
-
 
 async def decommission(
     client: MattermostClient,
     handles: list[str],
     *,
+    org: Any = None,
     username_prefix: str = "",
+    dry_run: bool = False,
 ) -> list[tuple[str, str]]:
     """Disable the bot accounts for *handles*.
 
     Disable rather than delete: the account keeps its history, so the
     channels it posted in stay readable, and the seat can be brought back
     with a re-enable.  Its access tokens are revoked, so a decommissioned
-    seat that is later restored needs a fresh token — the CLI says so.
+    seat that is later restored is minted a fresh one.
+
+    The account is disabled **first**.  Deactivating it is what actually
+    stops the seat acting; revoking tokens first meant one already-dead
+    token could abort the handle with the bot still enabled and its other
+    tokens live, reported as an error the caller shrugged at.  Each token
+    is then revoked on its own, so one failure costs one token rather
+    than the whole seat, and the outcome names what is left.
+
+    With *org*, the account name comes from :func:`seat_username`, the
+    same derivation ``provision`` used to create it — without it, a seat
+    with an explicit ``username`` could never be decommissioned at all
+    and was reported ``absent`` while its bot stayed enabled.
     """
     outcomes: list[tuple[str, str]] = []
     bots = {str(b.get("username") or ""): b for b in await client.list_bots()}
+    by_handle = {}
+    if org is not None:
+        by_handle = {r.get_handle(): r for r in org.all_roles()}
+
     for handle in handles:
-        username = f"{username_prefix}{handle}"
+        role = by_handle.get(handle)
+        if org is not None and role is None:
+            outcomes.append((handle, "unknown handle — not in this config"))
+            continue
+        username = (
+            seat_username(role, username_prefix)
+            if role is not None
+            else f"{username_prefix}{handle}"
+        )
         bot = bots.get(username)
         if bot is None:
-            outcomes.append((handle, "absent"))
+            outcomes.append((handle, f"absent (no bot named {username!r})"))
             continue
         user_id = str(bot.get("user_id") or "")
+
+        if dry_run:
+            try:
+                live = len(await client.list_user_access_tokens(user_id))
+            except MattermostError as exc:
+                outcomes.append((handle, f"error: {exc}"))
+                continue
+            state = "already disabled" if bot.get("delete_at") else "enabled"
+            outcomes.append(
+                (handle, f"would disable {username} ({state}, {live} token(s))")
+            )
+            continue
+
+        problems: list[str] = []
         try:
-            for token in await client.list_user_access_tokens(user_id):
-                token_id = str(token.get("id") or "")
-                if token_id:
-                    await client.revoke_user_access_token(token_id)
             await client.disable_bot(user_id)
-            outcomes.append((handle, "disabled"))
         except MattermostError as exc:
-            outcomes.append((handle, f"error: {exc}"))
+            problems.append(f"disable failed: {exc}")
+        try:
+            tokens = await client.list_user_access_tokens(user_id)
+        except MattermostError as exc:
+            problems.append(f"could not list tokens: {exc}")
+            tokens = []
+        remaining = 0
+        for token in tokens:
+            token_id = str(token.get("id") or "")
+            if not token_id:
+                continue
+            try:
+                await client.revoke_user_access_token(token_id)
+            except MattermostError as exc:
+                remaining += 1
+                logger.warning(
+                    "mattermost_token_revoke_failed", handle=handle, error=str(exc)
+                )
+        if remaining:
+            problems.append(f"{remaining} token(s) still active")
+        outcomes.append(
+            (handle, "disabled" if not problems else "error: " + "; ".join(problems))
+        )
     return outcomes
 
 
@@ -411,5 +693,7 @@ __all__ = [
     "SeatResult",
     "decommission",
     "provision",
+    "seat_channel",
     "seat_token_vars",
+    "seat_username",
 ]

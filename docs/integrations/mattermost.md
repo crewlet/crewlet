@@ -254,6 +254,24 @@ freely. One seat failing is recorded as a `FAILED` line and the remaining
 agents still provision; the command then exits non-zero, and re-running
 resumes exactly the failed seats.
 
+Before it writes anything, a preflight refuses the run when it cannot
+finish: a credential that is not a system admin, a team that does not exist,
+`ServiceSettings.EnableBotAccountCreation` or
+`ServiceSettings.EnableUserAccessTokens` switched off (both default to
+**false** on a fresh install, and both fail *late* — every bot created and
+joined, then nothing minted), and a loopback [Site URL](#the-site-url) on a
+server reached at a real address, which would leave every browser without
+live updates. Membership is **verified**, never inferred from a status code:
+Mattermost answers an add for an existing member with success, so a 4xx
+there is a real failure, and a configured channel that does not exist fails
+its seat rather than passing as a note — a bot hears nothing from a channel
+it is not in.
+
+"Already provisioned" is checked against the server as well as the env file.
+A `${VAR}` still holding a token that has since been revoked — by
+`--decommission`, by an admin, by a restore from an older `.env` — is
+re-minted, so the documented recovery below actually recovers.
+
 ### The admin token
 
 The reconcile authenticates as a **system admin** — creating bot accounts and
@@ -272,7 +290,7 @@ config: pass `--admin-token` or export `MATTERMOST_ADMIN_TOKEN`.
 | `--admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
 | `--handles a,b` | Only provision these agent handles. |
 | `--decommission a,b` | Disable these handles' bots and revoke their tokens. |
-| `--dry-run` | Print the plan; create and modify nothing. |
+| `--dry-run` | Print the plan; create and modify nothing. Applies to `--decommission` too. |
 | `--env-file PATH` | Env file minted tokens are written to (default `.env`). |
 | `--secret-store` | Write minted tokens into the encrypted `secret_values` table instead. |
 | `--print` | Print `export VAR=token` lines to stdout. |
@@ -284,8 +302,14 @@ and opens each seat's websocket.
 
 `--decommission` disables the bot account and revokes its tokens. Disable
 rather than delete: the account keeps its history, so channels it posted in
-stay readable, and a later provision run re-enables it. The revoked token is
-gone, though — a restored seat is minted a fresh one.
+stay readable, and a later provision run re-enables it *and mints a fresh
+token*, since the revoked one is gone.
+
+The account is disabled first — deactivating it is what actually stops the
+seat acting — and each token is then revoked on its own, so one failure
+costs one token rather than the whole seat. What is left over is named in
+the outcome (`error: 1 token(s) still active`) and exits non-zero.
+`--dry-run` applies here too, and prints what it would disable.
 
 ### Seats and licensing
 

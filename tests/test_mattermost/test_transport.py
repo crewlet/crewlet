@@ -659,3 +659,30 @@ class TestSiteURLPreflight:
         with caplog.at_level("WARNING"):
             transport._warn_on_site_url_mismatch({})
         assert "mattermost_site_url_mismatch" not in caplog.text
+
+
+class TestIdentityIsServerAuthoritative:
+    """The configured username is a guess: the provisioner may have
+    applied `provisioning.username_prefix`, or the account may have been
+    renamed. That name is what the agent is told to answer to, what it
+    writes when mentioning itself, and what the backfill's text grammar
+    matches."""
+
+    @pytest.mark.asyncio
+    async def test_start_corrects_the_username_from_the_server(self):
+        transport = MattermostTransport(base_url="https://chat.example", team="n")
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="swe")
+        )
+
+        class _Client(_FakeClient):
+            async def me(self) -> dict[str, Any]:
+                return {"id": BOT_ID, "username": "agent-swe"}
+
+            async def client_config(self) -> dict[str, Any]:
+                return {"SiteURL": "https://chat.example"}
+
+        transport._clients["engineer"] = _Client()  # type: ignore[assignment]
+        await transport.start()
+
+        assert transport.bots["engineer"].username == "agent-swe"
