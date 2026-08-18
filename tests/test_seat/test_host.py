@@ -14,14 +14,26 @@ lease is a zombie running someone else's agent.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-from crewlet.db.leases import Lease, LeaseError, MemoryLeaseStore, node_resource
-from crewlet.seat.host import SeatHost, SweepResult
+from crewlet.db.leases import (
+    Lease,
+    LeaseError,
+    MemoryLeaseStore,
+    node_resource,
+    seat_resource,
+)
+from crewlet.seat.host import (
+    ReleaseReason,
+    SeatHost,
+    SeatReleaseError,
+    SweepResult,
+)
 
 _TEST_DSN = os.environ.get("CREWLET_TEST_DSN", "")
 
@@ -238,19 +250,19 @@ async def test_a_lost_lease_drops_the_seat_immediately(leases: Any) -> None:
     this node does for it from here is a zombie's work."""
     released: list[str] = []
 
-    async def _on_release(handle: str, lease: Lease) -> None:
+    async def _on_release(handle: str, lease: Lease, reason: ReleaseReason) -> None:
         released.append(handle)
 
     host = _host(leases, seats=lambda: ["ceo"], on_release=_on_release)
     await host._renew_node_presence()
     await host.sweep()
-    assert host.owns("ceo")
+    assert host.may_start("ceo") is not None
 
     await _expire(leases, "seat:ceo")
     lost = await host.heartbeat()
 
     assert lost == ("ceo",)
-    assert not host.owns("ceo")
+    assert not (host.may_start("ceo") is not None)
     assert host.epoch_for("ceo") is None
     assert released == ["ceo"]
 
@@ -304,12 +316,12 @@ async def test_a_decommissioned_role_is_released(leases: Any) -> None:
     host = _host(leases, seats=lambda: list(seats))
     await host._renew_node_presence()
     await host.sweep()
-    assert host.owns("eng")
+    assert host.may_start("eng") is not None
 
     seats.remove("eng")
     await host.sweep()
-    assert not host.owns("eng")
-    assert host.owns("ceo")
+    assert not (host.may_start("eng") is not None)
+    assert host.may_start("ceo") is not None
 
 
 # ── draining ─────────────────────────────────────────────────────────
@@ -343,7 +355,7 @@ async def test_release_all_frees_seats_for_a_peer(leases: Any) -> None:
     peer = _host(leases, "node-b", seats=lambda: ["ceo"])
     await peer._renew_node_presence()
     await peer.sweep()
-    assert peer.owns("ceo")
+    assert peer.may_start("ceo") is not None
 
 
 # ── hooks ────────────────────────────────────────────────────────────
@@ -366,7 +378,7 @@ async def test_a_failed_takeover_gives_the_seat_back(leases: Any) -> None:
     await host.sweep()
 
     assert calls == ["ceo"]
-    assert not host.owns("ceo")
+    assert not (host.may_start("ceo") is not None)
     lease = await leases.get("seat:ceo")
     assert lease is None or lease.owner == ""
 
@@ -426,7 +438,7 @@ async def test_start_claims_before_the_loops_spin(leases: Any) -> None:
     host = _host(leases, seats=lambda: ["ceo"], sweep_seconds=99, heartbeat_seconds=99)
     await host.start()
     try:
-        assert host.owns("ceo")
+        assert host.may_start("ceo") is not None
     finally:
         await host.stop()
     assert host.held_handles == ()
@@ -477,13 +489,13 @@ async def test_an_unreachable_store_drops_the_seat_once_the_TTL_HAS_lapsed(
     """
     released: list[str] = []
 
-    async def _on_release(handle: str, lease: Lease) -> None:
+    async def _on_release(handle: str, lease: Lease, reason: ReleaseReason) -> None:
         released.append(handle)
 
     host = _host(leases, seats=lambda: ["ceo"], on_release=_on_release, ttl_seconds=30)
     await host._renew_node_presence()
     await host.sweep()
-    assert host.owns("ceo")
+    assert host.may_start("ceo") is not None
 
     async def _boom(*args: Any, **kwargs: Any) -> bool:
         raise LeaseError("database is down")
@@ -492,12 +504,12 @@ async def test_an_unreachable_store_drops_the_seat_once_the_TTL_HAS_lapsed(
 
     # Inside the TTL: hold on.
     assert await host.heartbeat() == ()
-    assert host.owns("ceo")
+    assert host.may_start("ceo") is not None
 
     # Past the TTL: the lease has lapsed regardless of what we can see.
     host._held["ceo"].renewed_at -= 31
     assert await host.heartbeat() == ("ceo",)
-    assert not host.owns("ceo")
+    assert not (host.may_start("ceo") is not None)
     assert released == ["ceo"]
 
 
@@ -512,7 +524,7 @@ async def test_a_successful_renew_refreshes_the_grace_window(leases: Any) -> Non
     assert await host.heartbeat() == ()
     # The successful renew reset the clock.
     assert await host.heartbeat() == ()
-    assert host.owns("ceo")
+    assert host.may_start("ceo") is not None
 
 
 async def test_a_reclaim_between_heartbeat_and_release_is_not_torn_down(
@@ -551,5 +563,347 @@ async def test_a_reclaim_between_heartbeat_and_release_is_not_torn_down(
     lost = await host.heartbeat()
 
     assert lost == (), "the heartbeat tore down a newer claim it did not own"
-    assert host.owns("ceo")
+    assert host.may_start("ceo") is not None
     assert host.epoch_for("ceo") == stale.epoch + 1
+
+
+# ── admission: freshness, not membership ─────────────────────────────
+
+
+async def test_may_start_returns_the_epoch_while_the_renew_is_fresh(
+    leases: Any,
+) -> None:
+    host = _host(leases, seats=lambda: ["ceo"])
+    await host._renew_node_presence()
+    await host.sweep()
+
+    epoch = host.may_start("ceo")
+    assert epoch is not None and epoch >= 1
+    assert host.may_start("nobody") is None
+
+
+async def test_may_start_refuses_once_the_last_renew_is_stale(leases: Any) -> None:
+    """The correction the design review forced.
+
+    A membership check ("is this seat in ``_held``?") reads a snapshot
+    refreshed on a 15 s heartbeat against a 45 s TTL, so it can be a full
+    TTL stale — precisely the window it exists to close. Freshness can be
+    proven: a renew at ``t`` bought exclusivity through ``t + ttl``.
+    """
+    host = _host(leases, seats=lambda: ["ceo"], heartbeat_seconds=5.0)
+    await host._renew_node_presence()
+    await host.sweep()
+    assert host.may_start("ceo") is not None
+
+    # Age the last successful renew past one heartbeat interval.
+    held = host._held["ceo"]
+    held.renewed_at -= 6.0
+
+    assert host.may_start("ceo") is None
+    # The seat is still HELD — in-flight work finishes, only new turns
+    # are refused — and its epoch is still available for fencing writes
+    # that belong to that work.
+    assert host.held_handles == ("ceo",)
+    assert host.epoch_for("ceo") is not None
+
+
+async def test_a_failed_renew_stops_new_turns_before_the_seat_is_dropped(
+    leases: Any,
+) -> None:
+    """The LeaseError grace keeps the seat so in-flight work can finish,
+    but it must not keep admitting NEW work on faith."""
+    host = _host(leases, seats=lambda: ["ceo"], ttl_seconds=30, heartbeat_seconds=5.0)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    async def _boom(*_a: Any, **_k: Any) -> bool:
+        raise LeaseError("store unreachable")
+
+    host.leases = _Unavailable(leases, renew=_boom)
+    await host.heartbeat()  # LeaseError: seat kept, renewed_at NOT refreshed
+
+    assert host.held_handles == ("ceo",)  # grace holds the seat
+    host._held["ceo"].renewed_at -= 6.0  # one heartbeat interval passes
+    assert host.may_start("ceo") is None  # but starts nothing new
+
+
+# ── release reasons ──────────────────────────────────────────────────
+
+
+async def test_release_reasons_separate_loss_from_drain(leases: Any) -> None:
+    """Voluntary and fenced are opposites: one has time and exclusivity,
+    the other has neither."""
+    assert ReleaseReason.DRAIN.fenced is False
+    assert ReleaseReason.ROLE_GONE.fenced is False
+    assert ReleaseReason.LEASE_LOST.fenced is True
+    assert ReleaseReason.ACQUIRE_FAILED.fenced is True
+    assert ReleaseReason.POSTURE.fenced is True
+
+
+async def test_the_hook_is_told_why_the_seat_is_going(leases: Any) -> None:
+    seen: list[tuple[str, ReleaseReason]] = []
+
+    async def _on_release(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        seen.append((handle, reason))
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_on_release)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    await host.release("ceo")
+    assert seen == [("ceo", ReleaseReason.DRAIN)]
+
+    seen.clear()
+    await host.sweep()
+    host.seats = lambda: []  # the role was decommissioned
+    await host.sweep()
+    assert seen == [("ceo", ReleaseReason.ROLE_GONE)]
+
+
+async def test_a_lost_lease_releases_with_the_fenced_reason(leases: Any) -> None:
+    seen: list[ReleaseReason] = []
+
+    async def _on_release(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        seen.append(reason)
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_on_release)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    # A peer takes it: the row moves, so our renew returns False.
+    await leases.release(seat_resource("ceo"), owner=host.owner, epoch=1)
+    await leases.try_acquire(seat_resource("ceo"), owner="peer", ttl_seconds=30)
+    await host.heartbeat()
+
+    assert seen == [ReleaseReason.LEASE_LOST]
+
+
+# ── fail-closed release ──────────────────────────────────────────────
+
+
+async def test_an_unproven_teardown_keeps_the_lease(leases: Any) -> None:
+    """The single failure ownership exists to prevent.
+
+    Releasing a lease while still consuming the seat hands a peer
+    permission to run the same agent concurrently. If teardown cannot be
+    PROVEN, the lease is kept and renewed instead.
+    """
+
+    async def _wont_die(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        raise SeatReleaseError("the consumer would not close")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_wont_die)
+    await host._renew_node_presence()
+    await host.sweep()
+    epoch = host.epoch_for("ceo")
+
+    assert await host.release("ceo") is False
+    # Out of _held, so nothing new starts on it...
+    assert host.held_handles == ()
+    assert host.may_start("ceo") is None
+    # ...but still leased, and still ours.
+    assert host.unproven_handles == ("ceo",)
+    lease = await leases.get(seat_resource("ceo"))
+    assert lease is not None and lease.owner == host.owner and lease.epoch == epoch
+
+    # A peer cannot take it.
+    assert (
+        await leases.try_acquire(seat_resource("ceo"), owner="peer", ttl_seconds=30)
+        is None
+    )
+
+
+async def test_an_unproven_seat_keeps_being_renewed(leases: Any) -> None:
+    async def _wont_die(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        raise SeatReleaseError("still consuming")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_wont_die, ttl_seconds=30)
+    await host._renew_node_presence()
+    await host.sweep()
+    await host.release("ceo")
+
+    before = (await leases.get(seat_resource("ceo"))).expires_at
+    await host.heartbeat()
+    after = (await leases.get(seat_resource("ceo"))).expires_at
+    assert after >= before, "an unproven seat stopped being renewed"
+
+
+async def test_an_unproven_seat_is_not_re_claimed_or_double_counted(
+    leases: Any,
+) -> None:
+    """It counts against capacity: this process may still be serving it,
+    so taking on more work would over-subscribe a node in trouble."""
+
+    async def _wont_die(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        raise SeatReleaseError("still consuming")
+
+    host = _host(leases, seats=lambda: ["ceo", "eng"], on_release=_wont_die)
+    await host._renew_node_presence()
+    await host.sweep()
+    await host.release("ceo")
+
+    result = await host.sweep()
+    assert "ceo" not in result.claimed
+    assert host.unproven_handles == ("ceo",)
+
+
+async def test_an_unexpected_release_failure_also_fails_closed(leases: Any) -> None:
+    """A hook that raises something unexpected is no more proof of
+    teardown than one that raises the documented error."""
+
+    async def _explodes(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        raise RuntimeError("something else entirely")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_explodes)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    assert await host.release("ceo") is False
+    assert host.unproven_handles == ("ceo",)
+
+
+# ── acquire backoff ──────────────────────────────────────────────────
+
+
+async def test_a_failed_acquire_is_not_retried_every_sweep(leases: Any) -> None:
+    """Retrying a config-shaped failure every 5 s spins at the cost of an
+    MCP fork each time, and the seat is dark throughout either way."""
+    attempts: list[str] = []
+
+    async def _fails(handle: str, lease: Lease) -> None:
+        attempts.append(handle)
+        raise RuntimeError("bad mcp command")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_acquire=_fails)
+    await host._renew_node_presence()
+    await host.sweep()
+    assert attempts == ["ceo"]
+    assert host.held_handles == ()
+
+    await host.sweep()
+    await host.sweep()
+    assert attempts == ["ceo"], "the seat was re-claimed while backed off"
+
+
+async def test_the_backoff_expires(leases: Any) -> None:
+    attempts: list[str] = []
+
+    async def _fails(handle: str, lease: Lease) -> None:
+        attempts.append(handle)
+        raise RuntimeError("bad mcp command")
+
+    host = _host(
+        leases, seats=lambda: ["ceo"], on_acquire=_fails, acquire_backoff_seconds=0.01
+    )
+    await host._renew_node_presence()
+    await host.sweep()
+    await asyncio.sleep(0.02)
+    await host.sweep()
+    assert attempts == ["ceo", "ceo"]
+
+
+# ── presence and the mixed-version gate ──────────────────────────────
+
+
+async def test_presence_survives_an_older_protocol_peer(leases: Any) -> None:
+    """The gate exists for the rolling upgrade; it must not make the
+    upgrading node invisible during one.
+
+    A node that cannot register presence is missing from
+    ``list_live("node:")``, so its peers divide the seats by a count that
+    excludes it and each take a larger share — and its own capacity
+    excludes it too.
+    """
+    await leases.try_acquire(
+        seat_resource("ceo"), owner="old-node:1", ttl_seconds=30, protocol=1
+    )
+    host = _host(leases, node="node-new", protocol=2)
+
+    await host._renew_node_presence()
+
+    live = await leases.list_live("node:")
+    assert [lease.resource for lease in live] == [node_resource("node-new")]
+    # Seat claims are still refused — that half of the gate stands.
+    result = await host.sweep()
+    assert result.claimed == () and result.blocked_by_protocol == 1
+
+
+# ── drain drops presence ─────────────────────────────────────────────
+
+
+async def test_draining_stops_counting_toward_the_fleet_size(leases: Any) -> None:
+    """A draining node that keeps its presence lease stays in every
+    peer's divisor, reserving capacity for a node that will never claim
+    again — its seats stay dark for the whole drain plus the ramp."""
+    host = _host(leases, seats=lambda: ["ceo"])
+    await host.start()
+    assert len(await leases.list_live("node:")) == 1
+
+    await host.begin_drain()
+    assert await leases.list_live("node:") == []
+    # And it still holds what it had, so in-flight turns finish.
+    assert host.held_handles == ("ceo",)
+    await host.stop()
+
+
+# ── bookkeeping ──────────────────────────────────────────────────────
+
+
+async def test_sweep_reports_what_it_released(leases: Any) -> None:
+    """``SweepResult.lost`` is documented "for logs, tests and /health"
+    and was hardcoded empty, so every consumer of it saw nothing."""
+    host = _host(leases, seats=lambda: ["ceo", "eng"])
+    await host._renew_node_presence()
+    await host.sweep()
+
+    host.seats = lambda: ["eng"]
+    result = await host.sweep()
+    assert result.lost == ("ceo",)
+
+
+async def test_heartbeat_losses_reach_the_last_sweep(leases: Any) -> None:
+    host = _host(leases, seats=lambda: ["ceo"])
+    await host._renew_node_presence()
+    await host.sweep()
+
+    await leases.release(seat_resource("ceo"), owner=host.owner, epoch=1)
+    await leases.try_acquire(seat_resource("ceo"), owner="peer", ttl_seconds=30)
+    assert await host.heartbeat() == ("ceo",)
+
+    assert host.last_sweep is not None
+    assert host.last_sweep.lost == ("ceo",)
+
+
+async def test_seat_locks_do_not_accumulate_forever(leases: Any) -> None:
+    """One lock per handle EVER seen, including every seat a live config
+    apply removed — unbounded growth in a long-lived process."""
+    host = _host(leases, seats=lambda: ["ceo", "eng", "ops"])
+    await host._renew_node_presence()
+    await host.sweep()
+    assert set(host._seat_locks) == {"ceo", "eng", "ops"}
+
+    host.seats = lambda: ["ceo"]
+    await host.sweep()
+    assert set(host._seat_locks) == {"ceo"}
+
+
+async def test_a_store_blip_does_not_make_every_node_claim_everything(
+    leases: Any,
+) -> None:
+    """Assuming a fleet of one on an unreadable node count turns every
+    node into "I should own everything" simultaneously. Mutual exclusion
+    still prevents double ownership, but the fleet degenerates to
+    whoever sweeps first taking the lot."""
+    host = _host(leases, node="node-a", seats=lambda: ["a", "b", "c", "d"])
+    await host._renew_node_presence()
+    # A second node is live.
+    await leases.try_acquire(node_resource("node-b"), owner="node-b:1", ttl_seconds=30)
+    capacity, live = await host._capacity(4)
+    assert (capacity, live) == (2, 2)
+
+    async def _boom(*_a: Any, **_k: Any) -> list[Any]:
+        raise LeaseError("store unreachable")
+
+    host.leases = _Unavailable(leases, list_live=_boom)
+    capacity, live = await host._capacity(4)
+    assert (capacity, live) == (2, 2), "a blip widened the share to everything"

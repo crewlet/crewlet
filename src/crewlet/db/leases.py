@@ -145,6 +145,7 @@ class LeaseBackend(Protocol):
         ttl_seconds: float,
         preferred: str = "",
         protocol: int = 1,
+        gated: bool = True,
     ) -> Lease | None: ...
 
     async def renew(
@@ -198,6 +199,7 @@ class LeaseStore:
         ttl_seconds: float,
         preferred: str = "",
         protocol: int = 1,
+        gated: bool = True,
     ) -> Lease | None:
         """Claim ``resource`` for ``owner``, or return ``None`` if held by another.
 
@@ -218,6 +220,16 @@ class LeaseStore:
         lease in the window between the two. Ask
         :meth:`fleet_protocol_floor` once per claim sweep to tell a
         protocol refusal apart from a peer simply holding the seat.
+
+        ``gated=False`` skips that refusal, and exactly one caller needs
+        it: **node presence**. Presence is membership, not work. A
+        newer-protocol node that cannot register itself during the
+        rolling upgrade the gate exists for is invisible in
+        ``list_live("node:")`` — its peers then divide the seats by a
+        count that excludes it and each take a larger share, while its
+        own capacity also excludes itself. It stays asymmetric: the
+        refusal only ever looks for leases at a LOWER protocol, so a
+        presence row written at the newer protocol blocks nobody.
         """
         _validate(resource, owner, ttl_seconds)
         try:
@@ -227,7 +239,7 @@ class LeaseStore:
                     resource, owner, epoch, expires_at, preferred, protocol
                 )
                 SELECT $1, $2, 1, now() + make_interval(secs => $3), $4, $5
-                WHERE NOT EXISTS (
+                WHERE NOT $6 OR NOT EXISTS (
                     SELECT 1 FROM leases
                     WHERE expires_at > now() AND protocol < $5
                 )
@@ -249,10 +261,13 @@ class LeaseStore:
                         leases.expires_at <= now()
                      OR leases.owner = EXCLUDED.owner
                       )
-                  AND NOT EXISTS (
-                        SELECT 1 FROM leases older
-                        WHERE older.expires_at > now()
-                          AND older.protocol < EXCLUDED.protocol
+                  AND (
+                        NOT $6
+                     OR NOT EXISTS (
+                            SELECT 1 FROM leases older
+                            WHERE older.expires_at > now()
+                              AND older.protocol < EXCLUDED.protocol
+                        )
                       )
                 RETURNING resource, owner, epoch, expires_at, preferred, protocol
                 """,
@@ -261,6 +276,7 @@ class LeaseStore:
                 float(ttl_seconds),
                 preferred,
                 int(protocol),
+                bool(gated),
             )
         except Exception:
             logger.exception("lease_acquire_failed", resource=resource, owner=owner)
@@ -444,7 +460,11 @@ class LeaseStore:
         warm. A live-only read would return nothing in exactly the case
         the hint exists for.
 
-        One indexed scan per sweep, not one lookup per seat.
+        One indexed scan per sweep, not one lookup per seat — see the
+        ``leases_preferred_idx`` partial index (migration 024). Without
+        it this is a sequential scan of every lease row on every sweep of
+        every node, and lease rows never shrink: ``release`` expires them
+        in place so the epoch stays monotonic.
         """
         try:
             rows = await self._db.execute(
@@ -503,13 +523,15 @@ class MemoryLeaseStore:
         ttl_seconds: float,
         preferred: str = "",
         protocol: int = 1,
+        gated: bool = True,
     ) -> Lease | None:
         _validate(resource, owner, ttl_seconds)
         now = self._now()
         # Mixed-version gate — the twin of the ``NOT EXISTS`` guard in
         # LeaseStore.try_acquire. Refuse while any live lease is held at
-        # an older protocol.
-        if any(
+        # an older protocol, unless the caller opted out (node presence:
+        # membership is not work — see LeaseStore.try_acquire).
+        if gated and any(
             r["expires_at"] > now and int(r.get("protocol") or 1) < int(protocol)
             for r in self._rows.values()
         ):

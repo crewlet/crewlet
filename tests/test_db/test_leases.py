@@ -47,13 +47,14 @@ class _FakeSQL:
             raise RuntimeError("database is down")
         q = " ".join(query.split())
         if q.startswith("INSERT INTO leases"):
-            resource, owner, ttl, preferred, protocol = args
+            resource, owner, ttl, preferred, protocol, gated = args
             row = self.rows.get(resource)
             now = self._now()
             # The mixed-version guard: both the INSERT's ``WHERE NOT
             # EXISTS`` and the ON CONFLICT branch's, which are the same
-            # predicate written twice.
-            if any(
+            # predicate written twice — and both skipped when the caller
+            # opted out (node presence).
+            if gated and any(
                 r["expires_at"] > now and int(r.get("protocol") or 1) < int(protocol)
                 for r in self.rows.values()
             ):
@@ -104,12 +105,35 @@ class _FakeSQL:
         if self.fail:
             raise RuntimeError("database is down")
         q = " ".join(query.split())
-        if q.startswith("SELECT resource"):
-            now = self._now()
+        now = self._now()
+        # Three statements start with "SELECT resource" and they mean
+        # completely different things.  Dispatching on the prefix alone
+        # sent all three into the list_owned branch, where they compared
+        # a row's owner against a resource PREFIX and returned [] — no
+        # error, just a wrong answer, under the placement algorithm.
+        if q.startswith("SELECT resource, owner, epoch, expires_at, preferred"):
+            if "WHERE owner = $1" in q:
+                return [
+                    dict(r)
+                    for r in sorted(
+                        self.rows.values(), key=lambda r: str(r["resource"])
+                    )
+                    if r["owner"] == args[0] and r["expires_at"] > now
+                ]
+            if "resource LIKE $1" in q:  # list_live(prefix)
+                return [
+                    dict(r)
+                    for r in sorted(
+                        self.rows.values(), key=lambda r: str(r["resource"])
+                    )
+                    if str(r["resource"]).startswith(args[0]) and r["expires_at"] > now
+                ]
+        if q.startswith("SELECT resource FROM leases"):  # preferred_resources
             return [
-                dict(r)
+                {"resource": r["resource"]}
                 for r in sorted(self.rows.values(), key=lambda r: str(r["resource"]))
-                if r["owner"] == args[0] and r["expires_at"] > now
+                if str(r["resource"]).startswith(args[0])
+                and str(r.get("preferred") or "") == args[1]
             ]
         raise AssertionError(f"unexpected execute: {q}")
 

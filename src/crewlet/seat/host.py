@@ -33,6 +33,32 @@ row is untouched and still held — so the node keeps its seats and retries
 until the TTL genuinely runs out. Conflating them would tear a healthy
 node's whole company down over a two-second database blip, and no peer
 could pick the seats up during it anyway.
+
+Three properties are worth stating outright, because each replaced
+something that looked reasonable and was not:
+
+- **Admission is freshness, not membership.** :meth:`SeatHost.may_start`
+  answers "may a new turn start on this seat?", and it answers it from
+  how long ago the last successful renew was — not from whether the
+  handle is in a local dict. That dict is refreshed on a heartbeat
+  against a TTL three times longer, so a membership check can be a full
+  TTL stale: exactly the window an ownership check exists to close. It is
+  an optimization either way. Correctness comes from epoch-fenced writes,
+  and the epoch ``may_start`` returns is that fence.
+- **Release has two modes, because loss and drain are opposites.**
+  Voluntary (:class:`ReleaseReason` ``DRAIN`` / ``ROLE_GONE``) still owns
+  the seat and can take its time: quiesce, let the in-flight handler
+  finish, detach, release. Fenced (``LEASE_LOST`` / ``ACQUIRE_FAILED`` /
+  ``POSTURE``) has neither time nor exclusivity — a peer may already be
+  running the seat — so in-flight work is abandoned and nothing is
+  republished, because republishing hands the peer a second copy of work
+  it is already doing.
+- **Release fails closed.** A hook that cannot *prove* teardown finished
+  raises :class:`SeatReleaseError`, and the lease is then kept and kept
+  renewed rather than handed on. Releasing a lease while still consuming
+  the seat is the one thing ownership exists to prevent; a lease held a
+  little too long costs latency, a lease released too early costs
+  correctness.
 """
 
 from __future__ import annotations
@@ -41,7 +67,8 @@ import asyncio
 import contextlib
 import math
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Any
 
 from crewlet._logging import get_logger
@@ -53,6 +80,9 @@ from crewlet.db.leases import (
     node_resource,
     seat_resource,
 )
+
+#: ``on_release(handle, lease, *, reason)``.
+type ReleaseHook = Callable[[str, Lease, ReleaseReason], Awaitable[None]]
 
 logger = get_logger("seat.host")
 
@@ -93,6 +123,68 @@ SEAT_SWEEP_INTERVAL_SECONDS = 5.0
 # be dark anyway, while never forking more than four subprocess trees in
 # one tick.
 SEAT_CLAIM_LIMIT_PER_SWEEP = 4
+
+# How long a seat whose acquire pipeline failed is not re-attempted here.
+#
+# A failed acquire is almost never transient at the seat level — a bad
+# MCP command, a credential the role's config resolves to nothing, a
+# sandbox template that no longer exists. Retrying it on the next 5 s
+# sweep spins: claim, spawn, fail, release, repeat, forever, at the cost
+# of an MCP fork each time, and the seat is dark throughout either way.
+#
+# Backing off for a TTL gives a peer a clear run at it (its own claim
+# order is unaffected) and, if every node fails the same way, reduces the
+# noise from twelve attempts a minute to one. It is deliberately not
+# permanent: the cause is often config, and config changes.
+SEAT_ACQUIRE_BACKOFF_SECONDS = SEAT_LEASE_TTL_SECONDS
+
+
+class ReleaseReason(StrEnum):
+    """Why a seat is being given up. The two families are opposites.
+
+    **Voluntary** — this node still holds the lease and is choosing to
+    let go. There is time: quiesce, let the in-flight handler finish
+    under a bounded wait, then detach and release.
+
+    **Fenced** — the lease is gone or must be treated as gone. There is
+    NO time and no exclusivity: a peer may already be running this seat,
+    so in-flight work is abandoned rather than finished, and nothing is
+    republished — republishing hands the peer a second copy of work it is
+    already doing.
+    """
+
+    #: Graceful shutdown / capacity rebalance. Voluntary.
+    DRAIN = "drain"
+    #: The role was decommissioned. Voluntary, but must not defer at all:
+    #: the events are for a role that no longer exists.
+    ROLE_GONE = "role_gone"
+    #: ``renew`` returned False, or the TTL grace expired. Fenced.
+    LEASE_LOST = "lease_lost"
+    #: The acquire pipeline failed partway. Fenced — the seat was never
+    #: fully established, so the hook must tolerate partial state.
+    ACQUIRE_FAILED = "acquire_failed"
+    #: Config posture went SHED or STUCK. Fenced: this node must stop
+    #: serving the seat now, not when its turn happens to end.
+    POSTURE = "posture"
+
+    @property
+    def fenced(self) -> bool:
+        return self in (
+            ReleaseReason.LEASE_LOST,
+            ReleaseReason.ACQUIRE_FAILED,
+            ReleaseReason.POSTURE,
+        )
+
+
+class SeatReleaseError(RuntimeError):
+    """A release hook could not prove the seat was torn down.
+
+    Raised by ``on_release`` when it cannot be sure this node has stopped
+    consuming — a consumer that will not close, an MCP child that will
+    not die. The host then **keeps the lease and keeps renewing it**
+    rather than handing the seat to a peer while still serving it. See
+    :meth:`SeatHost._release_locked`.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,20 +241,46 @@ class SeatHost:
     under a live config apply, and a snapshot taken at construction would
     keep claiming seats that no longer exist."""
     on_acquire: Callable[[str, Lease], Awaitable[None]] | None = None
-    on_release: Callable[[str, Lease], Awaitable[None]] | None = None
+    on_release: ReleaseHook | None = None
+    """Tear a seat down. Called as ``on_release(handle, lease,
+    reason=...)`` — the reason decides whether in-flight work is finished
+    or abandoned (see :class:`ReleaseReason`).
+
+    Must be **idempotent and tolerant of partial state**: a failed
+    acquire releases the same seat, so the hook can be handed a seat
+    whose MCP children are half-spawned and whose consumer was never
+    attached.
+
+    Raise :class:`SeatReleaseError` when teardown cannot be *proven* —
+    the host then keeps the lease rather than handing a seat to a peer
+    while still serving it."""
     ttl_seconds: float = SEAT_LEASE_TTL_SECONDS
     heartbeat_seconds: float = SEAT_HEARTBEAT_INTERVAL_SECONDS
     sweep_seconds: float = SEAT_SWEEP_INTERVAL_SECONDS
     claim_limit: int = SEAT_CLAIM_LIMIT_PER_SWEEP
+    acquire_backoff_seconds: float = SEAT_ACQUIRE_BACKOFF_SECONDS
     protocol: int = PROTOCOL_VERSION
 
     _held: dict[str, _Held] = field(default_factory=dict, init=False)
     _seat_locks: dict[str, asyncio.Lock] = field(default_factory=dict, init=False)
+    _acquire_backoff: dict[str, float] = field(default_factory=dict, init=False)
+    """Monotonic deadline before which a seat is not re-claimed here.
+
+    Negative stickiness: a seat whose acquire pipeline failed is skipped
+    by this node's claim order until the deadline. Peers are unaffected —
+    they may well succeed where this node did not."""
+    _undead: dict[str, _Held] = field(default_factory=dict, init=False)
+    """Seats whose teardown could not be proven, kept OUT of ``_held``
+    (so nothing new starts on them) but still renewed (so no peer takes a
+    seat this process may still be serving). See
+    :meth:`_release_locked`."""
     _node_lease: Lease | None = field(default=None, init=False)
     _tasks: list[asyncio.Task[Any]] = field(default_factory=list, init=False)
     _running: bool = field(default=False, init=False)
     _draining: bool = field(default=False, init=False)
     _last: SweepResult | None = field(default=None, init=False)
+    _live_nodes: int = field(default=1, init=False)
+    """Last successfully-read fleet size, reused when the store blips."""
 
     def _lock_for(self, handle: str) -> asyncio.Lock:
         """One lock per seat, held across a WHOLE acquire or release.
@@ -184,21 +302,68 @@ class SeatHost:
 
     # ── introspection ────────────────────────────────────────────────
 
-    def owns(self, handle: str) -> bool:
-        return handle in self._held
+    def may_start(self, handle: str) -> int | None:
+        """The epoch a new turn may start under, or ``None``.
+
+        **Freshness, not membership.** "Do I hold this seat?" is a
+        question about a local snapshot refreshed on a 15 s heartbeat
+        against a 45 s TTL, so the honest answer can be a full TTL stale
+        — precisely the window an ownership check exists to close, which
+        means a membership check cannot meet its own exit criterion.
+
+        What *is* provable: a successful renew at time ``t`` bought
+        exclusivity through ``t + ttl``. So admission asks how long ago
+        that renew was, and admits only inside one heartbeat interval.
+        Every turn that starts is then certified owned for at least
+        ``ttl - heartbeat`` (30 s at the shipped constants), and the
+        first failed renew stops NEW turns immediately while the
+        ``LeaseError`` grace still keeps the seat so in-flight work can
+        finish.
+
+        This is an optimization, not the safety property. Correctness
+        comes from epoch-fenced writes: the returned epoch is the fencing
+        token, and a write without it is a write a zombie can also make.
+        """
+        held = self._held.get(handle)
+        if held is None:
+            return None
+        elapsed = asyncio.get_running_loop().time() - held.renewed_at
+        if elapsed > self.heartbeat_seconds:
+            logger.info(
+                "seat_admission_stale",
+                seat=handle,
+                seconds_since_renew=round(elapsed, 1),
+                heartbeat_seconds=self.heartbeat_seconds,
+            )
+            return None
+        return held.lease.epoch
 
     def epoch_for(self, handle: str) -> int | None:
-        """The fencing token for a seat, or ``None`` if not owned.
+        """The fencing token for a seat, or ``None`` if not held here.
 
-        Thread this into every write made on the seat's behalf. A write
-        without it is a write a zombie can also make.
+        Unlike :meth:`may_start` this does NOT check freshness: it is for
+        fencing a write that belongs to work already under way, where
+        refusing would abandon a turn mid-flight for no gain — the fence
+        in the write itself is what makes the write safe.
         """
         held = self._held.get(handle)
         return held.lease.epoch if held is not None else None
 
     @property
     def held_handles(self) -> tuple[str, ...]:
+        """Seats this node is serving. Excludes the undead by design —
+        nothing new starts on a seat whose teardown was never proven."""
         return tuple(sorted(self._held))
+
+    @property
+    def unproven_handles(self) -> tuple[str, ...]:
+        """Seats still leased because their teardown could not be proven.
+
+        Operationally the most important number on this object: each one
+        is a seat this process may still be consuming, holding a lease no
+        peer can take. See :meth:`_release_locked`.
+        """
+        return tuple(sorted(self._undead))
 
     @property
     def last_sweep(self) -> SweepResult | None:
@@ -236,6 +401,12 @@ class SeatHost:
         second half.
         """
         self._draining = True
+        # Stop counting toward the fleet size immediately. A draining node
+        # that keeps its presence lease stays in every peer's divisor, so
+        # they compute a share that reserves capacity for a node which
+        # will never claim again — and this node's seats stay dark for
+        # the whole drain plus the takeover ramp.
+        await self._release_node_presence()
         logger.info("seat_host_draining", node=self.node_id, held=len(self._held))
 
     async def stop(self) -> None:
@@ -247,9 +418,24 @@ class SeatHost:
         self._tasks.clear()
         await self.release_all()
         await self._release_node_presence()
+        stranded = tuple(sorted(self._undead))
+        if stranded:
+            logger.error(
+                "seat_host_stopped_with_unproven_seats",
+                node=self.node_id,
+                seats=list(stranded),
+                hint=(
+                    "these seats' teardown was never proven, so their "
+                    "leases were held rather than released; they lapse at "
+                    "the TTL and a peer picks them up then"
+                ),
+            )
+        self._undead.clear()
+        self._acquire_backoff.clear()
+        self._seat_locks.clear()
         logger.info("seat_host_stopped", node=self.node_id)
 
-    async def release_all(self) -> None:
+    async def release_all(self, reason: ReleaseReason = ReleaseReason.DRAIN) -> None:
         """Hand every seat back, one at a time.
 
         Releasing expires the row in place rather than deleting it, so
@@ -258,24 +444,56 @@ class SeatHost:
         home afterwards.
         """
         for handle in list(self._held):
-            await self.release(handle)
+            await self.release(handle, reason)
 
-    async def release(self, handle: str) -> bool:
+    async def release(
+        self, handle: str, reason: ReleaseReason = ReleaseReason.DRAIN
+    ) -> bool:
         async with self._lock_for(handle):
-            return await self._release_locked(handle)
+            return await self._release_locked(handle, reason)
 
-    async def _release_locked(self, handle: str) -> bool:
+    async def _release_locked(self, handle: str, reason: ReleaseReason) -> bool:
+        """Tear the seat down, then give up the lease — in that order.
+
+        **Fail-closed.** If the hook cannot prove teardown finished
+        (:class:`SeatReleaseError`) the lease is NOT released: the seat
+        moves to ``_undead``, where nothing new starts on it but the
+        heartbeat keeps renewing it, so no peer can take a seat this
+        process may still be consuming. That is the whole point of a
+        lease — releasing one while still serving the seat hands a peer
+        permission to run the agent concurrently, which is the single
+        failure ownership exists to prevent.
+
+        Undead seats are not held forever: the watchdog's remedy applies
+        if they cannot be closed within the TTL (see :meth:`heartbeat`).
+        """
         held = self._held.pop(handle, None)
         if held is None:
             return False
-        await self._notify_release(handle, held.lease)
+        try:
+            await self._notify_release(handle, held.lease, reason)
+        except SeatReleaseError as exc:
+            self._undead[handle] = held
+            logger.error(
+                "seat_release_unproven",
+                seat=handle,
+                epoch=held.lease.epoch,
+                reason=str(reason),
+                error=str(exc),
+                hint=(
+                    "keeping the lease and renewing it: this node may still "
+                    "be consuming the seat, and releasing now would let a "
+                    "peer run the same agent concurrently"
+                ),
+            )
+            return False
         try:
             return await self.leases.release(
                 held.lease.resource, owner=self.owner, epoch=held.lease.epoch
             )
         except LeaseError:
-            # The seat is already torn down locally; the row simply
-            # lapses on its own. Nothing here is worth failing a drain.
+            # The seat IS torn down locally; the row simply lapses on its
+            # own. Nothing here is worth failing a drain.
             logger.warning("seat_release_unavailable", seat=handle)
             return False
 
@@ -310,8 +528,16 @@ class SeatHost:
         this is what stops the rest.
         """
         lost: list[str] = []
-        now = asyncio.get_running_loop().time()
-        for handle, held in list(self._held.items()):
+        loop = asyncio.get_running_loop()
+        # The undead are renewed alongside the living: their teardown was
+        # never proven, so a peer must not be able to claim them.
+        for handle, held in [*self._held.items(), *self._undead.items()]:
+            # Read the clock PER SEAT, not once before the loop. A single
+            # pre-loop timestamp is assigned to every seat's renewed_at,
+            # so with many seats and a slow store the later ones record a
+            # renew earlier than it happened — narrowing their grace, and
+            # their admission window, as the seat count grows.
+            now = loop.time()
             try:
                 alive = await self.leases.renew(
                     held.lease.resource,
@@ -354,7 +580,30 @@ class SeatHost:
                 )
                 alive = False
             if alive:
-                held.renewed_at = now
+                async with self._lock_for(handle):
+                    # Under the lock, and only if this is still the live
+                    # record: a sweep may have re-claimed the seat at a
+                    # new epoch while we awaited, and writing here would
+                    # stamp an orphaned object while the live one keeps
+                    # the older timestamp.
+                    current = self._held.get(handle) or self._undead.get(handle)
+                    if current is held:
+                        held.renewed_at = now
+                continue
+            if handle in self._undead:
+                # An undead seat whose lease is genuinely gone: the row
+                # has moved on and a peer owns it now. Stop renewing.
+                self._undead.pop(handle, None)
+                logger.error(
+                    "seat_undead_lease_lost",
+                    seat=handle,
+                    epoch=held.lease.epoch,
+                    hint=(
+                        "teardown was never proven and the lease has now "
+                        "moved to a peer; this process may still be "
+                        "consuming the seat"
+                    ),
+                )
                 continue
             async with self._lock_for(handle):
                 # Re-check under the lock: a sweep may have re-claimed
@@ -372,7 +621,16 @@ class SeatHost:
                     epoch=held.lease.epoch,
                     hint="a peer may already own this seat; dropping it locally",
                 )
-                await self._notify_release(handle, held.lease)
+                # Fenced: a peer may already be running this seat, so
+                # in-flight work is abandoned rather than finished. There
+                # is nothing to fail closed ON — the lease is already
+                # gone — so an unproven teardown is logged, not retained.
+                with contextlib.suppress(SeatReleaseError):
+                    await self._notify_release(
+                        handle, held.lease, ReleaseReason.LEASE_LOST
+                    )
+        if lost and self._last is not None:
+            self._last = replace(self._last, lost=tuple(lost), held=len(self._held))
         await self._renew_node_presence()
         return tuple(lost)
 
@@ -383,28 +641,34 @@ class SeatHost:
 
         # Seats this node holds that the org no longer has (a role was
         # decommissioned under a live apply) are released, not kept.
+        released: list[str] = []
         for handle in list(self._held):
             if handle not in seats:
                 logger.info("seat_released_role_gone", seat=handle)
-                await self.release(handle)
+                await self.release(handle, ReleaseReason.ROLE_GONE)
+                released.append(handle)
 
         claimed: list[str] = []
         blocked: int | None = None
         if not self._draining:
-            room = min(capacity - len(self._held), self.claim_limit)
+            # Undead seats count against capacity: this process may still
+            # be serving them, so taking on more work would over-subscribe
+            # a node that is already in trouble.
+            room = min(capacity - len(self._held) - len(self._undead), self.claim_limit)
             if room > 0:
                 claimed, blocked = await self._claim_up_to(seats, room)
 
+        self._prune_seat_locks(seats)
         result = SweepResult(
             held=len(self._held),
             capacity=capacity,
             live_nodes=live_nodes,
             claimed=tuple(claimed),
-            lost=(),
+            lost=tuple(released),
             blocked_by_protocol=blocked,
         )
         self._last = result
-        if claimed or blocked is not None:
+        if claimed or released or blocked is not None:
             logger.info(
                 "seat_sweep",
                 node=self.node_id,
@@ -412,9 +676,23 @@ class SeatHost:
                 capacity=capacity,
                 live_nodes=live_nodes,
                 claimed=list(claimed),
+                released=list(released),
                 blocked_by_protocol=blocked,
             )
         return result
+
+    def _prune_seat_locks(self, seats: Sequence[str]) -> None:
+        """Drop locks for seats this node neither holds nor could claim.
+
+        One ``asyncio.Lock`` accumulated per handle ever seen, including
+        every seat removed by a live config apply — unbounded growth in a
+        long-lived process that reconfigures often.
+        """
+        keep = set(seats) | set(self._held) | set(self._undead)
+        for handle in [h for h in self._seat_locks if h not in keep]:
+            lock = self._seat_locks[handle]
+            if not lock.locked():
+                del self._seat_locks[handle]
 
     # ── internals ────────────────────────────────────────────────────
 
@@ -470,8 +748,22 @@ class SeatHost:
         Sorted within each group so every node walks the list the same
         way. The lease decides races; a stable order stops two nodes
         colliding on the same seat over and over and making no progress.
+
+        Seats this node recently failed to acquire are skipped until
+        their backoff expires — negative stickiness, the mirror of the
+        positive kind. Peers are unaffected.
         """
-        candidates = sorted(h for h in seats if h not in self._held)
+        now = asyncio.get_running_loop().time()
+        self._acquire_backoff = {
+            h: until for h, until in self._acquire_backoff.items() if until > now
+        }
+        candidates = sorted(
+            h
+            for h in seats
+            if h not in self._held
+            and h not in self._undead
+            and h not in self._acquire_backoff
+        )
         try:
             hinted = await self.leases.preferred_resources("seat:", self.node_id)
         except LeaseError:
@@ -485,15 +777,26 @@ class SeatHost:
     async def _capacity(self, seat_count: int) -> tuple[int, int]:
         """``(fair share, live node count)``.
 
-        Falls back to a share of *everything* when the node count cannot
-        be read — the single-node case is the common one, and a node that
-        cannot see the table is not helped by claiming nothing.
+        When the node count cannot be read, the LAST known count is
+        reused rather than assuming a fleet of one. A partial store
+        failure — a timeout on the scan while point writes still succeed
+        — would otherwise turn every node in the fleet into "I should own
+        everything" simultaneously: mutual exclusion still prevents
+        double ownership, but the fleet degenerates to whoever sweeps
+        first taking the claim limit every 5 s until it holds the lot,
+        undoing the balance for no reason. Before the first successful
+        read there is no last count, and one is the honest assumption.
         """
         try:
             live_nodes = max(1, len(await self.leases.list_live("node:")))
+            self._live_nodes = live_nodes
         except LeaseError:
-            logger.warning("seat_capacity_unavailable", node=self.node_id)
-            live_nodes = 1
+            live_nodes = self._live_nodes
+            logger.warning(
+                "seat_capacity_unavailable",
+                node=self.node_id,
+                assumed_live_nodes=live_nodes,
+            )
         return math.ceil(seat_count / live_nodes), live_nodes
 
     async def _protocol_block(self) -> int | None:
@@ -523,6 +826,14 @@ class SeatHost:
         Uses ``try_acquire`` rather than ``renew`` because it is
         idempotent for a live self-held lease and re-establishes the row
         after a lapse, which is exactly the behaviour presence wants.
+
+        ``gated=False``: presence is membership, not work. Running it
+        through the mixed-version gate makes a newer-protocol node
+        invisible during the exact rolling upgrade the gate exists for —
+        its peers then divide the seats by a count that excludes it, and
+        its own capacity excludes it too. Nothing logged the refusal
+        either, because the protocol block is only reported on the seat
+        path.
         """
         try:
             lease = await self.leases.try_acquire(
@@ -531,11 +842,22 @@ class SeatHost:
                 ttl_seconds=self.ttl_seconds,
                 preferred=self.node_id,
                 protocol=self.protocol,
+                gated=False,
             )
         except LeaseError:
             return
-        if lease is not None:
-            self._node_lease = lease
+        if lease is None:
+            logger.warning(
+                "node_presence_refused",
+                node=self.node_id,
+                hint=(
+                    "another process holds this node id's presence lease; "
+                    "two processes sharing one node_id will miscount the "
+                    "fleet and each compute too small a share"
+                ),
+            )
+            return
+        self._node_lease = lease
 
     async def _release_node_presence(self) -> None:
         lease, self._node_lease = self._node_lease, None
@@ -554,14 +876,43 @@ class SeatHost:
         except Exception:
             # A seat whose takeover pipeline failed must not stay
             # claimed: it would look owned to the fleet while nothing
-            # runs it. Give it straight back so a peer can try.
+            # runs it. Give it straight back so a peer can try — and back
+            # off here, because retrying a config-shaped failure every
+            # 5 s spins at the cost of an MCP fork each time.
             logger.exception("seat_acquire_hook_failed", seat=handle)
+            self._acquire_backoff[handle] = (
+                asyncio.get_running_loop().time() + self.acquire_backoff_seconds
+            )
             # _release_locked, not release(): we are already inside this
-            # seat's lock, and asyncio.Lock is not reentrant.
-            await self._release_locked(handle)
+            # seat's lock, and asyncio.Lock is not reentrant. The reason
+            # tells the hook the seat was never fully established.
+            await self._release_locked(handle, ReleaseReason.ACQUIRE_FAILED)
 
-    async def _notify_release(self, handle: str, lease: Lease) -> None:
+    async def _notify_release(
+        self, handle: str, lease: Lease, reason: ReleaseReason
+    ) -> None:
+        """Run the teardown hook, letting the caller see what happened.
+
+        Exceptions are NOT swallowed. A release hook that fails leaves
+        the seat's consumer and MCP children alive in this process while
+        the lease goes to a peer — two live consumers on one inbox, the
+        exact state ownership exists to prevent — and the old
+        ``suppress(Exception)`` produced no evidence at all. A
+        :class:`SeatReleaseError` is the caller's cue to fail closed;
+        anything else is logged and re-raised as one, because an
+        unexpected failure is no more proof of teardown than an expected
+        one.
+        """
         if self.on_release is None:
             return
-        with contextlib.suppress(Exception):
-            await self.on_release(handle, lease)
+        try:
+            await self.on_release(handle, lease, reason)
+        except SeatReleaseError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "seat_release_hook_failed", seat=handle, reason=str(reason)
+            )
+            raise SeatReleaseError(
+                f"release hook for seat {handle!r} raised {exc!r}"
+            ) from exc
