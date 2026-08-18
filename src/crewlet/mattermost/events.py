@@ -74,6 +74,17 @@ MAX_BACKFILL_WINDOW_SECONDS = 900.0
 #: single backfill window yields while staying trivially small in memory.
 _DEDUPE_RING = 512
 
+#: How long a connection must survive before the reconnect backoff is
+#: allowed to drop back to the bottom of the schedule.  A socket the
+#: server accepts and then closes immediately looks, to the loop, exactly
+#: like a healthy connection that ended — so resetting on any clean
+#: return turns a server that hangs up on sight into a one-per-second
+#: reconnect storm that never escalates.  A minute is well past every
+#: handshake this integration performs (connect, auth ack, identity read,
+#: backfill) and well inside the 5-minute ceiling the schedule tops out
+#: at, so a genuinely healthy socket is never mistaken for a flapping one.
+_STABLE_CONNECTION_SECONDS = 60.0
+
 #: Websocket ping interval.  Mattermost closes an idle connection after
 #: roughly 30 s of silence, so the client pings well inside that.
 _PING_INTERVAL = 10.0
@@ -134,6 +145,78 @@ class _SeatState:
         return True
 
 
+async def send_authentication_challenge(socket: Any, token: str) -> None:
+    """Send the frame that authenticates a Mattermost websocket.
+
+    Mattermost's websocket carries no credential in its handshake: the
+    connection opens unauthenticated and the client proves itself in the
+    first frame.  Shared with ``crewlet mattermost doctor``, which opens
+    exactly this handshake to prove a seat's token really works — the
+    check that separates "the token is syntactically fine" from "this
+    seat will actually hear anything".
+    """
+    await socket.send(
+        json.dumps(
+            {
+                "seq": _AUTH_SEQ,
+                "action": "authentication_challenge",
+                "data": {"token": token},
+            }
+        )
+    )
+
+
+async def await_authentication(
+    socket: Any,
+    *,
+    handle: str = "",
+    timeout: float = _AUTH_TIMEOUT,
+) -> list[Any]:
+    """Block until the server acknowledges the authentication challenge.
+
+    Mattermost answers ``authentication_challenge`` with a status frame
+    carrying ``seq_reply``, and sends an unsolicited ``hello`` event once
+    the connection is authenticated.  A **rejected** token gets
+    ``status: FAIL`` and then a close.
+
+    Without waiting for that, both outcomes look identical to a caller:
+    ``connect()`` succeeds, the send succeeds, and the read loop ends
+    immediately when the server hangs up.  That returns cleanly, which
+    the fleet's seat loop would treat as a normal server-side close — so
+    a revoked or mistyped token would reconnect forever, logging
+    ``mattermost_ws_connected`` on every pass.  Raising
+    :class:`MattermostAuthError` instead puts a bad token on the backoff
+    schedule and names it in the log.
+
+    Returns any non-auth frames read while waiting, so a post that
+    arrives in the same batch as the ack is not dropped.
+    """
+    early: list[Any] = []
+    while True:
+        raw = await asyncio.wait_for(socket.recv(), timeout=timeout)
+        try:
+            frame = json.loads(raw)
+        except (TypeError, ValueError):
+            logger.debug("mattermost_ws_undecodable_frame", handle=handle)
+            continue
+        if not isinstance(frame, dict):
+            continue
+        if frame.get("seq_reply") == _AUTH_SEQ:
+            status = str(frame.get("status") or "").upper()
+            if status == "OK":
+                return early
+            error = frame.get("error")
+            raise MattermostAuthError(
+                f"websocket authentication rejected for {handle or 'seat'}: "
+                f"{error or status or 'unknown error'}"
+            )
+        if frame.get("event") == "hello":
+            # Success is also signalled unsolicited, and can land before
+            # the status reply.
+            return early
+        early.append(raw)
+
+
 class MattermostEventFleet:
     """Holds one authenticated websocket per Mattermost-enabled seat.
 
@@ -186,8 +269,10 @@ class MattermostEventFleet:
         if existing is not None:
             # A rotated token means the live socket is authenticated with
             # a credential that may already be revoked — drop it so the
-            # reconnect picks the new one up.
-            self._stop_seat(handle)
+            # reconnect picks the new one up.  Awaited, not just
+            # cancelled: the displaced loop may be mid-request on the
+            # client that is about to be closed underneath it.
+            await self._cancel_seat(handle)
             await self._close_client(handle)
         self._seats[handle] = _SeatState(handle=handle, token=token)
         self._clients[handle] = MattermostClient(self._base_url, token)
@@ -196,7 +281,7 @@ class MattermostEventFleet:
 
     async def unregister_seat(self, handle: str) -> None:
         """Drop a seat (role removed by a live config apply)."""
-        self._stop_seat(handle)
+        await self._cancel_seat(handle)
         self._seats.pop(handle, None)
         await self._close_client(handle)
 
@@ -231,11 +316,21 @@ class MattermostEventFleet:
         )
 
     async def stop(self) -> None:
-        """Cancel every connection and release the HTTP clients."""
+        """Cancel every connection and release the HTTP clients.
+
+        Every seat task is *awaited* after cancellation, not merely
+        cancelled: a websocket whose task is still unwinding holds an
+        open socket and, worse, may be mid-request on the HTTP client
+        this method is about to close — which surfaces as
+        ``RuntimeError: client has been closed`` from a task nobody is
+        waiting on, long after ``stop()`` returned.
+        """
         self._running = False
-        for handle in list(self._seats):
-            self._stop_seat(handle)
-        tasks = [s.task for s in self._seats.values() if s.task is not None]
+        tasks = [
+            task
+            for task in (self._cancel_task(handle) for handle in list(self._seats))
+            if task is not None
+        ]
         for task in tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
@@ -247,18 +342,46 @@ class MattermostEventFleet:
 
     def _start_seat(self, handle: str) -> None:
         seat = self._seats.get(handle)
-        if seat is None or seat.task is not None:
+        # A *finished* task is not a running connection.  The loop only
+        # returns when the fleet is stopping, so a done task here means
+        # something escaped it — treating that as "already started" would
+        # leave the seat permanently deaf.
+        if seat is None or (seat.task is not None and not seat.task.done()):
             return
-        seat.task = asyncio.create_task(
+        task = asyncio.create_task(
             self._seat_loop(seat), name=f"mattermost-ws-{handle}"
         )
+        seat.task = task
+        task.add_done_callback(lambda t: self._seat_task_finished(handle, t))
 
-    def _stop_seat(self, handle: str) -> None:
+    def _seat_task_finished(self, handle: str, task: asyncio.Task[None]) -> None:
+        """Log a seat loop that ended for any reason other than shutdown."""
+        if task.cancelled() or not self._running:
+            return
+        exc = task.exception()
+        logger.error(
+            "mattermost_seat_loop_exited",
+            handle=handle,
+            error=str(exc) if exc else "returned",
+        )
+
+    def _cancel_task(self, handle: str) -> asyncio.Task[None] | None:
+        """Cancel a seat's task and hand it back for awaiting."""
         seat = self._seats.get(handle)
         if seat is None or seat.task is None:
-            return
-        seat.task.cancel()
+            return None
+        task = seat.task
+        task.cancel()
         seat.task = None
+        return task
+
+    async def _cancel_seat(self, handle: str) -> None:
+        """Cancel a seat's task and wait for it to unwind."""
+        task = self._cancel_task(handle)
+        if task is None:
+            return
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
     # ----- the per-seat connection loop ----------------------------------
 
@@ -266,12 +389,24 @@ class MattermostEventFleet:
         """Connect, authenticate, read — forever, with backoff."""
         attempt = 0
         while self._running:
+            started = time.monotonic()
             try:
                 await self._connect_once(seat)
-                # A clean return means the server closed the socket; that
-                # is a normal reconnect, not an error, so the backoff
-                # resets.
-                attempt = 0
+                # A clean return means the server closed the socket.  That
+                # is a normal reconnect ONLY if the connection lasted:
+                # a server that accepts and immediately hangs up returns
+                # cleanly too, and resetting on that turns the schedule
+                # into a one-second reconnect storm that never escalates.
+                if time.monotonic() - started >= _STABLE_CONNECTION_SECONDS:
+                    attempt = 0
+                else:
+                    attempt += 1
+                    logger.warning(
+                        "mattermost_ws_closed_early",
+                        handle=seat.handle,
+                        attempt=attempt,
+                        seconds=round(time.monotonic() - started, 2),
+                    )
             except asyncio.CancelledError:
                 raise
             except MattermostAuthError as exc:
@@ -307,15 +442,7 @@ class MattermostEventFleet:
             ping_timeout=_PING_TIMEOUT,
             max_size=None,
         ) as socket:
-            await socket.send(
-                json.dumps(
-                    {
-                        "seq": _AUTH_SEQ,
-                        "action": "authentication_challenge",
-                        "data": {"token": seat.token},
-                    }
-                )
-            )
+            await send_authentication_challenge(socket, seat.token)
             early = await self._await_authentication(seat, socket)
             await self._resolve_identity(seat)
             logger.info(
@@ -328,57 +455,15 @@ class MattermostEventFleet:
             # order.  Duplicates across the boundary are caught by the
             # seat's dedupe ring.
             await self._backfill(seat)
+            await self._anchor_cursor(seat)
             for raw in early:
                 await self._handle_frame(seat, raw)
             async for raw in socket:
                 await self._handle_frame(seat, raw)
 
     async def _await_authentication(self, seat: _SeatState, socket: Any) -> list[Any]:
-        """Block until the server acknowledges the authentication challenge.
-
-        Mattermost answers ``authentication_challenge`` with a status
-        frame carrying ``seq_reply``, and sends an unsolicited ``hello``
-        event once the connection is authenticated.  A **rejected** token
-        gets ``status: FAIL`` and then a close.
-
-        Without waiting for that, both outcomes look identical from here:
-        ``connect()`` succeeds, the send succeeds, and the read loop ends
-        immediately when the server hangs up.  That returns cleanly, which
-        :meth:`_run_seat` treats as a normal server-side close and resets
-        the backoff — so a revoked or mistyped token reconnects once a
-        second, forever, logging ``mattermost_ws_connected`` on every
-        pass.  Raising here instead puts a bad token on the backoff
-        schedule and names it in the log.
-
-        Returns any non-auth frames read while waiting, so a post that
-        arrives in the same batch as the ack is not dropped.  They are
-        replayed by the caller *after* backfill, keeping the ordering
-        guarantee that backfilled history precedes live traffic.
-        """
-        early: list[Any] = []
-        while True:
-            raw = await asyncio.wait_for(socket.recv(), timeout=_AUTH_TIMEOUT)
-            try:
-                frame = json.loads(raw)
-            except (TypeError, ValueError):
-                logger.debug("mattermost_ws_undecodable_frame", handle=seat.handle)
-                continue
-            if not isinstance(frame, dict):
-                continue
-            if frame.get("seq_reply") == _AUTH_SEQ:
-                status = str(frame.get("status") or "").upper()
-                if status == "OK":
-                    return early
-                error = frame.get("error")
-                raise MattermostAuthError(
-                    f"websocket authentication rejected for {seat.handle}: "
-                    f"{error or status or 'unknown error'}"
-                )
-            if frame.get("event") == "hello":
-                # Success is also signalled unsolicited, and can land
-                # before the status reply.
-                return early
-            early.append(raw)
+        """Block until the server acknowledges the authentication challenge."""
+        return await await_authentication(socket, handle=seat.handle)
 
     async def _resolve_identity(self, seat: _SeatState) -> None:
         """Learn the bot's own user id (own-message suppression needs it)."""
@@ -421,7 +506,7 @@ class MattermostEventFleet:
                 logger.warning("mattermost_team_unresolved", team=self._team)
                 return
 
-        now_ms = int(time.time() * 1000)
+        now_ms = await self._now_ms(seat)
         floor_ms = now_ms - int(self._backfill_window * 1000)
         since_ms = seat.last_event_ms
         if since_ms < floor_ms:
@@ -475,6 +560,36 @@ class MattermostEventFleet:
                 posts=replayed,
                 since_ms=since_ms,
             )
+
+    async def _anchor_cursor(self, seat: _SeatState) -> None:
+        """Give a seat a reconnect floor even before its first post.
+
+        Called after :meth:`_backfill` on every connect, so the first one
+        still replays nothing.  Without it a connection that drops before
+        the seat has seen a single message leaves the cursor at zero, and
+        the next connect reads that as a first boot with no gap to cover —
+        so everything said during the outage is dropped silently.  A
+        seat that joins a quiet channel and reconnects an hour later is
+        exactly that case.
+        """
+        if not seat.last_event_ms:
+            seat.last_event_ms = await self._now_ms(seat)
+
+    async def _now_ms(self, seat: _SeatState) -> int:
+        """ "Now", on the clock the post timestamps are stamped by.
+
+        The backfill window is a comparison between a server-stamped post
+        timestamp and the present, so both sides have to come from the
+        same clock; skew between the engine host and the Mattermost host
+        would otherwise widen or silently truncate the window.  Falls
+        back to the local clock when the server does not say.
+        """
+        client = self._clients.get(seat.handle)
+        if client is not None:
+            server_ms = await client.server_time_ms()
+            if server_ms:
+                return server_ms
+        return int(time.time() * 1000)
 
     async def _handle_frame(self, seat: _SeatState, raw: str | bytes) -> None:
         """Decode one websocket frame and forward it if it is a post."""
@@ -585,5 +700,8 @@ def _decode_embedded(value: Any) -> Any:
 __all__ = [
     "MAX_BACKFILL_WINDOW_SECONDS",
     "RECONNECT_BACKOFF_SECONDS",
+    "MattermostAuthError",
     "MattermostEventFleet",
+    "await_authentication",
+    "send_authentication_challenge",
 ]

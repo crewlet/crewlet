@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any
+from unittest import mock
 
 import pytest
 
 from crewlet.mattermost.events import (
+    _STABLE_CONNECTION_SECONDS,
     MAX_BACKFILL_WINDOW_SECONDS,
     RECONNECT_BACKOFF_SECONDS,
     MattermostAuthError,
@@ -338,3 +342,181 @@ def test_backfill_window_is_bounded():
     """Replaying an outage in full would cost one agent turn per message
     for conversations that have long since moved on."""
     assert 0 < MAX_BACKFILL_WINDOW_SECONDS <= 3600.0
+
+
+# --- seat lifecycle -------------------------------------------------------
+
+
+class TestSeatLifecycle:
+    @pytest.mark.asyncio
+    async def test_stop_awaits_every_seat_task(self):
+        """``stop()`` must not return while a seat loop is still unwinding.
+
+        It closes the seats' HTTP clients, so a task left mid-request runs
+        on a closed client and raises into nobody's hands.
+        """
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        started = asyncio.Event()
+        ended = asyncio.Event()
+
+        async def _loop(seat: Any) -> None:
+            started.set()
+            try:
+                await asyncio.sleep(3600)
+            finally:
+                # A cancellation still has to unwind before stop() returns.
+                ended.set()
+
+        fleet._seat_loop = _loop  # type: ignore[method-assign]
+        await fleet.start()
+        await started.wait()
+
+        await fleet.stop()
+        assert ended.is_set()
+        assert fleet._seats["engineer"].task is None
+
+    @pytest.mark.asyncio
+    async def test_a_finished_task_does_not_block_a_restart(self):
+        """A seat whose loop ended is deaf; treating it as running would
+        leave it that way until the process restarts."""
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+
+        async def _immediate(seat: Any) -> None:
+            return None
+
+        fleet._seat_loop = _immediate  # type: ignore[method-assign]
+        fleet._running = True
+        fleet._start_seat("engineer")
+        first = fleet._seats["engineer"].task
+        assert first is not None
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert first.done()
+
+        fleet._start_seat("engineer")
+        assert fleet._seats["engineer"].task is not first
+        await fleet.stop()
+
+    @pytest.mark.asyncio
+    async def test_backoff_does_not_reset_on_an_instant_close(self):
+        """A server that accepts and immediately hangs up returns cleanly.
+
+        Resetting the schedule on that turns a refusing server into a
+        one-per-second reconnect storm that never escalates, so only a
+        connection that LASTED counts as healthy.
+        """
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        delays: list[float] = []
+        attempts = 0
+
+        async def _instant_close(_seat: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts >= 4:
+                fleet._running = False
+
+        async def _record_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        fleet._connect_once = _instant_close  # type: ignore[method-assign]
+        fleet._running = True
+        with mock.patch.object(asyncio, "sleep", _record_sleep):
+            await fleet._seat_loop(seat)
+
+        # The loop returns before sleeping on the pass that stops it.
+        assert delays == list(RECONNECT_BACKOFF_SECONDS[1:4])
+
+    @pytest.mark.asyncio
+    async def test_backoff_resets_after_a_connection_that_lasted(self):
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        delays: list[float] = []
+        attempts = 0
+        clock = [1000.0]
+
+        async def _long_connection(_seat: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            clock[0] += _STABLE_CONNECTION_SECONDS + 1
+            if attempts >= 3:
+                fleet._running = False
+
+        async def _record_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        fleet._connect_once = _long_connection  # type: ignore[method-assign]
+        fleet._running = True
+        with (
+            mock.patch.object(asyncio, "sleep", _record_sleep),
+            mock.patch.object(time, "monotonic", lambda: clock[0]),
+        ):
+            await fleet._seat_loop(seat)
+
+        assert delays == [RECONNECT_BACKOFF_SECONDS[0]] * 2
+
+
+# --- the reconnect cursor -------------------------------------------------
+
+
+class _ClockClient:
+    """A client stub that only answers the server-clock read."""
+
+    def __init__(self, now_ms: int) -> None:
+        self.now_ms = now_ms
+        self.calls = 0
+
+    async def server_time_ms(self) -> int:
+        self.calls += 1
+        return self.now_ms
+
+
+class TestReconnectCursor:
+    @pytest.mark.asyncio
+    async def test_now_comes_from_the_server_clock(self):
+        """The window compares SERVER-stamped post timestamps against
+        "now", so "now" cannot come from the engine host's clock."""
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        fleet._clients["engineer"] = _ClockClient(1700000000000)  # type: ignore[assignment]
+
+        assert await fleet._now_ms(fleet._seats["engineer"]) == 1700000000000
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_the_local_clock(self):
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        fleet._clients["engineer"] = _ClockClient(0)  # type: ignore[assignment]
+
+        now = await fleet._now_ms(fleet._seats["engineer"])
+        assert abs(now - int(time.time() * 1000)) < 5000
+
+    @pytest.mark.asyncio
+    async def test_first_connect_anchors_the_cursor(self):
+        """A seat that has seen no post still needs a reconnect floor.
+
+        Otherwise a drop before the first message looks like a fresh boot
+        on the next connect, and the whole outage is skipped in silence.
+        """
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        fleet._clients["engineer"] = _ClockClient(1700000000000)  # type: ignore[assignment]
+
+        await fleet._anchor_cursor(seat)
+        assert seat.last_event_ms == 1700000000000
+
+    @pytest.mark.asyncio
+    async def test_anchoring_never_moves_a_real_cursor_backwards(self):
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        seat.last_event_ms = 1699999999000
+        fleet._clients["engineer"] = _ClockClient(1700000000000)  # type: ignore[assignment]
+
+        await fleet._anchor_cursor(seat)
+        assert seat.last_event_ms == 1699999999000
