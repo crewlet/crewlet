@@ -8,6 +8,7 @@ that drifts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from starlette.requests import Request
@@ -24,17 +25,40 @@ DEFAULT_EVENT_LIMIT = 50
 MAX_EVENT_LIMIT = 500
 
 
+def parse_cursor(before: str, before_id: str) -> tuple[Any, str] | None:
+    """Build the keyset cursor from its two wire fields.
+
+    An unparseable timestamp yields no cursor rather than an error: this
+    is a best-effort read path (see ``safe_store_query``), and answering
+    the first page is a better failure than answering nothing.  The
+    caller can tell, because the page it gets back starts at the top.
+    """
+    if not before:
+        return None
+    try:
+        return (datetime.fromisoformat(before), before_id)
+    except ValueError:
+        return None
+
+
 async def events_query(
     app: Any,
     *,
     limit: int = DEFAULT_EVENT_LIMIT,
     event_type: str | None = None,
     source: str | None = None,
+    category: str | None = None,
     trace_id: str | None = None,
     actor: str | None = None,
     related_agent: str | None = None,
+    before: str = "",
+    before_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Recent events from the persistent store, newest first."""
+    """Recent events from the persistent store, newest first.
+
+    ``before`` / ``before_id`` are the exclusive keyset cursor: pass the
+    oldest row a caller already holds to get the page beneath it.
+    """
     store = app.state.event_store
     if store is None:
         return []
@@ -48,9 +72,11 @@ async def events_query(
             limit=limit,
             event_type=event_type,
             source=source,
+            category=category,
             trace_id=trace_id,
             actor=actor,
             related_agent=related_agent,
+            before=parse_cursor(before, before_id),
         ),
         [],
     )
@@ -73,7 +99,15 @@ async def trace_events(app: Any, trace_id: str) -> list[dict[str, Any]]:
 
 
 async def list_events(request: Request) -> JSONResponse:
-    """GET /events — recent events from the persistent store."""
+    """GET /events — recent events from the persistent store.
+
+    Answers 503 with no store wired, matching its two siblings.  It used
+    to answer 200 with ``[]``, which is indistinguishable from "you have
+    reached the beginning of history" -- fine when the response was one
+    unpaged page, wrong now that a caller pages until it runs out.
+    """
+    if request.app.state.event_store is None:
+        return JSONResponse({"error": "no event store"}, status_code=503)
     params = request.query_params
     try:
         limit = int(params.get("limit", str(DEFAULT_EVENT_LIMIT)))
@@ -85,9 +119,12 @@ async def list_events(request: Request) -> JSONResponse:
             limit=limit,
             event_type=params.get("type"),
             source=params.get("source"),
+            category=params.get("category"),
             trace_id=params.get("trace_id"),
             actor=params.get("actor"),
             related_agent=params.get("related_agent"),
+            before=params.get("before", ""),
+            before_id=params.get("before_id", ""),
         )
     )
 

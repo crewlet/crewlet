@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
 from crewlet.db._jsonb import decode_jsonb_dict
+from crewlet.events.types import event_failed
 from crewlet.timescaledb._match import collect_related_events
 from crewlet.timescaledb.projections import (
     llm_history_record,
@@ -33,6 +34,21 @@ if TYPE_CHECKING:
 logger = get_logger("timescaledb.repository")
 
 EVENTS_TABLE = "crewlet_events"
+
+# How far back the event table is read.  This is the hard bottom of
+# paging: once a cursor crosses it every page is empty forever, and a UI
+# that cannot name the floor draws it as "the org went quiet".  It was
+# inlined as a literal in two queries; naming it is what lets the API
+# ship the number to a dashboard footer.
+EVENT_HISTORY_DAYS = 30
+
+# Ceiling on one trace's rows.  A trace is unbounded in principle -- a
+# long-running turn with sub-agents can accumulate thousands of spans --
+# and the whole thing is returned in a single WebSocket frame, so an
+# uncapped read is a query that times out client-side and reports as a
+# generic failure.  Kept as the OLDEST rows: the root is what explains a
+# trace, and a truncated tail is legible where a truncated head is not.
+MAX_TRACE_EVENTS = 500
 
 
 class TimescaleDBEventStore:
@@ -119,11 +135,13 @@ class TimescaleDBEventStore:
         limit: int = 50,
         event_type: str | None = None,
         source: str | None = None,
+        category: str | None = None,
         trace_id: str | None = None,
         actor: str | None = None,
         related_agent: str | None = None,
+        before: tuple[Any, str] | None = None,
     ) -> list[dict[str, Any]]:
-        conditions = ["event_time >= now() - INTERVAL '30 days'"]
+        conditions = [f"event_time >= now() - INTERVAL '{EVENT_HISTORY_DAYS} days'"]
         params: list[Any] = []
         if event_type:
             params.append(event_type)
@@ -131,12 +149,32 @@ class TimescaleDBEventStore:
         if source:
             params.append(source)
             conditions.append(f"source = ${len(params)}")
+        if category:
+            params.append(category)
+            conditions.append(f"category = ${len(params)}")
         if trace_id:
             params.append(trace_id)
             conditions.append(f"trace_id = ${len(params)}")
         if actor:
             params.append(actor)
             conditions.append(f"actor = ${len(params)}")
+        if before is not None:
+            # Keyset, not OFFSET.  ``(event_time, event_id)`` is the
+            # table's primary key, so it is unique and already in index
+            # order -- no sort node, and no drift as new rows land at the
+            # head while a reader pages backwards.  The id half is not
+            # optional: burst writes share a timestamp at microsecond
+            # resolution routinely, and a cursor over a non-unique key
+            # skips or repeats whatever collided with it.
+            before_ts, before_id = before
+            params.append(before_ts)
+            if before_id:
+                params.append(before_id)
+                conditions.append(
+                    f"(event_time, event_id) < (${len(params) - 1}, ${len(params)})"
+                )
+            else:
+                conditions.append(f"event_time < ${len(params)}")
         where = " AND ".join(conditions)
 
         # related_agent is filtered post-query because it matches across
@@ -152,7 +190,7 @@ class TimescaleDBEventStore:
             "summary, actor, trace_id, span_id, parent_span_id, tags "
             f"FROM {EVENTS_TABLE} "
             f"WHERE {where} "
-            "ORDER BY event_time DESC "
+            "ORDER BY event_time DESC, event_id DESC "
             f"LIMIT {int(fetch_limit)}"
         )
         rows = await self._db.execute(sql, *params)
@@ -171,8 +209,9 @@ class TimescaleDBEventStore:
             "summary, actor, trace_id, span_id, parent_span_id, tags "
             f"FROM {EVENTS_TABLE} "
             "WHERE trace_id = $1 "
-            "AND event_time >= now() - INTERVAL '30 days' "
-            "ORDER BY event_time ASC, event_id ASC"
+            f"AND event_time >= now() - INTERVAL '{EVENT_HISTORY_DAYS} days' "
+            "ORDER BY event_time ASC, event_id ASC "
+            f"LIMIT {int(MAX_TRACE_EVENTS)}"
         )
         rows = await self._db.execute(sql, trace_id)
         return [
@@ -485,9 +524,10 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any]:
     """
     raw_tags = decode_jsonb_dict(row.get("tags"))
     tags: dict[str, str] = {str(k): str(v) for k, v in raw_tags.items()}
+    event_type = row.get("event_type", "")
     return {
         "id": row.get("event_id", ""),
-        "type": row.get("event_type", ""),
+        "type": event_type,
         "source": row.get("source", ""),
         "timestamp": _format_time(row.get("event_time")),
         "category": row.get("category", ""),
@@ -496,6 +536,13 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any]:
         "trace_id": row.get("trace_id", ""),
         "span_id": row.get("span_id", ""),
         "parent_span_id": row.get("parent_span_id", ""),
+        # Decided from the ``failed`` tag rather than the payload: this
+        # query never selects the payload column, so the tag is the only
+        # thing that survives into history.  Rows written before the
+        # writer began stamping it read back as not-failed -- a real
+        # discontinuity at that point in the timeline, not a bug to
+        # paper over.
+        "failed": event_failed(event_type, tag_failed=tags.get("failed") == "true"),
         "tags": tags,
     }
 

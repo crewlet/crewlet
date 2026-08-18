@@ -58,6 +58,36 @@ class Event(BaseModel):
         return getattr(self, "agent_id", "") or "system"
 
 
+# Event types that ARE a failure by their very type, independent of any
+# payload flag.  Named here, beside the events themselves, because three
+# layers need the same answer -- the live projection stamping its feed,
+# the event store reading a row back from history, and the API
+# serializing a push -- and a second copy is how the same turn ends up
+# red on one surface and not on another.
+FAILURE_EVENT_TYPES = frozenset(
+    {
+        "task_failed",
+        "llm_unavailable",
+        "budget_exhausted",
+        "turn.guard_breach",
+    }
+)
+
+
+def event_failed(
+    event_type: str, *, payload_failed: bool = False, tag_failed: bool = False
+) -> bool:
+    """Whether the work an event reports failed.
+
+    ``payload_failed`` is the event's own ``failed`` field, available
+    live; ``tag_failed`` is the ``failed`` tag the event-store writer
+    stamps, which is all that survives into history (``list_events``
+    never selects the payload column).  Either one, or a type that is
+    itself a failure, means failed.
+    """
+    return bool(payload_failed) or bool(tag_failed) or event_type in FAILURE_EVENT_TYPES
+
+
 def describe_trigger(event: Event | None) -> dict[str, Any]:
     """Compact descriptor of the event that triggered an agent turn.
 

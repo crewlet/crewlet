@@ -13,6 +13,7 @@ import pytest
 
 from crewlet.api import live_state
 from crewlet.api.live_state import LiveState
+from crewlet.events.types import FAILURE_EVENT_TYPES
 
 
 def _env(
@@ -392,7 +393,7 @@ class TestEventBuffer:
     def test_failure_by_event_type_needs_no_payload_flag(self) -> None:
         """Some events ARE the failure; they carry no ``failed`` field."""
         live = LiveState()
-        for i, etype in enumerate(sorted(live_state._FAILURE_EVENTS)):
+        for i, etype in enumerate(sorted(FAILURE_EVENT_TYPES)):
             live.apply_event(
                 _env(
                     etype,
@@ -467,9 +468,10 @@ class _FakeStore:
                 "timestamp": "2026-06-14T11:59:00",
                 "category": "system",
                 "summary": "execute failed",
-                # ``list_events`` never selects the payload column, so
-                # the failure survives history only as this tag.
-                "tags": {"failed": "true"},
+                # Every store row decides its own ``failed`` -- from the
+                # tag the writer stamps, since ``list_events`` never
+                # selects the payload column.
+                "failed": True,
             },
         ]
 

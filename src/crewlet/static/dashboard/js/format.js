@@ -201,6 +201,36 @@ export function parseUTC(ts) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// The ONE ordering key for an event, mirroring `timescaledb/_time.py`.
+//
+// Timestamps arrive in two encodings — aware (`...+00:00`) and naive —
+// often for the same instant, so raw string comparison orders the same
+// moment differently depending on who wrote it. The id is the tiebreak
+// and is not optional: burst writes share a timestamp at microsecond
+// resolution, and a merge keyed on a non-unique value drops or
+// duplicates whatever collided with it.
+export function tsKey(ts) {
+  const at = parseUTC(ts);
+  return at ? at.getTime() : 0;
+}
+
+export function rowKey(row) {
+  return [tsKey(row && row.timestamp), String((row && row.id) || "")];
+}
+
+/** Descending `(instant, id)` comparator — feed order. */
+export function newestFirst(a, b) {
+  const [at, ai] = rowKey(a);
+  const [bt, bi] = rowKey(b);
+  if (at !== bt) return bt - at;
+  return ai < bi ? 1 : ai > bi ? -1 : 0;
+}
+
+/** Ascending `(instant, id)` comparator — trace order. */
+export function oldestFirst(a, b) {
+  return -newestFirst(a, b);
+}
+
 export function fmtTime(ts) {
   const d = parseUTC(ts);
   if (!d) return "";

@@ -39,15 +39,39 @@ class EventStore(Protocol):
         limit: int = 50,
         event_type: str | None = None,
         source: str | None = None,
+        category: str | None = None,
         trace_id: str | None = None,
         actor: str | None = None,
         related_agent: str | None = None,
+        before: tuple[Any, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return recent events (without payload), newest first.
 
+        Ordered by ``(timestamp, id)`` DESCENDING.  The id is the
+        tiebreak and is not optional: burst writes share a timestamp at
+        microsecond resolution, and a cursor over a non-unique key skips
+        or repeats whatever collided with it.
+
+        Every row carries a ``failed`` boolean.  It is derived from the
+        stored ``failed`` tag, because this read never returns payloads;
+        events written before the writer began stamping that tag read
+        back as not-failed.
+
+        *before* is an exclusive keyset cursor ``(timestamp, event_id)``:
+        return only rows strictly older than it.  A page SHORTER than
+        *limit* means the history is exhausted -- except under
+        *related_agent*, which over-fetches and post-filters, so that
+        surface only knows it is done when a page returns zero rows.
+
         *related_agent* is a broad filter: matches events where the agent
         name appears in ``actor``, or in tags (``agent_role``, ``target``,
-        ``recipient``, ``sender``).
+        ``recipient``, ``sender``).  It also pulls in every event sharing
+        a trace with a direct match, so a caller must dedupe by id.
+
+        Implementations differ in how far back they reach: the persistent
+        store has a fixed retention floor (``EVENT_HISTORY_DAYS``), the
+        in-memory one is bounded by row count instead.  A cursor that
+        crosses either simply returns nothing more.
         """
         ...
 
@@ -56,7 +80,14 @@ class EventStore(Protocol):
         ...
 
     async def list_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        """Return all events in a trace, ordered by timestamp."""
+        """Return all events in a trace, OLDEST first, without payloads.
+
+        Ordered by ``(timestamp, id)`` ascending, because a trace is read
+        as a causal sequence.  Capped at ``MAX_TRACE_EVENTS``, keeping
+        the oldest rows -- the root is what explains a trace -- so a
+        caller seeing exactly that many should say the view is truncated.
+        Rows carry ``failed``, as in :meth:`list_events`.
+        """
         ...
 
     async def get_agent_states(

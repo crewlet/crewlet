@@ -26,6 +26,11 @@ export function parseRoute() {
   if (parts[0] === "events" && parts[1]) {
     return { name: "eventDetail", params: { id: decodeURIComponent(parts[1]) } };
   }
+  // Reached from a row, never from the nav: a trace view with no trace
+  // to show is a placeholder screen, and those are forbidden.
+  if (parts[0] === "traces" && parts[1]) {
+    return { name: "trace", params: { trace_id: decodeURIComponent(parts[1]) } };
+  }
 
   const known = [
     "dashboard",

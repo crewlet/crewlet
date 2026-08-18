@@ -28,7 +28,8 @@ placeholder or a coming-soon stub.
 | Company → Org Chart | `#/org` | `/org` + live agent state |
 | Company → Audit log | `#/audit` | `/config/audit` *(auth-gated)* |
 | Agents | `#/agents` | `/org` + live agent state |
-| Activity | `#/events` | the snapshot's `events`, then live `event` pushes |
+| Activity | `#/events` | the snapshot's `events`, then live `event` pushes, then the `events` query for stored history |
+| Trace | `#/traces/{trace_id}` | the `trace` query — reached from a row, never from the nav |
 | Tokens | `#/tokens` | the pushed spend rollup; a `tokens` query for any other window |
 | Tools | `#/tools` | `/tools` |
 | Schedules | `#/schedules` | `/schedules` |
@@ -83,6 +84,43 @@ all hour look like one that woke up five minutes ago.
 
 The strip on a seat card is deliberately the **same device** at a smaller
 size, not a second chart type.
+
+### Reading history
+
+The live feed is a bounded ring (`MAX_EVENTS`), which a busy org fills in
+minutes. Activity pages beneath it into the event store with the `events`
+query, and three rules keep the merged list honest:
+
+- **One ordering key**, `(instant, id)` descending — `newestFirst` in
+  `format.js`, mirroring `timescaledb/_time.py`. Raw ISO strings are not
+  safely comparable (the API emits naive and aware forms for the same
+  instant) and a shared timestamp needs the id to break it. A row's
+  position depends only on its own key, so nothing jumps when a page lands.
+- **Dedupe by id, live wins.** A page can arrive twice (queries are
+  re-sent across a reconnect) and legitimately overlaps the live window.
+  The live copy carries `payload` and `topic`, which store rows do not.
+- **The cursor is recomputed from the merged set**, never kept as a
+  running variable. The live ring evicts as it grows, so a row can leave
+  the live window while still held in the fetched half — deriving the
+  cursor from one half opens a hole that nothing reports.
+
+The pager's two jobs must not look alike: revealing rows already in
+memory is instant, reading the store is a network trip that can fail,
+run out, or find no store at all. Each says which it is.
+
+### Traces
+
+`#/traces/{trace_id}` is a turn's whole story — the notification that
+woke the agent, each phase, the tools, the completion — oldest first,
+indented by span. It is reached from the event-detail Trace row, from
+Activity's trace chip, and it grows live while its turn is still running.
+
+It has **no nav entry**, deliberately: a trace view with no trace to show
+is exactly the placeholder screen rule 6 forbids.
+
+`traceNodes.js` owns the node markup, the span arrangement, and the
+"is this worth opening" test, because three surfaces render the same
+thing and had begun to render it three ways.
 
 ### The turn rail
 

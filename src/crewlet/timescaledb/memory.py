@@ -7,11 +7,20 @@ from typing import Any
 from uuid import uuid4
 
 from crewlet._logging import get_logger
+from crewlet.events.types import event_failed
 from crewlet.timescaledb._match import collect_related_events
+from crewlet.timescaledb._time import row_key, ts_key
 from crewlet.timescaledb.projections import (
     llm_history_record,
     phase_token_record,
 )
+from crewlet.timescaledb.repository import MAX_TRACE_EVENTS
+
+
+def _as_iso(value: Any) -> str:
+    """A cursor timestamp as an ISO string, whichever form it arrived in."""
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
 
 logger = get_logger("timescaledb.memory")
 
@@ -109,30 +118,54 @@ class MemoryEventStore:
         limit: int = 50,
         event_type: str | None = None,
         source: str | None = None,
+        category: str | None = None,
         trace_id: str | None = None,
         actor: str | None = None,
         related_agent: str | None = None,
+        before: tuple[Any, str] | None = None,
     ) -> list[dict[str, Any]]:
         results = self._events
         if event_type:
             results = [e for e in results if e["type"] == event_type]
         if source:
             results = [e for e in results if e["source"] == source]
+        if category:
+            results = [e for e in results if e.get("category") == category]
         if trace_id:
             results = [e for e in results if e.get("trace_id") == trace_id]
         if actor:
             results = [e for e in results if e.get("actor") == actor]
+        if before is not None:
+            before_ts, before_id = before
+            cursor = (ts_key(_as_iso(before_ts)), str(before_id))
+            results = [e for e in results if row_key(e) < cursor]
         if related_agent:
             results = collect_related_events(results, related_agent, limit)
-            return [
-                {k: v for k, v in e.items() if k not in ("payload", "tags")}
-                for e in results
-            ]
-        # Newest first, strip payload/tags for list view
-        return [
-            {k: v for k, v in e.items() if k not in ("payload", "tags")}
-            for e in reversed(results[-limit:])
-        ][:limit]
+            return [self._light(e) for e in results]
+        # Ordered by (instant, id) descending, NOT by insertion.  The two
+        # differ whenever a write is backfilled -- a webhook replay, the
+        # Mattermost since= gap re-read -- and under a cursor that shows
+        # up as rows appearing above rows the reader already scrolled
+        # past.  ``ts_key`` is what makes the comparison safe across the
+        # naive and aware encodings ``write_event`` accepts.
+        ordered = sorted(results, key=row_key, reverse=True)
+        return [self._light(e) for e in ordered[:limit]]
+
+    @staticmethod
+    def _light(event: dict[str, Any]) -> dict[str, Any]:
+        """One list-view row: no payload, no tags, plus ``failed``.
+
+        The persistent store derives the same flag in ``_row_to_event``;
+        both must, or the same event reads as a failure on one backend
+        and not on the other.
+        """
+        row = {k: v for k, v in event.items() if k not in ("payload", "tags")}
+        tags = event.get("tags") or {}
+        row["failed"] = event_failed(
+            str(event.get("type", "")),
+            tag_failed=str(tags.get("failed", "")) == "true",
+        )
+        return row
 
     async def get_event(self, event_id: str) -> dict[str, Any] | None:
         for e in self._events:
@@ -141,12 +174,14 @@ class MemoryEventStore:
         return None
 
     async def list_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        """Return all events in a trace, ordered by timestamp (oldest first)."""
+        """Return all events in a trace, ordered by timestamp (oldest first).
+
+        Sorted and capped exactly as the persistent store does, so a
+        trace reads the same on either backend.
+        """
         results = [e for e in self._events if e.get("trace_id") == trace_id]
-        return [
-            {k: v for k, v in e.items() if k not in ("payload", "tags")}
-            for e in results
-        ]
+        ordered = sorted(results, key=row_key)
+        return [self._light(e) for e in ordered[:MAX_TRACE_EVENTS]]
 
     async def get_agent_states(
         self, agent_roles: list[str]

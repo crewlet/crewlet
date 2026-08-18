@@ -34,6 +34,7 @@ import { createSchedulesView } from "./views/schedules.js";
 import { createConfigView } from "./views/config.js";
 import { createAgentView } from "./views/agent.js";
 import { createEventDetailView } from "./views/eventDetail.js";
+import { createTraceView } from "./views/trace.js";
 
 const store = new Store();
 const socket = new LiveSocket(store);
@@ -54,6 +55,7 @@ const VIEWS = {
   agent: createAgentView,
   llm: createAgentView, // the agent view owns the llm sub-route
   eventDetail: createEventDetailView,
+  trace: createTraceView,
 };
 
 const TITLES = {
@@ -69,6 +71,7 @@ const TITLES = {
   schedules: "Schedules",
   config: "Configuration",
   eventDetail: "Event",
+  trace: "Trace",
 };
 
 let active = null;

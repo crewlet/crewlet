@@ -916,3 +916,196 @@ async def test_get_agent_states_afk_cleared_after_normal_event(
     states = await store.get_agent_states(["PM"])
     assert states["PM"]["state"] == "working"
     assert "afk_reason" not in states["PM"]
+
+
+# --- Keyset paging ----------------------------------------------------
+#
+# The in-memory store has to answer a cursor exactly as the persistent
+# one does, or the same dashboard reads differently on the two backends
+# — and it reads differently by silently skipping rows, which is the
+# kind of wrong nobody reports.
+
+
+async def _seed(store: MemoryEventStore, n: int, *, base_minute: int = 0) -> None:
+    await store.start()
+    for i in range(n):
+        await store.write_event(
+            event_id=f"e{i:02d}",
+            event_type="task_created",
+            source="pm",
+            timestamp=datetime(2026, 4, 1, 12, base_minute + i, tzinfo=UTC),
+            category="task",
+            summary=f"event {i}",
+        )
+
+
+async def test_a_cursor_returns_only_older_rows(store: MemoryEventStore) -> None:
+    await _seed(store, 6)
+    page = await store.list_events(limit=3)
+    assert [e["id"] for e in page] == ["e05", "e04", "e03"]
+
+    oldest = page[-1]
+    nxt = await store.list_events(limit=3, before=(oldest["timestamp"], oldest["id"]))
+    assert [e["id"] for e in nxt] == ["e02", "e01", "e00"]
+
+
+async def test_the_cursor_is_exclusive(store: MemoryEventStore) -> None:
+    """The row a caller already holds must not come back again."""
+    await _seed(store, 3)
+    page = await store.list_events(limit=3)
+    oldest = page[-1]
+    nxt = await store.list_events(before=(oldest["timestamp"], oldest["id"]))
+    assert oldest["id"] not in [e["id"] for e in nxt]
+
+
+async def test_rows_sharing_a_timestamp_are_broken_by_id(
+    store: MemoryEventStore,
+) -> None:
+    """Burst writes share a timestamp at microsecond resolution.
+
+    A cursor over a non-unique key skips or repeats whatever collided
+    with it, and the reader gets no error either way.
+    """
+    await store.start()
+    same = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    for eid in ("a", "b", "c"):
+        await store.write_event(
+            event_id=eid,
+            event_type="task_created",
+            source="pm",
+            timestamp=same,
+            category="task",
+            summary=eid,
+        )
+    first = await store.list_events(limit=1)
+    assert first[0]["id"] == "c"
+    rest = await store.list_events(before=(same, "c"))
+    assert [e["id"] for e in rest] == ["b", "a"]
+
+
+async def test_order_is_by_time_not_by_insertion(store: MemoryEventStore) -> None:
+    """Backfilled writes are real: a webhook replay, a gap re-read.
+
+    Ordering by insertion puts them at the head, which under a cursor
+    shows up as rows appearing above rows already scrolled past.
+    """
+    await store.start()
+    for eid, minute in (("late", 5), ("early", 1), ("middle", 3)):
+        await store.write_event(
+            event_id=eid,
+            event_type="task_created",
+            source="pm",
+            timestamp=datetime(2026, 4, 1, 12, minute, tzinfo=UTC),
+            category="task",
+            summary=eid,
+        )
+    assert [e["id"] for e in await store.list_events()] == [
+        "late",
+        "middle",
+        "early",
+    ]
+
+
+async def test_naive_and_aware_timestamps_order_together(
+    store: MemoryEventStore,
+) -> None:
+    """``write_event`` stores whatever encoding its caller passed.
+
+    Compared as raw strings, ``"...+00:00"`` sorts after the same
+    instant written naive, so the two interleave wrongly.
+    """
+    await store.start()
+    await store.write_event(
+        event_id="aware",
+        event_type="task_created",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 5, tzinfo=UTC),
+        category="task",
+        summary="aware",
+    )
+    await store.write_event(
+        event_id="naive",
+        event_type="task_created",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 9),
+        category="task",
+        summary="naive",
+    )
+    assert [e["id"] for e in await store.list_events()] == ["naive", "aware"]
+
+
+async def test_a_short_page_is_the_end(store: MemoryEventStore) -> None:
+    await _seed(store, 2)
+    assert len(await store.list_events(limit=10)) == 2
+
+
+async def test_filter_by_category(store: MemoryEventStore) -> None:
+    """The Activity view pushes its category pills into the query.
+
+    Filtering a paged list client-side silently excludes: a 50-row page
+    holding 2 matches reads as "only 2 exist".
+    """
+    await store.start()
+    for eid, category in (("t", "task"), ("s", "system"), ("t2", "task")):
+        await store.write_event(
+            event_id=eid,
+            event_type="x",
+            source="pm",
+            timestamp=datetime(2026, 4, 1, 12, 0, tzinfo=UTC),
+            category=category,
+            summary=eid,
+        )
+    rows = await store.list_events(category="task")
+    assert {e["id"] for e in rows} == {"t", "t2"}
+
+
+async def test_every_row_carries_the_failure_flag(store: MemoryEventStore) -> None:
+    """One rule for failure, whichever backend answered."""
+    await store.start()
+    await store.write_event(
+        event_id="dead",
+        event_type="agent_phase_completed",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 1, tzinfo=UTC),
+        category="system",
+        summary="died",
+        tags={"failed": "true"},
+    )
+    await store.write_event(
+        event_id="typed",
+        event_type="llm_unavailable",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 2, tzinfo=UTC),
+        category="system",
+        summary="no provider",
+    )
+    await store.write_event(
+        event_id="fine",
+        event_type="agent_phase_completed",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 3, tzinfo=UTC),
+        category="system",
+        summary="ok",
+    )
+    flags = {e["id"]: e["failed"] for e in await store.list_events()}
+    assert flags == {"dead": True, "typed": True, "fine": False}
+
+
+async def test_a_trace_is_oldest_first(store: MemoryEventStore) -> None:
+    """A trace is read as a causal sequence, so it runs the other way."""
+    await store.start()
+    for eid, minute in (("third", 3), ("first", 1), ("second", 2)):
+        await store.write_event(
+            event_id=eid,
+            event_type="task_created",
+            source="pm",
+            timestamp=datetime(2026, 4, 1, 12, minute, tzinfo=UTC),
+            category="task",
+            summary=eid,
+            trace_id="tr-1",
+        )
+    assert [e["id"] for e in await store.list_trace("tr-1")] == [
+        "first",
+        "second",
+        "third",
+    ]

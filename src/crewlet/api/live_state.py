@@ -54,6 +54,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from crewlet._logging import get_logger
+from crewlet.events.types import event_failed
 
 logger = get_logger("api.live_state")
 
@@ -125,20 +126,6 @@ _EVENT_STATE: dict[str, str] = {
 # cause the dashboard renders as a status quip.
 _AFK_EVENTS = frozenset({"llm_unavailable", "turn.guard_breach", "budget_exhausted"})
 
-# Event types that ARE a failure by their very type, independent of any
-# payload flag.  The feed row carries one ``failed`` boolean and this is
-# half of how it is decided (the other half is the event's own ``failed``
-# field, set on a phase or turn that died); a dashboard reads the boolean
-# and never re-derives failure from a type list of its own.
-_FAILURE_EVENTS = frozenset(
-    {
-        "task_failed",
-        "llm_unavailable",
-        "budget_exhausted",
-        "turn.guard_breach",
-    }
-)
-
 # The payload-free fields a feed row carries.  Named once because the row
 # is built in two places -- live from the stream and hydrated from the
 # store -- and two hand-maintained copies of a shape is how a field ends
@@ -161,7 +148,7 @@ _FEED_FIELDS = (
 def _light_event(row: dict[str, Any], *, failed: bool) -> dict[str, Any]:
     """Build one payload-free feed row."""
     light: dict[str, Any] = {key: row.get(key, "") for key in _FEED_FIELDS}
-    light["failed"] = failed or row.get("type", "") in _FAILURE_EVENTS
+    light["failed"] = event_failed(row.get("type", ""), payload_failed=failed)
     return light
 
 
@@ -1014,10 +1001,10 @@ class LiveState:
             logger.warning("live_state_hydrate_events_failed", error=str(exc))
             return
         # ``list_events`` is newest-first; the buffer is chronological.
-        # It never selects the payload column, so the failure flag comes
-        # off the ``failed`` tag the writer stamps (see
-        # ``EventStoreWriter._extract_tags``) -- without it a reloaded
-        # dashboard would show every historical failure as a success.
+        # Every store row decides its own ``failed`` now (from the tag
+        # the writer stamps, since that read never selects the payload
+        # column), so the projection reads the answer instead of
+        # re-deriving it -- one rule, in one place, for the live path and
+        # the hydrated one alike.
         for row in reversed(events):
-            tags = row.get("tags") or {}
-            self._events.append(_light_event(row, failed=tags.get("failed") == "true"))
+            self._events.append(_light_event(row, failed=bool(row.get("failed"))))

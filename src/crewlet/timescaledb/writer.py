@@ -176,39 +176,56 @@ class EventStoreWriter:
 
     @staticmethod
     def _extract_tags(event: Event) -> dict[str, str]:
-        """Extract filterable dimensions from the event."""
-        tags: dict[str, str] = {}
-        if agent_id := getattr(event, "agent_id", ""):
-            tags["agent_id"] = agent_id
-        if role := getattr(event, "role", ""):
-            tags["agent_role"] = role
-        if task_id := getattr(event, "task_id", ""):
-            tags["task_id"] = task_id
-        if channel_id := getattr(event, "channel_id", ""):
-            tags["channel_id"] = channel_id
-        if sender := getattr(event, "sender", ""):
-            tags["sender"] = sender
-        # A2A-specific tags for richer filtering.
-        if requester := getattr(event, "requester", ""):
-            tags["requester"] = requester
-        if target := getattr(event, "target", ""):
-            tags["target"] = target
-        if recipient := getattr(event, "recipient", ""):
-            tags["recipient"] = recipient
-        if closed_by := getattr(event, "closed_by", ""):
-            tags["closed_by"] = closed_by
-        # Whether the work this event reports actually failed.  A tag
-        # rather than a payload read because ``list_events`` deliberately
-        # never selects the payload column, so a dashboard hydrating its
-        # feed from history has no other way to know a phase died -- and
-        # a feed that renders a failed turn identically to a successful
-        # one is the bug this dimension exists to close.  Only set when
-        # true, so the tag doubles as a ``tags->>'failed'`` filter.
-        if getattr(event, "failed", False):
-            tags["failed"] = "true"
-        # Tag turns triggered by A2A for cross-referencing.
-        if (a2a_ctx := getattr(event, "a2a_context", None)) and (
-            a2a_ch := a2a_ctx.get("channel_id", "")
-        ):
-            tags["a2a_channel_id"] = a2a_ch
-        return tags
+        """Extract filterable dimensions from the event.
+
+        Kept as a method for its callers; the implementation is the
+        module-level :func:`extract_tags`, which the API also uses to
+        stamp the same keys onto a live push.
+        """
+        return extract_tags(event)
+
+
+def extract_tags(event: Event) -> dict[str, str]:
+    """Filterable dimensions of an event.
+
+    These are the routing keys a consumer matches on -- which agent an
+    event concerns, which task, which channel -- and the reason they are
+    computed here rather than read out of the payload downstream is that
+    "which agent does this event concern" is a rule, not a field, and one
+    copy of it is all this codebase should have.
+    """
+    tags: dict[str, str] = {}
+    if agent_id := getattr(event, "agent_id", ""):
+        tags["agent_id"] = agent_id
+    if role := getattr(event, "role", ""):
+        tags["agent_role"] = role
+    if task_id := getattr(event, "task_id", ""):
+        tags["task_id"] = task_id
+    if channel_id := getattr(event, "channel_id", ""):
+        tags["channel_id"] = channel_id
+    if sender := getattr(event, "sender", ""):
+        tags["sender"] = sender
+    # A2A-specific tags for richer filtering.
+    if requester := getattr(event, "requester", ""):
+        tags["requester"] = requester
+    if target := getattr(event, "target", ""):
+        tags["target"] = target
+    if recipient := getattr(event, "recipient", ""):
+        tags["recipient"] = recipient
+    if closed_by := getattr(event, "closed_by", ""):
+        tags["closed_by"] = closed_by
+    # Whether the work this event reports actually failed.  A tag
+    # rather than a payload read because ``list_events`` deliberately
+    # never selects the payload column, so a dashboard hydrating its
+    # feed from history has no other way to know a phase died -- and
+    # a feed that renders a failed turn identically to a successful
+    # one is the bug this dimension exists to close.  Only set when
+    # true, so the tag doubles as a ``tags->>'failed'`` filter.
+    if getattr(event, "failed", False):
+        tags["failed"] = "true"
+    # Tag turns triggered by A2A for cross-referencing.
+    if (a2a_ctx := getattr(event, "a2a_context", None)) and (
+        a2a_ch := a2a_ctx.get("channel_id", "")
+    ):
+        tags["a2a_channel_id"] = a2a_ch
+    return tags

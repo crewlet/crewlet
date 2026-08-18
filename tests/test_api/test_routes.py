@@ -688,9 +688,27 @@ class TestEventEndpoints:
         assert resp.json() == []
 
     def test_list_events_without_store(self, client_no_store: TestClient):
+        """503, like its two siblings -- not an empty page.
+
+        An empty 200 is indistinguishable from "you have reached the
+        beginning of history", which was harmless when the response was
+        one unpaged page and wrong now that a caller pages until it runs
+        out: a deployment with no store would announce that it had no
+        history rather than that it cannot answer.
+        """
         resp = client_no_store.get("/events")
+        assert resp.status_code == 503
+
+    def test_list_events_paged_by_cursor(self, client: TestClient):
+        """The cursor is exclusive and keyed on ``(timestamp, id)``."""
+        resp = client.get("/events?before=2026-04-01T12:00:00%2B00:00&before_id=x")
         assert resp.status_code == 200
         assert resp.json() == []
+
+    def test_list_events_ignores_an_unparseable_cursor(self, client: TestClient):
+        """Answering the first page beats answering nothing."""
+        resp = client.get("/events?before=not-a-timestamp")
+        assert resp.status_code == 200
 
     def test_get_event_without_store(self, client_no_store: TestClient):
         resp = client_no_store.get("/events/some-id")

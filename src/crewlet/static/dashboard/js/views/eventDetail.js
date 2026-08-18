@@ -1,7 +1,14 @@
 // Universal event detail — fetches /events/{id} and renders A2A,
 // webhook, LLM, or generic detail based on the event type.
 
-import { esc, fmtDateTime, prettyJson, relTime, shortId } from "../format.js";
+import {
+  esc,
+  escAttr,
+  fmtDateTime,
+  prettyJson,
+  relTime,
+  shortId,
+} from "../format.js";
 import { icon } from "../icons.js";
 import { integrationFromSource, integrationMeta } from "../state.js";
 import { empty } from "../ui.js";
@@ -309,7 +316,11 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
           [
             "Trace",
             ev.trace_id
-              ? raw(`<span class="mono">${esc(shortId(ev.trace_id, 16))}</span>`)
+              ? raw(
+                  `<span class="mono trace-link" data-action="open-trace" data-trace="${escAttr(
+                    ev.trace_id,
+                  )}">${esc(shortId(ev.trace_id, 16))} →</span>`,
+                )
               : "",
           ],
         ])}
@@ -355,6 +366,10 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
     onAction(action, target) {
       if (action === "back") {
         navigate("/events");
+        return;
+      }
+      if (action === "open-trace") {
+        navigate("/traces/" + encodeURIComponent(target.dataset.trace));
         return;
       }
       if (action === "copy") {

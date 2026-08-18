@@ -41,7 +41,7 @@ from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.api.live_state import EVENT_FEED_LIMIT, Change, LiveState
-from crewlet.events.types import Event
+from crewlet.events.types import Event, event_failed
 
 logger = get_logger("api.streaming")
 
@@ -102,8 +102,14 @@ def serialize_event(topic: str, event: Event) -> dict[str, Any]:
     the full event ``payload`` and the originating ``topic`` so live
     consumers (the agent page's LLM rows) and the live-state projection
     can read every field.
+
+    ``failed`` and ``tags`` are stamped here too, so a pushed row and a
+    row read back from history are the same shape.  A client that had to
+    derive either -- from the payload for ``failed``, from a
+    reimplementation of ``_extract_tags`` for the routing keys -- would
+    be a second copy of a rule that already exists twice.
     """
-    from crewlet.timescaledb.writer import _CATEGORY_MAP
+    from crewlet.timescaledb.writer import _CATEGORY_MAP, extract_tags
 
     payload = event.model_dump(mode="json")
     return {
@@ -117,6 +123,8 @@ def serialize_event(topic: str, event: Event) -> dict[str, Any]:
         "trace_id": getattr(event, "trace_id", ""),
         "span_id": getattr(event, "span_id", ""),
         "parent_span_id": getattr(event, "parent_span_id", ""),
+        "failed": event_failed(event.type, payload_failed=bool(payload.get("failed"))),
+        "tags": extract_tags(event),
         "topic": topic,
         "payload": payload,
     }

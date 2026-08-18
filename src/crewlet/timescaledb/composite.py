@@ -1,37 +1,33 @@
 """Composite event store — merges persistent storage with in-memory freshness.
 
-Writes go to both stores.  Reads prefer the persistent (TimescaleDB)
-store but fall back to the memory store for data that hasn't been
-indexed yet (eventual consistency).
+Writes go to both stores.  Reads MERGE both, deduped by id with the
+persistent copy winning, so a row that has not been indexed yet is still
+visible and a persistent leg that answers nothing does not hand back the
+memory leg's newest rows in its place.
 """
 
 from __future__ import annotations
 
 import contextlib
-from datetime import UTC, datetime
 from typing import Any
 
 from crewlet._logging import get_logger
+from crewlet.timescaledb._time import row_key, ts_key
+from crewlet.timescaledb.repository import MAX_TRACE_EVENTS
 
 logger = get_logger("timescaledb.composite")
 
 
-def _ts_key(ts: str) -> str:
-    """Normalize a timestamp string to a timezone-naive UTC key for deduplication.
-
-    Handles both aware (``2026-04-07T03:25:04.729224+00:00``) and naive
-    (``2026-04-07T03:25:04.729224``) ISO 8601 strings that represent the
-    same instant, preventing duplicate entries when memory and the
-    persistent store return the same turn with different timezone
-    encodings.
-    """
-    try:
-        dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(UTC).replace(tzinfo=None)
-        return dt.isoformat()
-    except ValueError:
-        return ts
+def _merge_by_id(
+    primary: list[dict[str, Any]], secondary: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Union two event lists, keeping ``primary``'s copy on a conflict."""
+    seen = {str(row.get("id", "")) for row in primary if row.get("id")}
+    merged = list(primary)
+    merged.extend(
+        row for row in secondary if not row.get("id") or str(row["id"]) not in seen
+    )
+    return merged
 
 
 class CompositeEventStore:
@@ -62,14 +58,31 @@ class CompositeEventStore:
             logger.warning("persistent_write_failed", error=str(exc))
 
     async def list_events(self, **kwargs: Any) -> list[dict[str, Any]]:
-        """List events — prefer persistent store for full history."""
-        try:
-            result = await self._persistent.list_events(**kwargs)
-            if result:
-                return result
-        except Exception:
-            pass
-        return await self._memory.list_events(**kwargs)
+        """Merge both legs, deduped by id, newest first.
+
+        This used to return the persistent leg whenever it was non-empty
+        and fall through to memory otherwise.  Two problems, and paging
+        turned the second into a visible one:
+
+        * memory rows with no persistent counterpart -- events not yet
+          flushed -- were invisible whenever the persistent store had
+          anything at all;
+        * under a cursor, an empty persistent page means "no more
+          history", and falling through hands back memory's NEWEST rows.
+          A reader who scrolled to the bottom would be teleported to the
+          present with no error.
+
+        Same rule the token-usage merge already uses: persistent wins on
+        conflict, memory fills the gaps.
+        """
+        persistent: list[dict[str, Any]] = []
+        with contextlib.suppress(Exception):
+            persistent = await self._persistent.list_events(**kwargs)
+        memory = await self._memory.list_events(**kwargs)
+        merged = _merge_by_id(persistent, memory)
+        merged.sort(key=row_key, reverse=True)
+        limit = int(kwargs.get("limit", 50) or 50)
+        return merged[:limit]
 
     async def get_event(self, event_id: str) -> dict[str, Any] | None:
         try:
@@ -81,13 +94,19 @@ class CompositeEventStore:
         return await self._memory.get_event(event_id)
 
     async def list_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        try:
-            result = await self._persistent.list_trace(trace_id)
-            if result:
-                return result
-        except Exception:
-            pass
-        return await self._memory.list_trace(trace_id)
+        """Merge both legs, deduped by id, OLDEST first.
+
+        A trace is read as a causal sequence, so its order is the
+        opposite of a feed's -- and a half-flushed trace showing only
+        its persistent spans would read as a turn that skipped steps.
+        """
+        persistent: list[dict[str, Any]] = []
+        with contextlib.suppress(Exception):
+            persistent = await self._persistent.list_trace(trace_id)
+        memory = await self._memory.list_trace(trace_id)
+        merged = _merge_by_id(persistent, memory)
+        merged.sort(key=row_key)
+        return merged[:MAX_TRACE_EVENTS]
 
     async def get_agent_states(
         self, agent_roles: list[str]
@@ -277,11 +296,11 @@ class CompositeEventStore:
         # with memory entries that are strictly newer than the most
         # recent persisted entry — these are turns that were published
         # but not yet flushed.
-        newest_persisted_ts = max(_ts_key(h["timestamp"]) for h in persistent_history)
+        newest_persisted_ts = max(ts_key(h["timestamp"]) for h in persistent_history)
         merged = list(persistent_history)
         for h in memory_history:
-            if _ts_key(h["timestamp"]) > newest_persisted_ts:
+            if ts_key(h["timestamp"]) > newest_persisted_ts:
                 merged.append(h)
         # Newest first across the cross-session set.
-        merged.sort(key=lambda h: _ts_key(h["timestamp"]), reverse=True)
+        merged.sort(key=lambda h: ts_key(h["timestamp"]), reverse=True)
         return merged[:limit]

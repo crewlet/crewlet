@@ -109,14 +109,23 @@ async def _event(app: Any, params: dict[str, Any]) -> Any:
 
 
 async def _events(app: Any, params: dict[str, Any]) -> Any:
+    # Guarded like ``_event`` and ``_trace``.  Without it a store-less
+    # deployment answers an empty page, which a pager reads as "you have
+    # reached the beginning of history" -- an answer that silently
+    # excludes every event there is.
+    if app.state.event_store is None:
+        raise QueryError("no_event_store")
     return await events_query(
         app,
         limit=_int(params, "limit", DEFAULT_EVENT_LIMIT),
         event_type=_str(params, "type") or None,
         source=_str(params, "source") or None,
+        category=_str(params, "category") or None,
         trace_id=_str(params, "trace_id") or None,
         actor=_str(params, "actor") or None,
         related_agent=_str(params, "related_agent") or None,
+        before=_str(params, "before"),
+        before_id=_str(params, "before_id"),
     )
 
 

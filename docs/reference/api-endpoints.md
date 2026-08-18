@@ -16,9 +16,9 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
 | `GET` | `/tools` | Registered tools (builtins + discovered MCP tools) |
-| `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500) |
+| `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
-| `GET` | `/events/trace/{trace_id}` | All events in one trace, ordered by timestamp |
+| `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
@@ -235,6 +235,37 @@ those events, and the projection reads it back when it hydrates its feed from
 history.  `list_events` deliberately never selects the payload column, so
 without the tag every historical failure would read back as a success.
 
+### Paging the event history
+
+`GET /events` and the `events` query return rows ordered by
+`(timestamp, id)` **descending**, and accept an exclusive keyset cursor:
+
+```
+GET /events?limit=100&before=2026-04-01T12:00:00%2B00:00&before_id=<event_id>
+```
+
+Pass the oldest row you already hold to get the page beneath it. The id
+half is not optional — burst writes routinely share a timestamp at
+microsecond resolution, and a cursor over a non-unique key silently
+skips or repeats whatever collided with it.
+
+**A page shorter than `limit` is the end of the history.** That rule
+holds for every filter the store pushes into SQL. It does *not* hold for
+`related_agent`, which over-fetches and post-filters (it also pulls in
+every event sharing a trace with a direct match, so a caller must dedupe
+by id); that surface only knows it is done when a page returns zero rows.
+
+The persistent store retains 30 days. Once a cursor crosses that floor
+every page is empty — which is why a client must distinguish it from
+quiet, rather than drawing the gap as silence. A deployment with no
+event store answers **503** (and `no_event_store` on the query channel)
+rather than an empty page, for the same reason: "there is nothing older"
+and "I cannot answer" are different facts.
+
+`category` is a filter for the same reason paging exists at all —
+filtering a paged list client-side silently excludes, because a 100-row
+page holding 2 matches reads as "only 2 exist".
+
 ### The live token meter
 
 `budget` carries the engine's in-memory token counters — the only figures
@@ -307,7 +338,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
 | `agent_memory` | `{id}` | `GET /agents/{id}/memory` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
-| `events` | `{limit, type, source, trace_id, actor, related_agent}` | `GET /events` |
+| `events` | `{limit, type, source, category, trace_id, actor, related_agent, before, before_id}` | `GET /events` |
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}` |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |
