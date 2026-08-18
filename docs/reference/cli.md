@@ -40,6 +40,7 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs (minted from the config's `${VAR}` references), and project webhooks — idempotent, with rotation and decommission paths |
 | `crewlet slack provision <company.yaml> --base-url URL` | Create/update one Slack app per Slack-enabled agent via Slack's App Manifest APIs, run the OAuth installs, write tokens into `.env` or the [secret store](../concepts/secret-store.md) |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into `.env` or the [secret store](../concepts/secret-store.md) |
+| `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits, a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
 | `crewlet --version` | Show the installed version |
 
 ---
@@ -482,6 +483,26 @@ A preflight aborts before touching anything if the credential is not a system ad
 | `--bootstrap PATH` / `--dsn DSN` | Tier A bootstrap YAML (default `./config.yaml`) supplying the DB DSN + keyring for `--secret-store`, or an explicit DSN override. |
 
 Re-runs are idempotent and resumable: every step is find-or-create, a seat whose token var already carries a value is never re-minted (Mattermost returns a token's value exactly once), and one seat's failure is reported as `FAILED` while the rest still provision — the exit code is then non-zero. See [Mattermost integration](../integrations/mattermost.md#automated-setup-crewlet-mattermost-provision).
+
+---
+
+## `crewlet mattermost doctor`
+
+```
+crewlet mattermost doctor my_company.yaml
+```
+
+Checks a Mattermost install the way [`crewlet llm doctor`](#crewlet-llm) checks a subscription CLI: by exercising what actually breaks, not what raises.
+
+| Check | What it catches |
+|---|---|
+| `GET /system/ping` (unauthenticated) | Wrong URL, server down, no route from here |
+| `ServiceSettings.SiteURL` vs `integrations.mattermost.url` | The setting with no error message: Mattermost accepts a websocket only from a browser whose `Origin` matches SiteURL exactly, so a mismatch silently costs every human live updates while the engine — which sends no `Origin` — keeps working. See [The Site URL](../integrations/mattermost.md#the-site-url). |
+| A websocket upgrade sent **with** an `Origin` header | Predicts what a browser gets, including a reverse proxy that drops `Upgrade` |
+| Per seat: `/users/me`, account state, channel membership | Revoked token, disabled bot, a bot in no channel (it would only ever hear DMs) |
+| Per seat: a real authenticated websocket | The engine's only inbound path — a token valid for REST can still fail to open a socket |
+
+Read-only, and no operator credential: the seat tokens already in the config do the work, resolved the way the engine resolves them ([secret store](../concepts/secret-store.md), then environment). Exits non-zero when any check fails.
 
 ---
 

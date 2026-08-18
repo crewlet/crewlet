@@ -162,6 +162,16 @@ def add_mattermost_parser(sub: argparse._SubParsersAction) -> None:
     )
     add_sink_arguments(prov, default_env_file=".env")
 
+    doc = group_sub.add_parser(
+        "doctor",
+        help=(
+            "Check a Mattermost install end to end: reachability, the "
+            "Site URL every browser inherits, a browser-shaped websocket "
+            "upgrade, and one real authenticated socket per agent seat"
+        ),
+    )
+    doc.add_argument("config", type=Path, help="Path to the Tier B company YAML")
+
 
 def _render(report: ProvisionReport) -> None:
     """Print the per-seat table the operator reads the run from."""
@@ -275,29 +285,90 @@ def _username_prefix(raw: Any) -> str:
     return getattr(provisioning, "username_prefix", "") or ""
 
 
-def cmd_mattermost_provision(args: Any) -> int:
-    """Run the Mattermost provisioning reconcile."""
-    config_path: Path = args.config
-    load_env_file(config_path)
-    if not config_path.exists():
-        logger.error("mattermost_provision_config_missing", path=str(config_path))
-        print(f"Company config file not found: {config_path}")
+def _seat_tokens(org: Any) -> dict[str, str]:
+    """Every Mattermost-enabled agent seat's resolved bot token.
+
+    Resolved through the engine's own ``${VAR}`` path (secret store, then
+    environment) so the doctor reads exactly the credential the engine
+    would boot with — a token present only in the secret store must not
+    read as missing here.
+    """
+    from crewlet.config import resolve_env_scalar
+
+    tokens: dict[str, str] = {}
+    for role in org.all_roles():
+        identity = dict(getattr(role, "mattermost", None) or {})
+        if not identity or getattr(role, "is_human", False):
+            continue
+        tokens[role.get_handle()] = resolve_env_scalar(
+            str(identity.get("bot_token") or "")
+        ).strip()
+    return tokens
+
+
+def cmd_mattermost_doctor(args: Any) -> int:
+    """Check one Mattermost install and every seat configured against it."""
+    from crewlet.config import config_to_organization
+    from crewlet.mattermost.doctor import format_report, run_doctor
+
+    loaded = _load_company(args.config)
+    if loaded is None:
+        return 1
+    cfg, raw = loaded
+    try:
+        target = _resolve_target(raw)
+    except MattermostConfigError as exc:
+        logger.error("mattermost_doctor_config_unresolved", error=str(exc))
+        print(str(exc))
         return 1
 
-    from crewlet.config import config_to_organization, load_company_config
+    org = config_to_organization(cfg)
+    report = asyncio.run(
+        run_doctor(
+            url=target.url,
+            team=target.team,
+            seat_tokens=_seat_tokens(org),
+        )
+    )
+    print(format_report(report))
+    return 0 if report.ok else 1
 
+
+def _load_company(config_path: Path) -> tuple[Any, Any] | None:
+    """Load the company YAML and its enabled ``integrations.mattermost``.
+
+    Shared by ``provision`` and ``doctor`` so the two commands cannot
+    disagree about what "this config has Mattermost" means.
+    """
+    from crewlet.config import load_company_config
+
+    load_env_file(config_path)
+    if not config_path.exists():
+        logger.error("mattermost_config_missing", path=str(config_path))
+        print(f"Company config file not found: {config_path}")
+        return None
     try:
         cfg = load_company_config(config_path)
     except ValueError as exc:  # incl. pydantic ValidationError
-        logger.error("mattermost_provision_config_invalid", error=str(exc))
+        logger.error("mattermost_config_invalid", error=str(exc))
         print(f"Company config is invalid: {exc}")
-        return 1
-
+        return None
     raw = getattr(cfg.integrations, "mattermost", None)
     if raw is None or not getattr(raw, "enabled", False):
-        logger.error("mattermost_provision_not_enabled")
+        logger.error("mattermost_not_enabled")
         print("integrations.mattermost is not enabled in this config.")
+        return None
+    return cfg, raw
+
+
+def cmd_mattermost_provision(args: Any) -> int:
+    """Run the Mattermost provisioning reconcile."""
+    from crewlet.config import config_to_organization
+
+    loaded = _load_company(args.config)
+    if loaded is None:
         return 1
+    cfg, raw = loaded
 
     try:
         target = _resolve_target(raw)
@@ -328,5 +399,6 @@ __all__ = [
     "ADMIN_TOKEN_ENV",
     "MattermostConfigError",
     "add_mattermost_parser",
+    "cmd_mattermost_doctor",
     "cmd_mattermost_provision",
 ]
