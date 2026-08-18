@@ -1024,6 +1024,78 @@ uses and `_spawn_role_live` currently inverts.
     message's life. Raising the count is close to free for the case the
     cap exists for, and buys the case a fleet actually produces.
 
+#### Review outcome (pre-implementation, 5 lenses + completeness critic)
+
+**Four lenses `implement-with-changes`, one `redesign-needed`** (the
+per-seat control topic). A marked improvement on the previous round's
+three-of-four `redesign-needed`, and the core reframings were endorsed
+independently by several lenses: subscription existence as an org
+invariant, the pause-gap diagnosis in (d) — verified in code by three
+reviewers rather than taken on trust — retiring the fleet-wide
+`recover()` scan, splitting `unsubscribe` into `detach` +
+`delete_subscription`, and "agents are no longer spawned on every node"
+for the reason given.
+
+What has to change before implementation:
+
+**(a) pre-create — three corrections, one of them fatal.**
+
+- *Pre-creating by subscribing joins a Shared subscription a peer
+  actively owns*, and the joining node then takes a share of that seat's
+  live traffic into its own prefetch before detaching. Decision (a) as
+  drafted has every node do this for every seat at every boot — it
+  manufactures the double-consumer state the whole phase exists to
+  prevent. Creation must happen **once, behind the `worker:{duty}`
+  singleton lease**, not N times from every node.
+- *`_create_durable_consumer` never passes `initial_position`* (verified),
+  so every subscription it creates starts at `Latest`. A pre-created
+  subscription would therefore skip anything already published — the
+  invariant would exist and still lose messages. Pre-create must be
+  `Earliest`.
+- *`delete_subscription` without a local consumer is not implementable on
+  this client*, and the subscribe-then-unsubscribe workaround has the same
+  join problem. Decommission goes behind the same singleton, after the
+  seat lease is released and tombstoned.
+
+**(b) the ownership check — it cannot carry the safety property alone.**
+
+`SeatHost.owns()` reads `self._held` (verified), a snapshot refreshed on
+a 15 s heartbeat against a 45 s TTL. The check can therefore be a full
+TTL stale, which is precisely the window it exists to close, so it cannot
+meet its own exit criterion. It is an **optimization**; correctness has
+to come from epoch-fenced writes — which are scheduled for 5.5. **5.5
+moves into this phase.** Two further corrections: the branch must not
+*requeue* (that reorders, re-creating the fatal (c) declares retired —
+it should leave the delivery unacked and detach), and it needs a pause or
+backoff behind it or it hot-loops when no node owns the seat — unbounded
+inline recursion on the memory twin, which dispatches inside `publish`.
+
+**(e) the control topic — `redesign-needed`.**
+
+The draft dropped superseded-5.6's actual fix: `_dispatch_resume_execute`
+must **raise** when the agent is not local, so a misrouted completion
+reverts instead of settling the run to `done` and discarding the
+suspended Execute conversation. Beyond restoring it: `recover()` inside
+`on_acquire` reaps a live run's sandbox (the reap's own precondition is
+destroyed by the move); `resumed` rows lose their reconciler; the waiter
+and pause reaper are not seat-owned, which contradicts epoch-fenced row
+writes; and moving the sandbox lifecycle events off `crewlet.events.*`
+blanks the dashboard's Running-sandboxes panel.
+
+**Item 12 (`_INBOX_MAX_REDELIVER` 3 → 10) — narrower than written.**
+
+The constant governs **every durable subscription in the process**, not
+the inbox, and the design traced none of the others. The memory twin
+carries its own `max_redeliveries: int = 3` with different semantics
+(verified), so raising one silently diverges the backends. And the rate
+argument is false at the edges: a node that dies *fast* produces NAKs a
+second apart, indistinguishable from poison. The raise stands, scoped and
+with the twin moved in lockstep.
+
+**Exit criteria are ungated.** They lead with "the chaos suite", which
+does not exist and which no work item builds. Either a work item builds
+it or the criteria name tests that exist.
+
 #### Exit criteria
 
 The chaos suite, plus: a seat handed off mid-conversation preserves
