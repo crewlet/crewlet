@@ -19,6 +19,22 @@ BOT_ID = "botuserid00000000000000000"
 HUMAN_ID = "humanuserid0000000000000000"
 
 
+class _StubRegistry:
+    """Minimal HandleRegistry stand-in for outbound resolution."""
+
+    def __init__(self, mapping: dict[str, str]) -> None:
+        self._mapping = mapping
+
+    def get_external_id(self, transport_name: str, handle: str) -> str:
+        return self._mapping.get(handle, "")
+
+    def register_external_id(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def unregister_external_id(self, *args: Any, **kwargs: Any) -> bool:
+        return True
+
+
 class MemoryThreadFollowRepo:
     """In-memory ChatThreadFollowRepository for tests."""
 
@@ -34,6 +50,56 @@ class MemoryThreadFollowRepo:
         self, backend: str, handle: str, channel: str, thread_id: str
     ) -> str | None:
         return self._store.get((backend, handle, channel, thread_id))
+
+
+class _FakeClient:
+    """Records what the transport asked the server to do."""
+
+    def __init__(self, *, users: dict[str, str] | None = None) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self.typing: list[dict[str, Any]] = []
+        self.direct: list[tuple[str, str]] = []
+        self.users = users or {}
+        self.channels: dict[str, str] = {"eng": "chan1eng000000000000000000"}
+        self.team = {"id": "team100000000000000000000"}
+
+    async def create_post(
+        self, channel_id: str, message: str, *, root_id: str = "", **_: Any
+    ) -> dict[str, Any]:
+        self.posts.append(
+            {"channel_id": channel_id, "message": message, "root_id": root_id}
+        )
+        return {"id": "newpost00000000000000000000"}
+
+    async def publish_typing(self, channel_id: str, **kwargs: Any) -> None:
+        self.typing.append({"channel_id": channel_id, **kwargs})
+
+    async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        user_id = self.users.get(username)
+        return {"id": user_id, "username": username} if user_id else None
+
+    async def create_direct_channel(self, a: str, b: str) -> dict[str, Any]:
+        self.direct.append((a, b))
+        return {"id": "dmchannel00000000000000000"}
+
+    async def get_team_by_name(self, name: str) -> dict[str, Any] | None:
+        return self.team
+
+    async def get_channel_by_name(
+        self, team_id: str, name: str
+    ) -> dict[str, Any] | None:
+        channel_id = self.channels.get(name)
+        return {"id": channel_id, "name": name} if channel_id else None
+
+    async def close(self) -> None:
+        return None
+
+
+def _with_fake_client(transport: MattermostTransport, **kwargs: Any) -> _FakeClient:
+    """Swap in a fake so no test touches the network."""
+    fake = _FakeClient(**kwargs)
+    transport._clients["engineer"] = fake  # type: ignore[assignment]
+    return fake
 
 
 def _make_transport(**kwargs: Any) -> MattermostTransport:
@@ -317,17 +383,145 @@ class TestWorkingStatus:
         assert transport.typing_status.mode is WorkingStatusMode.OFF
 
     @pytest.mark.asyncio
-    async def test_clearing_status_makes_no_call(self):
+    async def test_clearing_makes_no_call(self):
         """There is no clear operation — the indicator lapses on its own,
-        so an empty status must not emit a meaningless request."""
+        so clearing must not emit a meaningless request."""
         transport = _make_transport()
-        assert await transport.set_status("engineer", "c1", "p1", "") is False
+        fake = _with_fake_client(transport)
+        assert await transport.clear_status("engineer", "c1", "p1") is False
+        assert fake.typing == []
+
+    @pytest.mark.asyncio
+    async def test_the_indicator_is_raised_despite_carrying_no_text(self):
+        """The driver sends an empty status to a backend that renders no
+        text. Reading that as "clear" made the indicator unraisable — the
+        whole feature was dead on this backend."""
+        transport = _make_transport()
+        fake = _with_fake_client(transport)
+
+        assert await transport.set_status("engineer", "c1", "p1", "") is True
+
+        assert fake.typing[0]["channel_id"] == "c1"
+        assert fake.typing[0]["parent_id"] == "p1"
+
+    @pytest.mark.asyncio
+    async def test_the_typing_deadline_tracks_the_heartbeat(self):
+        transport = _make_transport()
+        transport.status_refresh_interval = 3.0
+        fake = _with_fake_client(transport)
+        await transport.set_status("engineer", "c1", "", "")
+        assert fake.typing[0]["timeout"] == 3.0
 
 
 # --- outbound -------------------------------------------------------------
 
 
 class TestOutbound:
+    @pytest.mark.asyncio
+    async def test_a_reply_threads_under_the_triggering_message(self):
+        """A top-level trigger carries no ``thread_ts``; the agent is told
+        to answer in a thread, so the anchor is what it must post under —
+        and the participation record depends on the same value."""
+        transport = _make_transport()
+        fake = _with_fake_client(transport)
+
+        ok = await transport.send(
+            OutboundMessage(
+                transport="mattermost",
+                sender_handle="engineer",
+                recipient="",
+                body="on it",
+                reply_to_metadata={
+                    "channel": "chan1eng000000000000000000",
+                    "thread_ts": "",
+                    "thread_anchor": "trigger0000000000000000000",
+                },
+            )
+        )
+
+        assert ok is True
+        assert fake.posts[0]["root_id"] == "trigger0000000000000000000"
+
+    @pytest.mark.asyncio
+    async def test_a_thread_reply_still_uses_the_root(self):
+        transport = _make_transport()
+        fake = _with_fake_client(transport)
+
+        await transport.send(
+            OutboundMessage(
+                transport="mattermost",
+                sender_handle="engineer",
+                recipient="",
+                body="x",
+                reply_to_metadata={
+                    "channel": "chan1eng000000000000000000",
+                    "thread_ts": "root00000000000000000000000",
+                    "thread_anchor": "root00000000000000000000000",
+                },
+            )
+        )
+
+        assert fake.posts[0]["root_id"] == "root00000000000000000000000"
+
+    @pytest.mark.asyncio
+    async def test_a_recipient_handle_becomes_a_dm_channel(self):
+        """A username is not a channel id; posting one as though it were
+        is how every fallback DM to a colleague or a human used to fail."""
+        transport = _make_transport()
+        fake = _with_fake_client(
+            transport, users={"jane": "janeid00000000000000000000"}
+        )
+        transport._handle_registry = _StubRegistry({"jane-founder": "jane"})
+
+        ok = await transport.send(
+            OutboundMessage(
+                transport="mattermost",
+                sender_handle="engineer",
+                recipient="jane-founder",
+                body="escalating",
+            )
+        )
+
+        assert ok is True
+        assert fake.direct == [(BOT_ID, "janeid00000000000000000000")]
+        assert fake.posts[0]["channel_id"] == "dmchannel00000000000000000"
+
+    @pytest.mark.asyncio
+    async def test_the_default_channel_name_is_resolved_to_an_id(self):
+        """``role.integrations.mattermost.channel`` is a NAME; the API
+        takes ids only."""
+        transport = _make_transport()
+        fake = _with_fake_client(transport)
+
+        ok = await transport.send(
+            OutboundMessage(
+                transport="mattermost",
+                sender_handle="engineer",
+                recipient="",
+                body="status update",
+            )
+        )
+
+        assert ok is True
+        assert fake.posts[0]["channel_id"] == "chan1eng000000000000000000"
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_default_channel_fails_cleanly(self):
+        transport = _make_transport()
+        fake = _with_fake_client(transport)
+        fake.channels = {}
+
+        ok = await transport.send(
+            OutboundMessage(
+                transport="mattermost",
+                sender_handle="engineer",
+                recipient="",
+                body="x",
+            )
+        )
+
+        assert ok is False
+
     @pytest.mark.asyncio
     async def test_send_without_a_channel_fails_cleanly(self):
         transport = MattermostTransport(base_url="https://chat.example", team="n")
