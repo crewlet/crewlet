@@ -348,3 +348,76 @@ class TestOutbound:
             )
         )
         assert ok is False
+
+
+# --- identity recovery ----------------------------------------------------
+
+
+class TestOwnIdentityFallback:
+    """``start()`` resolves each bot's user id, but that read can fail and
+    a live-added seat is never in the map at all. An empty id disables
+    own-message suppression, and an agent that cannot recognise its own
+    posts answers itself, forever, at one LLM turn per round."""
+
+    @pytest.mark.asyncio
+    async def test_own_message_is_suppressed_without_a_resolved_identity(self):
+        transport = _make_transport()
+        transport._user_ids.clear()
+
+        result = await transport.handle_event(_event(user_id=BOT_ID), "engineer")
+
+        assert result is None
+        assert "loop prevention" in transport.last_skip_reason
+
+    @pytest.mark.asyncio
+    async def test_the_stamped_identity_is_cached_for_later_events(self):
+        transport = _make_transport()
+        transport._user_ids.clear()
+
+        await transport.handle_event(_event(user_id=BOT_ID), "engineer")
+
+        assert transport._user_ids["engineer"] == BOT_ID
+
+    @pytest.mark.asyncio
+    async def test_a_direct_mention_is_still_recognised_as_one(self):
+        """Without the id, a mention of this bot would be misread as a
+        weaker collective address."""
+        transport = _make_transport()
+        transport._user_ids.clear()
+
+        result = await transport.handle_event(
+            _event(mentions=[BOT_ID], root_id=""), "engineer"
+        )
+
+        assert result is not None
+        assert result.metadata["thread_follow_reason"] == "mention"
+        assert result.metadata["bot_user_id"] == BOT_ID
+
+
+# --- the Site URL preflight ----------------------------------------------
+
+
+class TestSiteURLPreflight:
+    """The one Mattermost misconfiguration with no symptom the engine
+    would otherwise surface: the server keeps answering the engine while
+    every browser loses live updates."""
+
+    def test_a_mismatch_is_logged_with_the_impact(self, caplog):
+        transport = _make_transport()
+        with caplog.at_level("WARNING"):
+            transport._warn_on_site_url_mismatch({"SiteURL": "http://localhost:8065"})
+        assert "mattermost_site_url_mismatch" in caplog.text
+
+    def test_a_match_is_silent(self, caplog):
+        transport = _make_transport()
+        with caplog.at_level("WARNING"):
+            transport._warn_on_site_url_mismatch({"SiteURL": "https://chat.example/"})
+        assert "mattermost_site_url_mismatch" not in caplog.text
+
+    def test_an_unreported_site_url_is_not_a_mismatch(self, caplog):
+        """An older or locked-down server that does not report it must not
+        produce a warning naming a value nobody set."""
+        transport = _make_transport()
+        with caplog.at_level("WARNING"):
+            transport._warn_on_site_url_mismatch({})
+        assert "mattermost_site_url_mismatch" not in caplog.text

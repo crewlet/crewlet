@@ -40,6 +40,9 @@ from crewlet.mattermost.client import (
     DIRECT_CHANNEL_TYPES,
     MattermostClient,
     MattermostError,
+    normalize_base_url,
+    site_urls_match,
+    typing_throttle_from,
 )
 from crewlet.notifications.handle import HandleRegistry
 from crewlet.notifications.protocol import (
@@ -258,13 +261,15 @@ class MattermostTransport:
                 username=username,
             )
 
-        # One read, from any bot's client — the throttle is a server-wide
-        # setting, not a per-user one.
+        # One read, from any bot's client — both settings below are
+        # server-wide, not per-user.
         for client in self._clients.values():
-            throttle_ms = await client.typing_throttle_ms()
+            config = await client.client_config()
+            throttle_ms = typing_throttle_from(config)
             self.status_refresh_interval = (
                 throttle_ms / 1000.0 + _TYPING_REFRESH_MARGIN_SECONDS
             )
+            self._warn_on_site_url_mismatch(config)
             break
         self._started = True
 
@@ -287,19 +292,12 @@ class MattermostTransport:
                 bots=len(self._bots),
             )
             return
+        from crewlet.mattermost.client import websocket_url
         from crewlet.mattermost.events import MattermostEventFleet
 
-        base = self._base_url
-        if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://") :]
-        else:
-            ws_base = base
-
         self._fleet = MattermostEventFleet(
-            base_url=base,
-            websocket_url=f"{ws_base}/api/v4/websocket",
+            base_url=self._base_url,
+            websocket_url=websocket_url(self._base_url),
             team=self._team,
             event_queue=self._event_queue,
         )
@@ -326,6 +324,40 @@ class MattermostTransport:
             except Exception as exc:
                 logger.warning("mattermost_client_close_failed", error=str(exc))
         logger.info("transport_stopped")
+
+    def _warn_on_site_url_mismatch(self, config: dict[str, Any]) -> None:
+        """Warn when the server does not know the address it is reached on.
+
+        ``ServiceSettings.SiteURL`` is the address Mattermost hands to
+        every browser and every plugin, which build their absolute URLs
+        from it.  When it disagrees with the address this engine — and,
+        almost always, the humans — reach the server on, the server keeps
+        answering REST calls perfectly while the web app's live feed and
+        its plugin requests point at a host the reader's machine cannot
+        resolve.  Nothing errors; readers simply refresh to see replies.
+
+        That is the one Mattermost misconfiguration with no symptom the
+        engine would otherwise surface, so it is named here rather than
+        left for someone to find in a browser console.
+        """
+        reported = str(config.get("SiteURL") or "")
+        if not reported or site_urls_match(self._base_url, reported):
+            return
+        logger.warning(
+            "mattermost_site_url_mismatch",
+            configured=self._base_url,
+            site_url=normalize_base_url(reported),
+            impact=(
+                "browsers and plugins build absolute URLs from the server's "
+                "SiteURL, so the web app's live updates and its plugin "
+                "requests target that address instead of this one"
+            ),
+            fix=(
+                "set ServiceSettings.SiteURL (MM_SERVICESETTINGS_SITEURL) to "
+                "the address people reach Mattermost on, then re-run "
+                "`crewlet mattermost doctor`"
+            ),
+        )
 
     # ----- outbound ------------------------------------------------------
 
@@ -446,7 +478,7 @@ class MattermostTransport:
         post_id = str(post.get("id") or "")
         root_id = str(post.get("root_id") or "")
         sender_id = str(post.get("user_id") or "")
-        own_user_id = self._user_ids.get(handle, "")
+        own_user_id = self._own_user_id(handle, body)
         channel_type = str(body.get("channel_type") or "")
         text = mattermost_post_text(post)
 
@@ -479,7 +511,7 @@ class MattermostTransport:
                 )
                 if not is_following_thread:
                     follow_reason = self._detect_follow(
-                        body, text, handle, channel_type
+                        body, text, handle, channel_type, own_user_id
                     )
                     if follow_reason is not None:
                         await tracker.start_following(
@@ -492,7 +524,9 @@ class MattermostTransport:
                     )
                     return None
             else:
-                follow_reason = self._detect_follow(body, text, handle, channel_type)
+                follow_reason = self._detect_follow(
+                    body, text, handle, channel_type, own_user_id
+                )
                 if follow_reason is not None:
                     await tracker.start_following(
                         handle, channel, post_id, follow_reason
@@ -550,12 +584,42 @@ class MattermostTransport:
             },
         )
 
+    def _own_user_id(self, handle: str, body: dict[str, Any]) -> str:
+        """This seat's own Mattermost user id, however it can be learned.
+
+        ``start()`` resolves every bot's id up front, but that read can
+        fail (a server blip, a token rotated between provisioning and
+        boot) and a bot registered by a live config apply is never in
+        that map at all.  An empty id here is not cosmetic: it disables
+        own-message suppression, and an agent that cannot recognise its
+        own posts answers itself — one inbound message per reply, forever,
+        at one LLM turn each.
+
+        So fall back to the id the websocket fleet stamps on every event
+        it publishes.  The fleet resolved it from ``/users/me`` with this
+        seat's own token, which is exactly what ``start()`` does, and
+        caching it here repairs the map for every later event.
+        """
+        known = self._user_ids.get(handle, "")
+        if known:
+            return known
+        stamped = str(body.get("bot_user_id") or "")
+        if stamped:
+            self._user_ids[handle] = stamped
+            logger.info(
+                "mattermost_identity_recovered_from_event",
+                handle=handle,
+                user_id=stamped,
+            )
+        return stamped
+
     def _detect_follow(
         self,
         body: dict[str, Any],
         text: str,
         handle: str,
         channel_type: str,
+        own_user_id: str,
     ) -> ThreadFollowReason | None:
         """Why this post should make the agent follow its thread.
 
@@ -571,7 +635,6 @@ class MattermostTransport:
             return ThreadFollowReason.MENTION
 
         tracker = self._thread_tracker
-        own_user_id = self._user_ids.get(handle, "")
         mentions = body.get("mentions")
 
         if isinstance(mentions, list) and mentions:
