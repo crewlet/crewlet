@@ -108,6 +108,33 @@ ADMIN_PASS="${MATTERMOST_ADMIN_PASSWORD:-crewlet-dev-password}"
 # match returns the LAST id in a payload, not the first, which is a bug
 # waiting for the day Mattermost adds a field.
 # ---------------------------------------------------------------------------
+env_get() {
+  # env_get <file> <KEY> — the value, with `export ` and any surrounding
+  # quotes handled. A `grep ^KEY= | cut -d= -f2-` misses an `export`
+  # line entirely and hands back a quoted string as its own value, which
+  # then authenticates as nothing.
+  python3 -c '
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    sys.exit(0)
+wanted = sys.argv[2]
+found = ""
+for line in path.read_text().splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    if key.strip().removeprefix("export ").strip() != wanted:
+        continue
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"'"'":
+        value = value[1:-1]
+    found = value
+print(found)
+' "$1" "$2"
+}
+
 json_get() {
   # json_get <json> <dotted.path> — empty string when absent.
   python3 -c '
@@ -185,8 +212,8 @@ TOKEN_DESC="crewlet-dev-bootstrap"
 existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens" 2>/dev/null || echo '[]')
 if printf '%s' "$existing" | grep -q "\"description\":\"${TOKEN_DESC}\""; then
   echo "    a '${TOKEN_DESC}' token already exists."
-  if grep -q '^MATTERMOST_ADMIN_TOKEN=' "$ENV_FILE" 2>/dev/null; then
-    ADMIN_TOKEN=$(grep '^MATTERMOST_ADMIN_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+  ADMIN_TOKEN=$(env_get "$ENV_FILE" MATTERMOST_ADMIN_TOKEN)
+  if [ -n "$ADMIN_TOKEN" ]; then
     echo "    reusing the value in ${ENV_FILE}"
   else
     echo "    ...but ${ENV_FILE} has no MATTERMOST_ADMIN_TOKEN, and the value" >&2
@@ -236,12 +263,21 @@ values = {
 lines = path.read_text().splitlines() if path.exists() else []
 seen = set()
 for i, line in enumerate(lines):
-    key = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+    raw = line.split("=", 1)[0].strip()
+    key = raw.removeprefix("export ").strip()
     if key in values:
-        lines[i] = f"{key}={values[key]}"
+        # Keep the operator's own `export ` prefix: rewriting it away
+        # silently changes what `. .env` puts in a child process.
+        prefix = "export " if raw.startswith("export ") else ""
+        lines[i] = f"{prefix}{key}={values[key]}"
         seen.add(key)
 lines.extend(f"{k}={v}" for k, v in values.items() if k not in seen)
-path.write_text("\n".join(lines) + "\n")
+# Atomic: a crash mid-write must not leave a truncated env file holding
+# the only copy of a token Mattermost will never show again.
+tmp = path.with_name(path.name + ".tmp")
+tmp.write_text("\n".join(lines) + "\n")
+tmp.chmod(0o600)
+tmp.replace(path)
 PY
 
 # ---------------------------------------------------------------------------
