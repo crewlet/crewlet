@@ -1,116 +1,147 @@
-// The overview: what the company is doing right now, then who it is, then
-// what just happened.
+// The overview: is anything happening, did anything break, who is doing
+// it, and what did it cost.
 //
-// The lead panel is the live turn board — one row per agent actually
-// mid-turn, showing its phase, how many rounds it has spent, and the
-// response text as it streams. That panel is the reason to keep this page
-// open, and it is what the dashboard did not have: it showed counts and a
-// feed, and you had to open an agent to learn whether anything was
-// happening at all.
+// The page is built around one lead panel — the company pulse — because
+// that is the question the dashboard is opened to answer and the one it
+// used to answer worst. It had three counters, a scrolling log, and no
+// sense of time at all: an org that had been flat out for twenty minutes
+// looked identical to one that had been asleep since yesterday. The
+// pulse puts an hour of every seat's real activity on one grid, marks
+// failures in red, and folds the counters into a strip beside it so the
+// figures cost a corner of the panel instead of the whole fold.
+//
+// Below it, in order of urgency: what is in flight right now (as a turn
+// rail, not a phase name), which seat stopped and why, who is on the
+// team, and what just happened.
 
-import { esc, escAttr, fmtNum, relTime, trunc } from "../format.js";
-import { icon } from "../icons.js";
+import { esc, escAttr, fmtCompact, fmtNum, relTime, trunc } from "../format.js";
 import {
+  afkQuip,
   avatarFor,
-  effectiveAgentState,
   phaseColor,
   phaseInk,
   roleInk,
-  stateBadgeClass,
-  stateLabel,
-  statusLine,
+  staleness,
 } from "../state.js";
 import { flattenSeats } from "../org.js";
 import { seatRow } from "../cards.js";
+import { buildPulse, pulseGrid } from "../pulse.js";
 import {
-  bucketSeries,
   empty,
   phaseBar,
   sectionHead,
   activityRow,
   skeletonCards,
-  statWidget,
+  statStrip,
+  turnRail,
 } from "../ui.js";
 import { failureLabel } from "../llm.js";
-
-// Window the overview's trend lines cover. One hour at 5-minute
-// resolution: long enough to show whether the company has been busy,
-// short enough that a burst two minutes ago is still visible as a spike
-// rather than averaged into the floor.
-const TREND_MINUTES = 60;
-const TREND_BUCKETS = 12;
 
 // Rows on the overview's activity feed. The full history is one click
 // away on Activity; this is a glance, not a log.
 const FEED_ROWS = 12;
 
 export function createDashboardView({ store }) {
-  function widgets(state) {
-    const agents = state.agents || [];
-    const tokens = state.tokens;
-    const totals = tokens ? tokens.totals : null;
-    const working = agents.filter((a) => a.state === "working").length;
-    const afk = agents.filter((a) => a.state === "afk").length;
+  // ---- the lead panel ----
 
-    const eventTrend = bucketSeries(state.events || [], {
-      minutes: TREND_MINUTES,
-      buckets: TREND_BUCKETS,
-    });
-    const spendTrend = bucketSeries(tokens ? tokens.by_turn || [] : [], {
-      minutes: TREND_MINUTES,
-      buckets: TREND_BUCKETS,
-      value: (turn) => turn.total_tokens || 0,
-    });
-
-    return `
-      <div class="widgets">
-        ${statWidget({
-          hue: "green",
-          iconId: "users",
-          label: "Agents",
-          value: fmtNum(agents.length),
-          foot: `${fmtNum(working)} working now${afk ? ` · <span class="warn-ink">${fmtNum(afk)} stopped</span>` : ""}`,
-          series: eventTrend,
-        })}
-        ${statWidget({
-          hue: "purple",
-          iconId: "zap",
-          label: "Token Spend",
-          value: totals ? fmtNum(totals.total_tokens) : "—",
-          foot: totals
-            ? `${fmtNum(totals.input_tokens)} in · ${fmtNum(totals.output_tokens)} out`
-            : "waiting for the first turn",
-          series: spendTrend,
-          action: "view-tokens",
-        })}
-        <div class="widget pink clickable" data-action="view-tools" data-k="w:tools">
-          <div class="widget-head">${icon("wrench", "sm")} Tools</div>
-          <div class="widget-big">${fmtNum((state.tools || []).length)}</div>
-          <div class="widget-foot">${esc(toolSources(state))}</div>
-        </div>
-      </div>
-      ${
-        tokens && totals && totals.total_tokens
-          ? `<div class="card phase-panel" data-k="phase-panel">${phaseBar(tokens.by_phase, totals.total_tokens)}</div>`
-          : ""
-      }`;
+  // The headline: seats working, out of seats that could be. Written as
+  // a sentence rather than a bare count because "2" on its own is the
+  // kind of number that means nothing without its denominator, and this
+  // is the first thing on the page.
+  function headline(pulse) {
+    const total = pulse.rows.length;
+    const working = pulse.working;
+    if (!total) return { figure: "—", rest: "no agent seats configured" };
+    if (working) {
+      return { figure: String(working), rest: `of ${total} seats working` };
+    }
+    return { figure: "0", rest: `of ${total} seats working — all quiet` };
   }
 
-  // Where the tool surface comes from, rather than a bare count.
-  function toolSources(state) {
-    const sources = new Set(
-      (state.tools || []).map((t) => (t.source || "builtin").replace(/^mcp[:_-]?/i, "")),
-    );
-    if (!sources.size) return "none registered";
-    return [...sources].sort().join(" · ");
+  function hero(state, pulse) {
+    const tokens = state.tokens;
+    const totals = tokens ? tokens.totals : null;
+    const head = headline(pulse);
+    const stopped = (state.agents || []).filter(
+      (a) => a.state === "afk" || a.last_error,
+    ).length;
+
+    // Claim the window the feed can actually speak for, not the nominal
+    // one: the projection keeps a bounded number of events, and a busy
+    // org fills it in minutes.
+    const sub = pulse.total
+      ? `${fmtNum(pulse.total)} event${pulse.total === 1 ? "" : "s"} in the last ${pulse.covered} minutes` +
+        (pulse.failures
+          ? ` · <span class="warn-ink">${fmtNum(pulse.failures)} failed</span>`
+          : "") +
+        (pulse.blindTo ? " · older activity is past the retained feed" : "")
+      : `nothing has happened in the last ${pulse.covered} minutes`;
+
+    return `
+      <section class="hero panel dot-texture" data-k="hero">
+        <div class="hero-head">
+          <div class="hero-lede">
+            <div class="eyebrow">Company pulse</div>
+            <div class="hero-figure display">
+              <span class="num">${esc(head.figure)}</span>
+              <span class="hero-rest">${esc(head.rest)}</span>
+            </div>
+            <div class="hero-sub">${sub}</div>
+          </div>
+          ${statStrip([
+            {
+              label: "LLM calls",
+              value: totals ? fmtNum(totals.calls || 0) : "—",
+              foot: "last 24h",
+            },
+            {
+              label: "Spend",
+              value: totals ? fmtCompact(totals.total_tokens) : "—",
+              foot: totals
+                ? `${fmtCompact(totals.input_tokens)} in · ${fmtCompact(totals.output_tokens)} out`
+                : "no turns yet",
+            },
+            {
+              label: "Stopped",
+              value: fmtNum(stopped),
+              foot: stopped ? "needs attention" : "all seats healthy",
+              tone: stopped ? "red" : "",
+            },
+          ])}
+        </div>
+        ${pulseGrid(pulse)}
+        ${
+          totals && totals.total_tokens
+            ? `<div class="hero-phases" data-k="hero:phases">${phaseBar(
+                tokens.by_phase,
+                totals.total_tokens,
+              )}</div>`
+            : ""
+        }
+      </section>`;
+  }
+
+  // One bucketing pass per render, threaded through to the hero grid and
+  // every seat card's strip — deriving it twice is how the two would end
+  // up disagreeing about the same seat.
+  function pulseFor(state) {
+    return buildPulse({
+      seats: flattenSeats(state.org),
+      agents: state.agents,
+      events: state.events,
+      tokens: state.tokens,
+      sandboxes: state.sandboxes,
+    });
   }
 
   // ---- the live board ----
 
-  // One row per agent mid-turn. Everything on it comes from the server's
-  // in-flight call, so it survives a refresh and needs no reconstruction
-  // from the event stream.
-  function liveRow(agent) {
+  // One card per agent mid-turn: the turn as an object, with the phase
+  // rail showing where it has been and where it is going, its rounds as
+  // pips, and the response as it streams. Everything comes from the
+  // server's in-flight call, so it survives a refresh and needs no
+  // reconstruction from the event stream.
+  function liveCard(agent) {
     const call = agent.live_call;
     const phase = call.phase || agent.current_phase || "";
     const roundCount = call.rounds || 0;
@@ -122,19 +153,30 @@ export function createDashboardView({ store }) {
       ? trunc(call.response.replace(/<\/?think>/g, " "), 260)
       : "";
     const tools = (call.tool_executions || []).slice(-4);
+    // How long since this call last moved. A row whose last round landed
+    // minutes ago drops its animation and says its age instead — pips
+    // that keep pulsing on a hung turn actively claim progress that is
+    // not happening.
+    const stale = staleness(call.updated_at);
     return `
-      <div class="live-row clickable" data-k="live:${escAttr(agent.role)}"
+      <div class="live-row clickable ${stale ? "is-" + stale : ""}" data-k="live:${escAttr(agent.role)}"
            data-action="agent" data-id="${escAttr(agent.id)}"
            style="--phase-color:${phaseColor(phase)}">
         <div class="live-row-top">
           ${avatarFor(agent.role)}
           <span class="live-who" style="color:${roleInk(agent.role)}">${esc(agent.role)}</span>
           <span class="ph-pill" style="color:${phaseInk(phase)}">${esc(phase || "working")}${call.iteration ? " #" + call.iteration : ""}</span>
-          <span class="pips is-live" title="${roundCount} round${roundCount === 1 ? "" : "s"}">${pips}</span>
+          <span class="pips ${stale ? "" : "is-live"}" title="${roundCount} round${roundCount === 1 ? "" : "s"}">${pips}</span>
+          <span class="live-age" title="last round">${esc(
+            stale === "stalled"
+              ? `no round in ${relTime(call.updated_at).replace(" ago", "")}`
+              : relTime(call.updated_at),
+          )}</span>
           <span class="live-model">${esc(call.model || "")}</span>
           <span style="flex:1"></span>
-          <span class="live-tokens">${fmtNum(call.total_tokens || 0)}</span>
+          <span class="live-tokens num">${fmtNum(call.total_tokens || 0)}</span>
         </div>
+        ${turnRail(phase)}
         ${text ? `<div class="live-text">${esc(text)}</div>` : '<div class="live-text is-waiting">thinking…</div>'}
         ${
           tools.length
@@ -153,19 +195,28 @@ export function createDashboardView({ store }) {
   // live board: an agent that is not working because something broke
   // should be as visible as one that is working.
   function stoppedRow(agent) {
+    // `last_error` is the full record and is what a live failure sets. It
+    // does not survive an API restart — the projection hydrates an
+    // agent's state and AFK reason from the store, not the payload that
+    // caused it — so a seat that is merely known to be AFK still renders
+    // here, with the reason it does have. Keying the board on
+    // `last_error` alone hid every broken seat after a restart, which is
+    // exactly when an operator goes looking for them.
     const failure = agent.last_error || {};
+    const kind = failure.kind || agent.afk_reason || "error";
+    const message = failure.message || (agent.state === "afk" ? afkQuip(agent.afk_reason) : "");
     return `
       <div class="live-row is-failed clickable" data-k="stopped:${escAttr(agent.role)}"
            data-action="agent" data-id="${escAttr(agent.id)}">
         <div class="live-row-top">
           ${avatarFor(agent.role)}
           <span class="live-who" style="color:${roleInk(agent.role)}">${esc(agent.role)}</span>
-          <span class="badge failed"><i class="dot"></i>${esc(failureLabel(failure.kind))}</span>
+          <span class="badge failed"><i class="dot"></i>${esc(failureLabel(kind))}</span>
           ${failure.phase ? `<span class="ph-pill" style="color:${phaseInk(failure.phase)}">${esc(failure.phase)}</span>` : ""}
           <span style="flex:1"></span>
-          <span class="row-ts">${esc(relTime(failure.at))}</span>
+          ${failure.at ? `<span class="row-ts">${esc(relTime(failure.at))}</span>` : ""}
         </div>
-        ${failure.message ? `<div class="live-text">${esc(trunc(failure.message, 220))}</div>` : ""}
+        ${message ? `<div class="live-text">${esc(trunc(message, 220))}</div>` : ""}
       </div>`;
   }
 
@@ -180,23 +231,14 @@ export function createDashboardView({ store }) {
       !a.live_call.failed &&
       a.state !== "afk";
     const live = agents.filter(isRunning);
-    const stopped = agents.filter((a) => !isRunning(a) && a.last_error);
-    if (!live.length && !stopped.length) {
-      return (
-        sectionHead("activity", "Live now", 0, null) +
-        `<div class="idle-panel">
-          <span class="dot idle"></span>
-          <div>
-            <div class="idle-title">Nothing in flight</div>
-            <div class="empty-sub">Every seat is idle. A message, a work item, or a schedule will wake one.</div>
-          </div>
-        </div>`
-      );
-    }
+    const stopped = agents.filter(
+      (a) => !isRunning(a) && (a.last_error || a.state === "afk"),
+    );
+    if (!live.length && !stopped.length) return "";
     return (
-      sectionHead("activity", "Live now", live.length + stopped.length, null) +
+      sectionHead("activity", "In flight", live.length + stopped.length, null) +
       `<div class="live-board">
-        ${live.map(liveRow).join("")}
+        ${live.map(liveCard).join("")}
         ${stopped.map(stoppedRow).join("")}
       </div>`
     );
@@ -204,38 +246,36 @@ export function createDashboardView({ store }) {
 
   // Who is on the team and what each one is doing, as cards. Human seats
   // sit in the row alongside agents — they hold seats in the same chart.
-  function seats(state) {
+  function seats(state, pulse) {
     const all = flattenSeats(state.org);
     if (!all.length) return "";
     return (
       sectionHead("users", "The team", all.length, {
         action: "view-agents",
         label: "All agents",
-      }) + seatRow(all, { agents: state.agents, sandboxes: state.sandboxes })
+      }) +
+      seatRow(all, {
+        agents: state.agents,
+        sandboxes: state.sandboxes,
+        pulse,
+      })
     );
   }
 
-  // Fallback for an org with no chart data: the plain agent list.
-  function agentsList(state) {
+  // Fallback for an org with no chart data: the live agent list, rendered
+  // as the same card so the two paths look alike.
+  function agentsList(state, pulse) {
     const agents = state.agents || [];
     if (!agents.length) return empty("user", "No agents running");
-    return (
-      '<div class="list">' +
-      agents
-        .map((a) => {
-          const st = effectiveAgentState(a, state.sandboxes);
-          return `
-          <div class="row clickable" data-k="a:${escAttr(a.role || a.id)}" data-action="agent" data-id="${escAttr(a.id)}">
-            ${avatarFor(a.role)}
-            <div class="row-body">
-              <div class="row-title">${esc(a.role || a.name)}</div>
-              <div class="row-sub">${esc(statusLine(a, { sandbox: (state.sandboxes || []).find((s) => s.role === a.role) }))}</div>
-            </div>
-            <span class="badge ${stateBadgeClass(st)}"><i class="dot"></i>${esc(stateLabel(st))}</span>
-          </div>`;
-        })
-        .join("") +
-      "</div>"
+    return seatRow(
+      agents.map((a) => ({
+        name: a.role || a.name,
+        handle: a.handle || "",
+        kind: "agent",
+        integrations: [],
+        unitPath: [],
+      })),
+      { agents, sandboxes: state.sandboxes, pulse },
     );
   }
 
@@ -247,7 +287,6 @@ export function createDashboardView({ store }) {
         const waiting = s.status === "awaiting_input";
         return `
         <div class="row" data-k="sb:${escAttr(s.turn_id)}">
-          ${icon("code", "sm")}
           <div class="row-body">
             <div class="row-title">${esc(s.role || s.agent_handle || "agent")}
               <span class="chip">${esc(s.coding_agent || "coding agent")}</span>
@@ -284,12 +323,12 @@ export function createDashboardView({ store }) {
         return skeletonCards(3);
       }
       const hasSeats = flattenSeats(state.org).length > 0;
+      const pulse = pulseFor(state);
       return `
-        ${widgets(state)}
+        ${hero(state, pulse)}
         ${liveBoard(state)}
-        ${seats(state)}
+        ${hasSeats ? seats(state, pulse) : sectionHead("users", "Agents", null, null) + agentsList(state, pulse)}
         ${sandboxList(state)}
-        ${hasSeats ? "" : sectionHead("users", "Agents", null, null) + agentsList(state)}
         ${sectionHead("activity", "Engine activity", (state.events || []).length, {
           action: "view-events",
           label: "View all",

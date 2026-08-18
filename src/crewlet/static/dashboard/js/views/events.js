@@ -34,11 +34,17 @@ export function createEventsView({ navigate, refresh }) {
   const expanded = new Set();
   const cats = new Set();
   const agents = new Set();
+  // Failures cut across every category — a dead phase is `system`, a
+  // dead task is `task` — so this is its own toggle rather than another
+  // category pill. It is the one filter an operator reaches for under
+  // pressure, so it sits first and stays first.
+  let failedOnly = false;
   let sortAsc = false;
   let shown = PAGE;
 
   function filtered(state) {
     let evs = state.events || [];
+    if (failedOnly) evs = evs.filter((e) => e.failed);
     if (cats.size) evs = evs.filter((e) => cats.has(e.category || "system"));
     if (agents.size)
       evs = evs.filter((e) => agents.has(e.actor || e.source || "system"));
@@ -90,9 +96,18 @@ export function createEventsView({ navigate, refresh }) {
       )
       .join("");
 
+    const failures = (state.events || []).filter((e) => e.failed).length;
+
     return `
       <div class="filters">
-        <span class="pill ${cats.size === 0 ? "active" : ""}" data-action="cat-all">All</span>
+        <span class="pill ${cats.size === 0 && !failedOnly ? "active" : ""}" data-action="cat-all">All</span>
+        ${
+          failures
+            ? `<span class="pill failed ${failedOnly ? "active" : ""}" data-action="failed">
+                 ${icon("alert", "sm")}Failures <span class="ct">${failures}</span>
+               </span>`
+            : ""
+        }
         ${catPills}
         <span class="pill sort" data-action="sort">${icon("chevron", "sm")} ${sortAsc ? "Oldest first" : "Newest first"}</span>
       </div>
@@ -108,7 +123,7 @@ export function createEventsView({ navigate, refresh }) {
     if (solo) {
       return `
         <div class="trace" data-k="t:${esc(g.key)}" data-trace="${esc(g.key)}">
-          <div class="trace-head ${inspectRoot ? "expandable" : ""}" ${inspectRoot ? `data-action="open" data-id="${esc(r.id)}"` : ""}>
+          <div class="trace-head ${inspectRoot ? "expandable" : ""} ${r.failed ? "is-failed" : ""}" ${inspectRoot ? `data-action="open" data-id="${esc(r.id)}"` : ""}>
             <span style="width:14px"></span>
             <span class="node-dot ${catClass(r.category)}"></span>
             <span class="trace-summary">${eventSummary(r)}</span>
@@ -126,7 +141,7 @@ export function createEventsView({ navigate, refresh }) {
         const insp = isInspectable(c);
         const skipped = c.type === "notification_skipped";
         return `
-        <div class="trace-child ${insp ? "clickable" : ""} ${skipped ? "skipped" : ""}" data-k="c:${esc(c.id)}"
+        <div class="trace-child ${insp ? "clickable" : ""} ${skipped ? "skipped" : ""} ${c.failed ? "is-failed" : ""}" data-k="c:${esc(c.id)}"
              ${insp ? `data-action="open" data-id="${esc(c.id)}"` : ""}>
           <span class="node-dot ${catClass(c.category)}" style="width:7px;height:7px"></span>
           <span class="trace-summary">${eventSummary(c)}</span>
@@ -141,7 +156,7 @@ export function createEventsView({ navigate, refresh }) {
 
     return `
       <div class="trace ${open ? "open" : ""}" data-k="t:${esc(g.key)}" data-trace="${esc(g.key)}">
-        <div class="trace-head expandable" data-action="toggle" data-key="${esc(g.key)}">
+        <div class="trace-head expandable ${g.list.some((e) => e.failed) ? "is-failed" : ""}" data-action="toggle" data-key="${esc(g.key)}">
           ${icon("chevron", "chevron")}
           <span class="node-dot ${catClass(r.category)}"></span>
           <span class="trace-summary">${eventSummary(r)}</span>
@@ -179,7 +194,7 @@ export function createEventsView({ navigate, refresh }) {
             : empty(
                 "inbox",
                 "No events",
-                cats.size || agents.size
+                cats.size || agents.size || failedOnly
                   ? "No events match the selected filters"
                   : "Activity will appear here as agents work",
               )
@@ -200,6 +215,9 @@ export function createEventsView({ navigate, refresh }) {
         else cats.add(c);
       } else if (action === "cat-all") {
         cats.clear();
+        failedOnly = false;
+      } else if (action === "failed") {
+        failedOnly = !failedOnly;
       } else if (action === "actor") {
         const a = t.dataset.actor;
         if (agents.has(a)) agents.delete(a);

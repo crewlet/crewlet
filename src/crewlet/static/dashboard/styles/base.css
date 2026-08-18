@@ -30,19 +30,37 @@ body {
   font-size: 14px;
   line-height: 1.55;
   /* The site sets a slight negative tracking on body copy; it is what makes
-     Instrument Sans read as the brand rather than as a default UI font. */
-  letter-spacing: -0.011em;
+     the text read as the brand rather than as a default UI font. */
+  letter-spacing: var(--track-body);
   color: var(--text);
   background: var(--bg);
   transition: background-color 0.4s, color 0.3s;
 }
 
+/* Anything that reads as a *title* — a page heading, a panel headline, a
+   figure — is set in the display face at display tracking. The site draws
+   the same distinction: Inter carries the prose, Inter Tight carries the
+   statements. Where neither font is installed both slots fall back to the
+   same system face, and the tracking difference alone still separates
+   them, which is why the tracking is a token rather than baked into the
+   font choice. */
 h1,
 h2,
 h3,
-h4 {
+h4,
+.display {
+  font-family: var(--font-display);
+  letter-spacing: var(--track-display);
   color: var(--heading);
   text-wrap: balance;
+  font-weight: 600;
+}
+
+/* A number that changes must not re-flow the text around it. Every live
+   figure on this dashboard is a changing number. */
+.num,
+.figure {
+  font-variant-numeric: tabular-nums;
 }
 
 p {
@@ -74,13 +92,12 @@ code,
  * ---------------------------------------------------------------------------
  * The site's mono, uppercase, wide-tracked micro-label ("LEARNING YOUR
  * COMPANY", "CONNECTED ACCOUNTS"). It is the dashboard's entire small-label
- * register: section headers, nav group titles, table headers, widget heads,
- * stat and block labels, source badges. Declared once, here in the first
- * stylesheet, so every use below states only its deltas. */
+ * register: section headers, nav group titles, table headers, hero and
+ * strip labels, stat and block labels, source badges. Declared once, here
+ * in the first stylesheet, so every use below states only its deltas. */
 .eyebrow,
 .sec-title,
 .nav-title,
-.widget-head,
 .stat-label,
 .block-label,
 .mem-label,
@@ -90,7 +107,7 @@ code,
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 500;
-  letter-spacing: 0.1em;
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -125,10 +142,18 @@ code,
 }
 
 /* ---- App grid ---- */
+/* The sidebar tone is painted by the GRID, not by the sidebar element.
+   The sidebar is `position: sticky; height: 100vh`, so on any page taller
+   than the viewport its own background — and its right border — simply
+   stopped one screen down, leaving a visible horizontal seam in the left
+   column on every theme where the two grounds differ. Painting the
+   column and letting `.main` cover its own half is the only version of
+   this that is correct at every scroll position. */
 #app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 100vh;
+  background: var(--bg-sidebar);
 }
 
 /* ---- Sidebar ---- */
@@ -139,8 +164,6 @@ code,
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
   overflow-y: auto;
 }
 
@@ -156,9 +179,10 @@ code,
   border-radius: 6px;
 }
 .brand h1 {
-  font-size: 13.5px;
+  font-family: var(--font-display);
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: var(--track-display);
   margin: 0;
   flex: 1;
 }
@@ -303,6 +327,8 @@ code,
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
 }
 
 /* Frosted chrome — the site's fixed nav: page tone at 78%, blurred and
@@ -321,9 +347,10 @@ code,
   border-bottom: 1px solid var(--border);
 }
 .topbar h2 {
+  font-family: var(--font-display);
   font-size: 17px;
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: var(--track-display);
   margin: 0;
   flex: 1;
 }
@@ -462,6 +489,13 @@ code,
   }
   #app.nav-open .sidebar {
     transform: none;
+  }
+  .sidebar {
+    background: var(--bg-sidebar);
+  }
+  /* One column: the divider has nothing to divide. */
+  .main {
+    border-left: none;
   }
   .view,
   .topbar {

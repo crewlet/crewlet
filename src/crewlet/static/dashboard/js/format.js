@@ -35,6 +35,22 @@ export function fmtNum(n) {
   return (Number(n) || 0).toLocaleString();
 }
 
+// A short magnitude for a figure that has to fit in a strip: 77,280 →
+// "77.3k". Only for display slots where the exact number is available
+// elsewhere (a title, the Tokens view) — never as the only rendering of
+// a value someone might need to read exactly.
+export function fmtCompact(n) {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  if (abs < 1000) return String(Math.round(v));
+  if (abs < 1_000_000) {
+    const k = v / 1000;
+    return (abs < 10_000 ? k.toFixed(1) : Math.round(k)) + "k";
+  }
+  const m = v / 1_000_000;
+  return (abs < 10_000_000 ? m.toFixed(1) : Math.round(m)) + "M";
+}
+
 // Very small, safe markdown for memory/summary text. Escapes first, then
 // applies bold / inline-code / bullet markers. Newlines are preserved by
 // the consumer's `white-space: pre-wrap`.

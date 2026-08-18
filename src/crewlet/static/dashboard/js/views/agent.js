@@ -204,13 +204,32 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         </div>
         <div class="agent-head-state">
           <span class="badge ${stateBadgeClass(st)}"><i class="dot"></i>${esc(stateLabel(st))}${esc(phaseSuffix(a))}</span>
-          <div class="tok-chip">
-            <span class="in">${fmtNum(a.input_tokens || 0)}</span> in ·
-            <span class="out">${fmtNum(a.output_tokens || 0)}</span> out ·
-            <span class="tot">${fmtNum(a.total_tokens || 0)}</span></div>
+          ${tokenChip(a)}
         </div>
       </div>
       ${failure ? renderFailureCard(failure) : ""}`;
+  }
+
+  // The seat's token usage, from the PHASE rollup when it has loaded.
+  //
+  // The projection's own per-agent counters (`a.total_tokens`) are fed by
+  // `agent_turn_completed`, so they count only turns that reached the
+  // end — which meant a seat whose provider kept dying showed "0 in · 0
+  // out · 0" in its header directly above a phase card reporting a
+  // quarter of a million tokens over the same window. Both numbers were
+  // real; only one of them answers "what has this seat spent". Reading
+  // the phase rollup here makes the header and the card below two views
+  // of one figure rather than two figures.
+  function tokenChip(a) {
+    const t = phaseSummary && phaseSummary.totals;
+    const [input, output, total] = t
+      ? [t.input_tokens, t.output_tokens, t.total_tokens]
+      : [a.input_tokens || 0, a.output_tokens || 0, a.total_tokens || 0];
+    return `
+      <div class="tok-chip" title="last ${phaseWindow} days">
+        <span class="in">${fmtNum(input)}</span> in ·
+        <span class="out">${fmtNum(output)}</span> out ·
+        <span class="tot">${fmtNum(total)}</span></div>`;
   }
 
   // The seat-level "why it stopped" card. The engine knows precisely why
@@ -245,11 +264,12 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
       return "";
     }
     const t = phaseSummary.totals;
+    // Totals live in the header chip now — repeating them here was the
+    // same three numbers twice on one screen.
     return `
       <div class="card phase-summary" data-k="phases">
         <div class="row-sub" style="margin-bottom:8px">
-          ${icon("zap", "sm")} last ${phaseWindow}d · ${fmtNum(t.total_tokens)} tokens ·
-          ${fmtNum(t.input_tokens)} in / ${fmtNum(t.output_tokens)} out · ${fmtNum(t.calls)} calls
+          ${icon("zap", "sm")} where it went · last ${phaseWindow}d · ${fmtNum(t.calls)} calls
         </div>
         ${phaseBar(phaseSummary.by_phase, t.total_tokens)}
       </div>`;

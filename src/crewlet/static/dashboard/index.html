@@ -7,8 +7,17 @@
     <link rel="icon" type="image/svg+xml" href="/static/crewlet-icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      The three faces styles/tokens.css names: Inter for text, Inter Tight
+      for display, JetBrains Mono for anything that is a code or a number
+      that changes.  `display=swap` plus the system fallbacks in each token
+      mean an engine on a closed network that cannot reach the CDN renders
+      immediately in the fallback face rather than blocking on it — the
+      brand's negative tracking is a token, so it applies to whichever face
+      actually resolves.
+    -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=Inter+Tight:wght@500..700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/dashboard/styles/tokens.css" />
@@ -97,6 +106,10 @@
             <button class="icon-btn" id="theme-btn" title="Toggle theme"></button>
           </div>
         </header>
+        <div class="degraded" id="degraded" hidden>
+          <span class="ic sm"><svg><use href="#i-alert" /></svg></span>
+          <span id="degraded-text"></span>
+        </div>
         <section class="view" id="view"></section>
       </main>
     </div>

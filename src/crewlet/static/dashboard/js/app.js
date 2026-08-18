@@ -17,7 +17,7 @@ import { parseRoute, navigate, onRouteChange } from "./router.js";
 import { patch } from "./patch.js";
 import { schedule, cancel } from "./scheduler.js";
 import { $, delegate } from "./dom.js";
-import { esc } from "./format.js";
+import { esc, relTime } from "./format.js";
 import { icon } from "./icons.js";
 import { apiToken } from "./authToken.js";
 
@@ -183,15 +183,29 @@ function toggleGroup(name) {
 function renderNav() {
   schedule("nav", () => {
     const current = activeRoute ? activeRoute.name : "dashboard";
-    const counts = { events: store.state.events.length };
+    const events = store.state.events;
+    // A count in the nav ring is only worth the pixels if it tells you
+    // whether to click. "44 events" never does; "2 failed" always does.
+    // So Activity carries its failure count in red when there is one and
+    // falls back to the plain total when there is not.
+    const failures = events.filter((e) => e.failed).length;
+    const counts = {
+      events: failures
+        ? { value: failures, alert: true, title: `${failures} failed` }
+        : { value: events.length, alert: false, title: `${events.length} events` },
+    };
 
     const item = (n, sub = false) => {
-      const count = n.count ? counts[n.count] : 0;
+      const count = n.count ? counts[n.count] : null;
       return `
       <div class="nav-item ${sub ? "sub" : ""} ${current === n.name ? "active" : ""}"
            data-k="nav:${n.name}" data-action="nav" data-nav="${n.name}">
         ${icon(n.icon, "sm")}<span class="label">${esc(n.label)}</span>
-        ${count ? `<span class="nav-count">${esc(String(count))}</span>` : ""}
+        ${
+          count && count.value
+            ? `<span class="nav-count ${count.alert ? "alert" : ""}" title="${esc(count.title)}">${esc(String(count.value))}</span>`
+            : ""
+        }
       </div>`;
     };
 
@@ -231,6 +245,21 @@ function renderChrome() {
           : state.connected
             ? "ok"
             : "down");
+
+    // Degraded mode: the socket is down and the client is polling REST
+    // every few seconds. The dot alone does not read as "this data may
+    // be stale" — and a dashboard that is quietly wrong is worse than
+    // one that says it cannot see.
+    const banner = $("#degraded");
+    if (state.connected) {
+      banner.hidden = true;
+    } else {
+      banner.hidden = false;
+      const last = state.events && state.events[0];
+      $("#degraded-text").textContent = last
+        ? `Not connected to the engine — showing the last state received, from ${relTime(last.timestamp)}.`
+        : "Not connected to the engine — retrying.";
+    }
 
     const footer = $("#chrome-footer");
     const pill = $("#inflight");
@@ -297,6 +326,7 @@ function boot() {
 
   store.subscribe(["health"], renderChrome);
   store.subscribe(["events"], renderNav);
+  store.subscribe(["events"], renderChrome);
 
   // The socket starts first so a query issued by the first view's mount
   // goes out as soon as the connection is up (it would queue either way,

@@ -631,9 +631,21 @@ src/crewlet/          # Main package
                       #   normalizer for an LLM record, pass-through rather
                       #   than a field whitelist — four hand-maintained
                       #   whitelists are how a phase failure got deleted on
-                      #   its way to the screen). Views are pure
+                      #   its way to the screen), pulse.js (THE COMPANY
+                      #   PULSE — the overview's lead panel: one row per
+                      #   seat, one cell per minute of the last hour, lit
+                      #   by real feed events, red where the server's
+                      #   `failed` flag says so. buildPulse is pure and
+                      #   runs ONCE per render, threaded through to the
+                      #   hero grid AND every seat card's strip so the two
+                      #   cannot disagree about a seat). Views are pure
                       #   render(state) -> markup + a `slices` list;
-                      #   hash router, per-view modules; llm.js renders each
+                      #   hash router, per-view modules; turnRail() in ui.js
+                      #   draws an in-flight turn as an object (phases spent
+                      #   / live / pending, packet on the live segment);
+                      #   staleness() in state.js is why MOTION STOPS WHEN
+                      #   WORK STOPS — pips that keep pulsing on a hung turn
+                      #   claim progress that is not happening; llm.js renders each
                       #   LLM invocation with
                       #   collapsible, height-capped prompt messages so a long
                       #   system prompt cannot bury the response, plus a
@@ -645,9 +657,17 @@ src/crewlet/          # Main package
                       #   (state.js integrationMeta/integrationBadge) — see
                       #   describe_trigger / turn-engine.md).
                       #   Visual system = the crewlet.io panel language:
+                      #   PURE BLACK ground, and every division on it is a
+                      #   different ALPHA OF ONE WARM CREAM (panel fill,
+                      #   hairline, inset) — that single material is what
+                      #   makes a dense surface read as one object. The
+                      #   brand gradient is used as LIGHT (a hairline on the
+                      #   hero's top edge, the rail packet), never as a fill.
                       #   styles/tokens.css is the ONLY place a colour is
                       #   defined (surface/border/text ramps, glass, the
-                      #   panel/card/lift shadows, and 8 categorical hue
+                      #   type stack + the three tracking tokens, the brand
+                      #   gradient/ramp, the panel/card/lift shadows, and
+                      #   8 categorical hue
                       #   families each shipping a --<hue> MARK step and a
                       #   --<hue>-ink TEXT step; --red is a reserved status
                       #   hue). One shared panel recipe in components.css

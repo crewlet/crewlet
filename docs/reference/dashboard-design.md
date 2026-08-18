@@ -5,9 +5,12 @@ The dashboard is a zero-build, modular ES-module app (see
 documents its **visual system** — the tokens every component reads, the panel
 recipe, and the rules a change has to keep holding.
 
-The system is the one the Crewlet marketing site ships. A panel here is the
-same object as a panel there: a fill just off the page tone, a hairline border
-doing the separation work, a 1px settle shadow, and a 2px lift on hover.
+The system is the one the Crewlet marketing site ships. The ground is pure
+black and every division on it — panel fill, hairline, inset — is a different
+alpha of the *same* warm cream. That single material is what makes a dense
+operational surface read as one object rather than as a stack of grey boxes,
+and it is the rule to keep: a new surface is another step of the ramp, never a
+new colour.
 
 ---
 
@@ -32,9 +35,63 @@ placeholder or a coming-soon stub.
 | Configuration | `#/config` | `/config` *(auth-gated, secrets redacted server-side)* |
 
 `js/org.js` is where the `/org` tree is flattened into **seats** — every role
-with its unit chain, effective unit lead, and the MCP surfaces it inherits.
-Views consume seats, never the raw payload, so lead inheritance and `mcp_env`
-inheritance are resolved once.
+with its unit chain, effective unit lead, its configured `token_budget`, and
+the MCP surfaces it inherits. Views consume seats, never the raw payload, so
+lead inheritance and `mcp_env` inheritance are resolved once.
+
+### The overview
+
+The Dashboard reads, top to bottom, in order of urgency:
+
+| Band | Answers |
+|---|---|
+| **Company pulse** (the lead panel) | Is anything happening, and did anything break? |
+| **In flight** | What is running right now, how far through its turn, and how long since it last moved |
+| **The team** | Who is on the roster and what each seat is doing |
+| **Running sandboxes** | Which detached coding jobs are open, and which are blocked on an answer |
+| **Engine activity** | What just happened |
+
+### The pulse
+
+`js/pulse.js` — one row per agent seat, one cell per minute of the last hour,
+lit by what that seat actually did. It is the site's masked dot field applied
+literally rather than decoratively: a cell is lit because a seat was working
+in that minute, its brightness is that minute's event count against the
+busiest cell on the grid, and a red cell is a real failure.
+
+| Element | Source |
+|---|---|
+| Rows | `flattenSeats(org)`, agents only — a seat that has done nothing still gets a row, which is itself a finding |
+| Cell brightness | Feed events for that actor in that minute, over the grid's busiest cell |
+| Red cell | The feed row's `failed` flag (see [Failure](#failure)) |
+| Breathing cell | The current minute of a seat that is working *now* — the only cell on the grid that moves |
+| Right-hand figure | The seat's spend from the pushed rollup, or its failure count |
+
+`buildPulse` is a pure function over data the page already holds, so the panel
+costs no request and no server work. One bucketing pass per render is threaded
+through to the hero grid *and* to every seat card's strip, so a card and the
+hero can never tell different stories about the same seat.
+
+**The panel claims only what the feed can speak for.** The projection retains
+a bounded number of events (`MAX_EVENTS` in `js/store.js`, matching the
+server's `EVENT_FEED_LIMIT`), and a busy org fills that in minutes — so on
+such an org the older part of the hour has *no record*, which is not the same
+as no activity. Cells past the retention edge render as a hairline marked "no
+record", the axis says so, and the headline counts the minutes actually
+covered. Drawing the gap as idle would make a company that had been flat out
+all hour look like one that woke up five minutes ago.
+
+The strip on a seat card is deliberately the **same device** at a smaller
+size, not a second chart type.
+
+### The turn rail
+
+`turnRail()` in `js/ui.js` draws an in-flight turn as an object: the canonical
+phases in order (plan → execute → review), the ones already spent filled in
+their own hue, the current one lit and breathing, the rest hollow, with a
+packet travelling the segment feeding the live phase. A phase running off that
+path — onboarding, a judge, a sub-agent — renders as its own single-node rail
+rather than being placed on a path it is not on.
 
 ### The seat card
 
@@ -45,14 +102,24 @@ runtime. Everything on a card is real:
 
 | Element | Source |
 |---|---|
-| Identity hue on the name | `roleColor` / `roleInk`, hashed from the seat name |
+| Identity hue on the name and the leading hairline | `roleColor` / `roleInk`, hashed from the seat name |
 | State dot | the live projection (`effectiveAgentState`), or `human` |
-| Integration chips | the seat's own + inherited `mcp_env` server keys; for a human seat, the `contact` identities it is reachable at |
+| Marker | the live phase when the seat is working, otherwise its state badge; a human seat gets its unit |
 | Status line | `statusLine` in `state.js` — derived from live state only |
+| Activity strip | this seat's row from `buildPulse` — the same hour the pulse grid shows |
+| Integration chips | the seat's own + inherited `mcp_env` server keys; for a human seat, the `contact` identities it is reachable at |
+| Cost line | 24-hour spend, the role's configured `token_budget` if it has one, and when the seat was last active |
 
 `statusLine` never invents activity. An agent with nothing in flight says so;
 an AFK agent shows its engine-detected cause; a seat running a detached
 sandbox says it is writing code, and says when it is blocked on an answer.
+
+The cap is **stated, never divided into**. The engine meters a role's budget
+cumulatively for the process lifetime (`concurrency.BudgetManager`) while the
+figure beside it is the dashboard's 24-hour window; a percentage would read as
+"budget remaining" and be wrong by however long the engine has been up. Side
+by side, the magnitudes are comparable and nothing is claimed that was not
+measured.
 
 ---
 
@@ -78,7 +145,7 @@ component branches on the theme.
 | Token | Job |
 |---|---|
 | `--bg` / `--bg-sidebar` | Page tone; the nav rail one step off it |
-| `--bg-card` | Panel fill — deliberately close to `--bg` |
+| `--bg-card` | Panel fill — a warm cream **alpha** over the ground in dark, so nested panels accumulate depth without another token |
 | `--bg-card-2` | Raised inner surface (table headers, chips) |
 | `--bg-hover` / `--bg-active` | Row and control states |
 | `--bg-inset` | Recessed surface (code blocks, expanded bodies) |
@@ -93,11 +160,21 @@ component branches on the theme.
 `--glass` / `--glass-hover` back the topbar, icon buttons, and segmented
 controls, always with `backdrop-filter: blur(…)`.
 
+### Brand
+
+`--brand-gradient` is the full seven-stop mark; `--brand-ramp` is its
+three-stop cousin for anything only a few pixels tall. Both are used as
+**light, never as a fill** — a hairline along the overview panel's top edge,
+the packet travelling the turn rail. There is no third place for them.
+
 ### Elevation and motion
 
-`--panel-shadow` (the 1px settle), `--card-shadow` (floating chrome: toasts,
-the mobile drawer), `--lift-shadow` (hover). Easings are `--ease` and
-`--ease-snappy`; durations `--dur` / `--dur-slow`.
+`--panel-shadow` (the settle), `--card-shadow` (floating chrome: toasts,
+the mobile drawer), `--lift-shadow` (hover). A drop shadow is invisible on
+pure black, so in the dark theme a panel is lifted by *light* instead: a
+one-pixel warm highlight along its top edge, the way a physical panel catches
+the light above it. Easings are `--ease` and `--ease-snappy`; durations
+`--dur` / `--dur-slow`.
 
 ### Categorical hues
 
@@ -158,15 +235,19 @@ badge renders its name, and every heat cell prints its value.
 
 ## The panel
 
-One recipe, shared by `.panel`, `.card`, `.list`, `.widget`, `.stat`,
-`.tool-card`, `.turn`, and `.mem-card`:
+One recipe, shared by `.panel`, `.card`, `.list`, `.stat`, `.tool-card`,
+`.turn`, and `.mem-card`:
 
 ```css
-background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+background: var(--bg-card);
 border: 1px solid var(--border);
-border-radius: var(--radius);          /* 13px */
-box-shadow: var(--panel-shadow);       /* 0 1px 0 */
+border-radius: var(--radius);          /* 14px */
+box-shadow: var(--panel-shadow);
 ```
+
+`--bg-card` is used neat: it is *itself* an alpha over the ground in the dark
+theme, and diluting it a second time leaves a panel under the threshold where
+its edge reads at all.
 
 An actionable panel adds `.clickable`, which swaps in `--lift-shadow` and
 `translateY(-2px)` on hover. `.dot-texture` adds the site's decorative accent
@@ -177,15 +258,28 @@ view needs a new surface, it gets the recipe, not a copy of it.
 
 ## Type
 
-- **Body** — Instrument Sans, `letter-spacing: -0.011em`. The negative
-  tracking is what makes the face read as the brand rather than as a default
-  UI font.
-- **Headings** — the same face at `-0.025em` to `-0.035em`, in `--heading`.
-- **Micro-labels** — JetBrains Mono, uppercase, `letter-spacing: 0.1em`–`0.16em`,
+Three faces and three tracking values, all tokens — so the brand's voice
+survives even where none of the faces resolve.
+
+- **Body** — Inter (`--font-sans`) at `--track-body` (`-0.011em`). The
+  negative tracking is what makes the text read as the brand rather than as a
+  default UI font.
+- **Display** — Inter Tight (`--font-display`) at `--track-display`
+  (`-0.024em`), in `--heading`. Anything that reads as a *title* wears it:
+  headings, the overview's headline figure, panel figures, the `.display`
+  class. Where neither face is installed both fall back to the same system
+  face and the tracking alone still separates them, which is why tracking is a
+  token rather than baked into the font choice.
+- **Micro-labels** — JetBrains Mono, uppercase, `--track-label` (`0.12em`),
   in `--text-muted`. This is the site's eyebrow, and it is what section
   headers (`.sec-title`), table headers (`.tbl th`), block labels
-  (`.block-label`), stat labels, and status badges all wear. The shared
-  `.eyebrow` class in `base.css` is the standalone form.
+  (`.block-label`), stat and strip labels, and status badges all wear. The
+  shared `.eyebrow` class in `base.css` is the standalone form.
+
+`index.html` requests all three from the font CDN with `display=swap`, and
+every token names a full system fallback: an engine on a closed network must
+render immediately in the fallback rather than block on a request that will
+never answer.
 - **Numbers** — `font-variant-numeric: tabular-nums` everywhere they can
   change, so a live value does not jitter its column.
 
@@ -238,6 +332,16 @@ means something is running:
 - `pip-lit` — the round-budget pips on a live phase row, lit in
   sequence with a per-pip delay, so a phase held for a second still
   reads as progressing.
+- `rail-packet` — the brand ramp running the turn-rail segment that feeds
+  the live phase.
+- `cell-breathe` — the current minute of a working seat on the pulse grid.
+
+**Motion stops when work stops.** A live row whose call has not moved for
+`STALE_MS` (`js/state.js`, 2 minutes) drops its pip animation and shows its
+age in amber; past `STALLED_MS` (10 minutes) it says so in red and takes the
+red rail. Pips that keep pulsing on a hung turn actively claim progress that
+is not happening, which is worse than showing nothing — this is the rule the
+thresholds exist to enforce, not a decoration.
 
 Controls settle with `scale(0.97)` on `:active`. Everything is disabled
 under `prefers-reduced-motion: reduce`.
@@ -256,6 +360,25 @@ error above whatever partial work the phase managed — the prompt it died
 on, the tools that had already run. "No response text yet" is a
 statement about a call still in flight and is never shown for one that
 ended.
+
+**Every feed row carries a `failed` boolean**, decided once on the server
+(`live_state._light_event`): the event's own `failed` field, or a type that
+*is* a failure (`task_failed`, `llm_unavailable`, `budget_exhausted`,
+`turn.guard_breach`). It survives a restart because the writer stamps it as a
+`failed` tag — `list_events` never selects the payload column, so without the
+tag every historical failure would read back as a success. The client never
+re-derives failure from a type list of its own.
+
+That one boolean drives: the red cells on the pulse grid, the red rail and
+`--red-ink` summary on feed rows and trace nodes, the **Failures** filter on
+Activity, and the red count in the sidebar next to Activity — a grey count of
+everything never told you whether to click.
+
+A seat that stopped is as visible as one that is working. The overview's
+in-flight board lists a seat with a `last_error` *or* simply known to be AFK:
+`last_error` is the full record and does not survive an API restart, and
+keying the board on it alone hid every broken seat at exactly the moment an
+operator went looking for them.
 
 ---
 
@@ -278,3 +401,6 @@ ended.
    split-transport bug the refactor removed.
 9. **New repeated row? Give it a `data-k`.** And never derive state the
    server already projects; mirror what it pushes.
+10. **New figure? Say what window it covers, and do not divide two windows
+    into each other.** Two numbers on one screen that disagree is worse than
+    one number with a caveat.

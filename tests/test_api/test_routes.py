@@ -199,14 +199,17 @@ class TestDashboard:
         assert css.status_code == 200
         body = css.text
         recipe = body.split("var(--panel-shadow)")[0]
-        surfaces = (".card", ".list", ".widget", ".stat", ".tool-card", ".turn")
+        surfaces = (".card", ".list", ".stat", ".tool-card", ".turn")
         for selector in (*surfaces, ".mem-card"):
             assert f"{selector},\n" in recipe or f"{selector} {{" in recipe, selector
-        # The recipe owns the fill. Views style internals; none of them
-        # re-declares the panel surface itself.
-        assert "color-mix(in srgb, var(--bg-card) 94%, transparent)" in recipe
+        # The recipe owns the fill, and it uses ``--bg-card`` NEAT: the
+        # token is itself a warm alpha over the ground in the dark theme,
+        # so diluting it a second time leaves a panel under the threshold
+        # where its own edge reads at all.
+        assert "background: var(--bg-card);" in recipe
+        assert "color-mix(in srgb, var(--bg-card)" not in recipe
         views = client.get("/static/dashboard/styles/views.css").text
-        assert "color-mix(in srgb, var(--bg-card) 94%" not in views
+        assert "color-mix(in srgb, var(--bg-card)" not in views
 
     def test_dashboard_hidden_attribute_is_honoured(self, client: TestClient):
         """`[hidden]` loses to any author `display`, so chrome that toggles

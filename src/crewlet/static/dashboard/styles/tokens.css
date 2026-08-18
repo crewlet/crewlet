@@ -41,25 +41,60 @@
  */
 
 :root {
-  /* ---- Typography ---- */
-  --font-sans: "Instrument Sans", system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, "Helvetica Neue",
+  /* ---- Typography ----
+   * The site's stack: Inter for text, Inter Tight for display, JetBrains
+   * Mono for anything that is a code or a number that can change.
+   * index.html requests all three with `display=swap`, and every slot
+   * below names a full system fallback, because the dashboard is served
+   * by the engine itself and may be running somewhere that cannot reach
+   * a font CDN at all — such a page must render instantly in the
+   * fallback rather than block on a request that will never answer.
+   * The negative tracking below is what carries the brand's voice, and it
+   * applies to whichever face actually resolves. */
+  --font-sans: "Inter", "Inter var", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     sans-serif;
+  --font-display: "Inter Tight", "Inter", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
     Consolas, "Liberation Mono", monospace;
 
+  /* Tracking. The site's signature: text is set slightly tight, display
+   * tighter still, and micro-labels are opened right up. */
+  --track-body: -0.011em;
+  --track-display: -0.024em;
+  --track-label: 0.12em;
+
   /* ---- Geometry ---- */
-  --radius: 13px; /* panels — the site's landing-card radius */
-  --radius-sm: 8px; /* nested blocks inside a panel */
-  --radius-ctl: 12px; /* buttons + glass controls */
-  --radius-lg: 16px;
-  --sidebar-w: 264px;
+  --radius: 14px; /* panels */
+  --radius-sm: 9px; /* nested blocks inside a panel */
+  --radius-ctl: 11px; /* buttons + glass controls */
+  --radius-lg: 18px;
+  --radius-pill: 100px; /* the site's pill convention */
+  --sidebar-w: 250px;
 
   /* ---- Motion ---- */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-snappy: cubic-bezier(0.25, 1, 0.5, 1);
   --dur: 0.15s;
   --dur-slow: 0.2s;
+
+  /* ---- Brand ----
+   * Used as LIGHT, never as a fill: a hairline along a top edge, a wash
+   * behind a live panel, a progress ramp. The seven-stop version is the
+   * full mark; the ramp is its three-stop cousin for anything that has to
+   * carry the brand across a few pixels of height. */
+  --brand-gradient: linear-gradient(
+    90deg,
+    #ff6b9d 0%,
+    #ffa14a 20%,
+    #ffe24a 40%,
+    #7ee081 58%,
+    #5fd0ff 74%,
+    #b18cff 88%,
+    #ff7ae0 100%
+  );
+  --brand-ramp: linear-gradient(90deg, #5fd0ff 0%, #b18cff 55%, #ff7ae0 100%);
 
   /* ---- Z layers ---- */
   --z-header: 20;
@@ -71,43 +106,60 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* Surfaces */
-  --bg: #0b0b0b;
-  --bg-sidebar: #101010;
-  --bg-card: #1d1d1d;
-  --bg-card-2: #242424;
-  --bg-hover: #242424;
-  --bg-active: #2b2b2b;
-  --bg-inset: #151515;
+  /* Surfaces.
+   *
+   * The ground is pure black and a panel is a WARM ALPHA over it, not a
+   * lighter grey step. That is the single change that makes this read as
+   * the crewlet surface rather than as a generic dark theme: the cream
+   * tint means a panel warms the black rather than greying it, and
+   * because it is an alpha, panels nested inside panels accumulate depth
+   * on their own without another token. */
+  --bg: #000;
+  --bg-sidebar: #000;
+  --bg-card: rgba(243, 230, 196, 0.04);
+  --bg-card-2: rgba(243, 230, 196, 0.07);
+  --bg-hover: rgba(243, 230, 196, 0.06);
+  --bg-active: rgba(243, 230, 196, 0.1);
+  /* Recessed surfaces go DARKER than the ground, not lighter — a code
+     block on a translucent panel has to read as a hole cut in it. */
+  --bg-inset: rgba(0, 0, 0, 0.5);
 
-  /* Borders */
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border: rgba(255, 255, 255, 0.084);
-  --border-strong: rgba(255, 255, 255, 0.16);
+  /* Borders — the site's cream hairline ramp. On black these do all the
+     separation work, which is why the panel recipe needs no shadow. */
+  --border-subtle: rgba(243, 230, 196, 0.07);
+  --border: rgba(243, 230, 196, 0.11);
+  --border-strong: rgba(243, 230, 196, 0.2);
 
-  /* Text */
-  --text: rgba(255, 255, 255, 0.87);
-  --text-secondary: rgba(255, 255, 255, 0.57);
-  --text-muted: rgba(255, 255, 255, 0.4);
-  --text-dim: rgba(255, 255, 255, 0.26);
-  --heading: #f2f2f2;
-  --on-accent: #0b0b0b;
+  /* Text — warm cream, not white. */
+  --text: #f4f5f7;
+  --text-secondary: #c3c7d0;
+  --text-muted: rgba(255, 255, 255, 0.5);
+  --text-dim: rgba(255, 255, 255, 0.32);
+  --heading: #f4f5f7;
+  --on-accent: #000;
 
-  /* Accent — a pale fill plus its readable ink partner */
-  --accent: #91b7ff;
-  --accent-hover: #6b9cfb;
-  --accent-soft: rgba(145, 183, 255, 0.15);
-  --accent-ink: #acd3f2;
+  /* Accent — the brand violet, and its lit companion for text. */
+  --accent: #ac9dff;
+  --accent-hover: #bfb3ff;
+  --accent-soft: rgba(172, 157, 255, 0.14);
+  --accent-ink: #cabfff;
 
-  /* Glass (topbar, icon buttons, segmented controls) */
-  --glass: rgba(95, 95, 95, 0.3);
-  --glass-hover: rgba(95, 95, 95, 0.45);
+  /* Glass (topbar, icon buttons, segmented controls) — a white wash whose
+     border lights toward cream on hover, always with a backdrop blur. */
+  --glass: rgba(255, 255, 255, 0.06);
+  --glass-hover: rgba(255, 255, 255, 0.11);
 
-  /* Elevation */
-  --panel-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
-  --card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.1),
-    0 4px 12px rgba(0, 0, 0, 0.15);
-  --lift-shadow: 0 4px 16px rgba(0, 0, 0, 0.32);
+  /* Elevation.
+   *
+   * A drop shadow is invisible on pure black, so a panel is lifted by
+   * LIGHT instead: a one-pixel warm highlight along its top edge, the way
+   * a physical panel catches the light above it. The dramatic drop
+   * shadow is kept for chrome that genuinely floats over content. */
+  --panel-shadow: inset 0 1px 0 rgba(243, 230, 196, 0.055);
+  --card-shadow: 0 24px 60px rgba(0, 0, 0, 0.75),
+    0 2px 10px rgba(0, 0, 0, 0.5);
+  --lift-shadow: inset 0 1px 0 rgba(243, 230, 196, 0.09),
+    0 10px 30px rgba(0, 0, 0, 0.6);
 
   /* Categorical hues — mark step / text step */
   --green: #4da41a;
@@ -136,37 +188,40 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f1f1f1;
-  --bg-sidebar: #ededed;
-  --bg-card: #f4f4f4;
-  --bg-card-2: #fafafa;
-  --bg-hover: #eaeaea;
-  --bg-active: #e3e3e3;
-  --bg-inset: #e9e9e9;
+  /* The warm counterpart. The site itself is dark-only, so this is the
+     same recipe inverted: a warm off-white ground, panels raised to true
+     white rather than tinted down, and the same cream hue running through
+     the borders as a warm grey. */
+  --bg: #f6f5f1;
+  --bg-sidebar: #f1efe9;
+  --bg-card: #ffffff;
+  --bg-card-2: #faf9f5;
+  --bg-hover: rgba(60, 50, 30, 0.045);
+  --bg-active: rgba(60, 50, 30, 0.08);
+  --bg-inset: rgba(60, 50, 30, 0.05);
 
-  --border-subtle: rgba(0, 0, 0, 0.05);
-  --border: rgba(0, 0, 0, 0.07);
-  --border-strong: rgba(0, 0, 0, 0.14);
+  --border-subtle: rgba(60, 50, 30, 0.07);
+  --border: rgba(60, 50, 30, 0.12);
+  --border-strong: rgba(60, 50, 30, 0.22);
 
-  --text: rgba(0, 0, 0, 0.8);
-  --text-secondary: rgba(0, 0, 0, 0.57);
-  --text-muted: rgba(0, 0, 0, 0.4);
-  --text-dim: rgba(0, 0, 0, 0.26);
-  --heading: #030213;
+  --text: #17161c;
+  --text-secondary: #4b4a55;
+  --text-muted: rgba(23, 22, 28, 0.52);
+  --text-dim: rgba(23, 22, 28, 0.34);
+  --heading: #0d0c12;
   --on-accent: #ffffff;
 
-  --accent: #c4e5ff;
-  --accent-hover: #7ec8ff;
-  --accent-soft: rgba(196, 229, 255, 0.35);
-  --accent-ink: #003155;
+  --accent: #7b5cf0;
+  --accent-hover: #6a48e8;
+  --accent-soft: rgba(123, 92, 240, 0.12);
+  --accent-ink: #5b34d6;
 
-  --glass: rgba(207, 207, 207, 0.3);
-  --glass-hover: rgba(207, 207, 207, 0.45);
+  --glass: rgba(255, 255, 255, 0.7);
+  --glass-hover: rgba(255, 255, 255, 0.9);
 
-  --panel-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
-  --card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.02), 0 1px 2px rgba(0, 0, 0, 0.02),
-    0 4px 12px rgba(0, 0, 0, 0.03);
-  --lift-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --panel-shadow: 0 1px 2px rgba(60, 50, 30, 0.05);
+  --card-shadow: 0 18px 44px rgba(60, 50, 30, 0.16), 0 2px 8px rgba(60, 50, 30, 0.08);
+  --lift-shadow: 0 8px 22px rgba(60, 50, 30, 0.12);
 
   --green: #419700;
   --green-ink: #307600;

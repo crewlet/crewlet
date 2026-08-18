@@ -19,7 +19,12 @@
 // Longest activity feed a tab keeps. Matches the server's own retention
 // (EVENT_FEED_LIMIT in api/live_state.py) so a reconnect's snapshot
 // neither truncates the feed nor leaves rows the server can't resend.
-const MAX_EVENTS = 400;
+//
+// Exported because it is also the limit of what anything derived from the
+// feed can HONESTLY claim to know: a busy org fills 400 events in minutes,
+// and a panel covering an hour has to say where the record actually starts
+// rather than drawing the gap as quiet (see js/pulse.js).
+export const MAX_EVENTS = 400;
 
 export class Store {
   constructor() {

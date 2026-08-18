@@ -12,6 +12,8 @@ import {
   effectiveAgentState,
   integrationMeta,
   roleInk,
+  stateBadgeClass,
+  stateLabel,
   CONTACT_FIELDS,
 } from "../state.js";
 import { flattenSeats, managerOf } from "../org.js";
@@ -51,9 +53,12 @@ export function createPeopleView({ refresh }) {
     const agent = byRole.get(seat.name);
     const human = seat.kind === "human";
     const state = human ? "human" : agent ? effectiveAgentState(agent, sandboxes) : "offline";
+    // Through the shared helpers, not a local ternary chain and the raw
+    // state string — this row was the one place that rendered
+    // `awaiting_sandbox` verbatim, underscore and all.
     const badge = human
       ? '<span class="badge purple">human</span>'
-      : `<span class="badge ${state === "working" ? "live" : state === "idle" ? "done" : state === "afk" ? "afk" : "pending"}"><i class="dot"></i>${esc(state)}</span>`;
+      : `<span class="badge ${stateBadgeClass(state)}"><i class="dot"></i>${esc(stateLabel(state))}</span>`;
     // "agent" navigation is handled by the global delegate in app.js.
     const nav =
       agent && !human ? `class="row clickable" data-action="agent" data-id="${escAttr(agent.id)}"` : 'class="row"';

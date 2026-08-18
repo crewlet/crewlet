@@ -409,6 +409,7 @@ const FAILURE_LABEL = {
   max_iter: "Hit the round cap",
   depth_cap: "Delegation too deep",
   fatal: "Provider rejected the call",
+  task_failed: "Task failed",
 };
 
 export function failureLabel(kind) {

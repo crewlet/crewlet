@@ -5,6 +5,7 @@ import { icon } from "./icons.js";
 import {
   PHASE_ORDER,
   phaseColor,
+  phaseInk,
   catClass,
   integrationFromSource,
   integrationBadge,
@@ -21,7 +22,7 @@ export function skeletonRows(n = 5) {
 }
 
 export function skeletonCards(n = 3) {
-  let out = '<div class="widgets">';
+  let out = '<div class="seat-grid">';
   for (let i = 0; i < n; i++) out += '<div class="skel skel-card"></div>';
   return out + "</div>";
 }
@@ -76,7 +77,8 @@ export function eventSummary(ev) {
     const key = integrationFromSource(ev.source);
     if (key) badge = integrationBadge(key);
   }
-  return `${badge}<span class="${catClass(ev.category)}" style="color:inherit">${esc(ev.summary || ev.type)}</span>`;
+  const cls = ev.failed ? "is-failed" : catClass(ev.category);
+  return `${badge}<span class="${cls}" style="color:inherit">${esc(ev.summary || ev.type)}</span>`;
 }
 
 // One line of the engine activity feed: clock time, the actor in its own
@@ -86,7 +88,14 @@ export function eventSummary(ev) {
 export function activityRow(ev, { agents } = {}) {
   const actor = ev.actor || "";
   const agent = (agents || []).find((a) => (a.role || a.name) === actor);
-  const nav = agent ? `class="act-row clickable" data-action="agent" data-id="${escAttr(agent.id)}"` : 'class="act-row"';
+  // The projection stamps `failed` on every feed row, live and hydrated
+  // (live_state._light_event). Without reading it, a turn that died read
+  // exactly like one that succeeded — same grey row, same prose — and
+  // scanning a feed for the thing that broke meant reading every line.
+  const cls = "act-row" + (ev.failed ? " is-failed" : "") + (agent ? " clickable" : "");
+  const nav = agent
+    ? `class="${cls}" data-action="agent" data-id="${escAttr(agent.id)}"`
+    : `class="${cls}"`;
   // `source` is the only integration signal here: the projection's event
   // buffer keeps a payload-free copy (live_state._record_event), so a
   // payload lookup would never fire on this surface.
@@ -102,7 +111,7 @@ export function activityRow(ev, { agents } = {}) {
       <span class="act-time">${esc(fmtTime(ev.timestamp))}</span>
       <span class="act-actor" ${actor ? `style="color:${roleInk(actor)}"` : ""}>${esc(actor || "engine")}</span>
       <span class="act-surface">${surface}</span>
-      <span class="act-text">${esc(ev.summary || ev.type)}</span>
+      <span class="act-text">${ev.failed ? icon("alert", "sm") : ""}${esc(ev.summary || ev.type)}</span>
     </div>`;
 }
 
@@ -117,65 +126,75 @@ export function sectionHead(iconId, title, count, link) {
 }
 
 // ---------------------------------------------------------------------
-// Sparklines
+// The turn rail
 // ---------------------------------------------------------------------
-// Every widget on the overview showed one number and no history, so a
-// dashboard that was busy looked exactly like one that had been idle for
-// an hour. These draw a trend from data the client already has — the
-// activity feed's timestamps, the spend rollup's per-turn rows — so they
-// cost no request and no server work.
+// A turn is the unit of work this engine does, and until now the
+// dashboard never drew one: a running agent got a phase name in a pill,
+// which says where it is but not where it has been or what is left. The
+// rail is the turn as an object — the phases in order, the ones already
+// spent filled in their own hue, the current one lit and breathing, the
+// rest hollow — with a packet travelling the segment feeding the live
+// phase so motion on the page always means work is actually happening.
 
-// Bucket timestamped items into `buckets` equal slices ending now, and
-// return the per-bucket totals. `value` maps an item to its contribution
-// and defaults to counting items.
-//
-// Deliberately not named `valueOf`: destructuring that name off an
-// options object yields `Object.prototype.valueOf` rather than
-// `undefined` when the caller omits it, so the "no mapper given" branch
-// never runs and every call throws.
-export function bucketSeries(items, { minutes = 60, buckets = 24, value } = {}) {
-  const now = Date.now();
-  const span = minutes * 60_000;
-  const width = span / buckets;
-  const series = new Array(buckets).fill(0);
-  for (const item of items || []) {
-    const at = Date.parse(item.timestamp || item.ended_at || "");
-    if (!at) continue;
-    const age = now - at;
-    if (age < 0 || age > span) continue;
-    const idx = Math.min(buckets - 1, Math.floor((span - age) / width));
-    series[idx] += value ? value(item) : 1;
-  }
-  return series;
+// The canonical turn. Onboarding is deliberately not in it: it runs at
+// most once per agent, before the first Plan, so carrying it as a
+// permanently-dead first node would mislead on every other turn. A turn
+// sitting in onboarding (or in any phase off this path — a judge, a
+// sub-agent) renders as its own single-node rail instead.
+const RAIL_PHASES = ["plan", "execute", "review"];
+
+/**
+ * The phase rail for one in-flight turn.
+ *
+ * `phase` is the phase running now; anything before it on the canonical
+ * path is drawn as spent, anything after as pending.
+ */
+export function turnRail(phase) {
+  const current = String(phase || "");
+  const at = RAIL_PHASES.indexOf(current);
+  const steps = at === -1 && current ? [current] : RAIL_PHASES;
+  const live = at === -1 ? 0 : at;
+
+  let out = '<div class="rail">';
+  steps.forEach((name, i) => {
+    if (i) {
+      // The segment entering the live step is the one that animates —
+      // the others are plain, spent or pending.
+      const cls = i <= live ? (i === live ? "rail-link is-live" : "rail-link is-done") : "rail-link";
+      out += `<span class="${cls}"></span>`;
+    }
+    const state = i < live ? "is-done" : i === live ? "is-live" : "";
+    out += `<span class="rail-step ${state}" style="--n:${phaseColor(name)};--ink:${phaseInk(name)}"><i></i>${esc(name)}</span>`;
+  });
+  return out + "</div>";
 }
 
-// An area sparkline with a dot on the last point. Drawn as inline SVG in
-// `currentColor` so one function serves every hue, and given an explicit
-// height so a widget's layout never shifts when the data arrives.
-export function sparkline(series, { height = 28, fill = true } = {}) {
-  const points = series || [];
-  if (points.length < 2) return `<div class="spark" style="height:${height}px"></div>`;
-  const max = Math.max(...points, 1);
-  const stepX = 100 / (points.length - 1);
-  const y = (v) => (1 - v / max) * (height - 4) + 2;
-  const line = points.map((v, i) => `${(i * stepX).toFixed(2)},${y(v).toFixed(2)}`);
-  const last = points[points.length - 1];
-  return `
-    <svg class="spark" viewBox="0 0 100 ${height}" preserveAspectRatio="none" aria-hidden="true">
-      ${fill ? `<polygon class="spark-area" points="0,${height} ${line.join(" ")} 100,${height}"></polygon>` : ""}
-      <polyline class="spark-line" points="${line.join(" ")}"></polyline>
-      <circle class="spark-dot" cx="100" cy="${y(last).toFixed(2)}" r="2"></circle>
-    </svg>`;
-}
+// ---------------------------------------------------------------------
+// The stat strip
+// ---------------------------------------------------------------------
+// Four figures on one hairline-divided rail rather than four cards.
+// Cards give a number a whole panel each, which is a lot of screen for
+// four integers and pushes everything that moves below the fold; the
+// strip fits inside the lead panel and leaves the room to the thing
+// worth looking at.
 
-// A stat widget: label, headline number, a supporting line, and a trend.
-export function statWidget({ hue, iconId, label, value, foot, series, action }) {
-  const clickable = action ? ` clickable" data-action="${escAttr(action)}` : "";
-  return `
-    <div class="widget ${hue}${clickable}" data-k="w:${escAttr(label)}">
-      <div class="widget-head">${icon(iconId, "sm")} ${esc(label)}</div>
-      <div class="widget-big">${esc(String(value))}</div>
-      <div class="widget-foot">${foot || ""}</div>
-      ${series ? sparkline(series) : ""}
-    </div>`;
+/**
+ * `items` are `{label, value, foot, tone}` — `tone` names a hue family
+ * (`red`, `green`, …) for a figure whose *value* carries a warning.
+ */
+export function statStrip(items) {
+  const cells = items
+    .filter(Boolean)
+    .map(
+      (it) => `
+      <div class="strip-cell" data-k="strip:${escAttr(it.label)}">
+        <div class="stat-label">${esc(it.label)}</div>
+        <div class="strip-value num${it.tone ? " tone" : ""}"${
+          it.tone ? ` style="color:var(--${it.tone}-ink)"` : ""
+        }>${it.value}</div>
+        <div class="strip-foot">${it.foot || ""}</div>
+      </div>`,
+    )
+    .join("");
+  return `<div class="strip">${cells}</div>`;
 }
