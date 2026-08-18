@@ -36,6 +36,11 @@ _CATEGORY_MAP: dict[str, str] = {
     "a2a_message_sent": "a2a",
     "a2a_message_delivered": "a2a",
     "a2a_channel_closed": "a2a",
+    # DACI is behavioural guidance carried on the org's own chat
+    # surfaces, not an engine subsystem — nothing in crewlet publishes
+    # these four.  They stay mapped as the seam an extension that *does*
+    # model decisions writes through, and they are why the dashboard has
+    # a ``decision`` category to filter on.
     "decision_requested": "decision",
     "decision_resolved": "decision",
     "contribution_requested": "decision",
@@ -76,7 +81,46 @@ _CATEGORY_MAP: dict[str, str] = {
     # the dashboard despite being emitted.
     "plan_prefetch_summary": "learning",
     "relevant_knowledge_refetched": "learning",
+    # Skill lifecycle.  ``skill_used`` is what makes a promoted skill's
+    # value auditable at all, and the stale / archived / revived trio is
+    # the record of the lifecycle acting on its own.
+    "skill_used": "learning",
+    "skill_staled": "learning",
+    "skill_archived": "learning",
+    "skill_revived": "learning",
+    "compaction_requested": "learning",
+    "compaction_completed": "learning",
+    # Detached sandbox runs.  These drive a dashboard panel, so they
+    # were already reaching open tabs over the live stream — but with no
+    # entry here they were never written, which meant a row you could
+    # see vanished on the next reload and 404'd if you clicked it.  They
+    # are the execution of a task, hence ``task``.
+    "sandbox_run_started": "task",
+    "sandbox_clarification_requested": "task",
+    "sandbox_run_completed": "task",
+    # A schedule firing creates work; same category as the assignment
+    # it produces.
+    "scheduled_task_fired": "task",
+    # Configuration changes are org lifecycle, and the one class of
+    # event an operator is most likely to go looking for after the fact.
+    "config_revision_activated": "lifecycle",
+    "config_revision_applied": "lifecycle",
+    # Failure-adjacent runtime telemetry.  ``provider_fallback`` is the
+    # early warning for the failures the dashboard surfaces downstream —
+    # it says a provider is degrading before the chain exhausts.
+    "provider_fallback": "system",
+    "phase.tool_skill_blocked": "system",
+    "skill_telemetry_write_failed": "system",
+    "subagent_batched": "system",
 }
+
+# ``agent_turn_progress`` is deliberately absent and must stay that way:
+# it fires once per LLM round as a live-only signal, and the matching
+# ``agent_phase_completed`` is its durable record.  Every OTHER event
+# type the engine publishes belongs above — a type that is missing is
+# silently dropped here, which is how the sandbox panel ended up showing
+# rows that disappeared on reload.  ``tests/test_timescaledb`` asserts
+# the two sets agree.
 
 
 class EventStoreWriter:
