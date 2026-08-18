@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import Any
@@ -873,3 +874,58 @@ class TestUndeliveredPosts:
 
         assert seat.last_event_ms == 1700000000000
         assert seat.already_seen("p1")
+
+
+class TestConcurrentDrain:
+    """Mattermost gives each write a 30 s deadline, and a socket nobody
+    reads stops accepting writes once the kernel buffer fills — so a
+    backfill walking a seat's channels one REST call at a time could get
+    the connection closed underneath it, reconnect, and backfill again."""
+
+    class _Socket:
+        """A socket that yields frames and then closes."""
+
+        def __init__(self, frames: list[str]) -> None:
+            self._frames = list(frames)
+            self.read_started = asyncio.Event()
+
+        def __aiter__(self):
+            return self._iterate()
+
+        async def _iterate(self):
+            self.read_started.set()
+            for frame in self._frames:
+                yield frame
+
+    @pytest.mark.asyncio
+    async def test_frames_are_drained_while_the_backfill_runs(self):
+        queue = _QueueStub()
+        fleet = _fleet(queue)
+        await fleet.register_seat("engineer", "tok")
+        socket = self._Socket([_frame("p1"), _frame("p2")])
+        inbox: asyncio.Queue[Any] = asyncio.Queue()
+
+        pump = asyncio.create_task(fleet._pump_frames(socket, inbox))
+        await socket.read_started.wait()
+        # Stand in for a slow backfill: the pump must have kept reading.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        pump.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump
+
+        drained = []
+        while not inbox.empty():
+            drained.append(inbox.get_nowait())
+        assert len(drained) >= 2
+
+    @pytest.mark.asyncio
+    async def test_a_closed_socket_ends_the_consumer(self):
+        """Without the sentinel the consumer would wait forever on a queue
+        nothing will ever fill again."""
+        fleet = _fleet()
+        inbox: asyncio.Queue[Any] = asyncio.Queue()
+
+        await fleet._pump_frames(self._Socket([]), inbox)
+
+        assert inbox.get_nowait() is events_module._SOCKET_CLOSED

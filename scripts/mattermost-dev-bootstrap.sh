@@ -296,6 +296,19 @@ if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
     fi
   fi
 
+  # A Site URL that is loopback or unset is wrong for any browser that is
+  # not on this host, so this script will repair it. Any OTHER address is
+  # a value somebody chose — a hostname the team browses to, a proxy in
+  # front — and overwriting that on a server this script does not own
+  # would break every link for everyone else. So: repair the obviously
+  # wrong, report the merely different.
+  reported_host=${CURRENT_SITE_URL#*://}
+  reported_host=${reported_host%%[:/]*}
+  case "${reported_host:-unset}" in
+    localhost|127.0.0.1|0.0.0.0|::1|unset) repairable=1 ;;
+    *) repairable=0 ;;
+  esac
+
   # Not our container, or the recreate did not take: patch it over the
   # API — but only when the setting is not environment-managed. An MM_*
   # variable is re-applied on every config write, so a PUT against one
@@ -304,7 +317,7 @@ if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
   # for the same reason.) `/config/patch` is a PUT: Mattermost has no
   # PATCH verb here, and `PUT /config` would demand — and clobber — the
   # whole config document.
-  if [ -z "$fixed" ]; then
+  if [ -z "$fixed" ] && [ "$repairable" = "1" ]; then
     env_managed=$(curl -fsS "${API}/config/environment" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || echo '{}')
     if [ "$(json_get "$env_managed" ServiceSettings.SiteURL)" = "true" ]; then
@@ -326,6 +339,14 @@ if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
 
   if [ -n "$fixed" ]; then
     echo "    now:       ${CURRENT_SITE_URL}  (${fixed})"
+  elif [ "$repairable" = "0" ]; then
+    warn "Site URL is ${CURRENT_SITE_URL}, and this run resolved ${URL}."
+    warn "Both are real addresses, so this script will not overwrite one"
+    warn "somebody chose. If people browse to ${CURRENT_SITE_URL}, that is"
+    warn "correct and nothing is wrong — Mattermost accepts a websocket"
+    warn "only from a browser whose Origin matches it, so whichever address"
+    warn "they type is the one SiteURL has to name. The websocket check"
+    warn "below probes ${URL}; a 403 there means this is the wrong one."
   else
     warn "Site URL is still ${CURRENT_SITE_URL:-<unset>}, not ${URL}."
     warn ""

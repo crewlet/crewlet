@@ -120,6 +120,10 @@ _AUTH_TIMEOUT = 20.0
 #: echoes it back as ``seq_reply``, which is how the ack is identified.
 _AUTH_SEQ = 1
 
+#: Sentinel queued by the frame pump when the socket closes, so the
+#: consumer ends instead of waiting forever on a dead connection.
+_SOCKET_CLOSED = object()
+
 #: Mattermost websocket event names this fleet forwards.  Everything else
 #: (typing, presence changes, channel-viewed bookkeeping, preference
 #: updates) is chatter that would wake an agent with nothing to act on.
@@ -506,20 +510,55 @@ class MattermostEventFleet:
                 handle=seat.handle,
                 user_id=seat.user_id,
             )
-            # Cover whatever was missed while the socket was down BEFORE
-            # reading live traffic, so the agent sees the conversation in
-            # order.  Duplicates across the boundary are caught by the
-            # seat's dedupe ring.
-            await self._backfill(seat)
-            await self._anchor_cursor(seat)
-            for raw in early:
-                await self._handle_frame(seat, raw)
-            # From here on the connection is doing its job; how long it
-            # lasts from this point is what tells the reconnect loop
-            # whether this seat is healthy or flapping.
-            seat.live_since = time.monotonic()
+            # Start draining the socket IMMEDIATELY, into a buffer.
+            # Mattermost gives each write a 30 s deadline
+            # (``writeWaitTime``), and a socket nobody reads stops
+            # accepting writes as soon as the kernel buffer fills — so a
+            # backfill that walks a seat's channels one REST call at a
+            # time can outlast the deadline and get the connection closed
+            # underneath it. That reconnects, which backfills again: on a
+            # busy team the seat never reaches live traffic at all.
+            inbox: asyncio.Queue[Any] = asyncio.Queue()
+            pump = asyncio.create_task(
+                self._pump_frames(socket, inbox), name=f"mattermost-pump-{seat.handle}"
+            )
+            try:
+                # Cover whatever was missed while the socket was down
+                # BEFORE handling live traffic, so the agent sees the
+                # conversation in order. Duplicates across the boundary
+                # are caught by the seat's dedupe ring.
+                await self._backfill(seat)
+                await self._anchor_cursor(seat)
+                for raw in early:
+                    await self._handle_frame(seat, raw)
+                # From here on the connection is doing its job; how long
+                # it lasts from this point is what tells the reconnect
+                # loop whether this seat is healthy or flapping.
+                seat.live_since = time.monotonic()
+                while True:
+                    raw = await inbox.get()
+                    if raw is _SOCKET_CLOSED:
+                        return
+                    await self._handle_frame(seat, raw)
+            finally:
+                pump.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await pump
+
+    @staticmethod
+    async def _pump_frames(socket: Any, inbox: asyncio.Queue[Any]) -> None:
+        """Read frames into *inbox* until the socket closes.
+
+        Unbounded on purpose: the server's own send queue is 256 events
+        deep, so the buffer cannot grow past what one connection is
+        willing to hold, and a bound here would re-create the very stall
+        this exists to prevent.
+        """
+        try:
             async for raw in socket:
-                await self._handle_frame(seat, raw)
+                await inbox.put(raw)
+        finally:
+            await inbox.put(_SOCKET_CLOSED)
 
     async def _await_authentication(self, seat: _SeatState, socket: Any) -> list[Any]:
         """Block until the server acknowledges the authentication challenge."""
