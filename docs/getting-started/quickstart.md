@@ -361,12 +361,16 @@ each), then wire them in:
   ```
   To try chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
-  `docker-compose.yml` and needs no account, no public URL and no clicks:
+  `docker-compose.yml` and needs no account, no inbound URL and no clicks:
   ```bash
   docker compose --profile mattermost up -d --wait
   scripts/mattermost-dev-bootstrap.sh
   crewlet mattermost provision company.yaml
   ```
+  Running that stack on a **remote host** rather than this machine? Set
+  `MATTERMOST_PUBLIC_URL` to the address your browser uses first — see
+  [The Site URL](../integrations/mattermost.md#the-site-url). The engine
+  needs no public URL; the Mattermost server still needs to know its own.
 - Connect a work-item tracker — self-hosted [Plane](../integrations/plane.md)
   (also ships a full local docker-compose loop), or
   [Jira](../integrations/jira.md)

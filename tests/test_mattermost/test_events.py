@@ -10,6 +10,7 @@ from unittest import mock
 
 import pytest
 
+from crewlet.mattermost.client import MattermostError
 from crewlet.mattermost.events import (
     _STABLE_CONNECTION_SECONDS,
     MAX_BACKFILL_WINDOW_SECONDS,
@@ -556,3 +557,167 @@ class TestForwardedEvents:
         await fleet._handle_frame(seat, json.dumps(frame))
 
         assert seat.last_event_ms == 1700000000000
+
+
+class _BackfillClient:
+    """A client stub for the reconnect gap replay."""
+
+    def __init__(
+        self,
+        *,
+        channels: list[dict[str, Any]] | None = None,
+        posts: dict[str, list[dict[str, Any]]] | None = None,
+        now_ms: int = 1700000900000,
+        fail_channels: set[str] | None = None,
+    ) -> None:
+        self._channels = (
+            channels
+            if channels is not None
+            else [
+                {"id": "c1", "name": "engineering", "type": "O"},
+                {"id": "c2", "name": "product", "type": "O"},
+            ]
+        )
+        self._posts = posts or {}
+        self._now_ms = now_ms
+        self._fail = fail_channels or set()
+        self.since_seen: dict[str, int] = {}
+
+    async def server_time_ms(self) -> int:
+        return self._now_ms
+
+    async def get_team_by_name(self, name: str) -> dict[str, Any]:
+        return {"id": "team1", "name": name}
+
+    async def list_channels_for_user(
+        self, user_id: str, team_id: str
+    ) -> list[dict[str, Any]]:
+        return list(self._channels)
+
+    async def posts_since(self, channel_id: str, since_ms: int) -> list[dict[str, Any]]:
+        self.since_seen[channel_id] = since_ms
+        if channel_id in self._fail:
+            raise MattermostError("channel unreadable", status=403)
+        return list(self._posts.get(channel_id, []))
+
+
+def _post(post_id: str, *, channel: str = "c1", create_at: int = 1700000500000):
+    return {
+        "id": post_id,
+        "channel_id": channel,
+        "user_id": "humanid0000000000000000000",
+        "message": "hello",
+        "create_at": create_at,
+    }
+
+
+class TestBackfillReplay:
+    """The subsystem whose whole reason for existing is "a message sent
+    while the socket was down must not be lost"."""
+
+    async def _fleet_with(self, client: Any) -> tuple[Any, Any, Any]:
+        queue = _QueueStub()
+        fleet = _fleet(queue)
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        seat.user_id = BOT_ID
+        seat.last_event_ms = 1700000000000
+        fleet._clients["engineer"] = client
+        return fleet, seat, queue
+
+    @pytest.mark.asyncio
+    async def test_every_channel_is_read_not_just_ones_with_traffic(self):
+        """A message in a channel the bot was invited to DURING the outage
+        would otherwise be invisible forever."""
+        client = _BackfillClient(posts={"c2": [_post("p9", channel="c2")]})
+        fleet, seat, queue = await self._fleet_with(client)
+
+        await fleet._backfill(seat)
+
+        assert set(client.since_seen) == {"c1", "c2"}
+        assert [p["id"] for p in queue.posts] == ["p9"]
+        assert queue.published[0][1].payload["body"]["replayed"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_gap_wider_than_the_window_is_clamped_and_logged(self, caplog):
+        """Replaying an hour of conversation would cost one agent turn per
+        message for threads that have long since moved on."""
+        client = _BackfillClient(now_ms=1700003600000)
+        fleet, seat, queue = await self._fleet_with(client)
+        seat.last_event_ms = 1700000000000  # an hour behind
+
+        with caplog.at_level("WARNING"):
+            await fleet._backfill(seat)
+
+        assert "mattermost_backfill_window_exceeded" in caplog.text
+        floor = 1700003600000 - int(MAX_BACKFILL_WINDOW_SECONDS * 1000)
+        assert client.since_seen["c1"] == floor
+
+    @pytest.mark.asyncio
+    async def test_one_unreadable_channel_does_not_abandon_the_rest(self):
+        client = _BackfillClient(
+            posts={"c2": [_post("p9", channel="c2")]}, fail_channels={"c1"}
+        )
+        fleet, seat, queue = await self._fleet_with(client)
+
+        await fleet._backfill(seat)
+
+        assert [p["id"] for p in queue.posts] == ["p9"]
+
+    @pytest.mark.asyncio
+    async def test_the_boundary_duplicate_is_published_once(self):
+        """A post can legitimately arrive twice at the reconnect boundary —
+        once through the backfill read, once from the live socket."""
+        client = _BackfillClient(posts={"c1": [_post("p1")]})
+        fleet, seat, queue = await self._fleet_with(client)
+
+        await fleet._backfill(seat)
+        await fleet._handle_frame(seat, _frame("p1"))
+
+        assert len(queue.published) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_unresolved_identity_skips_rather_than_misattributes(self):
+        client = _BackfillClient(posts={"c1": [_post("p1")]})
+        fleet, seat, queue = await self._fleet_with(client)
+        seat.user_id = ""
+
+        await fleet._backfill(seat)
+
+        assert queue.published == []
+
+
+class TestAuthRejectionReachesTheOperator:
+    """The doc's troubleshooting rows tell an operator to grep for
+    ``mattermost_ws_auth_rejected``; nothing asserted the seat loop emits
+    it, or that a bad token lands on the backoff schedule rather than
+    hot-looping."""
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_token_is_named_and_backed_off(self, caplog):
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "revoked")
+        seat = fleet._seats["engineer"]
+        delays: list[float] = []
+        attempts = 0
+
+        async def _reject(_seat: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts >= 3:
+                fleet._running = False
+            raise MattermostAuthError("websocket authentication rejected")
+
+        async def _record_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        fleet._connect_once = _reject  # type: ignore[method-assign]
+        fleet._running = True
+        with (
+            caplog.at_level("ERROR"),
+            mock.patch.object(asyncio, "sleep", _record_sleep),
+        ):
+            await fleet._seat_loop(seat)
+
+        assert "mattermost_ws_auth_rejected" in caplog.text
+        assert delays == list(RECONNECT_BACKOFF_SECONDS[1:3])

@@ -91,6 +91,12 @@ class _FakeClient:
         channel_id = self.channels.get(name)
         return {"id": channel_id, "name": name} if channel_id else None
 
+    async def me(self) -> dict[str, Any]:
+        return {"id": BOT_ID, "username": "agent-swe"}
+
+    async def client_config(self) -> dict[str, Any]:
+        return {"SiteURL": "https://chat.example"}
+
     async def close(self) -> None:
         return None
 
@@ -686,3 +692,77 @@ class TestIdentityIsServerAuthoritative:
         await transport.start()
 
         assert transport.bots["engineer"].username == "agent-swe"
+
+
+class TestFleetWiring:
+    """The two one-line mistakes that make the integration silently
+    inbound-dead — a hand-rolled ws URL and a missing event queue — both
+    present exactly as "nothing errors and no agent ever hears anything"."""
+
+    @pytest.mark.asyncio
+    async def test_an_https_instance_gets_a_wss_fleet(self, monkeypatch):
+        captured: dict[str, Any] = {}
+
+        class _FakeFleet:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+                self.seats: list[tuple[str, str]] = []
+
+            async def register_seat(self, handle: str, token: str) -> None:
+                self.seats.append((handle, token))
+                captured["seats"] = self.seats
+
+            async def start(self) -> None:
+                captured["started"] = True
+
+        import crewlet.mattermost.events as events_mod
+
+        monkeypatch.setattr(events_mod, "MattermostEventFleet", _FakeFleet)
+
+        transport = MattermostTransport(base_url="https://chat.example", team="n")
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="tok", username="agent-swe")
+        )
+        transport._clients["engineer"] = _FakeClient()  # type: ignore[assignment]
+        transport.set_event_queue(object())
+        await transport.start()
+
+        assert captured["websocket_url"] == "wss://chat.example/api/v4/websocket"
+        assert captured["seats"] == [("engineer", "tok")]
+        assert captured["started"] is True
+
+    @pytest.mark.asyncio
+    async def test_without_a_queue_the_fleet_is_not_started_silently(self, caplog):
+        transport = MattermostTransport(base_url="https://chat.example", team="n")
+        transport.register_bot("engineer", MattermostBotConfig(bot_token="tok"))
+        transport._clients["engineer"] = _FakeClient()  # type: ignore[assignment]
+
+        with caplog.at_level("WARNING"):
+            await transport.start()
+
+        assert transport.fleet is None
+        assert "mattermost_fleet_not_started_no_queue" in caplog.text
+
+
+class TestUnregisterBot:
+    @pytest.mark.asyncio
+    async def test_it_releases_the_seat_and_its_socket(self):
+        transport = _make_transport()
+        _with_fake_client(transport)
+        transport._handle_registry = _StubRegistry({})
+
+        class _Fleet:
+            def __init__(self) -> None:
+                self.dropped: list[str] = []
+
+            async def unregister_seat(self, handle: str) -> None:
+                self.dropped.append(handle)
+
+        fleet = _Fleet()
+        transport._fleet = fleet
+
+        await transport.unregister_bot("engineer")
+
+        assert fleet.dropped == ["engineer"]
+        assert "engineer" not in transport.bots
+        assert transport.user_id_for("engineer") == ""

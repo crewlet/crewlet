@@ -37,8 +37,9 @@ from crewlet._logging import get_logger
 from crewlet.mattermost.client import (
     MattermostClient,
     MattermostError,
+    browser_origin,
     normalize_base_url,
-    site_urls_match,
+    site_url_origin_matches,
     websocket_url,
 )
 
@@ -100,12 +101,15 @@ async def _probe_browser_websocket(base_url: str) -> tuple[bool, str]:
     the only input to Mattermost's websocket origin check.  Probing
     without it would prove the endpoint is reachable while telling us
     nothing about whether a human's web app can use it — which is
-    precisely the blind spot this command exists to remove.
+    precisely the blind spot this command exists to remove.  It carries
+    no path, exactly as a browser's does: ``AllowCorsFrom`` is matched by
+    exact string, so a path-bearing Origin would fail a check every real
+    browser passes.
     """
     import websockets
 
     url = websocket_url(base_url)
-    origin = normalize_base_url(base_url)
+    origin = browser_origin(base_url)
     try:
         async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
             async with websockets.connect(url, origin=origin, open_timeout=None):
@@ -240,7 +244,7 @@ async def run_doctor(
 
         config = await anon.client_config()
         report.site_url = normalize_base_url(str(config.get("SiteURL") or ""))
-        report.site_url_ok = bool(report.site_url) and site_urls_match(
+        report.site_url_ok = bool(report.site_url) and site_url_origin_matches(
             base_url, report.site_url
         )
         if not report.site_url:

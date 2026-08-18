@@ -32,7 +32,7 @@ from crewlet._logging import get_logger
 from crewlet.mattermost.client import (
     MattermostClient,
     MattermostError,
-    site_urls_match,
+    site_url_origin_matches,
 )
 from crewlet.provisioning import TokenSink, referenced_env_vars, sole_env_var
 
@@ -263,7 +263,7 @@ async def _check_site_url(client: MattermostClient, report: ProvisionReport) -> 
         logger.debug("mattermost_site_url_read_failed", error=str(exc))
         return
     configured = client.base_url
-    if not reported or site_urls_match(configured, reported):
+    if not reported or site_url_origin_matches(configured, reported):
         return
 
     from urllib.parse import urlparse

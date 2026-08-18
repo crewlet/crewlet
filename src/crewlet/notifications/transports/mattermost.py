@@ -43,7 +43,8 @@ from crewlet.mattermost.client import (
     MattermostClient,
     MattermostError,
     normalize_base_url,
-    site_urls_match,
+    site_url_origin_matches,
+    site_url_path_matches,
     typing_throttle_from,
 )
 from crewlet.notifications.handle import HandleRegistry
@@ -467,23 +468,40 @@ class MattermostTransport:
         left for someone to find in a browser console.
         """
         reported = str(config.get("SiteURL") or "")
-        if not reported or site_urls_match(self._base_url, reported):
+        if not reported:
             return
-        logger.warning(
-            "mattermost_site_url_mismatch",
-            configured=self._base_url,
-            site_url=normalize_base_url(reported),
-            impact=(
-                "browsers and plugins build absolute URLs from the server's "
-                "SiteURL, so the web app's live updates and its plugin "
-                "requests target that address instead of this one"
-            ),
-            fix=(
-                "set ServiceSettings.SiteURL (MM_SERVICESETTINGS_SITEURL) to "
-                "the address people reach Mattermost on, then re-run "
-                "`crewlet mattermost doctor`"
-            ),
+        fix = (
+            "set ServiceSettings.SiteURL (MM_SERVICESETTINGS_SITEURL) to the "
+            "address people reach Mattermost on, then re-run "
+            "`crewlet mattermost doctor`"
         )
+        if not site_url_origin_matches(self._base_url, reported):
+            logger.warning(
+                "mattermost_site_url_mismatch",
+                configured=self._base_url,
+                site_url=normalize_base_url(reported),
+                impact=(
+                    "Mattermost accepts a websocket upgrade only from a "
+                    "browser whose Origin matches SiteURL, so everyone "
+                    "browsing at this address loses live updates and has to "
+                    "refresh to see new messages"
+                ),
+                fix=fix,
+            )
+        elif not site_url_path_matches(self._base_url, reported):
+            # Same origin, different subpath: the websocket is fine (the
+            # origin check ignores the path); what breaks is every
+            # absolute link and plugin URL the server builds.
+            logger.warning(
+                "mattermost_site_url_subpath_mismatch",
+                configured=self._base_url,
+                site_url=normalize_base_url(reported),
+                impact=(
+                    "links and plugin URLs the server builds carry the "
+                    "SiteURL path, not this one"
+                ),
+                fix=fix,
+            )
 
     # ----- outbound ------------------------------------------------------
 

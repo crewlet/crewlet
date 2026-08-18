@@ -15,6 +15,11 @@ own infrastructure.
 > server: it opens outbound websockets rather than receiving webhooks, so a
 > Crewlet running on a laptop against a self-hosted Mattermost needs no
 > tunnel and no public URL.
+>
+> That is a statement about the **engine**. The Mattermost **server** still
+> has to know the address browsers reach it on — read [The Site
+> URL](#the-site-url) before you deploy anywhere but localhost; getting it
+> wrong costs every human live updates while the agents keep working.
 
 ---
 
@@ -58,13 +63,16 @@ What this buys you, compared with Slack:
 |---|---|---|
 | Credentials per agent | 2 (bot token + signing secret) | **1** (bot token) |
 | Manual steps per agent | An OAuth **Allow** click, per app | **none** |
-| Engine must be publicly reachable | yes (Events API) | **no** |
+| Engine must be publicly reachable | yes (Events API) | **no** [^siteurl] |
 | Mention detection | inferred from text markup | **server-computed** list |
 | Channel vs DM | inferred (`channel_type`, `D`-prefix) | **server-stamped** |
 | Working-status text | free text, per phase | fixed *"is typing…"* |
 
 The last row is the one real regression — see
 [Working status](#working-status).
+
+[^siteurl]: The *engine* needs no public URL. The *server* still needs its
+    [Site URL](#the-site-url) set to the address browsers use.
 
 ---
 
@@ -407,7 +415,8 @@ sequence gap or resume token to detect it with.
 
 Each seat therefore records the newest post it has seen and, on reconnect,
 re-reads every channel it is a member of since that point and replays the gap
-in order. Every channel is read, not only ones with prior traffic — a message
+in order within each channel — across channels the order is the channel list's,
+which does not matter because each replayed post becomes its own agent turn. Every channel is read, not only ones with prior traffic — a message
 in a channel the bot was invited to *during* the outage would otherwise be
 invisible forever. Duplicates across the boundary are caught by a per-seat
 de-duplication ring.
@@ -429,7 +438,7 @@ those conversations have moved on. A wider gap is logged with the amount
 skipped rather than silently truncated:
 
 ```
-mattermost_backfill_window_exceeded handle=engineer skipped_seconds=3612.4
+mattermost_backfill_window_exceeded handle=engineer skipped_seconds=3612.4 window_seconds=900.0
 ```
 
 Reconnect backoff is capped at 5 minutes. A seat that cannot connect is a
@@ -755,6 +764,14 @@ The bootstrap defaults it to the address you reached the host on over SSH,
 so the second line is usually enough on its own; it prints which address it
 chose and why. It then makes the server agree, opens a websocket to prove
 the upgrade works, and stops with the fix if either check fails.
+
+It writes the address it settled on to **both** `MATTERMOST_PUBLIC_URL` (read
+by `docker compose`, so a later `up -d` keeps it) and `MATTERMOST_URL` (read
+by the company config and the provisioner). They are the same value here
+because the engine and the browsers reach the server the same way. Point
+`MATTERMOST_URL` somewhere else only when the engine has a different route
+to the server than people do — an internal DNS name, say — and never point
+`MATTERMOST_PUBLIC_URL` anywhere but the address in the address bar.
 
 ---
 

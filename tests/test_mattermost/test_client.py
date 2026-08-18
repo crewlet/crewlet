@@ -9,8 +9,10 @@ from crewlet.mattermost.client import (
     DEFAULT_TYPING_THROTTLE_MS,
     MattermostClient,
     MattermostError,
+    browser_origin,
     normalize_base_url,
-    site_urls_match,
+    site_url_origin_matches,
+    site_url_path_matches,
     typing_throttle_from,
     websocket_url,
 )
@@ -70,15 +72,49 @@ class TestWebsocketURL:
 
 
 class TestSiteURLComparison:
+    """Models the server's rule — ``EqualFold(Host) && EqualFold(Scheme)``,
+    path ignored — rather than approximating it with a string compare."""
+
     def test_trailing_slashes_are_not_a_difference(self):
-        assert site_urls_match("https://chat.example/", "https://chat.example")
+        assert site_url_origin_matches("https://chat.example/", "https://chat.example")
 
     def test_a_different_host_is_a_mismatch(self):
         """The exact case that silently blinds every browser."""
-        assert not site_urls_match("http://203.0.113.7:8065", "http://localhost:8065")
+        assert not site_url_origin_matches(
+            "http://203.0.113.7:8065", "http://localhost:8065"
+        )
 
     def test_a_different_scheme_is_a_mismatch(self):
-        assert not site_urls_match("https://chat.example", "http://chat.example")
+        assert not site_url_origin_matches(
+            "https://chat.example", "http://chat.example"
+        )
+
+    def test_case_is_not_a_mismatch(self):
+        """The server compares case-insensitively; reporting this as a
+        broken websocket sends an operator hunting a problem that does
+        not exist."""
+        assert site_url_origin_matches(
+            "https://Chat.Example.com", "https://chat.example.com"
+        )
+
+    def test_a_subpath_does_not_break_the_origin(self):
+        """An Origin header never carries a path, so the websocket check
+        cannot see one."""
+        assert site_url_origin_matches(
+            "https://example.com/mattermost", "https://example.com"
+        )
+        assert not site_url_path_matches(
+            "https://example.com/mattermost", "https://example.com"
+        )
+
+    def test_a_schemeless_value_never_matches(self):
+        assert not site_url_origin_matches("chat.example", "chat.example")
+
+    def test_the_probe_origin_is_what_a_browser_sends(self):
+        assert browser_origin("https://example.com/mattermost/") == (
+            "https://example.com"
+        )
+        assert browser_origin("http://LOCALHOST:8065") == "http://localhost:8065"
 
     def test_normalisation_is_whitespace_safe(self):
         assert normalize_base_url("  https://chat.example/  ") == "https://chat.example"

@@ -101,6 +101,14 @@ and provisions the agent seats. See
 [GitLab § Local testing](../integrations/gitlab.md#local-testing) and
 [Mattermost § Local testing](../integrations/mattermost.md#local-testing).
 
+Running any of these on a **remote host** rather than your own machine? Each
+one has to be told the address browsers reach it on — `MATTERMOST_PUBLIC_URL`
+and `PLANE_PUBLIC_URL` — before the stack comes up. For Mattermost that
+setting also gates live updates, so getting it wrong looks like a working
+install where messages only appear on refresh; the bootstrap script settles
+it for you, and [The Site
+URL](../integrations/mattermost.md#the-site-url) explains why.
+
 (`--wait` is safe for the Mattermost profile — every service there has a
 healthcheck. Do not add it to the Plane profile: its migrator is a one-shot
 job whose clean exit `--wait` treats as a failure.)

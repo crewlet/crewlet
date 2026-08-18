@@ -143,17 +143,51 @@ def typing_throttle_from(client_config: dict[str, Any]) -> int:
     return value if value > 0 else DEFAULT_TYPING_THROTTLE_MS
 
 
-def site_urls_match(configured: str, reported: str) -> bool:
-    """Whether the server's own ``SiteURL`` names the configured address.
+def browser_origin(base_url: str) -> str:
+    """The ``Origin`` header a browser at *base_url* would send.
 
-    Mattermost hands ``SiteURL`` to every browser and every plugin, which
-    build absolute URLs from it; a value that does not match the address
-    people actually reach the server on produces requests to a host the
-    reader's machine cannot resolve.  Compared after normalisation
-    because the server trims its own trailing slash and an operator's
-    config may not.
+    Scheme and authority only, lower-cased — an ``Origin`` never carries
+    a path, which matters twice: it is what Mattermost's websocket check
+    compares, and it is the exact string ``AllowCorsFrom`` is matched
+    against, so a probe that invents a path-bearing Origin fails a check
+    every real browser passes.
     """
-    return normalize_base_url(configured) == normalize_base_url(reported)
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(normalize_base_url(base_url))
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}"
+
+
+def site_url_origin_matches(configured: str, reported: str) -> bool:
+    """Whether a browser at *configured* passes the websocket origin check.
+
+    Models the server's own rule rather than approximating it:
+    ``EqualFold(origin.Host, siteURL.Host) && EqualFold(origin.Scheme,
+    siteURL.Scheme)`` (``App.OriginChecker``).  So the comparison is
+    case-insensitive and ignores the path entirely — a whole-URL string
+    compare reports a mismatch for ``https://Chat.Example.com`` and for
+    every subpath deployment, on installs whose live feed works
+    perfectly.
+    """
+    left, right = browser_origin(configured), browser_origin(reported)
+    return bool(left) and left == right
+
+
+def site_url_path_matches(configured: str, reported: str) -> bool:
+    """Whether the two agree on the subpath the server is served under.
+
+    A separate question from the origin, with a separate consequence: a
+    wrong path does not break the websocket, it breaks every absolute
+    link and plugin URL the server builds.
+    """
+    from urllib.parse import urlsplit
+
+    def _path(value: str) -> str:
+        return urlsplit(normalize_base_url(value)).path.rstrip("/")
+
+    return _path(configured) == _path(reported)
 
 
 class MattermostError(Exception):
@@ -829,7 +863,9 @@ __all__ = [
     "MattermostError",
     "WEBSOCKET_PATH",
     "normalize_base_url",
-    "site_urls_match",
+    "browser_origin",
+    "site_url_origin_matches",
+    "site_url_path_matches",
     "typing_throttle_from",
     "websocket_url",
 ]
