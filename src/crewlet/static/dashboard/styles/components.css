@@ -211,6 +211,70 @@
      row shorter than its neighbour and break the grid's baseline. */
   min-height: 2.9em;
 }
+/* ---- The budget bar ----
+   The only place the dashboard divides one token figure by another, and
+   it is honest exactly because both cover the same span: the engine's
+   live meter against the cap that meter enforces. Everything else on a
+   card is a 24-hour or 7-day window and is stated, never divided. */
+.seat-budget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+.seat-budget-track {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.seat-budget-track.sm {
+  display: inline-block;
+  width: 46px;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.seat-budget-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--seat, var(--accent));
+  transition: width var(--dur-slow) var(--ease);
+}
+.seat-budget.warn .seat-budget-track > i,
+.tok-chip.budget.warn .seat-budget-track > i {
+  background: var(--amber);
+}
+.seat-budget.over .seat-budget-track > i,
+.tok-chip.budget.over .seat-budget-track > i {
+  background: var(--red);
+}
+.seat-budget.over .seat-budget-note {
+  color: var(--red-ink);
+}
+.seat-budget-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.seat-budget-note {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+/* A cap with no meter behind it: the figure is real config, so it is
+   shown — but it is not a measurement, so it gets no bar. */
+.seat-budget.is-unmetered .seat-budget-label {
+  flex: 1 1 auto;
+}
+
 /* Pinned to the bottom so the chip row and the cost line align across a
    grid whose cards carry different numbers of chips. */
 .seat-foot {

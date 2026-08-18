@@ -883,6 +883,13 @@ class OrgUnit(BaseModel):
                     "handle": r.get_handle(),
                     "goal": r.goal,
                     "manages": r.manages,
+                    # The configured per-seat cap (0 = unlimited).  This
+                    # is the ``/org`` shape a YAML-only embedded engine
+                    # serves; the config-store path passes the payload
+                    # through verbatim and always carried it, so
+                    # omitting it here made the cap appear on one
+                    # deployment and vanish on the other.
+                    "token_budget": r.token_budget,
                 }
                 for r in self.roles
             ],
@@ -1020,6 +1027,16 @@ class Organization(BaseModel):
     discoverable via ``get_role()`` / ``all_roles()``.
     """
     units: list[OrgUnit] = Field(default_factory=list)
+    token_budget: int = 0
+    """Org-wide token cap (0 = unlimited).
+
+    Mirrored from :class:`~crewlet.config.CompanyConfig.token_budget` at
+    parse time, for the same reason ``Role.token_budget`` lives on the
+    domain model: the API serves the org from here, and a cap that
+    exists only in the config layer cannot be shown beside the meter
+    that enforces it.  Per-engine-run, like every other budget figure --
+    the counter is in memory and resets on restart.
+    """
     confluence_spaces: list[str] = Field(default_factory=list)
     """Org-wide Confluence read scope for the ``## Relevant knowledge``
     search — the only thing that narrows it.
@@ -1257,6 +1274,7 @@ class Organization(BaseModel):
         return {
             "name": self.name,
             "mission": self.mission,
+            "token_budget": self.token_budget,
             "roles": [
                 {
                     "name": r.name,
@@ -1264,6 +1282,13 @@ class Organization(BaseModel):
                     "handle": r.get_handle(),
                     "goal": r.goal,
                     "manages": r.manages,
+                    # The configured per-seat cap (0 = unlimited).  This
+                    # is the ``/org`` shape a YAML-only embedded engine
+                    # serves; the config-store path passes the payload
+                    # through verbatim and always carried it, so
+                    # omitting it here made the cap appear on one
+                    # deployment and vanish on the other.
+                    "token_budget": r.token_budget,
                 }
                 for r in self.roles
             ],

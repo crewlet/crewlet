@@ -1353,6 +1353,7 @@ async def _fetch_personal_memory_block_wrapper(
         interactions=interactions,
         llm_providers=llm_providers,
         event_queue=getattr(agent_context, "event_queue", None),
+        budget_manager=getattr(agent_context, "budget_manager", None),
         turn_id=turn.turn_id,
         trigger_requires_recon=interactions_require_recon(interactions),
     )
@@ -1416,6 +1417,7 @@ async def _fetch_relevant_knowledge_block(
         task_description=task_description,
         llm_providers=llm_providers,
         event_queue=getattr(agent_context, "event_queue", None),
+        budget_manager=getattr(agent_context, "budget_manager", None),
         agent_id=agent_context.agent_id,
         turn_id=turn.turn_id,
         trigger_requires_recon=trigger_requires_recon,

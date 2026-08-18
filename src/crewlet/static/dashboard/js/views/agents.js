@@ -25,7 +25,7 @@ function rank(agent) {
 
 export function createAgentsView({ store }) {
   return {
-    slices: ["agents", "org", "sandboxes", "events", "tokens", "health"],
+    slices: ["agents", "org", "sandboxes", "events", "tokens", "budget", "health"],
 
     render(state) {
       const agents = state.agents || [];

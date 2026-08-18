@@ -109,6 +109,7 @@ class ReflectEngine:
                 diary=diary,
                 budget_tokens=persist_budget_tokens,
                 event_queue=event_queue,
+                budget_manager=budget_manager,
             )
         self._counterparty_profiler = counterparty_profiler
         self._skill_synthesizer = skill_synthesizer

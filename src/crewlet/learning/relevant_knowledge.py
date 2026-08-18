@@ -104,6 +104,7 @@ async def fetch_relevant_knowledge_block(
     task_description: str,
     llm_providers: dict[str, LLMProvider] | None = None,
     event_queue: Any = None,
+    budget_manager: Any = None,
     agent_id: str = "",
     turn_id: str = "",
     char_budget: int = DEFAULT_CHAR_BUDGET,
@@ -171,6 +172,7 @@ async def fetch_relevant_knowledge_block(
         role=role,
         llm_providers=llm_providers,
         event_queue=event_queue,
+        budget_manager=budget_manager,
         agent_id=agent_id,
         turn_id=turn_id,
     )
@@ -213,6 +215,7 @@ async def _generate_search_query(
     role: Role,
     llm_providers: dict[str, LLMProvider],
     event_queue: Any,
+    budget_manager: Any = None,
     agent_id: str,
     turn_id: str,
 ) -> str:
@@ -240,6 +243,7 @@ async def _generate_search_query(
             role_name=role.name,
             provider_key=provider_key,
             event_queue=event_queue,
+            budget_manager=budget_manager,
             agent_id=agent_id,
             turn_id=turn_id,
             temperature=0.2,

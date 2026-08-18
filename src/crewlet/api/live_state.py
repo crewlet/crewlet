@@ -190,9 +190,12 @@ class Change:
     sandboxes: bool = False
     tokens: bool = False
     events: bool = False
+    budget: bool = False
 
     def __bool__(self) -> bool:
-        return bool(self.agents or self.sandboxes or self.tokens or self.events)
+        return bool(
+            self.agents or self.sandboxes or self.tokens or self.events or self.budget
+        )
 
 
 def _remember(seen: dict[str, None], key: str) -> None:
@@ -224,6 +227,18 @@ class AgentLive:
     # The in-flight LLM call (latest ``agent_turn_progress`` / the
     # ``agent_phase_started`` placeholder), or ``None`` between turns.
     live_call: dict[str, Any] | None = None
+    # The engine's live token meter for this seat, or ``None``.
+    #
+    # ``None`` covers two different situations that look the same from
+    # here and read the same on screen: the seat has no per-agent budget
+    # (the engine seeds one only for a non-zero ``Role.token_budget``),
+    # or no engine is reporting at all.  Either way there is no meter,
+    # and a bar drawn without one would be a claim nobody measured.
+    #
+    # ``{"used", "max", "refused_at"}``.  A PROCESS-LIFETIME meter --
+    # never to be compared against the 24-hour spend rollup or the
+    # 7-day per-agent total that sit beside it.
+    budget: dict[str, Any] | None = None
     # Timestamp (ISO-8601) of the last *state-affecting* event applied —
     # the reorder guard.
     _state_ts: str = ""
@@ -241,6 +256,7 @@ class AgentLive:
             "total_tokens": self.total_tokens,
             "live_call": self.live_call,
             "last_error": self.last_error,
+            "budget": self.budget,
             # Always present, even when empty. The overlay is now MERGED
             # into a client's row rather than replacing it, so an omitted
             # key reads as "unchanged" — leaving a recovered agent
@@ -283,6 +299,11 @@ class LiveState:
         # of the three it had — the endpoint's, a re-implementation in
         # the browser, and whatever a reconnect left behind.
         self._phase_spend: deque[dict[str, Any]] = deque(maxlen=_SPEND_RECORD_LIMIT)
+        # The org-wide half of the live token meter, plus the reporting
+        # meter's identity and sequence.  Empty until an engine reports:
+        # the standalone API has none of its own, and rendering a zero
+        # there would claim a measurement nobody took.
+        self._budget: dict[str, Any] = {}
 
     # -- read side -------------------------------------------------------
 
@@ -349,6 +370,14 @@ class LiveState:
         etype = envelope.get("type", "")
         payload = envelope.get("payload") or {}
         change = Change()
+
+        # The live token meters. Stream-only for the same reason the
+        # in-flight call is, and one stronger: these figures describe
+        # ONE engine run (see ``BudgetReported.meter_id``), so a
+        # persisted copy replayed from history would show a dead
+        # process's counters as the current ones.
+        if etype == "budget_reported":
+            return self._apply_budget(payload)
 
         # The in-flight call is stream-only: update it, but never let it
         # into the persisted-event buffer.
@@ -808,6 +837,75 @@ class LiveState:
         }
 
     # -- buffer ----------------------------------------------------------
+
+    def _apply_budget(self, payload: dict[str, Any]) -> Change:
+        """Fold one meter report into the projection.
+
+        Two guards, both load-bearing:
+
+        A report from a DIFFERENT ``meter_id`` replaces everything.  The
+        counters are a process-lifetime meter, so a restart legitimately
+        zeroes them; merging, or taking a maximum, would pin a phantom
+        high-water mark that no later report could ever clear.
+
+        A report with a ``seq`` at or below the one held is dropped.
+        Broker ordering holds only within a topic and the standalone API
+        reads a broadcast subscription across all of them, so an older
+        report can arrive after a newer one and walk the meter backwards
+        on screen.
+        """
+        change = Change()
+        meter_id = str(payload.get("meter_id", ""))
+        seq = int(payload.get("seq", 0) or 0)
+        held = self._budget
+        if meter_id and meter_id == held.get("meter_id"):
+            if seq <= int(held.get("seq", 0) or 0):
+                return change
+        elif held.get("meter_id"):
+            # A new meter: every seat's figures are from a dead run.
+            for agent in self._agents.values():
+                if agent.budget is not None:
+                    agent.budget = None
+                    change.agents.add(agent.role)
+
+        self._budget = {
+            "meter_id": meter_id,
+            "seq": seq,
+            "org": {
+                "used": int(payload.get("org_used_tokens", 0) or 0),
+                "max": int(payload.get("org_max_tokens", 0) or 0),
+                "refused_at": str(payload.get("org_refused_at", "") or ""),
+            },
+        }
+        change.budget = True
+
+        # Only metered seats are reported; a seat that lost its meter
+        # (a cap edited down to zero, a role decommissioned) must lose
+        # its bar rather than keep the last figure it had.
+        reported: set[str] = set()
+        for row in payload.get("agents") or []:
+            role = str(row.get("role", "") or "")
+            if not role:
+                continue
+            reported.add(role)
+            agent = self._ensure_agent(role)
+            if agent_id := str(row.get("agent_id", "") or ""):
+                agent.runtime_id = agent.runtime_id or agent_id
+            agent.budget = {
+                "used": int(row.get("used_tokens", 0) or 0),
+                "max": int(row.get("max_tokens", 0) or 0),
+                "refused_at": str(row.get("refused_at", "") or ""),
+            }
+            change.agents.add(role)
+        for agent in self._agents.values():
+            if agent.budget is not None and agent.role not in reported:
+                agent.budget = None
+                change.agents.add(agent.role)
+        return change
+
+    def budget(self) -> dict[str, Any]:
+        """The org-wide meter, or an empty dict when none is reporting."""
+        return dict(self._budget)
 
     def _record_event(self, envelope: dict[str, Any]) -> None:
         """Append a light (payload-free) copy of an event to the buffer."""

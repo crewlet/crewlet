@@ -205,6 +205,19 @@ async def test_extract_tags_from_task_event() -> None:
     assert tags == {"agent_id": "a-1", "task_id": "T-1"}
 
 
+def test_live_meters_are_never_persisted() -> None:
+    """``budget_reported`` must stay out of the category map.
+
+    It is a snapshot of in-memory counters whose values mean nothing
+    outside the engine run that produced them, so a persisted copy
+    would let a dashboard hydrate a dead process's meters and render
+    them as the current ones -- a figure that is not merely stale but
+    describes a different run.
+    """
+    assert "budget_reported" not in _CATEGORY_MAP
+    assert "agent_turn_progress" not in _CATEGORY_MAP
+
+
 async def test_failed_events_are_tagged() -> None:
     """A failed phase is a filterable dimension, not just a payload field.
 

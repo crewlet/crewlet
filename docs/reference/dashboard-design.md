@@ -107,19 +107,38 @@ runtime. Everything on a card is real:
 | Marker | the live phase when the seat is working, otherwise its state badge; a human seat gets its unit |
 | Status line | `statusLine` in `state.js` — derived from live state only |
 | Activity strip | this seat's row from `buildPulse` — the same hour the pulse grid shows |
+| Budget bar | the engine's live token meter against the cap that meter enforces |
 | Integration chips | the seat's own + inherited `mcp_env` server keys; for a human seat, the `contact` identities it is reachable at |
-| Cost line | 24-hour spend, the role's configured `token_budget` if it has one, and when the seat was last active |
+| Cost line | 24-hour spend, and when the seat was last active |
 
 `statusLine` never invents activity. An agent with nothing in flight says so;
 an AFK agent shows its engine-detected cause; a seat running a detached
 sandbox says it is writing code, and says when it is blocked on an answer.
 
-The cap is **stated, never divided into**. The engine meters a role's budget
-cumulatively for the process lifetime (`concurrency.BudgetManager`) while the
-figure beside it is the dashboard's 24-hour window; a percentage would read as
-"budget remaining" and be wrong by however long the engine has been up. Side
-by side, the magnitudes are comparable and nothing is claimed that was not
-measured.
+### The budget bar
+
+The bar is the **only** place the dashboard divides one token figure by
+another, and it is honest for exactly one reason: both figures cover the same
+span. A seat card carries three token numbers with three different spans — a
+24-hour spend rollup, a 7-day per-agent total, and the engine's
+process-lifetime meter — and only the meter shares a span with the cap that
+constrains it. Dividing either of the others produces a percentage wrong by
+however long the engine has been up, and it looks entirely plausible.
+
+Three states, none of which invents a number:
+
+| State | Rendered as |
+|---|---|
+| Metered — a live meter and a cap | a bar, `used / max`, labelled `this run` |
+| Capped but unmetered — no engine reporting, or none yet | the cap, stated, marked `no live meter` |
+| No cap | nothing at all |
+
+**Exhaustion is a state, not a ratio.** `TokenBudget.consume` refuses a charge
+that would exceed the cap and increments nothing, so a seat charged in
+3k-token rounds against a 100k cap stalls at ~99k and can never reach its own
+maximum. A bar keyed on `used >= max` shows a permanently-blocked seat at 97%
+and calls it healthy. The engine records *when the cap turned a charge away*,
+and that is what the bar reads.
 
 ---
 
@@ -403,4 +422,5 @@ operator went looking for them.
    server already projects; mirror what it pushes.
 10. **New figure? Say what window it covers, and do not divide two windows
     into each other.** Two numbers on one screen that disagree is worse than
-    one number with a caveat.
+    one number with a caveat. The budget bar is the one ratio on the page,
+    and only because its numerator and denominator are the same engine run.

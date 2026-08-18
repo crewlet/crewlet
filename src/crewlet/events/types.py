@@ -680,6 +680,69 @@ class BudgetExhausted(Event):
         return f"{self.actor} exhausted {self.budget_type} token budget"
 
 
+class BudgetReported(Event):
+    """A snapshot of every live token meter, for the dashboard.
+
+    Published on a fixed tick by the engine whenever a counter moved.
+    It exists because the counters live nowhere but in the engine's own
+    :class:`~crewlet.concurrency.BudgetManager`: they are not derivable
+    from any other event, and the two figures a dashboard already has --
+    the 7-day per-agent total and the 24-hour spend rollup -- cover
+    different spans and cannot substitute.
+
+    Deliberately NOT persisted (it is absent from the event store's
+    category map, like ``agent_turn_progress``).  It is a *live meter*,
+    so replaying one from history would show a dead engine's counters as
+    the current ones.  Being an ordinary event is nonetheless what makes
+    it work on both deployment shapes: the embedded API sees it through
+    the publish listener and the standalone API through its broadcast
+    subscription, with no second transport.
+    """
+
+    type: str = "budget_reported"
+    meter_id: str = ""
+    """Identity of the reporting meter's run.
+
+    ``used_tokens`` is comparable only within one ``meter_id``.  A new
+    id means the engine restarted and every prior figure is dead --
+    consumers must REPLACE what they hold, never merge or take a
+    maximum, or a restart pins a phantom high-water mark forever.
+    """
+    seq: int = 0
+    """Monotonic within ``meter_id``; the reorder guard.
+
+    Broker ordering holds only within a topic, and the standalone API
+    reads a broadcast subscription across all of them, so an older
+    report can arrive after a newer one and walk the meter backwards.
+    """
+    org_used_tokens: int = 0
+    org_max_tokens: int = 0
+    org_refused_at: str = ""
+    agents: list[dict[str, Any]] = Field(default_factory=list)
+    """One entry per METERED seat: ``agent_id``, ``role``,
+    ``used_tokens``, ``max_tokens``, ``refused_at``.
+
+    Only seats with a per-agent budget appear: the engine seeds one
+    solely for a non-zero ``Role.token_budget``, so absence means "no
+    cap and no meter" -- a different fact from a cap of zero, and one a
+    consumer must not draw as an empty bar.
+
+    ``role`` rides along because the engine already knows it and every
+    consumer is keyed by role; re-deriving it from ``agent_id`` would be
+    a second identity path, and the two diverge after a live handle
+    edit.
+
+    ``refused_at`` is when the cap last turned a charge away.  That, not
+    ``used_tokens >= max_tokens``, is what "exhausted" means: a refused
+    charge increments nothing, so the counter stops short of the cap by
+    the size of the round that would not fit.
+    """
+
+    @property
+    def summary(self) -> str:
+        return f"Token meters reported for {len(self.agents)} agents"
+
+
 class LLMUnavailable(Event):
     """Emitted when the LLM fallback chain is exhausted.
 

@@ -64,7 +64,7 @@ export function createOrgView() {
   }
 
   return {
-    slices: ["agents", "org", "sandboxes", "health"],
+    slices: ["agents", "org", "sandboxes", "budget", "health"],
 
     render(state) {
       const org = state.org || {};

@@ -19,6 +19,7 @@ from crewlet.a2a.protocol import A2ABus
 from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.agent.pool import AgentPool
 from crewlet.agent.turn import TurnEngine
+from crewlet.budget_reporter import BudgetReporter
 from crewlet.concurrency import BudgetManager, ConcurrencyController
 from crewlet.config import (
     MCPServerConfig,
@@ -304,6 +305,7 @@ class Engine:
         self._learning_config = learning_config
         self._scheduling_config = scheduling_config
         self._scheduler: Any = None
+        self._budget_reporter: Any = None
         self._embeddings = embeddings
         self._episode_store: Any = None
         self._skill_variables: dict[str, str] = {}
@@ -419,6 +421,15 @@ class Engine:
         )
         self.concurrency = ConcurrencyController(max_concurrent=max_concurrent)
         self.budget_manager = BudgetManager(org_budget=org_token_budget)
+        # Reads the manager through a callable rather than capturing it:
+        # ``_apply_config`` replaces ``budget_manager`` wholesale on the
+        # first activation, and a captured reference would leave the
+        # reporter publishing a meter nobody charges any more.
+        self._budget_reporter = BudgetReporter(
+            manager_of=lambda: self.budget_manager,
+            event_queue=self.event_queue,
+            role_of=self._role_for_agent_id,
+        )
         logger.debug("init_subsystem", subsystem="observability")
         self.observability = ObservabilityManager(self.event_queue)
 
@@ -772,6 +783,10 @@ class Engine:
             )
             self._inbox_batch_options.max_batch = new.notification_coalesce_max_batch
             self.budget_manager = BudgetManager(org_budget=new.token_budget)
+            # A new manager means a new meter; re-install the reporter's
+            # hook or every subsequent charge goes unreported.
+            if self._budget_reporter is not None:
+                self._budget_reporter.attach()
             self._turn_engine_config = new.turn_engine
             self._learning_config = new.learning
             self._scheduling_config = new.scheduling
@@ -1632,6 +1647,7 @@ class Engine:
                         counterparty_profiler = CounterpartyProfiler(
                             llm_providers=self._llm_providers,
                             store=self._counterparty_store,
+                            budget_manager=self.budget_manager,
                             budget_tokens=int(
                                 counterparty_cfg.budget_tokens
                                 if counterparty_cfg is not None
@@ -1668,6 +1684,7 @@ class Engine:
                         skill_synthesizer = SkillSynthesizer(
                             llm_providers=self._llm_providers,
                             store=self._synthesized_skill_store,
+                            budget_manager=self.budget_manager,
                             budget_tokens=int(
                                 skill_synth_cfg.budget_tokens
                                 if skill_synth_cfg is not None
@@ -1811,6 +1828,7 @@ class Engine:
                         skill_refiner = SkillRefiner(
                             llm_providers=self._llm_providers,
                             store=self._synthesized_skill_store,
+                            budget_manager=self.budget_manager,
                             budget_tokens=int(
                                 skill_refine_cfg.budget_tokens
                                 if skill_refine_cfg is not None
@@ -1892,6 +1910,7 @@ class Engine:
                     cfg = episode_lifecycle_cfg
                     self._episode_lifecycle_worker = EpisodeLifecycleWorker(
                         event_queue=self.event_queue,
+                        budget_manager=self.budget_manager,
                         episode_store=self._episode_store,
                         llm_providers=self._llm_providers,
                         organization=self.org,
@@ -2059,6 +2078,15 @@ class Engine:
                 await self._scheduler.start()
             except Exception as exc:
                 logger.error("scheduler_start_failed", error=str(exc))
+
+        # Budget reporter — publishes the live token meters on a tick
+        # when they move.  A producer like the scheduler, and equally
+        # best-effort: losing it costs a dashboard panel, never a turn.
+        if self._budget_reporter is not None:
+            try:
+                await self._budget_reporter.start()
+            except Exception as exc:
+                logger.error("budget_reporter_start_failed", error=str(exc))
 
         # Sandbox coordinator — subscribes the
         # started/completed control topics and re-attaches to in-flight
@@ -2669,6 +2697,10 @@ class Engine:
         from crewlet.api.app import attach_config_refresh, create_app
         from crewlet.api.streaming import StreamService
 
+        # Field-for-field the same shape ``_serialize_agent_roles``
+        # produces for the standalone API: two producers of one payload
+        # that disagree is how a field ends up present on one
+        # deployment and missing on the other.
         agent_roles = [
             {
                 "name": agent.definition.role_name,
@@ -2676,6 +2708,7 @@ class Engine:
                 "id": agent.id_str,
                 "goal": agent.definition.role.goal,
                 "handle": agent.handle,
+                "token_budget": int(agent.definition.role.token_budget or 0),
             }
             for agent in self.agent_pool.agents
         ]
@@ -3045,6 +3078,12 @@ class Engine:
             logger.debug("stopping_scheduler")
             await _timed("scheduler", self._scheduler.stop())
             self._scheduler = None
+        # The budget reporter is a producer too, and its meters stop
+        # meaning anything the moment this process does.
+        if self._budget_reporter is not None:
+            logger.debug("stopping_budget_reporter")
+            await _timed("budget_reporter", self._budget_reporter.stop())
+            self._budget_reporter = None
         # The sandbox waiter is a producer (fires SandboxRunCompleted):
         # stop it before the drain, same rationale as the scheduler.
         if self._sandbox_waiter is not None:
@@ -4850,6 +4889,19 @@ class Engine:
                 os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
             ),
         )
+
+    def _role_for_agent_id(self, agent_id: str) -> str:
+        """Role name for a live agent id, or ``""``.
+
+        The budget cascade is keyed by ``AgentInstance.id_str`` while
+        every consumer of the meter is keyed by role, so the engine --
+        which holds both -- does the mapping once here rather than
+        making the API re-derive it.  Re-derivation would be a second
+        identity path, and the two diverge after a live handle edit
+        (the instance keeps the handle it was constructed with).
+        """
+        agent = self.agent_pool.get_by_id(agent_id)
+        return agent.role_name if agent is not None else ""
 
     async def _start_sandbox_coordinator(self) -> None:
         """Build, subscribe, and recover the sandbox coordinator.

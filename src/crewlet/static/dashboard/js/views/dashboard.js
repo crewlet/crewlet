@@ -107,6 +107,7 @@ export function createDashboardView({ store }) {
               foot: stopped ? "needs attention" : "all seats healthy",
               tone: stopped ? "red" : "",
             },
+            orgBudgetStat(state),
           ])}
         </div>
         ${pulseGrid(pulse)}
@@ -119,6 +120,26 @@ export function createDashboardView({ store }) {
             : ""
         }
       </section>`;
+  }
+
+  // The org-wide token meter, when an engine is reporting one and the
+  // org has a cap at all.
+  //
+  // `statStrip` drops a falsy entry, so a company with no org cap — or
+  // an API with no engine behind it — simply has one fewer figure
+  // rather than a tile reading zero. The percentage is honest here for
+  // the same reason it is on a seat card: meter and cap cover the same
+  // engine run.
+  function orgBudgetStat(state) {
+    const org = (state.budget || {}).org;
+    if (!org || !org.max) return null;
+    const pct = Math.round(Math.min(100, (org.used / org.max) * 100));
+    return {
+      label: "Org budget",
+      value: `${pct}%`,
+      foot: `${fmtCompact(org.used)} of ${fmtCompact(org.max)} this run`,
+      tone: org.refused_at ? "red" : pct >= 75 ? "amber" : "",
+    };
   }
 
   // One bucketing pass per render, threaded through to the hero grid and
@@ -313,7 +334,7 @@ export function createDashboardView({ store }) {
   }
 
   return {
-    slices: ["agents", "events", "sandboxes", "org", "tools", "tokens", "health"],
+    slices: ["agents", "events", "sandboxes", "org", "tools", "tokens", "budget", "health"],
 
     render(state) {
       if (!state.connected && !(state.agents || []).length) {

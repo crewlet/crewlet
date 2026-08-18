@@ -176,6 +176,7 @@ async def fetch_personal_memory_block(
     interactions: list[InboundInteraction] | None = None,
     llm_providers: dict[str, LLMProvider] | None = None,
     event_queue: Any = None,
+    budget_manager: Any = None,
     turn_id: str = "",
     char_budget: int = DEFAULT_CHAR_BUDGET,
     candidate_pool_limit: int = DEFAULT_CANDIDATE_POOL_LIMIT,
@@ -266,6 +267,7 @@ async def fetch_personal_memory_block(
         llm_providers=llm_providers,
         interactions=interactions,
         event_queue=event_queue,
+        budget_manager=budget_manager,
         agent_id=agent_id,
         turn_id=turn_id,
     )
@@ -420,6 +422,7 @@ async def _select_via_aux_llm(
     llm_providers: dict[str, LLMProvider],
     interactions: list[InboundInteraction] | None,
     event_queue: Any,
+    budget_manager: Any = None,
     agent_id: str,
     turn_id: str,
 ) -> list[int] | None:
@@ -460,6 +463,7 @@ async def _select_via_aux_llm(
             role_name=role.name,
             provider_key=provider_key,
             event_queue=event_queue,
+            budget_manager=budget_manager,
             agent_id=agent_id,
             turn_id=turn_id,
             response_formatter=_format,

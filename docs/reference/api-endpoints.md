@@ -216,6 +216,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
   "tools":     [ { "name": "...", "description": "...", "source": "..." } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
+  "budget":    { /* the live org-wide token meter, or {} — see below */ },
   "schedules": [ { /* configured schedule + computed next_run */ }, ... ]
 }
 ```
@@ -233,6 +234,34 @@ The flag survives a restart: the event-store writer stamps a `failed` tag on
 those events, and the projection reads it back when it hydrates its feed from
 history.  `list_events` deliberately never selects the payload column, so
 without the tag every historical failure would read back as a success.
+
+### The live token meter
+
+`budget` carries the engine's in-memory token counters — the only figures
+that can honestly be divided into a configured cap, because both cover the
+same span: **the engine's run**. The dashboard's other two token figures
+are a 24-hour spend rollup and a 7-day per-agent total; dividing either
+into a cap produces a percentage wrong by however long the engine has been
+up.
+
+- `meter_id` identifies the reporting run. `used` is comparable only
+  within one `meter_id`; a new one means the engine restarted and every
+  prior figure is dead, so a consumer must **replace** what it holds
+  rather than merge or take a maximum.
+- `seq` is monotonic within a `meter_id`. Broker ordering holds only
+  within a topic and the standalone API reads a broadcast subscription
+  across all of them, so a report at or below the held `seq` is dropped.
+- `refused_at` — when the cap last turned a charge away. That, and not
+  `used >= max`, is what "exhausted" means: a refused charge increments
+  nothing, so the counter stops short of the cap by the size of the round
+  that would not fit.
+- `{}` means no engine is reporting one (the standalone API has no meter
+  of its own). Per-agent, `budget: null` means the same, or that the seat
+  has no per-agent cap at all — the engine seeds one only for a non-zero
+  `token_budget`.
+
+It is deliberately never persisted: replaying a live meter from history
+would show a dead process's counters as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, response, tool_executions, rounds,
@@ -256,6 +285,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
 | `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection) with the engine's `in_flight_count` and `shutting_down` flag. `shutting_down` flips `true` (and `status` reads `"shutting_down"`) from the first moment of a graceful stop, so the dashboard shows the drain while it happens — the API server itself keeps serving until the engine has fully stopped. | `{ status, in_flight?, shutting_down? }` |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |

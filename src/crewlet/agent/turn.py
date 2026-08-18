@@ -1810,6 +1810,7 @@ class TurnEngine:
             unit_ids=unit_ids,
             org=org,
             event_queue=self._event_queue,
+            budget_manager=self._budget_manager,
             storage=self._storage,
             knowledge_searcher=self._knowledge_searcher,
             notification_service=self._notification_service,

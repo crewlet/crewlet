@@ -483,6 +483,108 @@ class _FakeStore:
         return self.events
 
 
+class TestBudgetMeter:
+    """The live token meter, and the two guards it cannot work without."""
+
+    @staticmethod
+    def _report(seq: int, *, meter: str = "m1", used: int = 10, org: int = 100):
+        return _env(
+            "budget_reported",
+            {
+                "meter_id": meter,
+                "seq": seq,
+                "org_used_tokens": org,
+                "org_max_tokens": 1000,
+                "org_refused_at": "",
+                "agents": [
+                    {
+                        "agent_id": "rt-1",
+                        "role": "Lead",
+                        "used_tokens": used,
+                        "max_tokens": 500,
+                        "refused_at": "",
+                    }
+                ],
+            },
+            category="",
+        )
+
+    def test_a_report_lands_on_the_seat_and_the_org(self) -> None:
+        live = LiveState()
+        change = live.apply_event(self._report(1))
+        assert change.budget is True
+        assert change.agents == {"Lead"}
+        assert live.agent_overlay("Lead")["budget"] == {
+            "used": 10,
+            "max": 500,
+            "refused_at": "",
+        }
+        assert live.budget()["org"] == {
+            "used": 100,
+            "max": 1000,
+            "refused_at": "",
+        }
+
+    def test_the_meter_never_enters_the_activity_feed(self) -> None:
+        """It is a live meter: a persisted copy replayed from history
+        would show a dead process's counters as the current ones."""
+        live = LiveState()
+        live.apply_event(self._report(1))
+        assert live.recent_events() == []
+
+    def test_an_older_report_cannot_walk_the_meter_backwards(self) -> None:
+        """Broker ordering holds only within a topic, and the standalone
+        API reads a broadcast subscription across all of them."""
+        live = LiveState()
+        live.apply_event(self._report(2, used=90, org=900))
+        live.apply_event(self._report(1, used=10, org=100))
+        assert live.agent_overlay("Lead")["budget"]["used"] == 90
+        assert live.budget()["org"]["used"] == 900
+
+    def test_a_repeated_seq_is_dropped(self) -> None:
+        live = LiveState()
+        live.apply_event(self._report(3, used=50))
+        assert live.apply_event(self._report(3, used=999)).budget is False
+        assert live.agent_overlay("Lead")["budget"]["used"] == 50
+
+    def test_a_new_meter_replaces_rather_than_merges(self) -> None:
+        """A restart legitimately zeroes every counter.
+
+        Merging -- or taking a maximum -- would pin a high-water mark
+        from a dead run that no later report could ever clear.
+        """
+        live = LiveState()
+        live.apply_event(self._report(9, used=400, org=900))
+        # The new meter starts its sequence over, and at a lower value.
+        live.apply_event(self._report(1, meter="m2", used=5, org=7))
+        assert live.agent_overlay("Lead")["budget"]["used"] == 5
+        assert live.budget()["org"]["used"] == 7
+        assert live.budget()["meter_id"] == "m2"
+
+    def test_a_seat_that_lost_its_meter_loses_its_bar(self) -> None:
+        """A cap edited to zero, or a role decommissioned, stops being
+        reported -- the seat must not keep the last figure it had."""
+        live = LiveState()
+        live.apply_event(self._report(1))
+        assert live.agent_overlay("Lead")["budget"] is not None
+        empty = _env(
+            "budget_reported",
+            {"meter_id": "m1", "seq": 2, "org_used_tokens": 5, "agents": []},
+            category="",
+        )
+        change = live.apply_event(empty)
+        assert live.agent_overlay("Lead")["budget"] is None
+        assert "Lead" in change.agents
+
+    def test_no_meter_reports_as_no_meter(self) -> None:
+        """An API with no engine behind it has nothing to report, and a
+        zero there would claim a measurement nobody took."""
+        live = LiveState()
+        assert live.budget() == {}
+        live.apply_event(_env("task_started", {"role": "Lead", "agent_id": "rt-1"}))
+        assert live.agent_overlay("Lead")["budget"] is None
+
+
 class TestHydration:
     async def test_hydrate_seeds_state_tokens_and_events(self) -> None:
         live = LiveState()

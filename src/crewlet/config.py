@@ -3334,6 +3334,7 @@ def config_to_organization(config: CompanyConfig) -> Organization:
         policies=config.policies,
         roles=root_roles,
         units=units,
+        token_budget=config.token_budget,
         confluence_spaces=list(config.knowledge.confluence_spaces),
         plane_projects=list(config.knowledge.plane_projects),
     )

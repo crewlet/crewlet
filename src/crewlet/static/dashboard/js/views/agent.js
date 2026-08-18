@@ -205,6 +205,7 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         <div class="agent-head-state">
           <span class="badge ${stateBadgeClass(st)}"><i class="dot"></i>${esc(stateLabel(st))}${esc(phaseSuffix(a))}</span>
           ${tokenChip(a)}
+          ${budgetChip(a)}
         </div>
       </div>
       ${failure ? renderFailureCard(failure) : ""}`;
@@ -230,6 +231,31 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         <span class="in">${fmtNum(input)}</span> in ·
         <span class="out">${fmtNum(output)}</span> out ·
         <span class="tot">${fmtNum(total)}</span></div>`;
+  }
+
+  // The seat's budget, from the engine's live meter.
+  //
+  // Deliberately a separate figure from the token chip above it, and
+  // labelled: the chip is a 7-day phase rollup and this is a meter over
+  // the engine's run. Merging them, or dividing one by the other, would
+  // produce a percentage wrong by however long the engine has been up.
+  function budgetChip(a) {
+    const meter = a.budget;
+    const cap = (meter && meter.max) || Number(data?.token_budget || 0);
+    if (!cap) return "";
+    if (!meter) {
+      return `<div class="tok-chip" title="no engine is reporting a live meter">
+        cap <span class="tot">${fmtNum(cap)}</span></div>`;
+    }
+    const pct = Math.max(0, Math.min(100, (meter.used / cap) * 100));
+    const tone = meter.refused_at ? "over" : pct >= 75 ? "warn" : "";
+    return `
+      <div class="tok-chip budget ${tone}"
+           title="${escAttr(`${meter.used.toLocaleString()} of ${cap.toLocaleString()} tokens used this engine run`)}">
+        <span class="seat-budget-track sm"><i style="width:${pct.toFixed(1)}%"></i></span>
+        <span class="tot">${fmtNum(meter.used)}</span> / ${fmtNum(cap)}
+        ${meter.refused_at ? '<span class="warn-ink">exhausted</span>' : ""}
+      </div>`;
   }
 
   // The seat-level "why it stopped" card. The engine knows precisely why
@@ -655,7 +681,7 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
     // The in-flight call and every header field live on the agent
     // projection, so an `agents` push is all this view needs to redraw a
     // streaming round. No per-event bookkeeping, no refetch.
-    slices: ["agents", "sandboxes"],
+    slices: ["agents", "sandboxes", "budget"],
 
     mount() {
       load();

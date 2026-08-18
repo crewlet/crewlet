@@ -36,6 +36,10 @@ export class Store {
       tools: [],
       health: { status: "unknown" },
       tokens: null,
+      // The engine's live token meter: `{meter_id, seq, org:{used,max,
+      // refused_at}}`, or `{}` when nothing is reporting one. Per-seat
+      // figures ride on each agent's overlay, not here.
+      budget: {},
       schedules: null,
       recentRuns: null,
       connected: false,
@@ -86,12 +90,23 @@ export class Store {
     this.state.org = snap.org || {};
     this.state.tools = snap.tools || [];
     if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
+    this.state.budget = snap.budget || {};
     if (snap.schedules) this.state.schedules = snap.schedules;
     if (snap.health) {
       this.state.health = snap.health;
       this.state.connected = snap.health.status !== "unknown";
     }
-    this._emit("agents", "events", "sandboxes", "org", "tools", "tokens", "schedules", "health");
+    this._emit(
+      "agents",
+      "events",
+      "sandboxes",
+      "org",
+      "tools",
+      "tokens",
+      "budget",
+      "schedules",
+      "health",
+    );
   }
 
   /** Changed agent overlays, keyed by role. */
@@ -141,6 +156,11 @@ export class Store {
     if (!rollup) return;
     this.state.tokens = rollup;
     this._emit("tokens");
+  }
+
+  applyBudget(budget) {
+    this.state.budget = budget || {};
+    this._emit("budget");
   }
 
   applySchedules(payload) {

@@ -116,11 +116,19 @@ _CATEGORY_MAP: dict[str, str] = {
 
 # ``agent_turn_progress`` is deliberately absent and must stay that way:
 # it fires once per LLM round as a live-only signal, and the matching
-# ``agent_phase_completed`` is its durable record.  Every OTHER event
-# type the engine publishes belongs above — a type that is missing is
-# silently dropped here, which is how the sandbox panel ended up showing
-# rows that disappeared on reload.  ``tests/test_timescaledb`` asserts
-# the two sets agree.
+# ``agent_phase_completed`` is its durable record.
+#
+# ``budget_reported`` is absent for a stronger reason: it is a snapshot
+# of LIVE, in-memory meters whose values mean nothing outside the engine
+# run that produced them (see ``BudgetReported.meter_id``).  Persisting
+# it would let a dashboard hydrate a dead process's counters and render
+# them as the current ones -- a number that is not merely stale but
+# describes a different run.
+#
+# Every OTHER event type the engine publishes belongs above — a type
+# that is missing is silently dropped here, which is how the sandbox
+# panel ended up showing rows that disappeared on reload.
+# ``tests/test_timescaledb`` asserts the two sets agree.
 
 
 class EventStoreWriter:

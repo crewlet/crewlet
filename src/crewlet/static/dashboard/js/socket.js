@@ -1,7 +1,8 @@
 // The dashboard's single connection to the engine.
 //
 // State arrives as pushes (`snapshot`, then `agents` / `sandboxes` /
-// `tokens` / `events` / `org` / `tools` / `schedules` / `health`), and
+// `tokens` / `budget` / `events` / `org` / `tools` / `schedules` /
+// `health`), and
 // anything the dashboard needs on demand — an agent's LLM history, one
 // event's payload, a trace, a different spend window, the configuration
 // document — is asked for over the same socket and answered on it.
@@ -192,6 +193,9 @@ export class LiveSocket {
         break;
       case "tokens":
         this.store.applyTokens(msg.data);
+        break;
+      case "budget":
+        this.store.applyBudget(msg.data);
         break;
       case "schedules":
         this.store.applySchedules(msg.data);

@@ -292,6 +292,12 @@ class StreamService:
                 self._fan_out("agents", overlays)
         if change.sandboxes:
             self._fan_out("sandboxes", self._live.active_sandboxes())
+        if change.budget:
+            # Fanned out immediately rather than marked dirty: unlike the
+            # spend rollup there is nothing to aggregate — the engine's
+            # reporter already coalesced this to at most one report a
+            # second, so the work here is a dict copy.
+            self._fan_out("budget", self._live.budget())
         if change.tokens:
             # Marked only. Aggregating here would run inside the caller's
             # ``publish()`` — which, on the embedded deployment, is the
@@ -359,6 +365,7 @@ class StreamService:
             "tools": state.tools_data,
             "org": state.org_data,
             "tokens": self.token_rollup(),
+            "budget": self._live.budget(),
             "schedules": _schedule_projection(app),
         }
 

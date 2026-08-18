@@ -59,6 +59,11 @@ def _serialize_agent_roles(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "role": name,
                 "goal": role.get("goal", ""),
                 "handle": handle,
+                # The configured cap (0 = unlimited).  Carried so the
+                # agent page can name a seat's budget with no engine
+                # attached -- the live meter is engine-only, the cap is
+                # config and must render either way.
+                "token_budget": int(role.get("token_budget", 0) or 0),
             }
         )
 
@@ -128,6 +133,11 @@ def _serialize_org_data(payload: dict[str, Any]) -> dict[str, Any]:
         "mission": payload.get("mission", ""),
         "vision": payload.get("vision", ""),
         "policies": payload.get("policies", []) or [],
+        # The org-wide token cap (0 = unlimited).  Per-role caps ride
+        # through inside ``units`` / ``roles``, which are passed
+        # verbatim; the org one is a top-level field and was being
+        # dropped.
+        "token_budget": int(payload.get("token_budget", 0) or 0),
         "units": payload.get("units", []) or [],
         "roles": payload.get("roles", []) or [],
     }
