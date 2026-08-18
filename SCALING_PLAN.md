@@ -793,7 +793,7 @@ mail and not the work. They will be implemented and reviewed together.
   with an epoch re-check inside it, so a heartbeat carrying a stale lease
   cannot tear down a claim a sweep made while it was awaiting.
 
-### 5.2a — Org-derived resolution — IN PROGRESS
+### 5.2a — Org-derived resolution — DONE
 
 Split out of the revised 5.2 and shipped first, because it is not
 actually multi-node work. Six paths resolve a recipient through the live
@@ -822,10 +822,59 @@ human seat, which never has an instance, and an agent seat that is not
 running here. `kind` distinguishes them; `is_local` answers the
 execution question.
 
-**Remaining in 5.2a:** the notification-ingress recipient resolution, the
-internal task routing in `events/subscriptions.py`, the scheduler's
-`_fire`, the A2A `request_channel` guard, and seeding budget caps for
-every org seat on every node.
+**Landed since:** every remaining path.
+
+- **Notification ingress** (`notifications/service.py`) resolves a
+  `ResolvedParty` instead of an instance. The human-seat branch used to
+  run a SECOND, party-based cascade over the same handle/email/external-id
+  candidates after the agent cascade had failed; with one resolution the
+  kind is just a question about the result, so `_resolve_human_recipient`
+  (36 lines) is gone.
+- **Internal task routing** (`events/subscriptions.py`) resolves every
+  recipient from the live org and no longer takes an `agent_pool` at all —
+  routing needs the org and nothing else. `TaskCompleted` was the worst of
+  the three drop paths: it needed TWO local seats, the completing agent and
+  its manager.
+- **The scheduler's `_fire`** looked the runner up with
+  `agent_pool.get_by_handle` purely to read three org facts off the
+  instance. A miss warned `schedule_runner_not_found` and refused to claim
+  — and every other node's tick reached the same conclusion, so the
+  schedule simply never ran.
+- **The A2A `request_channel` guard** asked "is this a live agent"; it now
+  asks "is this an agent seat", which is the question it always meant. The
+  old form would have failed nearly every cross-node ask as a typo: the
+  more nodes, the fewer colleagues an agent appears to have.
+- **Per-seat budget caps** are now a projection of the active org
+  (`Engine._reseed_seat_budgets`), re-derived on every swap and keyed on
+  the derived id. `BudgetManager.spend` passes `agent_limit=None` when it
+  has no local cap, which the shared store reads as **unlimited** — so a
+  node that seeded only what it spawned would run a seat with no cap the
+  moment it took that seat over.
+
+**Found and fixed on the way** (all in the same commits):
+
+- `Organization` now owns seat identity — `agent_id_for` /
+  `agent_seat_by_handle` / `agent_seat_by_id`. The derivation and its
+  inverse had no single home, and three modules were about to grow their
+  own copy.
+- The inbox subject `crewlet.agent.{handle}.inbox` was hand-formatted at
+  nine call sites across six modules, plus a private duplicate in
+  `sandbox/coordinator.py`. `queue/topics.py` is now the one definition;
+  a test fails the build on a new hand-built f-string. A producer and a
+  consumer that disagree about a topic name never raise — the publish
+  lands in a topic nobody reads.
+- The rollback snapshot carried only the ORG-level budget cap, so a
+  failed apply that had already applied the `org` subsystem left the
+  *failed* revision's per-role caps in place, governing spend until the
+  next successful apply. The cap projection fixes it.
+- `lookup_colleague`'s agent branch re-resolved the handle through the
+  pool to print `role:` and `email:`, so a peer owned by another node
+  rendered a card missing both.
+- `ConfluenceTransport._resolve_account_id` — the transport's watcher /
+  @mention recipient routing — resolved through the pool, so a watcher on
+  another node was dropped and routing fell through to the space lead: a
+  *wrong* recipient rather than a missing one, and one that reads as
+  normal fallback in the logs.
 
 ### 5.2 — Seat ownership: inbox, takeover, and sandbox control (REVISED, one phase)
 
