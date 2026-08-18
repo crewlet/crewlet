@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from crewlet._logging import get_logger
+from crewlet._tasks import cancel_and_wait
 from crewlet.db.leases import (
     PROTOCOL_VERSION,
     Lease,
@@ -215,9 +216,7 @@ class SeatHost:
             return
         self._running = False
         for task in self._tasks:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            await cancel_and_wait(task)
         self._tasks.clear()
         await self.release_all()
         await self._release_node_presence()

@@ -51,6 +51,7 @@ from uuid import uuid4
 import pulsar
 
 from crewlet._logging import get_logger
+from crewlet._tasks import cancel_and_wait
 from crewlet.events.types import Event
 from crewlet.queue.protocol import (
     BatchOptions,
@@ -684,13 +685,16 @@ class PulsarEventQueue:
             return
         for sub in matched:
             self._subscriptions.remove(sub)
-            sub.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await sub.task
+            await cancel_and_wait(sub.task)
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(sub.consumer.unsubscribe)
             with contextlib.suppress(Exception):
-                sub.consumer.close()
+                # Bridged, like every other close in this module: the
+                # pulsar client is a blocking C++ wrapper, and a bare
+                # call here stalls the whole event loop — every agent
+                # turn and the embedded API with it — for as long as the
+                # broker takes to answer.
+                await asyncio.to_thread(sub.consumer.close)
             sub.executor.shutdown(wait=False, cancel_futures=True)
         logger.info("unsubscribed", topic=topic, group=group, consumers=len(matched))
 

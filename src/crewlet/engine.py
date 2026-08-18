@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from crewlet.a2a.service import A2AService
 
 from crewlet._logging import configure_logging, get_logger
+from crewlet._tasks import cancel_and_wait
 from crewlet.a2a.protocol import A2ABus
 from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.agent.pool import AgentPool
@@ -1522,9 +1523,7 @@ class Engine:
         """
         if self._reconcile_task is not None:
             task, self._reconcile_task = self._reconcile_task, None
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            await cancel_and_wait(task)
         if self._nudge_unsubscribe is not None:
             unsubscribe, self._nudge_unsubscribe = self._nudge_unsubscribe, None
             with contextlib.suppress(Exception):
