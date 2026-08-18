@@ -22,11 +22,20 @@ function isInspectable(e) {
   );
 }
 
+// Traces rendered before the "show older" control. The projection
+// retains several hundred events and the feed grows as they stream, so
+// rendering all of them puts a wall of identical rows on screen and a
+// few hundred nodes into every patch. This is roughly three screens —
+// enough to scroll through what just happened without paging, and the
+// rest is one click away.
+const PAGE = 60;
+
 export function createEventsView({ navigate, refresh }) {
   const expanded = new Set();
   const cats = new Set();
   const agents = new Set();
   let sortAsc = false;
+  let shown = PAGE;
 
   function filtered(state) {
     let evs = state.events || [];
@@ -153,13 +162,20 @@ export function createEventsView({ navigate, refresh }) {
       if (!state.connected && !(state.events || []).length) return skeletonRows(6);
       const evs = filtered(state);
       const groups = groupTraces(evs);
+      const page = groups.slice(0, shown);
+      const more = groups.length - page.length;
       return `
         <div class="sec"><span class="sec-title">${icon("inbox", "sm")} Traces
           <span class="sec-count">${evs.length}</span></span></div>
         ${filterBar(state)}
         ${
           groups.length
-            ? '<div class="list">' + groups.map(renderTrace).join("") + "</div>"
+            ? '<div class="list">' +
+              page.map(renderTrace).join("") +
+              "</div>" +
+              (more
+                ? `<div class="show-more" data-action="more">Show ${more > PAGE ? PAGE : more} older · ${more} remaining</div>`
+                : "")
             : empty(
                 "inbox",
                 "No events",
@@ -190,6 +206,8 @@ export function createEventsView({ navigate, refresh }) {
         else agents.add(a);
       } else if (action === "sort") {
         sortAsc = !sortAsc;
+      } else if (action === "more") {
+        shown += PAGE;
       } else {
         return;
       }

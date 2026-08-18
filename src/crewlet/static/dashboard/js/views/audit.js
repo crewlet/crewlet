@@ -136,6 +136,13 @@ export function createAuditView({ query, refresh, setToken }) {
     if (!window.confirm("Create a new active revision from this one?")) return;
     let ok = false;
     let code = "";
+    // The one HTTP request the dashboard still makes, and deliberately:
+    // reverting is a WRITE. Reads moved to the socket because two
+    // transports disagreed and a re-fetch on every streamed round made
+    // the page churn — neither applies to a POST fired by an explicit
+    // click. It stays on the authenticated REST route so the revision it
+    // creates is attributed to the operator by the same middleware that
+    // guards every other write.
     try {
       const res = await fetch(
         `/config/revisions/${encodeURIComponent(revId)}/revert`,

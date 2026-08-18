@@ -1304,3 +1304,22 @@
   gap: 10px;
   margin-bottom: 12px;
 }
+
+/* The feed's pager. A wall of several hundred identical rows is not a
+   feed, it is a scroll bar — this bounds what is on screen without
+   putting any of it out of reach. */
+.show-more {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.show-more:hover {
+  color: var(--text);
+  border-color: var(--border);
+}

@@ -1,54 +1,26 @@
-// Thin REST client. All reads degrade to null on error (callers null-check).
+// The one HTTP read the dashboard still makes.
+//
+// Everything else goes over the WebSocket — state arrives as pushes and
+// anything on-demand is a query on the same socket (see socket.js). This
+// remains for exactly one case: a browser that cannot upgrade to a
+// WebSocket at all, usually a corporate proxy. While the socket is down
+// the client polls this snapshot so the page keeps telling the truth,
+// and it stops the moment the socket is back.
+//
+// The REST API itself is much larger than this — it is a public read
+// surface documented in docs/reference/api-endpoints.md. The dashboard
+// simply no longer uses it.
 
 const BASE = location.origin;
 
-async function get(path, opts) {
-  try {
-    const r = await fetch(BASE + path, opts);
-    if (!r.ok) return { _error: r.status };
-    return await r.json();
-  } catch {
-    return { _error: 0 };
-  }
-}
-
-function ok(v) {
-  return v && !v._error;
-}
-
 export const api = {
-  snapshot: () => get("/stream/snapshot"),
-  agent: (id) => get(`/agents/${encodeURIComponent(id)}`),
-  agentMemory: (id) => get(`/agents/${encodeURIComponent(id)}/memory`),
-  event: (id) => get(`/events/${encodeURIComponent(id)}`),
-  trace: (traceId) =>
-    get(`/events?trace_id=${encodeURIComponent(traceId)}&limit=200`),
-  schedules: () => get("/schedules"),
-  tokens: ({ sinceDays = 7, agentRole = "", recentTurns = 50 } = {}) => {
-    const p = new URLSearchParams({
-      since_days: sinceDays,
-      recent_turns: recentTurns,
-    });
-    if (agentRole) p.set("agent_role", agentRole);
-    return get(`/tokens/breakdown?${p}`);
+  async snapshot() {
+    try {
+      const response = await fetch(BASE + "/stream/snapshot");
+      if (!response.ok) return { _error: response.status };
+      return await response.json();
+    } catch {
+      return { _error: 0 };
+    }
   },
-  // --- config (auth-gated) ---
-  config: (token) => get("/config", { headers: authH(token) }),
-  configAudit: (token) =>
-    get("/config/audit?limit=50", { headers: authH(token) }),
-  configDiff: (revId, token) =>
-    get(`/config/revisions/${encodeURIComponent(revId)}/diff`, {
-      headers: authH(token),
-    }),
-  revertConfig: (revId, summary, token) =>
-    get(`/config/revisions/${encodeURIComponent(revId)}/revert`, {
-      method: "POST",
-      headers: { ...authH(token), "X-Summary": summary },
-    }),
 };
-
-function authH(token) {
-  return token ? { Authorization: "Bearer " + token } : {};
-}
-
-export { ok };
