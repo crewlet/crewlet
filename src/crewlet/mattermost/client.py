@@ -602,7 +602,7 @@ class MattermostClient:
         return await self._request("POST", "/posts", json=payload)
 
     async def posts_since(self, channel_id: str, since_ms: int) -> list[dict[str, Any]]:
-        """Posts in a channel with **new or changed content** since *since_ms*.
+        """Posts **created** in a channel since *since_ms*.
 
         The reconnect-gap primitive.  Mattermost's websocket replays
         nothing after a disconnect, so the fleet re-reads each channel it
@@ -610,15 +610,16 @@ class MattermostClient:
         which is the order the fleet must replay them in.
 
         The server's ``since=`` is ``UpdateAt``-based, and ``UpdateAt`` is
-        bumped by things that are not content: adding or removing a
-        reaction touches the post, and deleting a reply touches the
-        thread's root.  Replaying those would wake an agent to re-answer
-        a message it has already answered — a full LLM turn per 👍 landing
-        during a reconnect.  So the filter is on the two fields that mean
-        the content itself is new: ``create_at`` (a new post) and
-        ``edit_at`` (the message was actually edited).  Deleted posts are
-        dropped here rather than downstream, since ``since=`` returns
-        them as tombstones.
+        bumped by things that are not new content: adding or removing a
+        reaction touches the post, editing one touches it, and deleting a
+        reply touches the thread's root.  Replaying those would wake an
+        agent to re-answer a message it has already answered — a full LLM
+        turn per 👍 landing during a reconnect.  So the server's filter is
+        a superset and ``create_at`` is the one that decides, which also
+        keeps the gap replay to exactly what the live socket would have
+        delivered (the fleet does not forward edits either).  Deleted
+        posts are dropped here rather than downstream, since ``since=``
+        returns them as tombstones.
         """
         data = await self._request(
             "GET", f"/channels/{channel_id}/posts", params={"since": since_ms}
@@ -631,9 +632,7 @@ class MattermostClient:
             post = posts.get(post_id)
             if not isinstance(post, dict) or post.get("delete_at"):
                 continue
-            created = int(post.get("create_at") or 0)
-            edited = int(post.get("edit_at") or 0)
-            if created > since_ms or edited > since_ms:
+            if int(post.get("create_at") or 0) > since_ms:
                 replayable.append(post)
         return replayable
 

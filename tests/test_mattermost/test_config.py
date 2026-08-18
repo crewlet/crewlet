@@ -154,3 +154,38 @@ class TestMaterialisation:
         )
         role = config_to_organization(cfg).all_roles()[0]
         assert ("mattermost", "jane") in role.contact.resolved_identities()
+
+
+class TestURLValidation:
+    """A schemeless URL is the mistake with no useful error anywhere:
+    httpx rejects the base at the first request and websockets rejects a
+    URI with no ws scheme, both long after ``crewlet validate`` passed."""
+
+    def test_a_schemeless_url_is_rejected(self):
+        from crewlet.config import MattermostConfig
+
+        with pytest.raises(ValueError, match="http://"):
+            MattermostConfig(enabled=True, url="chat.example", team="nimbus")
+
+    def test_an_unresolved_reference_is_allowed(self):
+        """The URL may legitimately come from the environment."""
+        from crewlet.config import MattermostConfig
+
+        cfg = MattermostConfig(enabled=True, url="${MATTERMOST_URL}", team="nimbus")
+        assert cfg.url == "${MATTERMOST_URL}"
+
+    def test_the_url_is_normalised_once_at_the_model(self):
+        from crewlet.config import MattermostConfig
+
+        cfg = MattermostConfig(
+            enabled=True, url="https://chat.example/ ", team="nimbus"
+        )
+        assert cfg.url == "https://chat.example"
+        assert cfg.api_base == "https://chat.example/api/v4"
+
+    def test_a_disabled_block_is_still_normalised(self):
+        from crewlet.config import MattermostConfig
+
+        assert MattermostConfig(url="https://chat.example/").url == (
+            "https://chat.example"
+        )

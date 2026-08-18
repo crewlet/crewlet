@@ -864,32 +864,55 @@ class MattermostTransport:
     ) -> ThreadFollowReason | None:
         """Why this post should make the agent follow its thread.
 
-        A DM is always addressed to the bot — there is nobody else in the
-        room — so it follows unconditionally.  Otherwise the
-        **server-computed** ``mentions`` list decides: it is exact, and it
-        resolves ``@all`` / ``@channel`` / ``@here`` against real channel
-        membership, which the regex fallback cannot.  That fallback
-        exists only for reconnect-backfilled posts, which come over REST
-        with no mention list attached.
+        The two signals answer different questions, and using either for
+        the other's job gets it wrong.
+
+        **Whether** this bot is a target is the server's answer.  Its
+        ``mentions`` list is rewritten per connection
+        (``addMentionsBroadcastHook``): the field is present only when
+        this connection's user was mentioned, and its value is then
+        always exactly ``[own_user_id]``.  So it is exact — it resolves
+        ``@all`` / ``@channel`` / ``@here`` against real membership, and
+        catches group and keyword mentions no regex could — but it can
+        never say a bot was *not* the target while naming someone else.
+        The old "mentions list without me ⇒ collective" branch was
+        therefore unreachable except when this seat's own id was unknown,
+        in which case it fired on every mention of anybody.
+
+        **Why** is the message text's answer, and only the text's.  A
+        bare ``@channel`` expands into every member's id, so by the list
+        alone a broadcast is indistinguishable from being named — and
+        treating a broadcast as a personal address is exactly what the
+        working-status modes say must not happen.
+
+        A DM short-circuits both: there is nobody else the message could
+        be for.
         """
         if channel_type in DIRECT_CHANNEL_TYPES:
             return ThreadFollowReason.MENTION
 
         tracker = self._thread_tracker
+        username = self._bots[handle].username
+        by_text = (
+            tracker.detect_follow_trigger(text, username)
+            if tracker is not None
+            else None
+        )
         mentions = body.get("mentions")
 
-        if isinstance(mentions, list) and mentions:
-            if own_user_id and own_user_id in {str(m) for m in mentions}:
-                return ThreadFollowReason.MENTION
-            # The server resolved a collective address into the member
-            # list this bot is part of — being included by @channel is
-            # weaker than being named, and is recorded as such.
-            return ThreadFollowReason.COLLECTIVE
+        if isinstance(mentions, list) and mentions and own_user_id:
+            if own_user_id not in {str(m) for m in mentions}:
+                # Only reachable when this seat's id is stale; the server
+                # says someone else was the target.
+                return None
+            # Named in the text outranks being swept up by a broadcast;
+            # a group or keyword mention the text cannot show still
+            # counts as being addressed.
+            return by_text or ThreadFollowReason.MENTION
 
-        if tracker is None:
-            return None
-        username = self._bots[handle].username
-        return tracker.detect_follow_trigger(text, username)
+        # No usable list: a reconnect-backfilled post (read over REST,
+        # which carries none) or an unresolved identity.
+        return by_text
 
 
 __all__ = [

@@ -520,3 +520,39 @@ class TestReconnectCursor:
 
         await fleet._anchor_cursor(seat)
         assert seat.last_event_ms == 1699999999000
+
+
+class TestForwardedEvents:
+    @pytest.mark.asyncio
+    async def test_edits_do_not_wake_an_agent(self):
+        """Matching the Slack transport, which classes edits as
+        bookkeeping: re-answering an already-triaged message costs a full
+        turn. Forwarding them was also incoherent — the dedupe ring
+        dropped the edit of a recent post and forwarded the edit of an old
+        one, so behaviour depended on channel traffic."""
+        queue = _QueueStub()
+        fleet = _fleet(queue)
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+
+        frame = json.loads(_frame("p1"))
+        frame["event"] = "post_edited"
+        await fleet._handle_frame(seat, json.dumps(frame))
+
+        assert queue.published == []
+
+    @pytest.mark.asyncio
+    async def test_the_cursor_tracks_creation_not_update(self):
+        """The backfill selects on ``create_at``; a cursor taken from
+        ``update_at`` could jump past posts that had not arrived yet."""
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+
+        frame = json.loads(_frame("p1"))
+        post = json.loads(frame["data"]["post"])
+        post["update_at"] = 1700000999000
+        frame["data"]["post"] = json.dumps(post)
+        await fleet._handle_frame(seat, json.dumps(frame))
+
+        assert seat.last_event_ms == 1700000000000

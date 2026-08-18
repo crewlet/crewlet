@@ -395,7 +395,7 @@ class TestPostsSince:
         return {"order": list(reversed(list(posts))), "posts": posts}
 
     @pytest.mark.asyncio
-    async def test_only_new_or_edited_posts_are_replayed(self):
+    async def test_only_newly_created_posts_are_replayed(self):
         since = 1000
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -428,8 +428,10 @@ class TestPostsSince:
         finally:
             await client.close()
         # Ordering is asserted by the next test; what matters here is
-        # WHICH posts survive the filter.
-        assert sorted(p["id"] for p in posts) == ["edited", "new"]
+        # WHICH posts survive the filter. The edited one is excluded for
+        # the same reason the live socket does not forward edits: an edit
+        # of a message the agent already triaged is not a new request.
+        assert [p["id"] for p in posts] == ["new"]
 
     @pytest.mark.asyncio
     async def test_results_are_oldest_first(self):

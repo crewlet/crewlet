@@ -104,7 +104,16 @@ _AUTH_SEQ = 1
 #: Mattermost websocket event names this fleet forwards.  Everything else
 #: (typing, presence changes, channel-viewed bookkeeping, preference
 #: updates) is chatter that would wake an agent with nothing to act on.
-_FORWARDED_EVENTS = frozenset({"posted", "post_edited"})
+#:
+#: ``post_edited`` is deliberately NOT here, matching the Slack transport,
+#: which classes edits as bookkeeping for the same reason: an edit of a
+#: message the agent has already triaged is not a new request, and waking
+#: it again costs a full turn to re-answer what it answered.  Forwarding
+#: edits was also incoherent in practice — the seat's de-duplication ring
+#: dropped the edit of any post still in it and forwarded the edit of any
+#: post that had aged out, so the behaviour was decided by how much
+#: traffic had passed since the original.
+_FORWARDED_EVENTS = frozenset({"posted"})
 
 
 class MattermostAuthError(MattermostError):
@@ -644,7 +653,10 @@ class MattermostEventFleet:
         if not post_id or not seat.remember(post_id):
             return False
 
-        create_at = int(post.get("update_at") or post.get("create_at") or 0)
+        # The cursor advances on CREATION time, matching what the
+        # backfill selects on.  Taking it from ``update_at`` would let an
+        # edit push the cursor past posts that had not arrived yet.
+        create_at = int(post.get("create_at") or post.get("update_at") or 0)
         if create_at > seat.last_event_ms:
             seat.last_event_ms = create_at
 

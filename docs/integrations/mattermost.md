@@ -358,8 +358,11 @@ problems      : none
 
 #### Which events wake an agent
 
-Only `posted` / `post_edited` events carrying user-visible content. Skipped
-with a recorded reason (a `NotificationSkipped` event):
+Only `posted` events carrying user-visible content — **edits do not**, the
+same call the [Slack](slack.md) transport makes: an edit of a message the
+agent has already triaged is not a new request, and re-answering it costs
+a full turn. Skipped with a recorded reason (a `NotificationSkipped`
+event):
 
 - **`system_*` posts** — joins, leaves, header/purpose changes, channel
   renames. They carry text, but the text is *about* the channel rather than
@@ -384,6 +387,15 @@ in order. Every channel is read, not only ones with prior traffic — a message
 in a channel the bot was invited to *during* the outage would otherwise be
 invisible forever. Duplicates across the boundary are caught by a per-seat
 de-duplication ring.
+
+The replay is what the live socket would have delivered, and nothing more.
+Mattermost's `since=` is *update*-based, and an update is not new content: a
+reaction touches a post, and deleting a reply touches its thread root — so a
+👍 landing during a reconnect would otherwise wake the agent to re-answer a
+message it had already answered. Only posts **created** in the gap are
+replayed. A seat that reconnects before it has seen any post still gets a
+cursor from the moment it connected, so its first outage is replayable like
+any other.
 
 The window is bounded at **15 minutes**. Backfill exists to cover a blip — a
 network drop, a rolling Mattermost restart, a brief engine pause — not to
@@ -416,13 +428,30 @@ Identical in shape to Slack's, on Mattermost's own primitives. Top-level
 channel messages are always delivered; thread replies only reach agents
 **following** that thread.
 
+Two signals decide, and each answers a different question.
+
+**Whether the bot was addressed** is the server's answer. Mattermost
+rewrites the `mentions` list *per connection*
+(`addMentionsBroadcastHook`): the field is present only when that
+connection's user was mentioned, and its value is then exactly that one
+id. So it is authoritative and catches what no regex could — group
+mentions, notification keywords, `@all` / `@channel` / `@here` resolved
+against real membership.
+
+**Why** is the message text's answer, and only the text's. A bare
+`@channel` expands into every member's id, so by the list alone a
+broadcast is indistinguishable from being named — and treating a
+broadcast as a personal address is exactly what
+[`typing_status: addressed`](#working-status) must not do.
+
 **Follow triggers:**
 
-1. **Direct mention** — the server-computed `mentions` list contains the
-   bot's user id. This is exact, and it resolves `@all` / `@channel` /
-   `@here` against real channel membership.
-2. **Collective address** — the server included this bot via a channel-wide
-   mention; recorded as `collective`, which is weaker than being named.
+1. **Direct mention** — the server says this bot is a target, and the text
+   names it (`@agent-swe`). Also the reason when the server says it is a
+   target for something the text cannot show, such as a group mention.
+2. **Collective address** — the server says this bot is a target, and the
+   text shows only `@all` / `@channel` / `@here`; recorded as
+   `collective`, which is weaker than being named.
 3. **DM** — a direct or group-DM channel always follows. There is nobody
    else the message could be for.
 4. **Participation** — the agent posts in the thread.
@@ -433,7 +462,8 @@ in PostgreSQL (`chat_thread_follows`, rows keyed `backend = 'mattermost'`) and
 survives engine restarts.
 
 For **backfilled** posts the mention list is unavailable (they are re-read
-over REST), so a literal `@username` grammar is used as the fallback.
+over REST), so the text alone decides — the same `@username` grammar, doing
+both jobs.
 
 ---
 

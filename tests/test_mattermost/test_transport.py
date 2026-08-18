@@ -286,6 +286,11 @@ class TestThreadRouting:
 
     @pytest.mark.asyncio
     async def test_mention_of_someone_else_does_not_follow(self):
+        """Mattermost rewrites ``mentions`` per connection: the field is
+        present only when THIS bot was mentioned, and is then exactly
+        ``[own id]``. A list naming somebody else can only mean this
+        seat's id is stale — it must not subscribe the bot to a thread it
+        was not addressed in."""
         transport = _make_transport()
         result = await transport.handle_event(
             _event(
@@ -296,10 +301,49 @@ class TestThreadRouting:
             ),
             "engineer",
         )
-        # The server resolved a mention list this bot is a member of only
-        # via a collective address — recorded as collective, not mention.
+        assert result is None
+        assert "not following" in transport.last_skip_reason
+
+    @pytest.mark.asyncio
+    async def test_a_broadcast_is_collective_not_a_personal_mention(self):
+        """``@channel`` expands into every member's id, so the server list
+        alone cannot tell a broadcast from being named. The text can, and
+        the difference decides whether the agent counts as *addressed*."""
+        transport = _make_transport()
+        result = await transport.handle_event(
+            _event(post_id="p2", message="@channel standup in 5", mentions=[BOT_ID]),
+            "engineer",
+        )
         assert isinstance(result, InboundNotification)
         assert result.metadata["thread_follow_reason"] == "collective"
+
+    @pytest.mark.asyncio
+    async def test_being_named_outranks_a_broadcast_in_the_same_message(self):
+        transport = _make_transport()
+        result = await transport.handle_event(
+            _event(
+                post_id="p2",
+                message="@channel — @agent-swe can you take this?",
+                mentions=[BOT_ID],
+            ),
+            "engineer",
+        )
+        assert isinstance(result, InboundNotification)
+        assert result.metadata["thread_follow_reason"] == "mention"
+
+    @pytest.mark.asyncio
+    async def test_a_keyword_mention_the_text_cannot_show_still_counts(self):
+        """A group mention, or a notification keyword, puts the bot in the
+        server's list without any ``@username`` in the text. The server is
+        authoritative about *whether*; absent a textual reason it is a
+        mention."""
+        transport = _make_transport()
+        result = await transport.handle_event(
+            _event(post_id="p2", message="who owns deploys?", mentions=[BOT_ID]),
+            "engineer",
+        )
+        assert isinstance(result, InboundNotification)
+        assert result.metadata["thread_follow_reason"] == "mention"
 
     @pytest.mark.asyncio
     async def test_following_persists_for_later_replies(self):
