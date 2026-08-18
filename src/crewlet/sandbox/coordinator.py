@@ -266,7 +266,9 @@ class SandboxCoordinator:
             )
         except Exception:
             logger.exception("sandbox_collect_failed", turn_id=run.turn_id)
-            await self._pending_store.set_status(run.turn_id, "failed")
+            await self._pending_store.set_status(
+                run.turn_id, "failed", epoch=run.owner_epoch or None
+            )
             await teardown_sandbox_run(
                 run=run, manager=self._manager, pending_store=self._pending_store
             )
@@ -360,7 +362,9 @@ class SandboxCoordinator:
             await teardown_sandbox_run(
                 run=run, manager=self._manager, pending_store=self._pending_store
             )
-            await self._pending_store.set_status(run.turn_id, "reseed")
+            await self._pending_store.set_status(
+                run.turn_id, "reseed", epoch=run.owner_epoch or None
+            )
         await self._event_queue.publish(
             "crewlet.events.sandbox_clarification_requested",
             SandboxClarificationRequested(
@@ -484,7 +488,9 @@ class SandboxCoordinator:
             # and the suspend persist). Can't continue the turn — fail + reap,
             # free the agent, and let its inbox flow again.
             logger.warning("sandbox_resume_no_execute_state", turn_id=run.turn_id)
-            await self._pending_store.set_status(run.turn_id, "failed")
+            await self._pending_store.set_status(
+                run.turn_id, "failed", epoch=run.owner_epoch or None
+            )
             await teardown_sandbox_run(
                 run=run, manager=self._manager, pending_store=self._pending_store
             )
@@ -520,7 +526,9 @@ class SandboxCoordinator:
                 turn_id=run.turn_id,
                 revert_to=revert_to,
             )
-            await self._pending_store.set_status(run.turn_id, revert_to)
+            await self._pending_store.set_status(
+                run.turn_id, revert_to, epoch=run.owner_epoch or None
+            )
             raise
         latest = await self._pending_store.get(run.turn_id)
         if latest is not None and latest.status == "running":
@@ -537,7 +545,9 @@ class SandboxCoordinator:
                 manager=self._manager,
                 pending_store=self._pending_store,
             )
-            await self._pending_store.set_status(run.turn_id, "done")
+            await self._pending_store.set_status(
+                run.turn_id, "done", epoch=run.owner_epoch or None
+            )
             await self._event_queue.resume_topic(
                 agent_inbox_topic(run.agent_handle),
                 agent_inbox_group(run.agent_handle),

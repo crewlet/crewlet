@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -160,6 +161,24 @@ async def _end_typing(session: Any, *, keep_alive: bool = False) -> None:
         logger.exception("working_status_end_failed")
 
 
+class SeatLost(RuntimeError):
+    """A turn was abandoned because this node stopped owning the seat.
+
+    Unlike :class:`ShutdownDraining` this can fire mid-turn, after work
+    has happened: rounds have run, tools have fired, side effects may
+    already be outside any transaction. Raising it does not undo those —
+    nothing can — it stops the turn from producing MORE of them beside
+    the seat's new owner.
+
+    That is the honest property this whole mechanism buys: **bounded
+    duplication**, not none. Epoch-fenced writes protect database state;
+    the fence in the loop bounds how far a zombie gets before it
+    notices. ``run_sandbox`` makes the limit vivid — it acquires a real,
+    billed E2B box before the pending row is written, so no fence of any
+    kind can recall a box already pushing commits.
+    """
+
+
 class ShutdownDraining(RuntimeError):
     """A turn was refused because the engine is draining for shutdown.
 
@@ -235,6 +254,7 @@ class TurnEngine:
         sandbox_mcp_servers: Any = None,
         sandbox_otel_receiver: Any = None,
         llm_provider_configs: dict[str, Any] | None = None,
+        seat_owner: Any = None,
     ) -> None:
         from crewlet.agent.turn_settings import TurnEngineSettings
         from crewlet.config import TurnEngineConfig
@@ -244,6 +264,12 @@ class TurnEngine:
         # visible here.  Read through the ``_llm_providers`` property
         # below, which prefers a turn's pin — see crewlet.agent.turn_pin.
         self._llm_providers_live = llm_providers
+        # Placement host, or ``None``. Read through ``_fence_for`` — the
+        # turn loop asks it before every round and before every
+        # side-effecting tool, so a node whose lease moved stops within
+        # one round rather than running a whole turn beside its
+        # successor.
+        self._seat_owner = seat_owner
         self._tool_registry = tool_registry
         self._event_queue = event_queue
         # Hold the engine's dict by reference -- NOT ``or {}``, which
@@ -447,6 +473,26 @@ class TurnEngine:
     def seat_in_flight(self, role_name: str) -> int:
         """Turns currently running for ``role_name`` in this process."""
         return self._seat_in_flight.get(role_name, 0)
+
+    def _fence_for(self, handle: str) -> Callable[[], None] | None:
+        """A zero-arg fence for one seat, or ``None`` when unfenced.
+
+        ``None`` for a single-node embed with no placement host and for
+        an empty handle — there is no seat to lose.
+        """
+        owner = self._seat_owner
+        if owner is None or not handle:
+            return None
+
+        def _check() -> None:
+            if owner.may_start(handle) is None:
+                raise SeatLost(
+                    f"this node no longer owns seat {handle!r}; abandoning "
+                    f"the turn rather than running it beside the seat's "
+                    f"new owner"
+                )
+
+        return _check
 
     async def drain_seat(
         self, role_name: str, *, timeout: float = SEAT_DRAIN_TIMEOUT_SECONDS
@@ -1989,6 +2035,7 @@ class TurnEngine:
             onboarding_marker_store=self._onboarding_marker_store,
             last_notification_metadata=turn.notification_metadata or {},
             prompt_skill_registry=self._prompt_skill_registry,
+            seat_fence=self._fence_for(turn.agent.handle),
         )
         # Attach the tool registry so colleague tools can forward to MCP.
         ctx.__dict__["tool_registry"] = self._tool_registry

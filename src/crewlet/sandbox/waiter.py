@@ -79,11 +79,19 @@ class SandboxWaiter:
         # inside the box TTL (``default_timeout_seconds``, 900 s) and makes
         # the give-up window ``_MAX_CONNECT_FAILURES`` * 15 s ≈ 1 min.
         poll_seconds: float = 15.0,
+        # Single-owner gate. The waiter polls EVERY active run in the
+        # company, not just this node's seats, because a box can be
+        # polled from anywhere — so N nodes running it means N reconnects
+        # per box per tick and N racing reapers. Supplied by the engine
+        # as a callable that claims ``worker:sandbox-waiter``; ``None``
+        # means "no fleet", which is the single-node case.
+        claim_duty: Any = None,
     ) -> None:
         self._event_queue = event_queue
         self._pending_store = pending_store
         self._manager = manager
         self._poll_seconds = poll_seconds
+        self._claim_duty = claim_duty
         self._running = False
         self._task: asyncio.Task[None] | None = None
         # turn_id -> consecutive reconnect failures (reset on any success).
@@ -119,6 +127,8 @@ class SandboxWaiter:
                 if not self._running:
                     return
                 try:
+                    if not await self._may_tick():
+                        continue
                     await self.tick_once()
                 except asyncio.CancelledError:
                     return
@@ -126,6 +136,21 @@ class SandboxWaiter:
                     logger.exception("sandbox_waiter_tick_failed")
         finally:
             self._running = False
+
+    async def _may_tick(self) -> bool:
+        """Whether this node holds the waiter duty this tick.
+
+        Re-claimed every tick rather than held: the duty lease is short,
+        so a node that dies mid-poll releases it by lapsing and a peer
+        takes over on its next tick, with no handoff protocol.
+        """
+        if self._claim_duty is None:
+            return True
+        try:
+            return bool(await self._claim_duty())
+        except Exception:
+            logger.exception("sandbox_waiter_duty_claim_failed")
+            return False
 
     async def tick_once(self) -> int:
         """Poll every running run once; return how many completions fired.
@@ -197,8 +222,16 @@ class SandboxWaiter:
                     turn_id=run.turn_id,
                     sandbox_id=run.sandbox_id,
                 )
+            # Compare-and-set on the status this row was READ in. The
+            # reaper decides from a snapshot taken seconds ago, and the
+            # clarification answer that un-pauses the run may have
+            # arrived since — without the precondition it would stamp
+            # ``reseed`` over a run that is already back to ``running``.
+            if not await self._pending_store.set_status(
+                run.turn_id, "reseed", expect=run.status
+            ):
+                continue
             await self._pending_store.release_box(run.turn_id)
-            await self._pending_store.set_status(run.turn_id, "reseed")
             reaped += 1
             logger.info(
                 "sandbox_pause_ttl_reaped",

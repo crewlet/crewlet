@@ -92,6 +92,22 @@ class AgentContext(BaseModel):
     written by the ``mark_onboarded`` builtin.  ``None`` in
     test / in-memory mode -- the hint always renders (no "already
     onboarded" path) and ``mark_onboarded`` returns an error."""
+    seat_fence: Any = None
+    """Callable raising when this node no longer owns the agent's seat.
+
+    ``() -> None``, injected by the engine. The turn loop calls it
+    before every LLM round and before every tool that is not known to be
+    read-only, so a node whose lease moved stops within one round
+    instead of running an entire turn beside its successor.
+
+    Fencing a *write* is the point. Epoch-fenced database writes protect
+    database state and nothing else: by the time an agent posts to Slack
+    or comments on a Jira issue the effect is outside any transaction,
+    and no fence can undo it. What the in-turn check buys is therefore
+    **bounded duplication**, not none — and without it nothing bounds
+    the window at all.
+
+    ``None`` (tests, single-node embeds) disables the check."""
     last_notification_metadata: dict[str, Any] = Field(default_factory=dict)
     """Metadata from the most recent inbound notification that triggered
     this agent turn.  Used by outbound tools to auto-populate

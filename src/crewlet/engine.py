@@ -2755,7 +2755,7 @@ class Engine:
         """
 
         async def handle(events: list[Event]) -> None:
-            from crewlet.agent.turn import ShutdownDraining
+            from crewlet.agent.turn import SeatLost, ShutdownDraining
 
             if not events:
                 return
@@ -2884,6 +2884,21 @@ class Engine:
                     event_count=len(events),
                 )
                 raise
+            except SeatLost as exc:
+                # The lease moved mid-turn. Defer, do not NAK: this is
+                # not a failed handler, and spending the message's
+                # dead-letter budget on a handoff would kill a healthy
+                # event after enough of them. The seat's new owner picks
+                # the delivery up, in order, at redeliveryCount 0.
+                from crewlet.queue.protocol import DeferDelivery
+
+                logger.warning(
+                    "turn_abandoned_seat_lost",
+                    agent_handle=agent.handle,
+                    event_type=events[0].type,
+                    event_count=len(events),
+                )
+                raise DeferDelivery(str(exc)) from exc
 
         return handle
 
@@ -5793,6 +5808,10 @@ class Engine:
             event_queue=self.event_queue,
             pending_store=self._sandbox_pending_store,
             manager=self._sandbox_manager,
+            # One waiter per company, not per node: it polls every live
+            # box, so N nodes running it means N reconnects per box per
+            # tick and N reapers racing to expire the same paused one.
+            claim_duty=lambda: self.claim_worker_duty("sandbox-waiter"),
         )
         try:
             await self._sandbox_waiter.start()
@@ -5874,6 +5893,10 @@ class Engine:
             sandbox_mcp_servers=getattr(self, "_mcp_configs", None),
             sandbox_otel_receiver=self._sandbox_otel_receiver,
             llm_provider_configs=self._llm_provider_configs,
+            # The in-turn fence. Read live rather than captured, because
+            # the host is built during ``start`` and the turn engine can
+            # be built before or after it.
+            seat_owner=_SeatOwnerView(self),
         )
 
     async def _ensure_turn_engine_after_providers(self) -> None:
@@ -6119,6 +6142,38 @@ class Engine:
             on_release=self._release_seat,
         )
 
+    async def claim_worker_duty(self, duty: str, ttl_seconds: float = 45.0) -> bool:
+        """Claim a fleet-wide singleton duty for this node, briefly.
+
+        Some work belongs to the company rather than to a seat — polling
+        every live sandbox box, sweeping dedupe TTLs, creating the seat
+        subscriptions. Running it on every node is not merely wasteful,
+        it races: N reapers deciding independently to expire the same
+        paused box, N nodes reconnecting to the same sandbox each tick.
+
+        Claimed per tick rather than held, so a node that dies mid-duty
+        releases it by lapsing and a peer picks it up on its next tick,
+        with no handoff protocol. Without a placement host — the
+        single-node case — the answer is always yes: there is no fleet
+        to be a singleton within.
+        """
+        if self._seat_host is None:
+            return True
+        from crewlet.db.leases import worker_resource
+
+        try:
+            lease = await self._seat_host.leases.try_acquire(
+                worker_resource(duty),
+                owner=self._incarnation,
+                ttl_seconds=ttl_seconds,
+                preferred=self._node_id,
+                gated=False,
+            )
+        except Exception:
+            logger.exception("worker_duty_claim_failed", duty=duty)
+            return False
+        return lease is not None
+
     def _agent_seat_handles(self) -> list[str]:
         """Every agent seat in the ACTIVE org, read fresh each sweep.
 
@@ -6140,23 +6195,12 @@ class Engine:
         only needs doing once per company and there is no reason for
         every node to walk every seat at every boot.
         """
-        from crewlet.db.leases import worker_resource
-
         handles = self._agent_seat_handles()
         if not handles:
             return
-        lease = None
-        if self._seat_host is not None:
-            with contextlib.suppress(Exception):
-                lease = await self._seat_host.leases.try_acquire(
-                    worker_resource("seat-subscriptions"),
-                    owner=self._incarnation,
-                    ttl_seconds=60.0,
-                    gated=False,
-                )
-            if lease is None:
-                logger.debug("seat_subscriptions_held_elsewhere")
-                return
+        if not await self.claim_worker_duty("seat-subscriptions", ttl_seconds=60.0):
+            logger.debug("seat_subscriptions_held_elsewhere")
+            return
         created = 0
         for handle in handles:
             try:
@@ -6652,3 +6696,25 @@ class Engine:
             removed=len(removed),
             updated=updated_count,
         )
+
+
+class _SeatOwnerView:
+    """Live view of the engine's placement host, for the in-turn fence.
+
+    The turn engine is built before or after the host depending on
+    whether the company had LLM providers at boot, so it cannot capture
+    the host by value. This reads it per call and answers "may this seat
+    keep working?" — which is ``None`` both when the host does not exist
+    (single-node embeds, tests) and when the seat is not ours.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def may_start(self, handle: str) -> int | None:
+        host = self._engine._seat_host
+        if host is None:
+            # No placement at all: nothing can take the seat away, so
+            # there is nothing to fence against.
+            return 1
+        return host.may_start(handle)

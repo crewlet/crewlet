@@ -457,6 +457,25 @@ def assistant_text_with_reasoning(messages: list[Message]) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
+def _is_known_read(name: str, surface: Any) -> bool:
+    """Whether ``name`` is annotated read-only on this surface.
+
+    Deliberately narrow: only an explicit ``read_only: true`` counts.
+    ``writes_to_shared_surface`` answers the opposite question and
+    returns ``False`` for an all-unknown annotation set, which is right
+    for its own callers and exactly wrong here — using it would exempt
+    every unannotated tool from the fence.
+    """
+    from crewlet.tools.capabilities import resolve_annotations
+
+    tool = surface.lookup(name)
+    if tool is None:
+        return False
+    registry = getattr(surface, "_registry", None)
+    lookup = getattr(registry, "annotations_for", None)
+    return resolve_annotations(tool, lookup).read_only is True
+
+
 async def run_tool_loop(
     *,
     provider: LLMProvider,
@@ -668,8 +687,15 @@ async def run_tool_loop(
     # the round budget. Counter so a pathological model can't burn the whole
     # budget on reprompts beyond a small cap.
     forced_retries = 0
+    fence = getattr(context, "seat_fence", None)
     for round_num in range(max_rounds):
         rounds_used = round_num + 1
+        # Seat fence, at the cheapest possible point: no tokens have been
+        # spent this round and nothing has fired. A node whose lease
+        # moved stops HERE rather than running the rest of the turn
+        # beside the seat's new owner. Raises SeatLost.
+        if fence is not None:
+            fence()
         # Refresh tool defs at the top of every round so any in-loop
         # surface mutation is visible to the provider on this call,
         # not the one after.
@@ -817,6 +843,15 @@ async def run_tool_loop(
 
         terminated_by_tool = False
         for tool_call in completion.tool_calls:
+            # The finest-grained fence, and the last point before an
+            # external side effect. Skipped for tools KNOWN to be
+            # read-only: refusing a read buys nothing (it produces no
+            # duplicate effect) and costs the turn. Unknown is fenced —
+            # most builtins carry no annotations, and treating "not
+            # classified" as "safe" would leave the majority of the
+            # outbound surface unfenced.
+            if fence is not None and not _is_known_read(tool_call.name, surface):
+                fence()
             tool_result = await execute_tool(
                 tool_call.name,
                 tool_call.arguments,

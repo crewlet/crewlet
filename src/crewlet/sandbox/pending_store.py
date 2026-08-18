@@ -197,9 +197,19 @@ class PendingSandboxRunStore(Protocol):
         ...
 
     async def set_status(
-        self, turn_id: str, status: str, *, epoch: int | None = None
+        self,
+        turn_id: str,
+        status: str,
+        *,
+        epoch: int | None = None,
+        expect: str | None = None,
     ) -> bool:
-        """Set a terminal / re-seed status (done | failed | reseed)."""
+        """Set a terminal / re-seed status (done | failed | reseed).
+
+        ``epoch`` fences the write to the node that owns the run's seat;
+        ``expect`` makes it conditional on the status the caller read.
+        Both return ``False`` when the precondition refused.
+        """
         ...
 
     async def attach_sandbox(
@@ -412,18 +422,30 @@ class PostgresPendingSandboxRunStore:
         return row is not None
 
     async def set_status(
-        self, turn_id: str, status: str, *, epoch: int | None = None
+        self,
+        turn_id: str,
+        status: str,
+        *,
+        epoch: int | None = None,
+        expect: str | None = None,
     ) -> bool:
-        """Move a run to ``status``; ``False`` when the fence refused.
+        """Move a run to ``status``; ``False`` when a precondition refused.
 
-        ``epoch`` is the caller's seat-lease epoch. Passing it makes the
-        write conditional on this node still owning the run, which is
-        what stops a node that lost the seat from settling a run its
-        successor is already resuming. ``None`` skips the fence, for the
-        paths that legitimately have no seat (the waiter's own reaping of
-        a run whose box vanished).
+        Two independent preconditions, both optional, both compare-and-set:
+
+        ``epoch`` is the caller's seat-lease epoch. It makes the write
+        conditional on this node still owning the run, which is what
+        stops a node that lost the seat from settling a run its
+        successor is already resuming.
+
+        ``expect`` is the status the caller believes the run is in. The
+        pause reaper needs it: it decides to expire a paused box from a
+        row it read seconds ago, and by then the clarification answer
+        that un-pauses that run may already have arrived. Without the
+        precondition it would stamp ``reseed`` over a run already back
+        to ``running``.
         """
-        if epoch is None:
+        if epoch is None and expect is None:
             await self._db.execute(
                 "UPDATE pending_sandbox_run SET status = $2, updated_at = now() "
                 "WHERE turn_id = $1",
@@ -436,22 +458,26 @@ class PostgresPendingSandboxRunStore:
             UPDATE pending_sandbox_run
             SET status = $2, updated_at = now()
             WHERE turn_id = $1
-              AND (owner_epoch IS NULL OR owner_epoch = $3)
+              AND ($3::bigint IS NULL OR owner_epoch IS NULL OR owner_epoch = $3)
+              AND ($4::text IS NULL OR status = $4)
             RETURNING turn_id
             """,
             turn_id,
             status,
-            int(epoch),
+            None if epoch is None else int(epoch),
+            expect,
         )
         if row is None:
             logger.warning(
-                "pending_run_write_fenced",
+                "pending_run_write_refused",
                 turn_id=turn_id,
                 status=status,
                 epoch=epoch,
+                expect=expect,
                 hint=(
-                    "this run's seat has moved to another node; the write "
-                    "was refused rather than racing its new owner"
+                    "the run moved under this caller — its seat went to "
+                    "another node, or its status changed — so the write "
+                    "was refused rather than racing whoever owns it now"
                 ),
             )
         return row is not None
@@ -598,18 +624,32 @@ class MemoryPendingSandboxRunStore:
         return True
 
     async def set_status(
-        self, turn_id: str, status: str, *, epoch: int | None = None
+        self,
+        turn_id: str,
+        status: str,
+        *,
+        epoch: int | None = None,
+        expect: str | None = None,
     ) -> bool:
         run = self._runs.get(turn_id)
         if run is None:
             return False
         if epoch is not None and run.owner_epoch and run.owner_epoch != int(epoch):
             logger.warning(
-                "pending_run_write_fenced",
+                "pending_run_write_refused",
                 turn_id=turn_id,
                 status=status,
                 epoch=epoch,
                 owner_epoch=run.owner_epoch,
+            )
+            return False
+        if expect is not None and run.status != expect:
+            logger.warning(
+                "pending_run_write_refused",
+                turn_id=turn_id,
+                status=status,
+                expect=expect,
+                actual=run.status,
             )
             return False
         run.status = status
