@@ -336,9 +336,26 @@ services:
       MM_SQLSETTINGS_DRIVERNAME: postgres
       MM_SQLSETTINGS_DATASOURCE: >-
         postgres://mmuser:mmuser@mattermost-db:5432/mattermost?sslmode=disable&connect_timeout=10
-      # The address BROWSERS use to reach Mattermost, and what the server
-      # builds its own links from. Keep it in lock-step with the company
-      # config's ${MATTERMOST_URL} — same rule as PLANE_PUBLIC_URL above.
+      # The address BROWSERS use to reach Mattermost. Load-bearing far
+      # beyond the links the server builds: Mattermost accepts a websocket
+      # upgrade only from a browser whose Origin matches this exactly
+      # (host AND scheme), so a value that is not what people type costs
+      # every human live updates — messages appear only on refresh — while
+      # the engine, which sends no Origin header, keeps working and hides
+      # the fault. Its plugins compound it by requesting this address from
+      # the READER's machine.
+      #
+      # The localhost default is right for a laptop and wrong for every
+      # remote host, and nothing here can tell which this is — so
+      # scripts/mattermost-dev-bootstrap.sh settles it: it derives the
+      # address (this variable, else the one you reached the host on over
+      # SSH, else localhost), recreates this service when the running
+      # server disagrees, and refuses to finish until it matches. Keep it
+      # in lock-step with the company config's ${MATTERMOST_URL} — same
+      # rule as PLANE_PUBLIC_URL above. An MM_* variable is authoritative
+      # over stored config, so this cannot be corrected in the System
+      # Console or over the API; the container has to be recreated.
+      # See docs/integrations/mattermost.md § The Site URL.
       MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_PUBLIC_URL:-http://localhost:${MATTERMOST_LISTEN_PORT:-8065}}
       # Required by `crewlet mattermost provision` (see the note above).
       MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"

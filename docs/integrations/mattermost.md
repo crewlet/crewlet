@@ -68,6 +68,89 @@ The last row is the one real regression — see
 
 ---
 
+## The Site URL
+
+One Mattermost setting decides whether the product works for the humans in
+it, and it fails silently in both directions. Get this right first.
+
+`ServiceSettings.SiteURL` must be **the address people type into their
+browser** — scheme, host and port, exactly. Not `localhost` because the
+server runs there; not an internal DNS name because the engine uses it. The
+address in the address bar.
+
+Two things read it, and both break when it is wrong:
+
+- **The websocket origin check.** Mattermost accepts a websocket upgrade
+  only from a browser whose `Origin` header matches SiteURL's host *and*
+  scheme ([`App.OriginChecker`](https://github.com/mattermost/mattermost/blob/master/server/channels/app/server.go)).
+  A mismatch is answered `403`, the web app retries and gives up, and it
+  falls back to fetching messages when you navigate. Nothing is reported as
+  broken — the symptom is *"I have to refresh to see the reply"*.
+- **Every absolute URL the server and its plugins build.** Email links,
+  OAuth redirects and the prepackaged plugins all use SiteURL. A browser
+  loading `http://203.0.113.7:8065` with SiteURL still on localhost issues
+  requests to `http://localhost:8065/plugins/…` — against the *reader's*
+  machine, which refuses them.
+
+```mermaid
+flowchart LR
+    B["Browser at<br/>http://203.0.113.7:8065"]
+    E["Crewlet engine<br/>(no Origin header)"]
+    MM["Mattermost<br/>SiteURL: http://localhost:8065"]
+    B -->|"REST — fine"| MM
+    B -->|"websocket — Origin ≠ SiteURL → 403"| MM
+    E -->|"websocket — no Origin → allowed"| MM
+```
+
+**The engine is exempt.** The origin check passes any client that sends no
+`Origin` header, which every non-browser client does, so Crewlet's per-seat
+sockets keep working while the humans' web app is blind. An agent answers
+your message; you just cannot see it until you reload. That asymmetry is
+what makes this look like an engine bug when it is a server setting.
+
+### Getting it right
+
+The compose stack reads `MATTERMOST_PUBLIC_URL`, and
+[`scripts/mattermost-dev-bootstrap.sh`](#local-testing) settles it for you:
+it derives the address (explicit variable → the address you reached the host
+on over SSH → `localhost`), makes the server agree, persists it to `.env`,
+and refuses to finish while the two disagree.
+
+```bash
+MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 \
+  docker compose --profile mattermost up -d --wait
+scripts/mattermost-dev-bootstrap.sh
+```
+
+Verify it from anywhere, with no credential — this must print the address
+you browse to:
+
+```bash
+curl -s "http://203.0.113.7:8065/api/v4/config/client?format=old" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["SiteURL"])'
+```
+
+Or let the engine's own check do it, which also proves a browser-shaped
+upgrade and every seat's socket:
+
+```bash
+crewlet mattermost doctor my_company.yaml
+```
+
+Two things that do **not** work, and cost an afternoon each:
+
+- **Changing it in the System Console.** An `MM_*` environment variable
+  outranks the stored config and is re-applied on every write, so the field
+  is read-only and `PUT /api/v4/config/patch` silently reverts. For the
+  compose stack the container has to be recreated with the new value.
+- **Setting `AllowCorsFrom: "*"`.** It restores live updates by disabling
+  the origin check, and in doing so grants credentialed cross-origin access
+  to the whole REST API from any site a signed-in user visits. It also
+  leaves SiteURL wrong, so the links and plugins stay broken. Use it only to
+  name additional legitimate origins, explicitly, never `*`.
+
+---
+
 ## Configure in YAML
 
 `integrations.mattermost` enables the transport and the websocket fleet. The
@@ -220,6 +303,44 @@ Worth knowing that the exclusion is an implementation detail of the seat
 query rather than a licensing commitment, and that the cap itself has been
 lowered several times across releases. If your org approaches the human
 limit, that is the number to watch — not the agent count.
+
+---
+
+## Checking an install: `crewlet mattermost doctor`
+
+```
+crewlet mattermost doctor my_company.yaml
+```
+
+Reads the same company YAML the engine boots from and checks the whole
+inbound path, in the order it breaks:
+
+| Check | Why it is here |
+|---|---|
+| `/system/ping` | Reachability, unauthenticated — a bad operator token must not make a healthy server look dead |
+| `SiteURL` vs `integrations.mattermost.url` | The [one setting](#the-site-url) whose failure has no error message |
+| A **browser-shaped** websocket upgrade | Sent *with* an `Origin` header, which is the only difference between a browser and the engine — this is the check that predicts what a human sees |
+| Per seat: token, account, channel membership | A bot receives nothing from channels it has not joined |
+| Per seat: a real authenticated websocket | The engine's only inbound path. A token can be valid for REST and still not open a socket |
+
+Nothing is written and no admin credential is needed — the seat tokens
+already in the config do the work, resolved the same way the engine resolves
+them (secret store, then environment). The exit code is non-zero when any
+check fails, so it drops into a deploy script.
+
+```
+url           : http://203.0.113.7:8065
+reachable     : yes (Mattermost 10.5.1)
+site url      : http://203.0.113.7:8065
+browser ws    : ok — upgraded with Origin: http://203.0.113.7:8065
+team          : nimbus
+
+SEAT               USERNAME               TOKEN   WS      CHANNELS
+agent-pm           agent-pm               ok      ok      engineering,product,town-square
+agent-swe          agent-swe              ok      ok      engineering,town-square
+
+problems      : none
+```
 
 ---
 
@@ -379,12 +500,14 @@ docker compose --profile mattermost up -d --wait
 scripts/mattermost-dev-bootstrap.sh
 ```
 
-The bootstrap waits for the server, creates the admin account (the **first**
-user on a fresh install is auto-promoted to system admin — that is the
-account the provisioner authenticates as), mints its personal access token,
-creates the `nimbus` team and its channels, and writes `MATTERMOST_URL` +
-`MATTERMOST_ADMIN_TOKEN` into `.env`. Every step is idempotent, so re-run it
-freely.
+The bootstrap waits for the server, reconciles the [Site
+URL](#the-site-url) with the address browsers will use, creates the admin
+account (the **first** user on a fresh install is auto-promoted to system
+admin — that is the account the provisioner authenticates as), mints its
+personal access token, creates the `nimbus` team and its channels, proves a
+websocket upgrade succeeds, and writes `MATTERMOST_URL`,
+`MATTERMOST_PUBLIC_URL` and `MATTERMOST_ADMIN_TOKEN` into `.env`. Every step
+is idempotent, so re-run it freely.
 
 Provision the agent bots in the same run by pointing it at a company config:
 
@@ -499,7 +622,10 @@ crewlet mattermost provision mm-company.yaml --dry-run --print
 # 4. Create the bots and mint their tokens into .env
 crewlet mattermost provision mm-company.yaml
 
-# 5. Boot — one websocket per agent seat
+# 5. Prove the whole path before booting
+crewlet mattermost doctor mm-company.yaml
+
+# 6. Boot — one websocket per agent seat
 export ANTHROPIC_API_KEY=sk-ant-...
 crewlet run examples/nimbus.config.yaml --import-company mm-company.yaml
 ```
@@ -509,9 +635,12 @@ would mint. Step 4 writes `MATTERMOST_TOKEN_PM` and `MATTERMOST_TOKEN_SWE`
 into `.env`, which the engine reads on boot; nothing has to be re-sourced.
 Both steps are idempotent, so re-run either freely.
 
-To watch it work, sign in at <http://localhost:8065> as `founder` /
-`crewlet-dev-password`, open `~engineering`, and post `@agent-pm what are you
-working on?`. Three things should follow, in order:
+To watch it work, sign in as `founder` / `crewlet-dev-password` at the URL
+the bootstrap printed (<http://localhost:8065> on a laptop; the public
+address it settled on otherwise — anything else and the [Site
+URL](#the-site-url) check will have already stopped you), open
+`~engineering`, and post `@agent-pm what are you working on?`. Three things
+should follow, in order:
 
 1. The working-status indicator appears under `@agent-pm` (that is
    `typing_status: addressed`).
@@ -525,6 +654,8 @@ working on?`. Three things should follow, in order:
 
 If a bot stays silent, check in this order:
 
+0. `crewlet mattermost doctor mm-company.yaml` — this is what it is for; the
+   checks below are what it automates.
 1. `crewlet mattermost provision mm-company.yaml --dry-run` — does the seat
    exist, and is its token minted?
 2. The engine log, for one `mattermost_ws_connected` line per seat. A
@@ -555,13 +686,39 @@ two POST webhooks into it, so they need `host.docker.internal` and a
 reachable address; Mattermost never calls the engine at all. The whole loop
 works behind NAT with no tunnel.
 
-On a remote host, set `MATTERMOST_PUBLIC_URL` (both the compose file and the
-bootstrap read it) so the server's own links carry that address:
+**On a remote host, set `MATTERMOST_PUBLIC_URL`** to the address browsers
+use — see [The Site URL](#the-site-url), which is the one thing that has to
+be right before anything a human sees works:
 
 ```bash
 MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 docker compose --profile mattermost up -d --wait
-MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 scripts/mattermost-dev-bootstrap.sh
+scripts/mattermost-dev-bootstrap.sh
 ```
+
+The bootstrap defaults it to the address you reached the host on over SSH,
+so the second line is usually enough on its own; it prints which address it
+chose and why. It then makes the server agree, opens a websocket to prove
+the upgrade works, and stops with the fix if either check fails.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Messages only appear when you refresh; the console shows `WebSocket connection to 'ws://…/api/v4/websocket…' failed` and `disconnect_err_code=1006` | `ServiceSettings.SiteURL` does not match the address in the browser's address bar, so the [origin check](#the-site-url) rejects the upgrade | Set `MATTERMOST_PUBLIC_URL` and recreate the container |
+| A plugin bundle requests `http://localhost:8065/plugins/…` and gets `ERR_CONNECTION_REFUSED` | The same wrong SiteURL — plugins build their URLs from it. (`mattermost-ai` is prepackaged and enabled by Mattermost's own defaults, so seeing it is normal.) | Same fix; these errors go away with it |
+| Agents reply, but nobody sees it live | Both of the above at once: the engine's sockets are exempt from the origin check, browsers are not | Same fix |
+| The websocket fails and the Site URL *is* correct | Something in front of Mattermost drops the `Upgrade` header | Forward `Upgrade` / `Connection` in the reverse proxy (`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`) |
+| One bot stays silent while others work | Its token was revoked, or its account disabled | `crewlet mattermost doctor <company.yaml>`, then re-run the provisioner |
+| An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
+| Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
+
+`crewlet mattermost doctor <company.yaml>` checks all of the above in one
+pass: reachability, the Site URL against your configured `url`, a
+**browser-shaped** websocket upgrade (with an `Origin` header, which is what
+distinguishes a browser from the engine), and one real authenticated socket
+per seat. It exits non-zero when anything is wrong.
 
 ---
 

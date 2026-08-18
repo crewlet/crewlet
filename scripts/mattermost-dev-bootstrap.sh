@@ -4,11 +4,12 @@
 # instance for local integration testing of the Crewlet Mattermost
 # integration.
 #
-# It waits for the server, creates the admin account (the FIRST user on a
+# It waits for the server, reconciles the server's own Site URL with the
+# address browsers use, creates the admin account (the FIRST user on a
 # fresh install is auto-promoted to system admin — that is the account the
 # provisioner authenticates as), mints a personal access token for it,
-# creates the team and its channels, and — with COMPANY= set — provisions
-# the agent bot accounts.
+# creates the team and its channels, proves a websocket can be opened, and
+# — with COMPANY= set — provisions the agent bot accounts.
 #
 # The company config references this instance as ${MATTERMOST_URL} — no
 # copy or sed needed: this script writes MATTERMOST_URL and
@@ -21,11 +22,26 @@
 #   # or, provision the agent bots in the same run:
 #   COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 #
-# On a REMOTE host, set MATTERMOST_PUBLIC_URL (compose + this script read
-# it) to the address browsers use, so the server's own links carry that
-# address instead of localhost:
-#   MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 docker compose --profile mattermost up -d --wait
-#   MATTERMOST_PUBLIC_URL=http://203.0.113.7:8065 scripts/mattermost-dev-bootstrap.sh
+# THE PUBLIC URL. Mattermost hands its own `ServiceSettings.SiteURL` to
+# every browser that loads the web app, and the web app and its plugins
+# build absolute URLs from it. Point it at localhost while people browse
+# from somewhere else and the client tries to reach `localhost:8065` from
+# the READER's machine — which is why a wrong Site URL shows up as
+# ERR_CONNECTION_REFUSED on `/plugins/...` requests and as a live feed
+# that never updates until you refresh. So this script resolves the
+# address browsers will use, in order:
+#
+#   1. $MATTERMOST_PUBLIC_URL, when set — always wins;
+#   2. the address you reached THIS host on over SSH ($SSH_CONNECTION's
+#      server field) — if you had to SSH in, your browser is not on this
+#      machine either, and that address is one it can reach;
+#   3. http://localhost:$MATTERMOST_LISTEN_PORT — the laptop loop.
+#
+# It then makes the server agree with it (recreating the compose service
+# when the setting is environment-managed, patching it over the API
+# otherwise) and refuses to finish while the two disagree, because a
+# silent disagreement is exactly the failure this reconcile exists to
+# prevent.
 #
 # Unlike the gitlab and plane loops, nothing here has to reach the engine:
 # Mattermost has no usable inbound webhook, so the engine dials OUT over a
@@ -35,10 +51,37 @@
 set -euo pipefail
 
 PORT="${MATTERMOST_LISTEN_PORT:-8065}"
-URL="${MATTERMOST_PUBLIC_URL:-http://localhost:${PORT}}"
+
+say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[33m    %s\033[0m\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# 0. The address BROWSERS will use
+# ---------------------------------------------------------------------------
+url_source="MATTERMOST_PUBLIC_URL"
+URL="${MATTERMOST_PUBLIC_URL:-}"
+if [ -z "$URL" ] && [ -n "${SSH_CONNECTION:-}" ]; then
+  # "<client-ip> <client-port> <server-ip> <server-port>" — the third
+  # field is the address the operator reached this host on, which is by
+  # construction an address that resolves and routes from where they are
+  # sitting. IPv6 needs the brackets a URL requires.
+  ssh_host=$(printf '%s\n' "$SSH_CONNECTION" | awk '{print $3}')
+  if [ -n "${ssh_host:-}" ]; then
+    case "$ssh_host" in
+      *:*) ssh_host="[${ssh_host}]" ;;
+    esac
+    URL="http://${ssh_host}:${PORT}"
+    url_source="SSH_CONNECTION"
+  fi
+fi
+if [ -z "$URL" ]; then
+  URL="http://localhost:${PORT}"
+  url_source="default"
+fi
+URL="${URL%/}"
+
 # The address THIS SCRIPT talks to. Always local — the published port is on
-# this host even when MATTERMOST_PUBLIC_URL names a remote address for
-# browsers.
+# this host even when the public URL names a remote address for browsers.
 API="http://localhost:${PORT}/api/v4"
 
 ENV_FILE="${ENV_FILE:-.env}"
@@ -54,7 +97,28 @@ ADMIN_USER="${MATTERMOST_ADMIN_USERNAME:-founder}"
 # literal, like the GITLAB_ROOT_PASSWORD default in docker-compose.yml.
 ADMIN_PASS="${MATTERMOST_ADMIN_PASSWORD:-crewlet-dev-password}"
 
-say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+# ---------------------------------------------------------------------------
+# JSON is parsed with python3 rather than sed. A greedy `.*"id":"..."`
+# match returns the LAST id in a payload, not the first, which is a bug
+# waiting for the day Mattermost adds a field.
+# ---------------------------------------------------------------------------
+json_get() {
+  # json_get <json> <dotted.path> — empty string when absent.
+  python3 -c '
+import json, sys
+try:
+    value = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(0)
+for key in sys.argv[2].split("."):
+    if not isinstance(value, dict):
+        sys.exit(0)
+    value = value.get(key)
+    if value is None:
+        sys.exit(0)
+print(value if isinstance(value, str) else json.dumps(value))
+' "$1" "$2"
+}
 
 # ---------------------------------------------------------------------------
 # 1. Wait for the server
@@ -74,7 +138,107 @@ for i in $(seq 1 60); do
 done
 
 # ---------------------------------------------------------------------------
-# 2. Admin account (first user is promoted to system admin automatically)
+# 2. Site URL — the setting every browser inherits
+# ---------------------------------------------------------------------------
+# `/config/client` is unauthenticated and carries exactly what the web app
+# is handed, so this reads the value the BROWSER will act on rather than
+# the one an admin API might report.
+site_url() {
+  local body
+  body=$(curl -fsS "${API}/config/client?format=old" 2>/dev/null || echo '')
+  [ -n "$body" ] || return 0
+  json_get "$body" SiteURL
+}
+
+say "Reconciling the Site URL with the address browsers use"
+echo "    browsers:  ${URL}   (from ${url_source})"
+CURRENT_SITE_URL=$(site_url)
+echo "    server:    ${CURRENT_SITE_URL:-<unset>}"
+
+if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
+  fixed=""
+  # An MM_* environment variable OUTRANKS anything written over the API,
+  # so for the compose stack the only fix that takes is recreating the
+  # container with the right value. Try that first, when this IS the
+  # compose stack.
+  mm_container=""
+  if command -v docker >/dev/null 2>&1; then
+    mm_container=$(docker compose --profile mattermost ps -q mattermost 2>/dev/null || true)
+  fi
+  if [ -n "$mm_container" ]; then
+    say "Recreating the mattermost service with MATTERMOST_PUBLIC_URL=${URL}"
+    if MATTERMOST_PUBLIC_URL="$URL" docker compose --profile mattermost up -d --wait mattermost; then
+      # Poll for the new VALUE, not merely for an answer: during a
+      # recreate the old container can still be serving, and a
+      # first-non-empty read would happily accept its stale Site URL.
+      for _ in $(seq 1 30); do
+        CURRENT_SITE_URL=$(site_url)
+        if [ "${CURRENT_SITE_URL%/}" = "$URL" ]; then
+          break
+        fi
+        sleep 2
+      done
+      if [ "${CURRENT_SITE_URL%/}" = "$URL" ]; then
+        fixed="recreated"
+      fi
+    fi
+  fi
+
+  # Not our container, or the recreate did not take: patch it over the
+  # API — but only when the setting is not environment-managed. An MM_*
+  # variable is re-applied on every config write, so a PUT against one
+  # returns 200 and changes nothing; attempting it would trade a clear
+  # failure for a confusing one. (The System Console greys the field out
+  # for the same reason.) `/config/patch` is a PUT: Mattermost has no
+  # PATCH verb here, and `PUT /config` would demand — and clobber — the
+  # whole config document.
+  if [ -z "$fixed" ] && [ -n "${MATTERMOST_ADMIN_TOKEN:-}" ]; then
+    env_managed=$(curl -fsS "${API}/config/environment" \
+      -H "Authorization: Bearer ${MATTERMOST_ADMIN_TOKEN}" 2>/dev/null || echo '{}')
+    if [ "$(json_get "$env_managed" ServiceSettings.SiteURL)" = "true" ]; then
+      warn "SiteURL is set from the environment (MM_SERVICESETTINGS_SITEURL);"
+      warn "the API cannot change it — the container has to be recreated."
+    else
+      say "Patching ServiceSettings.SiteURL over the API"
+      if curl -fsS -o /dev/null -X PUT "${API}/config/patch" \
+          -H "Authorization: Bearer ${MATTERMOST_ADMIN_TOKEN}" \
+          -H 'Content-Type: application/json' \
+          -d "{\"ServiceSettings\":{\"SiteURL\":\"${URL}\"}}" 2>/dev/null; then
+        CURRENT_SITE_URL=$(site_url)
+        if [ "${CURRENT_SITE_URL%/}" = "$URL" ]; then
+          fixed="patched"
+        fi
+      fi
+    fi
+  fi
+
+  if [ -n "$fixed" ]; then
+    echo "    now:       ${CURRENT_SITE_URL}  (${fixed})"
+  else
+    warn "Site URL is still ${CURRENT_SITE_URL:-<unset>}, not ${URL}."
+    warn ""
+    warn "Mattermost accepts a websocket upgrade only when the browser's"
+    warn "Origin matches SiteURL exactly, host AND scheme, so every browser"
+    warn "on any other address gets 403 on /api/v4/websocket and falls back"
+    warn "to refresh-to-see-new-messages. Plugins compound it: they build"
+    warn "their URLs from SiteURL too, so their requests go to a host the"
+    warn "reader's machine cannot reach. Fix it with:"
+    warn ""
+    warn "  MATTERMOST_PUBLIC_URL=${URL} \\"
+    warn "    docker compose --profile mattermost up -d --wait"
+    warn ""
+    warn "MM_* values are read-only in the System Console by design, so for"
+    warn "the compose stack recreating the container is the only fix that"
+    warn "takes. On a Mattermost you configure by hand, set it under"
+    warn "System Console > Environment > Web Server."
+    exit 1
+  fi
+else
+  echo "    match"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Admin account (first user is promoted to system admin automatically)
 # ---------------------------------------------------------------------------
 say "Creating the admin account (${ADMIN_USER}) ..."
 create_body=$(printf '{"email":"%s","username":"%s","password":"%s"}' \
@@ -98,13 +262,13 @@ if [ -z "$SESSION" ]; then
   echo "previous run, set MATTERMOST_ADMIN_PASSWORD to the current one." >&2
   exit 1
 fi
-USER_ID=$(printf '%s' "$user_json" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+USER_ID=$(json_get "$user_json" id)
 echo "    logged in as ${ADMIN_USER} (${USER_ID})"
 
 auth=(-H "Authorization: Bearer ${SESSION}")
 
 # ---------------------------------------------------------------------------
-# 3. A durable personal access token for the provisioner
+# 4. A durable personal access token for the provisioner
 # ---------------------------------------------------------------------------
 # The session token above expires; the provisioner wants a PAT. Reuse the
 # one this script minted on a previous run rather than accumulating a new
@@ -128,7 +292,7 @@ else
   token_json=$(curl -fsS -X POST "${API}/users/${USER_ID}/tokens" "${auth[@]}" \
     -H 'Content-Type: application/json' \
     -d "{\"description\":\"${TOKEN_DESC}\"}")
-  ADMIN_TOKEN=$(printf '%s' "$token_json" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' | head -1)
+  ADMIN_TOKEN=$(json_get "$token_json" token)
   echo "    minted"
 fi
 if [ -z "${ADMIN_TOKEN:-}" ]; then
@@ -137,7 +301,7 @@ if [ -z "${ADMIN_TOKEN:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Team + channels
+# 5. Team + channels
 # ---------------------------------------------------------------------------
 say "Creating the '${TEAM}' team ..."
 team_json=$(curl -fsS "${auth[@]}" "${API}/teams/name/${TEAM}" 2>/dev/null || echo '')
@@ -149,7 +313,7 @@ if [ -z "$team_json" ]; then
 else
   echo "    already exists"
 fi
-TEAM_ID=$(printf '%s' "$team_json" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+TEAM_ID=$(json_get "$team_json" id)
 
 # The admin has to be IN the team to administer its channels.
 curl -fsS -o /dev/null -X POST "${API}/teams/${TEAM_ID}/members" "${auth[@]}" \
@@ -170,16 +334,117 @@ for ch in $CHANNELS; do
 done
 
 # ---------------------------------------------------------------------------
-# 5. Persist the coordinates the config + provisioner resolve
+# 6. Prove a websocket opens
 # ---------------------------------------------------------------------------
-say "Writing MATTERMOST_URL + MATTERMOST_ADMIN_TOKEN to ${ENV_FILE}"
+# The one check that exercises what actually breaks in practice. Everything
+# above can pass against a server whose websocket endpoint is unreachable —
+# and a Mattermost whose websocket never connects looks ALIVE: pages load,
+# messages send, and only the live feed is dead, so readers refresh to see
+# replies instead of reporting an outage. It is also the engine's ONLY
+# inbound path, so a failure here means no agent ever hears anything.
+say "Checking the websocket upgrade"
+ws_check() {
+  python3 - "$1" <<'PY'
+import base64, os, socket, ssl, sys
+from urllib.parse import urlparse
+
+url = urlparse(sys.argv[1])
+host = url.hostname or "localhost"
+port = url.port or (443 if url.scheme == "https" else 80)
+path = (url.path or "").rstrip("/") + "/api/v4/websocket"
+try:
+    sock = socket.create_connection((host, port), timeout=10)
+except OSError as exc:
+    print(f"unreachable: {exc}")
+    sys.exit(2)
+try:
+    if url.scheme == "https":
+        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {url.netloc}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        f"Origin: {url.scheme}://{url.netloc}\r\n"
+        "\r\n"
+    )
+    sock.sendall(request.encode())
+    raw = sock.recv(4096).decode("latin-1", "replace")
+except OSError as exc:
+    print(f"handshake failed: {exc}")
+    sys.exit(2)
+finally:
+    sock.close()
+status = raw.split("\r\n", 1)[0] if raw else "<no response>"
+print(status)
+sys.exit(0 if " 101 " in f" {status} " else 1)
+PY
+}
+ws_status=$(ws_check "$URL") && ws_ok=1 || ws_ok=0
+if [ "$ws_ok" = "1" ]; then
+  echo "    ${URL} → ${ws_status}"
+else
+  echo "    ${URL} → ${ws_status}"
+  # Distinguish "Mattermost refuses to upgrade" from "something in front
+  # of Mattermost eats the Upgrade header" — the fix is in a different
+  # place for each, and the published port answers the question.
+  local_url="http://localhost:${PORT}"
+  local_status=$(ws_check "$local_url") && local_ok=1 || local_ok=0
+  echo "    ${local_url} → ${local_status}"
+  warn ""
+  case "$ws_status" in
+    *40[13]*)
+      # gorilla answers a rejected CheckOrigin with 403 — and the only
+      # input to Mattermost's checker is SiteURL. Reaching here means the
+      # reconcile above settled on an address this probe is not sending.
+      warn "The server rejected the upgrade rather than dropping it, which"
+      warn "is Mattermost's origin check: it accepts a websocket only from"
+      warn "a browser whose Origin matches ServiceSettings.SiteURL exactly"
+      warn "(${CURRENT_SITE_URL:-<unset>}), host and scheme. Set"
+      warn "MATTERMOST_PUBLIC_URL to the address people actually type."
+      ;;
+    *)
+      if [ "$local_ok" = "1" ]; then
+        warn "Mattermost upgrades fine on its own published port, but ${URL}"
+        warn "does not — so the break is IN FRONT of Mattermost, not in it:"
+        warn "  * a reverse proxy that does not forward the Upgrade and"
+        warn "    Connection headers (nginx needs proxy_set_header Upgrade"
+        warn "    \$http_upgrade; proxy_set_header Connection \"upgrade\";)"
+        warn "  * a firewall, CDN or load balancer between here and that"
+        warn "    address that allows HTTP but not websockets."
+      else
+        warn "Mattermost did not upgrade on its own published port either."
+        warn "Check: docker compose --profile mattermost logs mattermost"
+      fi
+      ;;
+  esac
+  warn ""
+  warn "Live updates in the web app and every inbound message the engine"
+  warn "sees travel over this connection, so both stay dead until it works."
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Persist the coordinates the config + provisioner resolve
+# ---------------------------------------------------------------------------
+# MATTERMOST_PUBLIC_URL lands in the env file too, and docker compose reads
+# `.env` from the project directory on every invocation — so a later
+# `docker compose --profile mattermost up -d` keeps the Site URL this run
+# settled on instead of silently reverting it to localhost.
+say "Writing MATTERMOST_URL + MATTERMOST_PUBLIC_URL + MATTERMOST_ADMIN_TOKEN to ${ENV_FILE}"
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 python3 - "$ENV_FILE" "$URL" "$ADMIN_TOKEN" <<'PY'
 import pathlib, sys
 
 path, url, token = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-values = {"MATTERMOST_URL": url, "MATTERMOST_ADMIN_TOKEN": token}
+values = {
+    "MATTERMOST_URL": url,
+    "MATTERMOST_PUBLIC_URL": url,
+    "MATTERMOST_ADMIN_TOKEN": token,
+}
 
 lines = path.read_text().splitlines() if path.exists() else []
 seen = set()
@@ -193,7 +458,7 @@ path.write_text("\n".join(lines) + "\n")
 PY
 
 # ---------------------------------------------------------------------------
-# 6. Optional: provision the agent bots
+# 8. Optional: provision the agent bots
 # ---------------------------------------------------------------------------
 if [ -n "${COMPANY:-}" ]; then
   say "Provisioning agent bots from ${COMPANY}"
@@ -210,7 +475,7 @@ $(printf '\033[1mDone.\033[0m')
   Mattermost   ${URL}
   Admin        ${ADMIN_USER} / ${ADMIN_PASS}
   Team         ${TEAM}
-  Env file     ${ENV_FILE}  (MATTERMOST_URL, MATTERMOST_ADMIN_TOKEN)
+  Env file     ${ENV_FILE}  (MATTERMOST_URL, MATTERMOST_PUBLIC_URL, MATTERMOST_ADMIN_TOKEN)
 
 Next:
   1. Point your company config at this instance:
@@ -225,7 +490,11 @@ Next:
 
        crewlet mattermost provision <company.yaml>
 
-  3. Start the engine — it opens one websocket per agent seat:
+  3. Check the whole path before you boot:
+
+       crewlet mattermost doctor <company.yaml>
+
+  4. Start the engine — it opens one websocket per agent seat:
 
        crewlet run config.yaml
 
