@@ -793,7 +793,210 @@ mail and not the work. They will be implemented and reviewed together.
   with an epoch re-check inside it, so a heartbeat carrying a stale lease
   cannot tear down a claim a sweep made while it was awaiting.
 
-### 5.2 Owner-only subscriptions (original plan text)
+### 5.2 — Seat ownership: inbox, takeover, and sandbox control (REVISED, one phase)
+
+Replaces the original 5.2, 5.3 and 5.6. They were three phases on paper
+and one change in fact: a node that owns a seat's mail but not its
+sandbox control, or that recovers seats it does not own, is not a seat
+owner — it is a node holding half of one. Splitting them ships a state
+we already know is wrong.
+
+#### The five decisions the review forced
+
+**(a) Subscription existence is an org invariant, not an ownership one.**
+
+Every node ensures the durable subscription exists for *every* seat at
+boot — `subscribe` then immediately `detach`, ~14 ms per seat by the
+measured attach/release numbers — and ownership thereafter governs only
+*attachment*. This is what makes an unclaimed seat safe: measured, a
+durable subscription retains its backlog with no consumer attached, so
+messages published during a lease gap, a claim ramp, or a full fleet
+restart are held rather than discarded. Without the invariant, the first
+publish to a never-subscribed seat is silently dropped — no DLQ, no
+producer error.
+
+It also decouples decommission. Deleting a subscription becomes an
+explicit `EventQueue.delete_subscription(topic, group)` that does not
+require a local consumer, so role removal cannot depend on which node
+happens to hold the seat.
+
+**(b) The safety property is an epoch-fenced ownership check where a turn
+starts — not detach.**
+
+The prescribed release ordering only ever described the *voluntary* path.
+The dominant path is lease **loss**, which inverts it by construction:
+the row lapsed, so a peer may already be running the agent before this
+node notices. No amount of careful detaching closes that window, because
+the window opens before detach is reached.
+
+So the inbox handler gains an ownership branch beside `admits_triggers()`:
+if this node does not hold the seat's lease, requeue-and-ack (never NAK).
+`SeatHost.epoch_for` stops being decorative and becomes the token every
+seat-scoped write carries. Detach is demoted to what it actually is —
+cleanup that stops *new* deliveries, not the thing that makes concurrency
+impossible.
+
+**(c) Two release modes, because loss and drain are opposites.**
+
+- **voluntary** (drain, capacity rebalance, role gone): quiesce → let the
+  in-flight handler finish under a bounded wait → detach → release lease.
+- **fenced** (renew returned `False`, the TTL grace expired, an acquire
+  hook failed, posture went SHED/STUCK): **detach first**, abandon
+  in-flight work, and never republish. A peer may already be running this
+  seat; republishing hands it a second copy of work it is already doing.
+
+`on_release(handle, lease, *, reason)` carries which. `role_gone` must
+not defer at all — the events are for a role that no longer exists.
+
+**Republish-then-ack is dropped from the handoff path entirely.** Measured:
+a close-driven handoff does not increment `redeliveryCount`; unacked
+messages return to the successor at count 0, in order. Gate (c)'s C3 and
+C4 invented republish-then-ack to avoid a dead-letter cost that does not
+exist here, and it was itself the source of the conversation-reordering
+fatal (republished messages go to the topic tail while prefetched
+siblings replay from the head). A plain close is the correct deferral.
+What *does* burn the counter is a NAK, so the rule inverts: **quiesce
+must avoid cancelling a handler mid-flight**, because the cancellation
+path NAKs.
+
+**(d) Quiesce is a per-subscription flag, not a topic pause.**
+
+Verified in the code: `_paused_topics` is consulted only at the top of
+`_receive_one`, before the blocking receive. The post-receive gate tests
+the *global* pause, and `_collect_batch` never checks the topic pause at
+all. A pause therefore stops the *next* fetch and nothing else — a
+message already fetched still dispatches, and a positive linger keeps
+collecting more.
+
+`_Subscription` gains a `quiescing` flag, checked at four points: loop
+top, immediately after `_receive_one` returns, inside `_collect_batch`'s
+loop, and immediately before dispatch. Collected-but-undispatched
+messages are left unacked for the successor rather than dispatched or
+NAK'd.
+
+(That same gap is a live bug today: the sandbox busy gate keeps filling a
+batch after the pause lands. It is fixed by the same flag.)
+
+**(e) Sandbox control is owner-routed, and a seat is established, not
+assumed.**
+
+`SandboxCoordinator` subscribes both control topics under one fleet-wide
+Shared group, so a completion lands on a non-owner (N−1)/N of the time.
+Replaced by a **per-seat control topic** — `crewlet.agent.{handle}.control`,
+group `agent-{handle}-control` — attached and detached alongside the
+inbox. Routing then emerges from who subscribes, exactly as it does for
+the inbox, rather than from any "which node" computation. It cannot ride
+the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused,
+and a completion riding it would queue behind the very pause it exists to
+lift.
+
+`pending_sandbox_run` gains `owner` and `owner_epoch`. `recover()` stops
+being a fleet-wide scan and becomes a per-seat step inside `on_acquire`,
+fenced on the claiming node's epoch.
+
+And **agents are no longer spawned on every node.** That was the original
+point 5, and it is unsound: `AgentInstance.state` is process-local and
+never persisted, so a non-owner's instance strands in `AWAITING_SANDBOX`
+and the seat comes home poisoned. It also contradicts the constants 5.1
+shipped, which size the claim-rate limit by MCP spawn cost that
+spawn-everywhere would eliminate. `on_acquire` establishes the seat in a
+known state — instance, budget, per-role MCP children, pending-run
+recovery — and attaches the consumer **last**, the ordering boot already
+uses and `_spawn_role_live` currently inverts.
+
+#### Work items
+
+1. **`EventQueue` protocol**: `detach(topic, group)` (non-destructive,
+   idempotent, returns whether an attachment existed),
+   `delete_subscription(topic, group)` (no local consumer required),
+   `quiesce(topic, group)`. `unsubscribe` is removed in favour of the
+   explicit pair — its name never said which one it was.
+2. **Pause holds keyed by `(topic, group)`**, dropped on detach, with a
+   dedicated `"seat"` reason. Today they are topic-keyed, process-local
+   and survive teardown, so a release/re-acquire on one node re-attaches
+   into a still-paused topic and goes silently deaf — and `preferred`
+   stickiness makes flap-and-return the *normal* case.
+3. **`MemoryEventQueue` gets a real durable subscription**: a
+   per-`(topic, group)` backlog created on first subscribe, appended to
+   by `publish` when no attachment exists, replayed on re-attach; plus
+   round-robin delivery across members of a group. Without both, the twin
+   inverts the design's load-bearing property and the double-consumer
+   split-brain is structurally untestable — CI would read green on
+   exactly the failure this phase exists to prevent.
+4. **A fake-broker unit suite** at the `_create_durable_consumer` seam
+   (the shape `test_pulsar_unit.py` already uses), asserting the real
+   detach body: close called, `unsubscribe` *not* called, executor shut
+   down, registry entry removed.
+5. **`SeatHost`**: `on_release` reason; fail-closed release (a detach
+   that cannot be proven complete does **not** release the lease — keep
+   renewing and retry, and if it cannot be closed within the TTL, take
+   the watchdog's remedy); acquire-hook failure gets backoff and negative
+   stickiness rather than an immediate re-claim; `_notify_release` stops
+   swallowing exceptions silently.
+6. **Seat identity**: `SeatHost` keys by handle, every engine drain and
+   config-apply primitive keys by role name, and `Role.handle` is
+   mutable. Make `handle` an identity field — a handle change
+   decommissions the old seat and spawns a new one instead of taking the
+   update branch — and give the hooks an explicit handle↔role mapping.
+7. **`_subscribed_inboxes` → `dict[handle, epoch]`**, written and cleared
+   only by the hooks, cleared in `stop()` and `_force_stop()`, and
+   `_subscribe_agent_inbox` raises rather than silently skipping when
+   asked to attach something it believes attached.
+8. **Drain ordering**: `Engine.stop()` begins with `begin_drain()` and
+   releases seats one at a time through the voluntary path *before*
+   `pause_delivery()`. Today's order blackholes the node's own seats for
+   the whole drain while its heartbeat keeps renewing them.
+9. **Posture couples to ownership**: SHED/STUCK drives `begin_drain()` +
+   `release_all()` and drops the `node:` presence lease, so the fair
+   share recomputes over serving nodes only. Otherwise a diverged node
+   holds seats it refuses to serve and reserves capacity for itself.
+10. **Observability**: a `seats` accessor on `NodeRuntime`, rendered in
+    the health envelope (held, capacity, live nodes, last claimed, last
+    lost, protocol block); `SweepResult.lost` actually populated — it is
+    documented "for logs, tests and /health" and is hardcoded empty;
+    `inbox_attached` / `inbox_detached` at INFO with seat, epoch and
+    elapsed ms. Every failure mode in this phase is currently diagnosable
+    only by reading three processes' logs at DEBUG.
+
+#### Measurements this design rests on
+
+| Question | Answer | Consequence |
+|---|---|---|
+| Does a durable subscription retain its backlog with no consumer? | **Yes**, all messages recovered | (a) is safe; detach must never `unsubscribe` |
+| Does a close-driven handoff increment `redeliveryCount`? | **No**, count 0 at the successor | republish-then-ack dropped; C3/C4 retired |
+| Does the cursor survive a change of owner? | **Yes**, no replay, no loss | owner-only Shared confirmed |
+| Attach / release cost | 4.9 ms / 9 ms | the boot pre-create in (a) is affordable |
+| Does ack-timeout redelivery increment the counter? | **Yes**, 0 → 1 | `_INBOX_MAX_REDELIVER = 3` becomes "three node deaths per message"; raised to 10 (item 11) |
+
+11. **`_INBOX_MAX_REDELIVER`: 3 → 10.** Measured: an ack-timeout
+    redelivery — the `kill -9`, wedged-node and watchdog-`os._exit` path
+    — increments the counter. Three was sized for a single-node world
+    where a redelivery means "the handler failed", i.e. a poison
+    message. In a fleet it also means "a node died holding this", so the
+    budget silently became three node deaths per message, after which a
+    perfectly healthy event is dead-lettered having never been handled.
+
+    Ten, because the two causes separate by **rate**, not by count. A
+    genuine poison message is NAK'd on handler failure and redelivered
+    after `_NEG_ACK_REDELIVERY_DELAY_MS` (1 s), so it still burns the
+    whole budget in about ten seconds — poison detection goes from 3 s to
+    10 s, which nothing depends on. Handoff-driven redeliveries are
+    minutes to half an hour apart (the ack timeout is 30 minutes), so ten
+    covers a 3-node rolling deploy plus several genuine crashes over a
+    message's life. Raising the count is close to free for the case the
+    cap exists for, and buys the case a fleet actually produces.
+
+#### Exit criteria
+
+The chaos suite, plus: a seat handed off mid-conversation preserves
+order; a node that loses its lease starts no new turn even while its
+consumer is still attached; a completion for a seat reaches its owner and
+only its owner; an unclaimed seat's messages survive until someone claims
+it; and the same suite passes on the memory twin.
+
+---
+
+### 5.2 Owner-only subscriptions — SUPERSEDED (original plan text, kept for the record)
 
 - The seat's inbox consumer (`engine.py:2120-2127`) is created on lease
   acquire and closed on release — same durable subscription name
@@ -804,7 +1007,7 @@ mail and not the work. They will be implemented and reviewed together.
   **only** on role decommission, coordinated via the control plane so every
   node first releases/ignores the seat.
 
-### 5.3 The takeover pipeline (boot = takeover)
+### 5.3 The takeover pipeline — SUPERSEDED, folded into the revised 5.2
 
 - Acquire lease → scan `pending_sandbox_run` for the seat → reconstruct
   pause state from rows (`sandbox_id` non-empty ⇔ paused) and
@@ -832,7 +1035,7 @@ mail and not the work. They will be implemented and reviewed together.
   precondition; `attach_sandbox`/`release_box`,
   `pending_store.py:367`) gain compare-and-set preconditions.
 
-### 5.6 Owner-routed sandbox control
+### 5.6 Owner-routed sandbox control — SUPERSEDED, folded into the revised 5.2
 
 - Primary variant: **the DB claim** — the waiter (a worker-host singleton)
   writes `completed` onto the pending row; each seat host claims completions
