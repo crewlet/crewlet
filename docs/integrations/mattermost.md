@@ -554,14 +554,16 @@ docker compose --profile mattermost up -d --wait
 scripts/mattermost-dev-bootstrap.sh
 ```
 
-The bootstrap waits for the server, reconciles the [Site
-URL](#the-site-url) with the address browsers will use, creates the admin
-account (the **first** user on a fresh install is auto-promoted to system
-admin — that is the account the provisioner authenticates as), mints its
-personal access token, creates the `nimbus` team and its channels, proves a
-websocket upgrade succeeds, and writes `MATTERMOST_URL`,
-`MATTERMOST_PUBLIC_URL` and `MATTERMOST_ADMIN_TOKEN` into `.env`. Every step
-is idempotent, so re-run it freely.
+The bootstrap waits for the server, creates the admin account (the **first**
+user on a fresh install is auto-promoted to system admin — that is the
+account the provisioner authenticates as), mints its personal access token
+and writes `MATTERMOST_URL`, `MATTERMOST_PUBLIC_URL` and
+`MATTERMOST_ADMIN_TOKEN` straight into `.env`, reconciles the [Site
+URL](#the-site-url) with the address browsers will use, creates the `nimbus`
+team and its channels, and proves a websocket upgrade succeeds. Credentials
+are written the moment they exist, before any check that can abort —
+Mattermost returns a token's value exactly once. Every step is idempotent,
+so re-run it freely.
 
 Provision the agent bots in the same run by pointing it at a company config:
 

@@ -4,12 +4,18 @@
 # instance for local integration testing of the Crewlet Mattermost
 # integration.
 #
-# It waits for the server, reconciles the server's own Site URL with the
-# address browsers use, creates the admin account (the FIRST user on a
+# It waits for the server, creates the admin account (the FIRST user on a
 # fresh install is auto-promoted to system admin — that is the account the
-# provisioner authenticates as), mints a personal access token for it,
-# creates the team and its channels, proves a websocket can be opened, and
-# — with COMPANY= set — provisions the agent bot accounts.
+# provisioner authenticates as), mints a personal access token for it and
+# writes it straight to the env file, reconciles the server's own Site URL
+# with the address browsers use, creates the team and its channels, proves
+# a websocket can be opened, and — with COMPANY= set — provisions the agent
+# bot accounts.
+#
+# Credentials are persisted the moment they exist, before any check that
+# can abort: Mattermost returns a personal access token's value exactly
+# once, so a gate that fails between minting and writing strands a live
+# admin credential nobody can read.
 #
 # The company config references this instance as ${MATTERMOST_URL} — no
 # copy or sed needed: this script writes MATTERMOST_URL and
@@ -138,11 +144,117 @@ for i in $(seq 1 60); do
 done
 
 # ---------------------------------------------------------------------------
-# 2. Site URL — the setting every browser inherits
+# 2. Admin account (first user is promoted to system admin automatically)
 # ---------------------------------------------------------------------------
-# `/config/client` is unauthenticated and carries exactly what the web app
-# is handed, so this reads the value the BROWSER will act on rather than
-# the one an admin API might report.
+say "Creating the admin account (${ADMIN_USER}) ..."
+create_body=$(printf '{"email":"%s","username":"%s","password":"%s"}' \
+  "$ADMIN_EMAIL" "$ADMIN_USER" "$ADMIN_PASS")
+# Tolerate "already exists" — this script is re-runnable.
+curl -fsS -o /dev/null -X POST "${API}/users" \
+  -H 'Content-Type: application/json' -d "$create_body" 2>/dev/null \
+  && echo "    created" \
+  || echo "    already exists (or signup closed) — continuing"
+
+say "Logging in ..."
+login_body=$(printf '{"login_id":"%s","password":"%s"}' "$ADMIN_USER" "$ADMIN_PASS")
+# The session token comes back in a RESPONSE HEADER, not the body.
+headers=$(mktemp)
+user_json=$(curl -fsS -D "$headers" -X POST "${API}/users/login" \
+  -H 'Content-Type: application/json' -d "$login_body")
+SESSION=$(awk 'BEGIN{IGNORECASE=1} /^token:/ {print $2}' "$headers" | tr -d '\r')
+rm -f "$headers"
+if [ -z "$SESSION" ]; then
+  echo "Login failed for ${ADMIN_USER}. If you changed the password after a" >&2
+  echo "previous run, set MATTERMOST_ADMIN_PASSWORD to the current one." >&2
+  exit 1
+fi
+USER_ID=$(json_get "$user_json" id)
+echo "    logged in as ${ADMIN_USER} (${USER_ID})"
+
+auth=(-H "Authorization: Bearer ${SESSION}")
+
+# ---------------------------------------------------------------------------
+# 3. A durable personal access token for the provisioner
+# ---------------------------------------------------------------------------
+# The session token above expires; the provisioner wants a PAT. Reuse the
+# one this script minted on a previous run rather than accumulating a new
+# token per run — Mattermost returns a token's value ONLY at creation, so a
+# re-mint would strand the old one.
+say "Minting the provisioning token ..."
+TOKEN_DESC="crewlet-dev-bootstrap"
+existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens" 2>/dev/null || echo '[]')
+if printf '%s' "$existing" | grep -q "\"description\":\"${TOKEN_DESC}\""; then
+  echo "    a '${TOKEN_DESC}' token already exists."
+  if grep -q '^MATTERMOST_ADMIN_TOKEN=' "$ENV_FILE" 2>/dev/null; then
+    ADMIN_TOKEN=$(grep '^MATTERMOST_ADMIN_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+    echo "    reusing the value in ${ENV_FILE}"
+  else
+    echo "    ...but ${ENV_FILE} has no MATTERMOST_ADMIN_TOKEN, and the value" >&2
+    echo "    is unrecoverable (Mattermost returns it once). Revoke the old" >&2
+    echo "    token in Profile > Security > Personal Access Tokens and re-run." >&2
+    exit 1
+  fi
+else
+  token_json=$(curl -fsS -X POST "${API}/users/${USER_ID}/tokens" "${auth[@]}" \
+    -H 'Content-Type: application/json' \
+    -d "{\"description\":\"${TOKEN_DESC}\"}")
+  ADMIN_TOKEN=$(json_get "$token_json" token)
+  echo "    minted"
+fi
+if [ -z "${ADMIN_TOKEN:-}" ]; then
+  echo "Could not obtain an admin token." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Persist the coordinates the config + provisioner resolve
+# ---------------------------------------------------------------------------
+# Written HERE, the moment the values exist, not at the end of the run:
+# Mattermost returns a personal access token's value exactly ONCE, so a
+# later step that fails before this point would strand a live admin
+# credential nobody can read — and this script's own recovery advice for
+# that is "revoke the old token and re-run". Same write-through
+# discipline the provisioning sinks follow (src/crewlet/provisioning.py).
+#
+# MATTERMOST_PUBLIC_URL lands in the env file too, and docker compose reads
+# `.env` from the project directory on every invocation — so a later
+# `docker compose --profile mattermost up -d` keeps the Site URL this run
+# settled on instead of silently reverting it to localhost.
+say "Writing MATTERMOST_URL + MATTERMOST_PUBLIC_URL + MATTERMOST_ADMIN_TOKEN to ${ENV_FILE}"
+touch "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+python3 - "$ENV_FILE" "$URL" "$ADMIN_TOKEN" <<'PY'
+import pathlib, sys
+
+path, url, token = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+values = {
+    "MATTERMOST_URL": url,
+    "MATTERMOST_PUBLIC_URL": url,
+    "MATTERMOST_ADMIN_TOKEN": token,
+}
+
+lines = path.read_text().splitlines() if path.exists() else []
+seen = set()
+for i, line in enumerate(lines):
+    key = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+    if key in values:
+        lines[i] = f"{key}={values[key]}"
+        seen.add(key)
+lines.extend(f"{k}={v}" for k, v in values.items() if k not in seen)
+path.write_text("\n".join(lines) + "\n")
+PY
+
+# ---------------------------------------------------------------------------
+# 5. Site URL — the setting every browser inherits
+# ---------------------------------------------------------------------------
+# Runs AFTER the admin token exists, because repairing it needs one: an
+# MM_* environment variable outranks stored config, so the compose stack
+# is fixed by recreating the container, and everything else by
+# `PUT /config/patch` — which needs a system admin. Reading is
+# unauthenticated: `/config/client` carries exactly what the web app is
+# handed, so this compares the value the BROWSER will act on rather than
+# the one an admin API might report. `format=old` is required — without
+# it, servers up to v10.5 answer 501.
 site_url() {
   local body
   body=$(curl -fsS "${API}/config/client?format=old" 2>/dev/null || echo '')
@@ -192,16 +304,16 @@ if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
   # for the same reason.) `/config/patch` is a PUT: Mattermost has no
   # PATCH verb here, and `PUT /config` would demand — and clobber — the
   # whole config document.
-  if [ -z "$fixed" ] && [ -n "${MATTERMOST_ADMIN_TOKEN:-}" ]; then
+  if [ -z "$fixed" ]; then
     env_managed=$(curl -fsS "${API}/config/environment" \
-      -H "Authorization: Bearer ${MATTERMOST_ADMIN_TOKEN}" 2>/dev/null || echo '{}')
+      -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || echo '{}')
     if [ "$(json_get "$env_managed" ServiceSettings.SiteURL)" = "true" ]; then
       warn "SiteURL is set from the environment (MM_SERVICESETTINGS_SITEURL);"
       warn "the API cannot change it — the container has to be recreated."
     else
       say "Patching ServiceSettings.SiteURL over the API"
       if curl -fsS -o /dev/null -X PUT "${API}/config/patch" \
-          -H "Authorization: Bearer ${MATTERMOST_ADMIN_TOKEN}" \
+          -H "Authorization: Bearer ${ADMIN_TOKEN}" \
           -H 'Content-Type: application/json' \
           -d "{\"ServiceSettings\":{\"SiteURL\":\"${URL}\"}}" 2>/dev/null; then
         CURRENT_SITE_URL=$(site_url)
@@ -238,70 +350,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Admin account (first user is promoted to system admin automatically)
-# ---------------------------------------------------------------------------
-say "Creating the admin account (${ADMIN_USER}) ..."
-create_body=$(printf '{"email":"%s","username":"%s","password":"%s"}' \
-  "$ADMIN_EMAIL" "$ADMIN_USER" "$ADMIN_PASS")
-# Tolerate "already exists" — this script is re-runnable.
-curl -fsS -o /dev/null -X POST "${API}/users" \
-  -H 'Content-Type: application/json' -d "$create_body" 2>/dev/null \
-  && echo "    created" \
-  || echo "    already exists (or signup closed) — continuing"
-
-say "Logging in ..."
-login_body=$(printf '{"login_id":"%s","password":"%s"}' "$ADMIN_USER" "$ADMIN_PASS")
-# The session token comes back in a RESPONSE HEADER, not the body.
-headers=$(mktemp)
-user_json=$(curl -fsS -D "$headers" -X POST "${API}/users/login" \
-  -H 'Content-Type: application/json' -d "$login_body")
-SESSION=$(awk 'BEGIN{IGNORECASE=1} /^token:/ {print $2}' "$headers" | tr -d '\r')
-rm -f "$headers"
-if [ -z "$SESSION" ]; then
-  echo "Login failed for ${ADMIN_USER}. If you changed the password after a" >&2
-  echo "previous run, set MATTERMOST_ADMIN_PASSWORD to the current one." >&2
-  exit 1
-fi
-USER_ID=$(json_get "$user_json" id)
-echo "    logged in as ${ADMIN_USER} (${USER_ID})"
-
-auth=(-H "Authorization: Bearer ${SESSION}")
-
-# ---------------------------------------------------------------------------
-# 4. A durable personal access token for the provisioner
-# ---------------------------------------------------------------------------
-# The session token above expires; the provisioner wants a PAT. Reuse the
-# one this script minted on a previous run rather than accumulating a new
-# token per run — Mattermost returns a token's value ONLY at creation, so a
-# re-mint would strand the old one.
-say "Minting the provisioning token ..."
-TOKEN_DESC="crewlet-dev-bootstrap"
-existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens" 2>/dev/null || echo '[]')
-if printf '%s' "$existing" | grep -q "\"description\":\"${TOKEN_DESC}\""; then
-  echo "    a '${TOKEN_DESC}' token already exists."
-  if grep -q '^MATTERMOST_ADMIN_TOKEN=' "$ENV_FILE" 2>/dev/null; then
-    ADMIN_TOKEN=$(grep '^MATTERMOST_ADMIN_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
-    echo "    reusing the value in ${ENV_FILE}"
-  else
-    echo "    ...but ${ENV_FILE} has no MATTERMOST_ADMIN_TOKEN, and the value" >&2
-    echo "    is unrecoverable (Mattermost returns it once). Revoke the old" >&2
-    echo "    token in Profile > Security > Personal Access Tokens and re-run." >&2
-    exit 1
-  fi
-else
-  token_json=$(curl -fsS -X POST "${API}/users/${USER_ID}/tokens" "${auth[@]}" \
-    -H 'Content-Type: application/json' \
-    -d "{\"description\":\"${TOKEN_DESC}\"}")
-  ADMIN_TOKEN=$(json_get "$token_json" token)
-  echo "    minted"
-fi
-if [ -z "${ADMIN_TOKEN:-}" ]; then
-  echo "Could not obtain an admin token." >&2
-  exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# 5. Team + channels
+# 6. Team + channels
 # ---------------------------------------------------------------------------
 say "Creating the '${TEAM}' team ..."
 team_json=$(curl -fsS "${auth[@]}" "${API}/teams/name/${TEAM}" 2>/dev/null || echo '')
@@ -334,7 +383,7 @@ for ch in $CHANNELS; do
 done
 
 # ---------------------------------------------------------------------------
-# 6. Prove a websocket opens
+# 7. Prove a websocket opens
 # ---------------------------------------------------------------------------
 # The one check that exercises what actually breaks in practice. Everything
 # above can pass against a server whose websocket endpoint is unreachable —
@@ -425,37 +474,6 @@ else
   warn "sees travel over this connection, so both stay dead until it works."
   exit 1
 fi
-
-# ---------------------------------------------------------------------------
-# 7. Persist the coordinates the config + provisioner resolve
-# ---------------------------------------------------------------------------
-# MATTERMOST_PUBLIC_URL lands in the env file too, and docker compose reads
-# `.env` from the project directory on every invocation — so a later
-# `docker compose --profile mattermost up -d` keeps the Site URL this run
-# settled on instead of silently reverting it to localhost.
-say "Writing MATTERMOST_URL + MATTERMOST_PUBLIC_URL + MATTERMOST_ADMIN_TOKEN to ${ENV_FILE}"
-touch "$ENV_FILE"
-chmod 600 "$ENV_FILE"
-python3 - "$ENV_FILE" "$URL" "$ADMIN_TOKEN" <<'PY'
-import pathlib, sys
-
-path, url, token = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-values = {
-    "MATTERMOST_URL": url,
-    "MATTERMOST_PUBLIC_URL": url,
-    "MATTERMOST_ADMIN_TOKEN": token,
-}
-
-lines = path.read_text().splitlines() if path.exists() else []
-seen = set()
-for i, line in enumerate(lines):
-    key = line.split("=", 1)[0].strip().removeprefix("export ").strip()
-    if key in values:
-        lines[i] = f"{key}={values[key]}"
-        seen.add(key)
-lines.extend(f"{k}={v}" for k, v in values.items() if k not in seen)
-path.write_text("\n".join(lines) + "\n")
-PY
 
 # ---------------------------------------------------------------------------
 # 8. Optional: provision the agent bots
