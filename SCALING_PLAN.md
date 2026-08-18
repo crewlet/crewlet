@@ -662,11 +662,53 @@ cursor argument holds), the turn-claim state machine's supersede rule,
 sandbox resumes never taking a turn claim, and the DB-claim variant of
 owner-routed sandbox control.
 
-### 5.1 Seat leases
+### 5.1 Seat leases — DONE
 
-- One lease per agent seat (`seat:{handle}`), greedy claim up to
-  `ceil(seats/N)`, claim-rate limit (prevents the MCP spawn storm on
-  takeover), `preferred` stickiness across deploys.
+`crewlet/seat/host.py` (`SeatHost`) + `crewlet/seat/watchdog.py`
+(`EventLoopWatchdog`), with a contract suite that runs against the memory
+lease twin and — when `CREWLET_TEST_DSN` is set — against real
+PostgreSQL.
+
+Delivered as planned: one lease per seat (`seat:{handle}`), greedy claim
+to `ceil(seats/N)`, claim-rate limit, `preferred` stickiness.
+
+Decisions the implementation had to make that the plan left open:
+
+- **`N` comes from `node:{id}` presence leases**, renewed on the same
+  heartbeat. There is no membership service, and inferring the node count
+  from *seat* ownership cannot work — a fleet where nobody has claimed
+  anything yet reads as zero nodes, and every node then believes it
+  should take every seat. The resource shape was already reserved in
+  `017_leases.sql`'s comment.
+- **`preferred` orders the attempt and never gates it.** Stated in the
+  plan; worth restating because the failure is silent and permanent — the
+  hint survives the node that set it, so treating a foreign hint as a
+  reason to wait would strand every seat a dead node used to hold.
+- **`renew() == False` drops the seat immediately; `LeaseError` does
+  not.** The lease module already drew this distinction; the seat host is
+  the first caller that has to act on it, and getting it backwards tears
+  a healthy node's whole company down over a two-second database blip
+  during which no peer could claim the seats anyway.
+- **A failed `on_acquire` releases the seat.** A takeover whose pipeline
+  raised would otherwise read as owned to the entire fleet while nothing
+  runs it — the seat simply goes dark until the process restarts.
+- **The watchdog's beat and poll intervals are scaled to the
+  threshold.** Found by a test: at a 0.5 s threshold with a fixed 1 s
+  beat, a *healthy* loop reports itself a second behind and shoots
+  itself. Invisible at production values (45 s vs 1 s) and lethal to
+  anyone who lowers the lease TTL, so it is enforced in the constructor
+  rather than documented as a caveat.
+
+Constants, from the gate (a) measurements rather than from reasoning:
+`SEAT_LEASE_TTL_SECONDS = 45` (the broker imposes no floor — 9 ms to
+release, 5 ms to attach — so the TTL is bounded by heartbeat reliability:
+three intervals, tolerating two consecutive misses),
+`SEAT_HEARTBEAT_INTERVAL_SECONDS = 15`, `SEAT_SWEEP_INTERVAL_SECONDS = 5`,
+`SEAT_CLAIM_LIMIT_PER_SWEEP = 4` (MCP spawn, not attach, is the cost of a
+takeover).
+
+Not yet wired into `Engine` — that is 5.2, where owning a seat starts to
+mean something.
 
 ### 5.2 Owner-only subscriptions
 

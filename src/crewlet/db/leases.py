@@ -97,6 +97,27 @@ def worker_resource(duty: str) -> str:
     return f"worker:{duty}"
 
 
+def node_resource(node_id: str) -> str:
+    """Lease resource name for a node's own presence.
+
+    Every node holds one, renewed on the same heartbeat as its seats.
+    Counting the live ones is how a node learns the fleet size it has to
+    divide the seats by — there is no membership service, and inferring
+    the count from *seat* ownership cannot work: a fleet where nobody has
+    claimed anything yet would read as zero nodes, and every node would
+    then believe it should take every seat.
+    """
+    return f"node:{node_id}"
+
+
+def is_seat_resource(resource: str) -> bool:
+    return resource.startswith("seat:")
+
+
+def is_node_resource(resource: str) -> bool:
+    return resource.startswith("node:")
+
+
 @dataclass(frozen=True, slots=True)
 class Lease:
     """A held lease. ``epoch`` is the fencing token — thread it into writes."""
@@ -135,6 +156,10 @@ class LeaseBackend(Protocol):
     async def get(self, resource: str) -> Lease | None: ...
 
     async def list_owned(self, owner: str) -> list[Lease]: ...
+
+    async def list_live(self, prefix: str) -> list[Lease]: ...
+
+    async def preferred_resources(self, prefix: str, node_id: str) -> set[str]: ...
 
     async def fleet_protocol_floor(self) -> int | None: ...
 
@@ -381,6 +406,59 @@ class LeaseStore:
             raise LeaseError(f"could not list leases for {owner!r}: {exc}") from exc
         return [_row_to_lease(r) for r in rows]
 
+    async def list_live(self, prefix: str) -> list[Lease]:
+        """Every LIVE lease whose resource starts with ``prefix``.
+
+        The fleet-membership read: ``list_live("node:")`` is how a node
+        learns how many peers it is dividing the seats between. Lapsed
+        rows are excluded, so a node that died stops counting toward
+        capacity as soon as its lease runs out — which is what lets the
+        survivors widen their share instead of leaving seats dark.
+
+        Raises :class:`LeaseError` when unreachable: an empty list means
+        "nobody holds anything matching", and a capacity calculation
+        would act on that.
+        """
+        try:
+            rows = await self._db.execute(
+                """
+                SELECT resource, owner, epoch, expires_at, preferred, protocol
+                FROM leases
+                WHERE resource LIKE $1 || '%' AND expires_at > now()
+                ORDER BY resource
+                """,
+                prefix,
+            )
+        except Exception as exc:
+            raise LeaseError(
+                f"could not list live leases for {prefix!r}: {exc}"
+            ) from exc
+        return [_row_to_lease(r) for r in rows]
+
+    async def preferred_resources(self, prefix: str, node_id: str) -> set[str]:
+        """Resources whose ``preferred`` hint names ``node_id``.
+
+        Deliberately includes LAPSED rows — that is the whole point. The
+        hint survives release and expiry so a node coming back from a
+        restart can find the seats whose MCP children and caches it had
+        warm. A live-only read would return nothing in exactly the case
+        the hint exists for.
+
+        One indexed scan per sweep, not one lookup per seat.
+        """
+        try:
+            rows = await self._db.execute(
+                """
+                SELECT resource FROM leases
+                WHERE resource LIKE $1 || '%' AND preferred = $2
+                """,
+                prefix,
+                node_id,
+            )
+        except Exception as exc:
+            raise LeaseError(f"could not read placement hints: {exc}") from exc
+        return {str(r["resource"]) for r in rows}
+
     async def fleet_protocol_floor(self) -> int | None:
         """Lowest ``protocol`` among LIVE leases, or ``None`` if none are held.
 
@@ -498,6 +576,23 @@ class MemoryLeaseStore:
             for r in sorted(self._rows.values(), key=lambda r: str(r["resource"]))
             if r["owner"] == owner and r["expires_at"] > now
         ]
+
+    async def list_live(self, prefix: str) -> list[Lease]:
+        now = self._now()
+        return [
+            _row_to_lease(r)
+            for r in sorted(self._rows.values(), key=lambda r: str(r["resource"]))
+            if str(r["resource"]).startswith(prefix) and r["expires_at"] > now
+        ]
+
+    async def preferred_resources(self, prefix: str, node_id: str) -> set[str]:
+        # Lapsed rows included on purpose — see LeaseStore.
+        return {
+            str(r["resource"])
+            for r in self._rows.values()
+            if str(r["resource"]).startswith(prefix)
+            and str(r.get("preferred") or "") == node_id
+        }
 
     async def fleet_protocol_floor(self) -> int | None:
         now = self._now()

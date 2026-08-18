@@ -320,6 +320,29 @@ src/crewlet/          # Main package
                       #   docs/concepts/configuration.md#secrets and
                       #   docs/concepts/secret-store.md
   task/               # Task engine (models, tracker, escalation)
+  seat/               # SEAT OWNERSHIP — which node runs which agent.
+                      #   host.py (SeatHost: greedy claim to
+                      #   ceil(seats/live nodes), `node:{id}` presence
+                      #   leases as THE membership read — inferring the
+                      #   count from seat ownership reads an unclaimed
+                      #   fleet as zero nodes and every node then takes
+                      #   every seat; claim-rate limit because a takeover
+                      #   costs an MCP spawn, not a lease (attach is 5 ms,
+                      #   measured); `preferred` ORDERS the attempt and
+                      #   never gates it — the hint outlives the node that
+                      #   set it, so gating strands a dead node's seats
+                      #   forever; renew()==False drops the seat NOW,
+                      #   LeaseError keeps it — conflating them tears a
+                      #   healthy company down over a DB blip);
+                      #   watchdog.py (EventLoopWatchdog — a stalled loop
+                      #   can't be signalled, so the thread's only real
+                      #   move is os._exit: a wedged-but-alive node holds
+                      #   its broker prefetch for the full 30-min ack
+                      #   timeout while its leases lapse and peers take
+                      #   over; exiting collapses that to 9 ms. Beat/poll
+                      #   are SCALED to the threshold — a beat slower than
+                      #   it makes a healthy loop shoot itself).
+                      #   Constants are MEASURED: SCALING_PLAN.md § Gate (a)
   schedule/           # Scheduler — role/unit cron-style recurring work:
                       #   cron.py (5-field evaluator), scheduler.py (tick loop
                       #   + describe_schedules projection for the dashboard
