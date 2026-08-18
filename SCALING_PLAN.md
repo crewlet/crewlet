@@ -710,7 +710,90 @@ takeover).
 Not yet wired into `Engine` — that is 5.2, where owning a seat starts to
 mean something.
 
-### 5.2 Owner-only subscriptions
+### 5.2 Owner-only subscriptions — DESIGN FAILED REVIEW
+
+A pre-implementation review (4 lenses over the mapped seams) returned
+**`redesign-needed` from three of four**. The design as written is not
+what gets built. Two of its fatal findings were then **overturned by
+measurement** against the live broker, and the rest stand.
+
+#### Measured, and they change the design
+
+- **A durable subscription retains its backlog with NO consumer
+  attached.** Published 5 messages while nothing was subscribed; the
+  successor received all 5. So the reviewed "unowned seats are a black
+  hole" hazard is wrong *provided the subscription is never
+  `unsubscribe()`d* — which makes a non-destructive detach load-bearing
+  rather than merely tidy.
+- **A close-driven handoff does NOT increment `redeliveryCount`.**
+  Prefetched-but-unacked messages returned to the successor at count 0.
+  This kills four findings at once — the "63 prefetched messages
+  dead-letter after three handoffs" fatal, the conversation-reordering
+  fatal that followed from it, and gate (c)'s own C3/C4, which invented
+  republish-then-ack to avoid a DLQ cost that does not exist on this
+  path. **A plain close is a safe deferral.** What *does* increment the
+  counter is a NAK, so the cancellation path is the thing to avoid, not
+  the close.
+
+#### Standing, and fatal
+
+1. **Detach is the wrong safety property.** The prescribed ordering
+   (quiesce → defer → detach → release) describes only the *voluntary*
+   path. The dominant path is lease **loss**, which inverts it by
+   construction: the row lapsed, so a peer may already hold the seat
+   before this node notices. Nothing anywhere tests ownership on the
+   turn-start path — `SeatHost.epoch_for` had no callers outside its own
+   module. The safety property has to be an **epoch-fenced ownership
+   check where a turn starts**, with detach demoted to cleanup.
+2. **`pause_topic` cannot quiesce.** Verified in the code: the per-topic
+   gate is checked at the top of `_receive_one` only. The post-receive
+   gate tests the *global* pause, and `_collect_batch` never checks the
+   topic pause at all. So a message already fetched is still dispatched,
+   and a linger window keeps fetching more. Quiesce needs a
+   per-`_Subscription` flag checked at four points, not a topic pause.
+   (This also means today's sandbox busy gate keeps filling a batch
+   after the pause lands — a live, if minor, bug.)
+3. **Spawning agents on every node and gating only the inbox is
+   unsound.** `AgentInstance.state` is process-local and never persisted,
+   so a non-owner's instance can be stranded in `AWAITING_SANDBOX`
+   permanently and the seat comes home poisoned. It also contradicts
+   5.1's own constants, which justify the claim-rate limit by MCP spawn
+   cost that spawn-everywhere would eliminate. `on_acquire` must
+   establish a *known* seat state.
+4. **Pause holds are keyed by topic and survive teardown**, so a
+   release/re-acquire on one node re-attaches into a still-paused topic
+   and goes silently deaf — and `preferred` stickiness makes
+   flap-and-return the *normal* case. Holds must be keyed by
+   `(topic, group)` and dropped on detach.
+5. **The sandbox busy gate lands on the wrong node** (N−1)/N of the time:
+   `SandboxCoordinator` subscribes both control topics under one
+   fleet-wide Shared group. `recover()` is likewise a fleet-wide
+   unfiltered scan that would poison every node's instances.
+6. **The memory twin has no backlog**, so owner-gating turns into
+   unconditional message loss in single-process and test runs.
+
+#### The structural conclusion
+
+**5.2, 5.3 and 5.6 are one change, not three.** A seat's inbox cannot be
+owned independently of its sandbox control and its recovery scan: gating
+the consumer while completions still ride a fleet-wide group, and while
+`recover()` scans every seat on every node, produces a node that owns the
+mail and not the work. They will be implemented and reviewed together.
+
+#### Fixed in 5.1 as a result
+
+- **The `LeaseError` grace was unbounded.** `heartbeat` retried forever
+  on an unreachable store while the module docstring claimed it retried
+  "until the TTL genuinely runs out" — a deadline the code never
+  computed. One unreachable database therefore became two nodes serving
+  one seat. Now bounded by the TTL, measured from the last *successful*
+  renew.
+- **The heartbeat and sweep were unsynchronised.** A per-seat
+  `asyncio.Lock` is now held across the whole acquire and release hook,
+  with an epoch re-check inside it, so a heartbeat carrying a stale lease
+  cannot tear down a claim a sweep made while it was awaiting.
+
+### 5.2 Owner-only subscriptions (original plan text)
 
 - The seat's inbox consumer (`engine.py:2120-2127`) is created on lease
   acquire and closed on release — same durable subscription name

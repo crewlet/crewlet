@@ -120,6 +120,14 @@ class SweepResult:
 class _Held:
     lease: Lease
     handle: str
+    renewed_at: float
+    """Monotonic time of the last SUCCESSFUL renew.
+
+    The deadline that makes "keep the seat through a database blip"
+    bounded rather than forever. Without it, a store that stays
+    unreachable leaves this node holding a seat whose row lapsed long
+    ago — and a peer that took it over is then running the same agent
+    concurrently."""
 
 
 @dataclass
@@ -149,11 +157,30 @@ class SeatHost:
     protocol: int = PROTOCOL_VERSION
 
     _held: dict[str, _Held] = field(default_factory=dict, init=False)
+    _seat_locks: dict[str, asyncio.Lock] = field(default_factory=dict, init=False)
     _node_lease: Lease | None = field(default=None, init=False)
     _tasks: list[asyncio.Task[Any]] = field(default_factory=list, init=False)
     _running: bool = field(default=False, init=False)
     _draining: bool = field(default=False, init=False)
     _last: SweepResult | None = field(default=None, init=False)
+
+    def _lock_for(self, handle: str) -> asyncio.Lock:
+        """One lock per seat, held across a WHOLE acquire or release.
+
+        The heartbeat and the sweep are independent tasks with no
+        ordering between them, and both hooks are long: an acquire
+        attaches a consumer and spawns MCP children, a release tears them
+        down. Without this, a heartbeat that detects a lost lease can
+        interleave with a sweep that just re-claimed the same seat — and
+        the release then tears down the consumer the claim just created,
+        leaving a seat that is owned in the lease table and dead in this
+        process, with nothing to notice.
+        """
+        lock = self._seat_locks.get(handle)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._seat_locks[handle] = lock
+        return lock
 
     # ── introspection ────────────────────────────────────────────────
 
@@ -234,6 +261,10 @@ class SeatHost:
             await self.release(handle)
 
     async def release(self, handle: str) -> bool:
+        async with self._lock_for(handle):
+            return await self._release_locked(handle)
+
+    async def _release_locked(self, handle: str) -> bool:
         held = self._held.pop(handle, None)
         if held is None:
             return False
@@ -279,6 +310,7 @@ class SeatHost:
         this is what stops the rest.
         """
         lost: list[str] = []
+        now = asyncio.get_running_loop().time()
         for handle, held in list(self._held.items()):
             try:
                 alive = await self.leases.renew(
@@ -288,22 +320,59 @@ class SeatHost:
                     ttl_seconds=self.ttl_seconds,
                 )
             except LeaseError:
-                # Unknown ≠ lost. The row is untouched and still held;
-                # shedding here would tear down a healthy node over a
-                # blip, and no peer could claim the seats during it.
-                logger.warning("seat_heartbeat_unavailable", seat=handle)
-                continue
+                # Unknown is not lost — the row is untouched and still
+                # held, so shedding on a blip would tear down a healthy
+                # node while no peer could claim the seats anyway.
+                #
+                # But it is only "not lost" until the row's TTL runs out.
+                # Past that the lease HAS lapsed, whatever this node can
+                # or cannot see, and a peer may already be running the
+                # agent. Keeping the seat on faith from there is how one
+                # unreachable database turns into two nodes serving one
+                # seat, so the grace is bounded by the same TTL the lease
+                # was granted with.
+                elapsed = now - held.renewed_at
+                if elapsed < self.ttl_seconds:
+                    logger.warning(
+                        "seat_heartbeat_unavailable",
+                        seat=handle,
+                        seconds_since_renew=round(elapsed, 1),
+                        ttl_seconds=self.ttl_seconds,
+                    )
+                    continue
+                logger.error(
+                    "seat_dropped_unrenewable",
+                    seat=handle,
+                    seconds_since_renew=round(elapsed, 1),
+                    ttl_seconds=self.ttl_seconds,
+                    hint=(
+                        "the lease store has been unreachable for longer "
+                        "than the TTL, so this lease has lapsed whether or "
+                        "not we can see it; dropping the seat rather than "
+                        "risk running an agent a peer now owns"
+                    ),
+                )
+                alive = False
             if alive:
+                held.renewed_at = now
                 continue
-            lost.append(handle)
-            self._held.pop(handle, None)
-            logger.warning(
-                "seat_lease_lost",
-                seat=handle,
-                epoch=held.lease.epoch,
-                hint="a peer may already own this seat; dropping it locally",
-            )
-            await self._notify_release(handle, held.lease)
+            async with self._lock_for(handle):
+                # Re-check under the lock: a sweep may have re-claimed
+                # this seat at a NEW epoch between the failed renew and
+                # here, and tearing that down would kill a claim this
+                # node legitimately holds.
+                current = self._held.get(handle)
+                if current is None or current.lease.epoch != held.lease.epoch:
+                    continue
+                lost.append(handle)
+                self._held.pop(handle, None)
+                logger.warning(
+                    "seat_lease_lost",
+                    seat=handle,
+                    epoch=held.lease.epoch,
+                    hint="a peer may already own this seat; dropping it locally",
+                )
+                await self._notify_release(handle, held.lease)
         await self._renew_node_presence()
         return tuple(lost)
 
@@ -356,21 +425,28 @@ class SeatHost:
         for handle in await self._claim_order(seats):
             if len(claimed) >= room:
                 break
-            lease = await self.leases.try_acquire(
-                seat_resource(handle),
-                owner=self.owner,
-                ttl_seconds=self.ttl_seconds,
-                # The STABLE node id, not the incarnation: the hint has
-                # to survive this process to be worth anything.
-                preferred=self.node_id,
-                protocol=self.protocol,
-            )
-            if lease is None:
-                continue
-            self._held[handle] = _Held(lease=lease, handle=handle)
-            claimed.append(handle)
-            logger.info("seat_claimed", seat=handle, epoch=lease.epoch)
-            await self._notify_acquire(handle, lease)
+            async with self._lock_for(handle):
+                if handle in self._held:
+                    continue  # re-claimed under us while we waited
+                lease = await self.leases.try_acquire(
+                    seat_resource(handle),
+                    owner=self.owner,
+                    ttl_seconds=self.ttl_seconds,
+                    # The STABLE node id, not the incarnation: the hint
+                    # has to survive this process to be worth anything.
+                    preferred=self.node_id,
+                    protocol=self.protocol,
+                )
+                if lease is None:
+                    continue
+                self._held[handle] = _Held(
+                    lease=lease,
+                    handle=handle,
+                    renewed_at=asyncio.get_running_loop().time(),
+                )
+                claimed.append(handle)
+                logger.info("seat_claimed", seat=handle, epoch=lease.epoch)
+                await self._notify_acquire(handle, lease)
 
         if claimed:
             return claimed, None
@@ -480,7 +556,9 @@ class SeatHost:
             # claimed: it would look owned to the fleet while nothing
             # runs it. Give it straight back so a peer can try.
             logger.exception("seat_acquire_hook_failed", seat=handle)
-            await self.release(handle)
+            # _release_locked, not release(): we are already inside this
+            # seat's lock, and asyncio.Lock is not reentrant.
+            await self._release_locked(handle)
 
     async def _notify_release(self, handle: str, lease: Lease) -> None:
         if self.on_release is None:

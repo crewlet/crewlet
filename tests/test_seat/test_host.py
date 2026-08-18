@@ -461,3 +461,95 @@ def test_sweep_result_reports_blocked_only_when_a_floor_is_set() -> None:
         SweepResult(held=0, capacity=1, live_nodes=1, blocked_by_protocol=1).blocked
         is True
     )
+
+
+async def test_an_unreachable_store_drops_the_seat_once_the_TTL_HAS_lapsed(
+    leases: Any,
+) -> None:
+    """Keeping a seat through a blip is right; keeping it forever is not.
+
+    ``LeaseError`` says nothing about ownership, so a short outage must
+    not shed seats no peer could claim anyway. But the row's TTL runs out
+    on wall-clock time whether or not this node can see it — past that
+    the lease HAS lapsed and a peer may already be running the agent.
+    Holding on from there is how one unreachable database becomes two
+    nodes serving one seat.
+    """
+    released: list[str] = []
+
+    async def _on_release(handle: str, lease: Lease) -> None:
+        released.append(handle)
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_on_release, ttl_seconds=30)
+    await host._renew_node_presence()
+    await host.sweep()
+    assert host.owns("ceo")
+
+    async def _boom(*args: Any, **kwargs: Any) -> bool:
+        raise LeaseError("database is down")
+
+    host.leases = _Unavailable(host.leases, renew=_boom)
+
+    # Inside the TTL: hold on.
+    assert await host.heartbeat() == ()
+    assert host.owns("ceo")
+
+    # Past the TTL: the lease has lapsed regardless of what we can see.
+    host._held["ceo"].renewed_at -= 31
+    assert await host.heartbeat() == ("ceo",)
+    assert not host.owns("ceo")
+    assert released == ["ceo"]
+
+
+async def test_a_successful_renew_refreshes_the_grace_window(leases: Any) -> None:
+    """The deadline is measured from the last SUCCESSFUL renew, so a node
+    that keeps renewing never accumulates its way into a false drop."""
+    host = _host(leases, seats=lambda: ["ceo"], ttl_seconds=30)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    host._held["ceo"].renewed_at -= 29
+    assert await host.heartbeat() == ()
+    # The successful renew reset the clock.
+    assert await host.heartbeat() == ()
+    assert host.owns("ceo")
+
+
+async def test_a_reclaim_between_heartbeat_and_release_is_not_torn_down(
+    leases: Any,
+) -> None:
+    """The heartbeat/sweep race, pinned at the point it actually happens.
+
+    Both loops are independent tasks and both hooks are long. The window
+    is INSIDE the awaited renew: the heartbeat is carrying a lease object
+    it read before the await, and a sweep can re-claim the same seat at a
+    new epoch while it is suspended there. Tearing that down would leave
+    the seat owned in the lease table and dead in this process, with
+    nothing to notice.
+    """
+    host = _host(leases, seats=lambda: ["ceo"])
+    await host._renew_node_presence()
+    await host.sweep()
+    stale = host._held["ceo"].lease
+    holder = type(host._held["ceo"])
+
+    async def _lost_but_reclaimed(*args: Any, **kwargs: Any) -> bool:
+        # The sweep lands here — while the heartbeat is awaiting us.
+        host._held["ceo"] = holder(
+            lease=Lease(
+                resource=stale.resource,
+                owner=stale.owner,
+                epoch=stale.epoch + 1,
+                expires_at=stale.expires_at,
+            ),
+            handle="ceo",
+            renewed_at=host._held["ceo"].renewed_at,
+        )
+        return False  # the OLD epoch is genuinely gone
+
+    host.leases = _Unavailable(host.leases, renew=_lost_but_reclaimed)
+    lost = await host.heartbeat()
+
+    assert lost == (), "the heartbeat tore down a newer claim it did not own"
+    assert host.owns("ceo")
+    assert host.epoch_for("ceo") == stale.epoch + 1
