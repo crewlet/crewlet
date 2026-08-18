@@ -19,6 +19,8 @@ from starlette.responses import JSONResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from crewlet._logging import get_logger
+from crewlet.api.queries import QueryError, run_query
+from crewlet.api.routes.org import schedule_projection
 from crewlet.api.streaming import build_health_envelope, envelope
 
 logger = get_logger("api.routes")
@@ -35,8 +37,11 @@ def _fallback_snapshot(app: Any) -> dict[str, Any]:
         "health": build_health_envelope(app),
         "agents": [dict(r) for r in (state.agent_roles or [])],
         "events": [],
+        "sandboxes": [],
         "tools": state.tools_data,
         "org": state.org_data,
+        "tokens": {},
+        "schedules": schedule_projection(app),
     }
 
 
@@ -75,13 +80,31 @@ async def _send(ws: WebSocket, message: str, lock: asyncio.Lock) -> bool:
 async def stream_websocket(websocket: WebSocket) -> None:
     """WS /ws/stream — stream engine events + health to a dashboard tab.
 
+    This is the dashboard's whole transport — state comes down it and
+    requests go up it, so a running dashboard makes no HTTP request at
+    all.
+
     Protocol (JSON, one envelope per text frame)::
 
-        ← {"kind": "snapshot", "data": {agents, events, org, tools, health}}
-        ← {"kind": "event",    "data": <event row + payload>}
-        ← {"kind": "health",   "data": {status, in_flight?, shutting_down?}}
+        ← {"kind": "snapshot",  "data": {health, agents, events, sandboxes,
+                                         org, tools, tokens, schedules}}
+        ← {"kind": "event",     "data": <event row + payload>}
+        ← {"kind": "agents",    "data": [<changed agent overlay>, …]}
+        ← {"kind": "sandboxes", "data": [<in-flight sandbox run>, …]}
+        ← {"kind": "tokens",    "data": <spend rollup>}
+        ← {"kind": "health",    "data": {status, in_flight?, shutting_down?}}
+        ← {"kind": "result",    "id": N, "what": "...", "data": <any>}
+        ← {"kind": "error",     "id": N, "what": "...", "error": "code"}
         ← {"kind": "pong"}
         → {"kind": "ping"}
+        → {"kind": "query", "id": N, "what": "...", "params": {…},
+                            "token": "<operator bearer, config queries only>"}
+
+    The ``agents`` / ``sandboxes`` / ``tokens`` envelopes carry the
+    *result* of applying an event to the server's projection.  A client
+    renders them; it does not re-derive them from the raw ``event``
+    stream, which is what every tab used to do — three private copies of
+    the projection, each drifting its own way.
 
     Backpressure is per-client: the service drops a slow tab's oldest
     queued envelope rather than stalling the publish path.  The dashboard
@@ -104,21 +127,61 @@ async def stream_websocket(websocket: WebSocket) -> None:
     inbound_task: asyncio.Task[Any] | None = None
     get_task: asyncio.Task[str] | None = None
 
+    async def _answer_query(parsed: dict[str, Any]) -> None:
+        """Run one client query and send its single reply frame."""
+        req_id = parsed.get("id")
+        what = str(parsed.get("what", ""))
+        params = parsed.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        token = parsed.get("token")
+        try:
+            data = await run_query(
+                websocket.app,
+                what,
+                params,
+                token=token if isinstance(token, str) else "",
+            )
+        except QueryError as exc:
+            body = json.dumps(
+                {"kind": "error", "id": req_id, "what": what, "error": exc.code}
+            )
+        else:
+            body = json.dumps(
+                {"kind": "result", "id": req_id, "what": what, "data": data}
+            )
+        await _send(websocket, body, lock)
+
     async def _drain_inbound() -> None:
-        """Read client → server frames (currently only ``ping``)."""
-        while True:
-            try:
-                msg = await websocket.receive_text()
-            except WebSocketDisconnect:
-                return
-            try:
-                parsed = json.loads(msg)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if parsed.get("kind") == "ping" and not await _send(
-                websocket, envelope("pong", None), lock
-            ):
-                return
+        """Read client → server frames (``ping`` and ``query``)."""
+        pending: set[asyncio.Task[None]] = set()
+        try:
+            while True:
+                try:
+                    msg = await websocket.receive_text()
+                except WebSocketDisconnect:
+                    return
+                try:
+                    parsed = json.loads(msg)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                kind = parsed.get("kind")
+                if kind == "ping":
+                    if not await _send(websocket, envelope("pong", None), lock):
+                        return
+                elif kind == "query":
+                    # Queries run concurrently with each other and with
+                    # the push stream: one slow read (an agent's LLM
+                    # history is a database scan) must not stall the
+                    # live feed or the tab's other requests behind it.
+                    task = asyncio.create_task(_answer_query(parsed))
+                    pending.add(task)
+                    task.add_done_callback(pending.discard)
+        finally:
+            for task in pending:
+                task.cancel()
 
     try:
         inbound_task = asyncio.create_task(_drain_inbound())

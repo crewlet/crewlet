@@ -28,31 +28,31 @@ def _stream(request: Request) -> Any:
     return getattr(request.app.state, "stream", None)
 
 
-async def list_agents(request: Request) -> JSONResponse:
-    """GET /agents — static config merged with live projection state."""
-    roles: list[dict[str, Any]] = request.app.state.agent_roles
-    stream = _stream(request)
+def agents_payload(app: Any) -> list[dict[str, Any]]:
+    """Every configured seat with its live state overlaid."""
+    roles: list[dict[str, Any]] = app.state.agent_roles
+    stream = getattr(app.state, "stream", None)
     if stream is None:
-        return JSONResponse([dict(r) for r in roles])
-    return JSONResponse(stream.live.merge_agents(roles))
+        return [dict(r) for r in roles]
+    return list(stream.live.merge_agents(roles))
 
 
-async def get_agent(request: Request) -> JSONResponse:
-    """GET /agents/{id} — one agent: static config + live state + history.
+async def agent_detail(app: Any, agent_id: str) -> dict[str, Any] | None:
+    """One agent: static config + live state + LLM history, or ``None``.
 
     Live fields (state, phase, tokens, the in-flight ``live_call``) come
     from the projection; ``llm_history`` is read from the event store for
-    the agent's runtime id.
+    the agent's runtime id.  Shared by ``GET /agents/{id}`` and the
+    WebSocket ``agent`` query so both answer with the same object.
     """
-    agent_id = request.path_params["id"]
-    roles: list[dict[str, Any]] = request.app.state.agent_roles
+    roles: list[dict[str, Any]] = app.state.agent_roles
     role = next((r for r in roles if r.get("id") == agent_id), None)
     if role is None:
-        return JSONResponse({"error": "Agent not found"}, status_code=404)
+        return None
 
     merged = dict(role)
     role_name = role.get("role", "") or ""
-    stream = _stream(request)
+    stream = getattr(app.state, "stream", None)
     runtime_id = ""
     if stream is not None:
         overlay = stream.live.agent_overlay(role_name)
@@ -60,7 +60,7 @@ async def get_agent(request: Request) -> JSONResponse:
             merged.update(overlay)
         runtime_id = stream.live.runtime_id_for(role_name)
 
-    store = request.app.state.event_store
+    store = app.state.event_store
     if not runtime_id and store is not None and role_name:
         states = await safe_store_query(store.get_agent_states([role_name]), {})
         runtime_id = states.get(role_name, {}).get("runtime_id", "") or ""
@@ -69,6 +69,19 @@ async def get_agent(request: Request) -> JSONResponse:
     if store is not None and runtime_id:
         history = await safe_store_query(store.get_agent_llm_history(runtime_id), [])
         merged["llm_history"] = history
+    return merged
+
+
+async def list_agents(request: Request) -> JSONResponse:
+    """GET /agents — static config merged with live projection state."""
+    return JSONResponse(agents_payload(request.app))
+
+
+async def get_agent(request: Request) -> JSONResponse:
+    """GET /agents/{id} — one agent: static config + live state + history."""
+    merged = await agent_detail(request.app, request.path_params["id"])
+    if merged is None:
+        return JSONResponse({"error": "Agent not found"}, status_code=404)
     return JSONResponse(merged)
 
 
@@ -301,55 +314,56 @@ async def _list_synthesized_skills(
     ]
 
 
-async def get_agent_memory(request: Request) -> JSONResponse:
-    """GET /agents/{id}/memory — durable memories for one agent.
+async def agent_memory(app: Any, agent_id: str) -> dict[str, Any] | None:
+    """Durable memories for one agent, or ``None`` if no such agent.
 
     Combines the four learning-subsystem stores (personal memories,
     episodes, counterparty profiles, synthesized skills) into one
-    response.  Each section degrades independently: a missing provider,
-    a non-Postgres backend, or a query error yields an empty list for
-    that section rather than erroring the whole response.
+    payload.  Each section degrades independently: a missing provider, a
+    non-Postgres backend, or a query error yields an empty list for that
+    section rather than failing the whole read.
     """
-    agent_id = request.path_params["id"]
-    roles: list[dict[str, Any]] = request.app.state.agent_roles
+    roles: list[dict[str, Any]] = app.state.agent_roles
     role = next((r for r in roles if r.get("id") == agent_id), None)
     if role is None:
-        return JSONResponse({"error": "Agent not found"}, status_code=404)
+        return None
 
     handle = role.get("handle", "") or ""
     role_name = role.get("role", "") or ""
 
-    stream = _stream(request)
+    stream = getattr(app.state, "stream", None)
     runtime_id = stream.live.runtime_id_for(role_name) if stream is not None else ""
     if not runtime_id:
-        store = request.app.state.event_store
+        store = app.state.event_store
         if store is not None and role_name:
             states = await safe_store_query(store.get_agent_states([role_name]), {})
             runtime_id = states.get(role_name, {}).get("runtime_id", "") or ""
-    # Fall back to the static config id so the endpoint still returns
+    # Fall back to the static config id so this still returns
     # personal-memory rows for orgs whose agents haven't emitted state
     # events yet.
     memory_scope_id = runtime_id or agent_id
 
-    database = getattr(request.app.state, "database", None)
+    database = getattr(app.state, "database", None)
     personal_memories: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
     if memory_scope_id:
         diary_docs = await _list_diary_for_agent(database, memory_scope_id)
         personal_memories = _serialize_personal_memories(diary_docs)
 
-    episodes = await _list_episodes_for_agent(database, handle)
-    counterparties = await _list_counterparty_profiles(database, handle)
-    synth_skills = await _list_synthesized_skills(database, handle)
+    return {
+        "agent_id": agent_id,
+        "handle": handle,
+        "role": role_name,
+        "runtime_id": runtime_id,
+        "personal_memories": personal_memories,
+        "episodes": await _list_episodes_for_agent(database, handle),
+        "counterparty_profiles": await _list_counterparty_profiles(database, handle),
+        "synthesized_skills": await _list_synthesized_skills(database, handle),
+    }
 
-    return JSONResponse(
-        {
-            "agent_id": agent_id,
-            "handle": handle,
-            "role": role_name,
-            "runtime_id": runtime_id,
-            "personal_memories": personal_memories,
-            "episodes": episodes,
-            "counterparty_profiles": counterparties,
-            "synthesized_skills": synth_skills,
-        }
-    )
+
+async def get_agent_memory(request: Request) -> JSONResponse:
+    """GET /agents/{id}/memory — durable memories for one agent."""
+    payload = await agent_memory(request.app, request.path_params["id"])
+    if payload is None:
+        return JSONResponse({"error": "Agent not found"}, status_code=404)
+    return JSONResponse(payload)

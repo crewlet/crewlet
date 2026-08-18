@@ -33,13 +33,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from crewlet._logging import get_logger
-from crewlet.api.live_state import LiveState
+from crewlet.api.live_state import EVENT_FEED_LIMIT, Change, LiveState
 from crewlet.events.types import Event
 
 logger = get_logger("api.streaming")
@@ -59,10 +60,20 @@ _EVENT_TOPIC_PREFIX = "crewlet.events."
 # drain state, and live dot honest.
 _HEALTH_INTERVAL_SECONDS = 5.0
 
-# Snapshot recent-events cap. Kept in step with the projection's
-# ``_EVENT_BUFFER_SIZE``-bounded feed so the initial render matches
-# the live view.
-SNAPSHOT_EVENT_LIMIT = 150
+# Snapshot recent-events cap.  Reads the projection's own feed limit so
+# the two cannot drift: a snapshot ships exactly what the projection
+# retains, which is exactly what a tab keeps.  It used to be a separate
+# 150 against a 400-deep ring, so a tab's feed visibly shrank on every
+# refresh and 250 retained rows were undeliverable.
+SNAPSHOT_EVENT_LIMIT = EVENT_FEED_LIMIT
+
+# Minimum gap between spend-rollup pushes.  The rollup is the one
+# derived payload big enough to be worth rate-limiting (a few tens of KB
+# with the per-turn table), and it only moves when a phase completes --
+# a few times a second at most across a busy company.  One push per
+# second keeps the Tokens view live to the eye while collapsing a burst
+# of phase completions into a single frame.
+_TOKENS_PUSH_INTERVAL_SECONDS = 1.0
 
 
 @dataclass(slots=True)
@@ -134,6 +145,18 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
     return body
 
 
+def _schedule_projection(app: Any) -> list[dict[str, Any]]:
+    """The configured schedules with ``next_run``, imported lazily.
+
+    ``routes.org`` imports nothing from here, but ``routes.stream`` does,
+    so keeping this import inside the call avoids wiring a cycle through
+    the routes package just to embed a section in the snapshot.
+    """
+    from crewlet.api.routes.org import schedule_projection
+
+    return schedule_projection(app)
+
+
 class StreamService:
     """Owns the live-state projection, client fan-out, and health pulse.
 
@@ -157,6 +180,19 @@ class StreamService:
         self._health_task: asyncio.Task[Any] | None = None
         self._health_fn: Callable[[], dict[str, Any]] | None = None
         self._hydrated_once = False
+        # Static context the derived pushes need: the configured roles
+        # (for role→handle on the spend rollup) and the app whose state
+        # holds org / tools / schedules.  Set by :meth:`bind`.
+        self._app: Any = None
+        # Monotonic timestamp of the last spend-rollup push, for the
+        # coalescing window; a pending push is flushed by the health tick
+        # so the last event of a burst is never left unsent.
+        self._tokens_pushed_at = 0.0
+        self._tokens_dirty = False
+
+    def bind(self, app: Any) -> None:
+        """Attach the app whose state backs snapshot + derived pushes."""
+        self._app = app
 
     @property
     def live(self) -> LiveState:
@@ -200,9 +236,10 @@ class StreamService:
         if not topic.startswith(_EVENT_TOPIC_PREFIX):
             return
         env = serialize_event(topic, event)
-        self._live.apply_event(env)
+        change = self._live.apply_event(env)
         if self._clients:
             self._fan_out("event", env)
+            self._push_change(change)
 
     async def emit_event(self, env: dict[str, Any]) -> None:
         """Inject an already-serialized event envelope (webhook surfaces).
@@ -211,14 +248,74 @@ class StreamService:
         engine event stream — the dashboard's activity feed reflects them
         in real time and the projection records them in its buffer.
         """
-        self._live.apply_event(env)
+        change = self._live.apply_event(env)
         if self._clients:
             self._fan_out("event", env)
+            self._push_change(change)
 
     async def broadcast(self, kind: str, data: Any) -> None:
         """Emit a non-event envelope (e.g. ``health``) to every client."""
         if self._clients:
             self._fan_out(kind, data)
+
+    def push(self, kind: str, data: Any) -> None:
+        """Synchronous :meth:`broadcast`, for non-async callers.
+
+        The fan-out itself never awaits (each client has a bounded queue
+        the publisher writes without blocking), so a caller that is not
+        a coroutine — the config-refresh handler — does not need to be
+        made one just to notify open dashboards.
+        """
+        if self._clients:
+            self._fan_out(kind, data)
+
+    # -- derived pushes --------------------------------------------------
+
+    def _push_change(self, change: Change) -> None:
+        """Push the *result* of applying an event, not just the event.
+
+        This is what lets a dashboard be a mirror rather than a second
+        implementation.  Every tab used to run its own copy of the
+        projection's state machine, its own sandbox tracker, and its own
+        token aggregation off the raw event stream; three copies, three
+        sets of drift, and a refresh that disagreed with what was on
+        screen a moment earlier.  Now the projection is computed once,
+        here, and its changes are sent.
+        """
+        if change.agents:
+            overlays = [
+                {"role": role, **overlay}
+                for role in sorted(change.agents)
+                if (overlay := self._live.agent_overlay(role)) is not None
+            ]
+            if overlays:
+                self._fan_out("agents", overlays)
+        if change.sandboxes:
+            self._fan_out("sandboxes", self._live.active_sandboxes())
+        if change.tokens:
+            self._tokens_dirty = True
+            self._flush_tokens()
+
+    def _flush_tokens(self, *, force: bool = False) -> None:
+        """Send the spend rollup, at most once per coalescing window."""
+        if not self._tokens_dirty or not self._clients:
+            return
+        now = time.monotonic()
+        if not force and now - self._tokens_pushed_at < _TOKENS_PUSH_INTERVAL_SECONDS:
+            return
+        self._tokens_pushed_at = now
+        self._tokens_dirty = False
+        self._fan_out("tokens", self.token_rollup())
+
+    def token_rollup(self) -> dict[str, Any]:
+        """The live spend rollup, with each role's handle attached."""
+        roles: list[dict[str, Any]] = []
+        if self._app is not None:
+            roles = getattr(self._app.state, "agent_roles", None) or []
+        handles = {
+            r.get("role", ""): r.get("handle", "") for r in roles if r.get("role")
+        }
+        return self._live.token_rollup(handles)
 
     def _fan_out(self, kind: str, data: Any) -> None:
         """Synchronous fan-out — atomic from the event loop's view."""
@@ -238,11 +335,14 @@ class StreamService:
     # -- snapshot --------------------------------------------------------
 
     def snapshot(self, app: Any) -> dict[str, Any]:
-        """Build the dashboard's initial-state bundle from memory.
+        """Build the dashboard's whole initial state from memory.
 
-        Combines health + agents (with their in-flight ``live_call``) +
-        recent events + tools + org into one payload, all served from the
-        in-memory projection — no database round-trip on the hot path.
+        Every section a screen renders on first paint is here — health,
+        agents (with their in-flight ``live_call``), the activity feed,
+        in-flight sandbox runs, tools, org, the spend rollup, and the
+        schedule list — so a dashboard opens on one WebSocket frame and
+        makes no HTTP request at all.  It is still served entirely from
+        the in-memory projection: no database round-trip on connect.
         """
         state = app.state
         roles: list[dict[str, Any]] = state.agent_roles or []
@@ -253,6 +353,8 @@ class StreamService:
             "sandboxes": self._live.active_sandboxes(),
             "tools": state.tools_data,
             "org": state.org_data,
+            "tokens": self.token_rollup(),
+            "schedules": _schedule_projection(app),
         }
 
     async def hydrate(self, store: Any, roles: list[str]) -> None:
@@ -285,6 +387,10 @@ class StreamService:
     async def _health_loop(self) -> None:
         while True:
             await asyncio.sleep(self._health_interval)
+            # Flush a spend rollup that the coalescing window held back —
+            # otherwise the last phase completion of a burst would sit
+            # unsent until the next one arrived.
+            self._flush_tokens(force=True)
             if self._health_fn is None:
                 continue
             try:

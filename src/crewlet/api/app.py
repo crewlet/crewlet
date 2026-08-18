@@ -216,6 +216,9 @@ def create_app(
     app.state.auth_disabled = auth_disabled
     app.state.engine = engine
     app.state.stream = stream
+    # The service needs the app to build a snapshot and to attach each
+    # role's handle to the spend rollup it pushes.
+    stream.bind(app)
     # ``configured`` semantics:
     # - With a ``company_config_store`` wired (Tier B path): starts
     #   False, flipped to True by ``attach_config_refresh`` once the

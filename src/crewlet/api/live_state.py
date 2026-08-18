@@ -49,7 +49,8 @@ turn.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from crewlet._logging import get_logger
@@ -57,9 +58,39 @@ from crewlet._logging import get_logger
 logger = get_logger("api.live_state")
 
 # How many recent (persisted-category) events the projection retains for
-# the dashboard's activity feed / events view.  Matches the snapshot
-# cap so the activity feed and the initial paint agree.
-_EVENT_BUFFER_SIZE = 400
+# the dashboard's activity feed / events view -- and the number a
+# snapshot ships.  ONE number: the ring, the hydration read, and the
+# snapshot all derive from it.  They used to be three (400 retained, 150
+# sent, 250 kept client-side), so a tab streamed its feed up to 250 rows
+# and then a refresh visibly snapped it back to 150 while 250 of the
+# server's rows could never be delivered at all.
+EVENT_FEED_LIMIT = 400
+
+# Cap on the ``agent_turn_completed`` id set used to dedupe token
+# accounting.  The set exists to stop a hydrated turn being counted a
+# second time when the same turn also arrives on the live stream, so it
+# only ever needs to cover the hydration overlap plus any re-delivery --
+# a window of minutes, not the process lifetime.  It was an unbounded
+# ``set`` seeded with 30 days of ids and never pruned, which is a slow
+# leak in an API process that stays up for weeks.  8k ids is orders of
+# magnitude beyond any real overlap and costs well under a megabyte.
+_TOKEN_DEDUPE_LIMIT = 8000
+
+# Memory backstop on retained per-phase spend records.  The real bound
+# is the rollup window (records older than ``TOKEN_WINDOW_DAYS`` are
+# pruned on write); this cap only matters for an org busy enough to emit
+# more than this inside the window.  Each record is a flat dict of ~14
+# small fields — roughly 400 bytes — so 20k of them is about 8 MB, and
+# the aggregation over them takes single-digit milliseconds.
+_SPEND_RECORD_LIMIT = 20_000
+
+# Window the projection hydrates per-agent token totals over, in days.
+# Matches the dashboard's default token-rollup window
+# (``/tokens/breakdown?since_days=7``) so the per-agent totals on a card
+# and the rollup above it describe the same period.  The hydration call
+# used to take the store's own 30-day default, so the two disagreed by
+# three weeks of spend.
+TOKEN_WINDOW_DAYS = 7
 
 # Event type → coarse agent state.  Mirrors ``_event_to_state`` in
 # :mod:`crewlet.timescaledb.repository` so the live projection and the
@@ -95,6 +126,31 @@ _SANDBOX_EVENTS = frozenset(
 )
 
 
+@dataclass
+class Change:
+    """What one applied event moved in the projection.
+
+    The stream service turns this into the push envelopes a dashboard
+    consumes: the changed agents' overlays, the sandbox set, the spend
+    rollup.  Anything not named here did not move and is not re-sent.
+    """
+
+    agents: set[str] = field(default_factory=set)
+    sandboxes: bool = False
+    tokens: bool = False
+    events: bool = False
+
+    def __bool__(self) -> bool:
+        return bool(self.agents or self.sandboxes or self.tokens or self.events)
+
+
+def _remember(seen: dict[str, None], key: str) -> None:
+    """Record ``key`` in a bounded, insertion-ordered id set."""
+    seen[key] = None
+    while len(seen) > _TOKEN_DEDUPE_LIMIT:
+        seen.pop(next(iter(seen)))
+
+
 @dataclass(slots=True)
 class AgentLive:
     """Live, incrementally-maintained state for one agent role."""
@@ -109,6 +165,11 @@ class AgentLive:
     output_tokens: int = 0
     total_tokens: int = 0
     afk_reason: str = ""
+    # The most recent phase failure, or ``None``.  Set from a failed
+    # ``agent_phase_completed`` and cleared the moment the agent starts
+    # real work again, so the dashboard can say *why* a seat stopped
+    # rather than leaving a call on screen that never answers.
+    last_error: dict[str, Any] | None = None
     # The in-flight LLM call (latest ``agent_turn_progress`` / the
     # ``agent_phase_started`` placeholder), or ``None`` between turns.
     live_call: dict[str, Any] | None = None
@@ -128,6 +189,7 @@ class AgentLive:
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
             "live_call": self.live_call,
+            "last_error": self.last_error,
         }
         if self.afk_reason:
             overlay["afk_reason"] = self.afk_reason
@@ -143,7 +205,7 @@ class LiveState:
     the single-threaded event loop's perspective — no lock required.
     """
 
-    def __init__(self, *, event_buffer_size: int = _EVENT_BUFFER_SIZE) -> None:
+    def __init__(self, *, event_buffer_size: int = EVENT_FEED_LIMIT) -> None:
         self._agents: dict[str, AgentLive] = {}
         # In-flight detached sandbox jobs, keyed by kick-off turn_id.
         # Populated from the SandboxRun* lifecycle events (see
@@ -153,8 +215,20 @@ class LiveState:
         self._events: deque[dict[str, Any]] = deque(maxlen=event_buffer_size)
         # ``agent_turn_completed`` event ids already counted toward token
         # totals — prevents double-counting hydrated turns against
-        # streamed ones.
-        self._counted_token_ids: set[str] = set()
+        # streamed ones.  A ``dict`` used as an insertion-ordered set so
+        # the oldest id evicts first once past ``_TOKEN_DEDUPE_LIMIT``.
+        self._counted_token_ids: dict[str, None] = {}
+        # ``agent_phase_completed`` ids already folded into the spend
+        # rollup — the rollup's analogue of the above.
+        self._counted_phase_ids: dict[str, None] = {}
+        # Per-phase spend records inside the rollup window, in the shape
+        # ``aggregate_phase_events`` consumes: hydrated from the store at
+        # startup and appended live.  Holding the *records* rather than a
+        # folded rollup means the aggregation has exactly one
+        # implementation (``api.tokens.aggregate_phase_events``) instead
+        # of the three it had — the endpoint's, a re-implementation in
+        # the browser, and whatever a reconnect left behind.
+        self._phase_spend: deque[dict[str, Any]] = deque(maxlen=_SPEND_RECORD_LIMIT)
 
     # -- read side -------------------------------------------------------
 
@@ -182,7 +256,7 @@ class LiveState:
         live = self._agents.get(role)
         return live.runtime_id if live is not None else ""
 
-    def recent_events(self, limit: int = _EVENT_BUFFER_SIZE) -> list[dict[str, Any]]:
+    def recent_events(self, limit: int = EVENT_FEED_LIMIT) -> list[dict[str, Any]]:
         """Return recent events, newest first, capped at ``limit``."""
         events = list(self._events)
         events.reverse()
@@ -201,7 +275,7 @@ class LiveState:
 
     # -- write side ------------------------------------------------------
 
-    def apply_event(self, envelope: dict[str, Any]) -> None:
+    def apply_event(self, envelope: dict[str, Any]) -> Change:
         """Update the projection from one serialized event envelope.
 
         ``envelope`` is the dashboard envelope shape produced by
@@ -209,39 +283,58 @@ class LiveState:
         ``payload`` / ``timestamp`` / ``category`` / …).  Reading off the
         serialized payload keeps engine events and webhook events on the
         same code path.
+
+        Returns a :class:`Change` naming what this event moved, so the
+        stream service can push the *result* of the projection rather
+        than the raw event.  That is the whole point: a dashboard should
+        mirror this projection, not re-implement it — every client used
+        to run its own copy of the state machine below, its own sandbox
+        tracking, and its own token aggregation, and each copy drifted
+        from this one in its own way.
         """
         etype = envelope.get("type", "")
         payload = envelope.get("payload") or {}
+        change = Change()
 
         # The in-flight call is stream-only: update it, but never let it
         # into the persisted-event buffer.
         if etype == "agent_turn_progress":
-            self._apply_progress(envelope, payload)
-            return
+            role = self._apply_progress(envelope, payload)
+            if role:
+                change.agents.add(role)
+            return change
 
         # Everything else that carries a category is a persisted event —
         # mirror it into the activity buffer (this is what ``/events``
         # and the snapshot's recent-activity feed show).
         if envelope.get("category"):
             self._record_event(envelope)
+            change.events = True
 
         # Detached sandbox lifecycle: maintain the in-flight set, then stop
         # (these don't drive an agent's run-state machine below).
         if etype in _SANDBOX_EVENTS:
             self._apply_sandbox(etype, envelope, payload)
-            return
+            change.sandboxes = True
+            return change
+
+        if etype == "agent_phase_completed":
+            change.tokens = self._fold_spend(envelope, payload)
 
         role = payload.get("role") or payload.get("agent_role") or ""
         if not role:
-            return
+            return change
         agent = self._ensure_agent(role)
         if agent_id := payload.get("agent_id", ""):
             agent.runtime_id = agent_id
 
         if etype == "agent_turn_completed":
             self._add_turn_tokens(agent, envelope, payload)
+            change.agents.add(role)
 
-        self._apply_state(agent, etype, envelope, payload)
+        if self._apply_state(agent, etype, envelope, payload):
+            change.agents.add(role)
+        return change
 
     def _apply_state(
         self,
@@ -249,17 +342,20 @@ class LiveState:
         etype: str,
         envelope: dict[str, Any],
         payload: dict[str, Any],
-    ) -> None:
-        """Apply a state-affecting event, gated on the reorder guard."""
+    ) -> bool:
+        """Apply a state-affecting event, gated on the reorder guard.
+
+        Returns whether the agent moved, so the caller knows to push it.
+        """
         if etype not in _EVENT_STATE:
-            return
+            return False
         ts = str(envelope.get("timestamp", ""))
         # Reorder guard: a strictly-older event must not clobber newer
         # state.  Equal timestamps are allowed through (same-instant
         # bursts) — the later-applied wins, matching the store's
         # ``event_id DESC`` tiebreak closely enough for the dashboard.
         if ts and agent._state_ts and ts < agent._state_ts:
-            return
+            return False
         if ts:
             agent._state_ts = ts
 
@@ -270,22 +366,37 @@ class LiveState:
             agent.state = "working"
             agent.current_task = payload.get("task_id") or None
             agent.afk_reason = ""
+            agent.last_error = None
         elif etype in ("task_completed", "task_failed"):
-            agent.state = "idle"
             agent.current_task = None
             agent.current_phase = None
             agent.current_iteration = 0
-            agent.afk_reason = ""
-            agent.live_call = None
+            # An engine-detected failure publishes its AFK event
+            # (``llm_unavailable`` / ``budget_exhausted`` / a guard
+            # breach) and ``TaskFailed`` microseconds apart, in that
+            # order.  Forcing ``idle`` here would erase the cause the
+            # instant it was set — which is why an agent whose provider
+            # died still showed as a healthy idle seat, and why a reload
+            # showed the same.  A seat only leaves AFK when it does real
+            # work again (``task_started`` / ``agent_phase_started``).
+            if agent.state != "afk":
+                agent.state = "idle"
+                agent.afk_reason = ""
+                agent.live_call = None
         elif etype == "agent_phase_started":
             agent.state = "working"
             agent.afk_reason = ""
+            # A new phase is real forward progress: whatever killed the
+            # last one is history now.
+            agent.last_error = None
             agent.current_phase = payload.get("phase") or None
             agent.current_iteration = int(payload.get("iteration", 0) or 0)
             self._begin_live_call(agent, payload)
         elif etype == "agent_phase_completed":
             agent.state = "working"
             agent.afk_reason = ""
+            if payload.get("failed"):
+                self._record_phase_failure(agent, envelope, payload)
             self._finish_live_call(agent, payload)
         elif etype == "reflection_completed":
             agent.state = "idle"
@@ -299,6 +410,23 @@ class LiveState:
             agent.state = "afk"
             agent.afk_reason = payload.get("kind") or etype
             agent.live_call = None
+            # ``llm_unavailable`` / ``budget_exhausted`` / a guard breach
+            # each carry their own reason; keep it where the dashboard
+            # reads failures from, so one panel explains every stop.
+            agent.last_error = {
+                "kind": payload.get("last_error_kind") or payload.get("kind") or etype,
+                "message": str(
+                    payload.get("last_error")
+                    or payload.get("detail")
+                    or payload.get("error")
+                    or ""
+                ),
+                "phase": agent.current_phase or "",
+                "turn_id": payload.get("turn_id", ""),
+                "at": str(envelope.get("timestamp", "")),
+                "event_id": envelope.get("id", ""),
+            }
+        return True
 
     # -- sandbox runs ----------------------------------------------------
 
@@ -378,13 +506,15 @@ class LiveState:
             "updated_at": payload.get("timestamp", ""),
         }
 
-    def _apply_progress(
-        self, envelope: dict[str, Any], payload: dict[str, Any]
-    ) -> None:
-        """Fold an ``agent_turn_progress`` round into the in-flight call."""
+    def _apply_progress(self, envelope: dict[str, Any], payload: dict[str, Any]) -> str:
+        """Fold an ``agent_turn_progress`` round into the in-flight call.
+
+        Returns the role whose live call moved, or ``""`` when the round
+        was stale and dropped.
+        """
         role = payload.get("role") or payload.get("agent_role") or ""
         if not role:
-            return
+            return ""
         agent = self._ensure_agent(role)
         if agent_id := payload.get("agent_id", ""):
             agent.runtime_id = agent_id
@@ -405,9 +535,9 @@ class LiveState:
         # call is ignored.
         if cur is not None and self._same_call(cur, turn_id, phase, iteration):
             if round_num < int(cur.get("round_num", -1)):
-                return
+                return ""
         elif cur is not None and ts and str(cur.get("updated_at", "")) > ts:
-            return
+            return ""
 
         agent.current_phase = phase or agent.current_phase
         agent.current_iteration = iteration
@@ -433,6 +563,43 @@ class LiveState:
             "in_progress": True,
             "updated_at": ts,
         }
+        return role
+
+    def _record_phase_failure(
+        self, agent: AgentLive, envelope: dict[str, Any], payload: dict[str, Any]
+    ) -> None:
+        """Remember a failed phase, and freeze its call instead of clearing it.
+
+        A phase that dies mid-call is exactly when an operator most wants
+        to see the call.  Clearing ``live_call`` here would blank the row
+        the moment the failure lands; instead the call is stamped
+        ``failed`` and kept, carrying whatever the phase managed —
+        prompt, partial response, tool calls — with the error attached.
+        """
+        error = {
+            "kind": payload.get("error_kind", "") or "error",
+            "message": payload.get("error", "") or "",
+            "phase": payload.get("phase", "") or "",
+            "turn_id": payload.get("turn_id", "") or "",
+            "at": str(envelope.get("timestamp", "")),
+            "event_id": envelope.get("id", ""),
+        }
+        agent.last_error = error
+        call = agent.live_call
+        if call is not None and self._same_call(
+            call,
+            payload.get("turn_id", ""),
+            payload.get("phase", ""),
+            int(payload.get("iteration", 0) or 0),
+        ):
+            call["in_progress"] = False
+            call["failed"] = True
+            call["error"] = error
+            call["response"] = payload.get("response", "") or call.get("response", "")
+            call["model"] = payload.get("model", "") or call.get("model", "")
+            call["tool_executions"] = payload.get("tool_executions") or call.get(
+                "tool_executions", []
+            )
 
     def _finish_live_call(self, agent: AgentLive, payload: dict[str, Any]) -> None:
         """Clear the in-flight call when its phase completes.
@@ -443,6 +610,10 @@ class LiveState:
         """
         cur = agent.live_call
         if cur is None:
+            return
+        # A failed phase deliberately keeps its (frozen) call on screen —
+        # see ``_record_phase_failure``.  Only a clean completion clears.
+        if payload.get("failed"):
             return
         if self._same_call(
             cur,
@@ -472,10 +643,68 @@ class LiveState:
         if event_id and event_id in self._counted_token_ids:
             return
         if event_id:
-            self._counted_token_ids.add(event_id)
+            _remember(self._counted_token_ids, event_id)
         agent.input_tokens += int(payload.get("input_tokens", 0) or 0)
         agent.output_tokens += int(payload.get("output_tokens", 0) or 0)
         agent.total_tokens += int(payload.get("total_tokens", 0) or 0)
+
+    # -- spend rollup ----------------------------------------------------
+
+    def _fold_spend(self, envelope: dict[str, Any], payload: dict[str, Any]) -> bool:
+        """Record one completed phase's spend; return whether it counted.
+
+        Deduped by event id so a re-delivered envelope can't inflate the
+        rollup, and window-pruned so a long-lived process doesn't keep
+        aggregating spend that has aged out of the window.
+        """
+        event_id = envelope.get("id", "")
+        if event_id and event_id in self._counted_phase_ids:
+            return False
+        if event_id:
+            _remember(self._counted_phase_ids, event_id)
+        timestamp = str(envelope.get("timestamp", ""))
+        self._phase_spend.append(
+            {
+                "event_id": event_id,
+                "timestamp": timestamp,
+                "agent_id": payload.get("agent_id", ""),
+                "agent_role": payload.get("role", "") or payload.get("agent_role", ""),
+                "phase": payload.get("phase", ""),
+                "host_phase": payload.get("host_phase", ""),
+                "worker": payload.get("worker", ""),
+                "model": payload.get("model", "") or payload.get("provider_key", ""),
+                "turn_id": payload.get("turn_id", ""),
+                "iteration": int(payload.get("iteration", 0) or 0),
+                "input_tokens": int(payload.get("input_tokens", 0) or 0),
+                "output_tokens": int(payload.get("output_tokens", 0) or 0),
+                "total_tokens": int(payload.get("total_tokens", 0) or 0),
+            }
+        )
+        self._prune_spend(timestamp)
+        return True
+
+    def _prune_spend(self, now_iso: str) -> None:
+        """Drop spend records that have aged out of the rollup window."""
+        if not now_iso:
+            return
+        try:
+            now = datetime.fromisoformat(now_iso)
+        except ValueError:
+            return
+        cutoff = (now - timedelta(days=TOKEN_WINDOW_DAYS)).isoformat()
+        while self._phase_spend and self._phase_spend[0]["timestamp"] < cutoff:
+            self._phase_spend.popleft()
+
+    def token_rollup(
+        self, role_handle_map: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """The spend breakdown over the live window, in the API's shape."""
+        from crewlet.api.tokens import aggregate_phase_events
+
+        rollup = aggregate_phase_events(
+            list(self._phase_spend), role_handle_map=role_handle_map or {}
+        )
+        return {"since_days": TOKEN_WINDOW_DAYS, "agent_role": "", **rollup}
 
     # -- buffer ----------------------------------------------------------
 
@@ -530,6 +759,7 @@ class LiveState:
         if only_states:
             return
         await self._hydrate_tokens(store)
+        await self._hydrate_spend(store)
         await self._hydrate_events(store)
 
     async def _hydrate_states(self, store: Any, roles: list[str]) -> None:
@@ -552,7 +782,9 @@ class LiveState:
 
     async def _hydrate_tokens(self, store: Any) -> None:
         try:
-            token_events = await store.list_token_usage_events()
+            token_events = await store.list_token_usage_events(
+                since_days=TOKEN_WINDOW_DAYS
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("live_state_hydrate_tokens_failed", error=str(exc))
             return
@@ -565,7 +797,21 @@ class LiveState:
             agent.output_tokens += int(ev.get("output_tokens", 0) or 0)
             agent.total_tokens += int(ev.get("total_tokens", 0) or 0)
             if event_id := ev.get("event_id", ""):
-                self._counted_token_ids.add(event_id)
+                _remember(self._counted_token_ids, event_id)
+
+    async def _hydrate_spend(self, store: Any) -> None:
+        """Seed the spend rollup so the first snapshot is not blank."""
+        try:
+            records = await store.list_phase_token_events(since_days=TOKEN_WINDOW_DAYS)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("live_state_hydrate_spend_failed", error=str(exc))
+            return
+        for record in sorted(records, key=lambda r: r.get("timestamp", "")):
+            if event_id := record.get("event_id", ""):
+                if event_id in self._counted_phase_ids:
+                    continue
+                _remember(self._counted_phase_ids, event_id)
+            self._phase_spend.append(record)
 
     async def _hydrate_events(self, store: Any) -> None:
         try:

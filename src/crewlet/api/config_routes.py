@@ -362,6 +362,65 @@ class RevisionDispatcher:
 # ── routes ─────────────────────────────────────────────────────────────
 
 
+async def config_document(app: Any) -> dict[str, Any] | None:
+    """The active revision's payload with every secret redacted.
+
+    Shared by ``GET /config`` and the WebSocket ``config`` query so the
+    two cannot diverge on what they mask.  ``None`` means there is no
+    active revision.
+    """
+    from crewlet.secrets import redact_config
+
+    store = getattr(app.state, "company_config_store", None)
+    if store is None:
+        return None
+    rev = await store.get_active()
+    if rev is None:
+        return None
+    cipher = getattr(app.state, "secret_cipher", None)
+    return redact_config(rev.payload, cipher)
+
+
+async def revision_diff(
+    app: Any, revision_id: str, *, against: str = "active"
+) -> dict[str, Any] | None:
+    """Structural diff between one revision and another (default: active).
+
+    Both sides are redacted first, so a rotated secret shows as a marker
+    change and never as ciphertext or plaintext.  ``None`` means either
+    side could not be resolved.
+    """
+    from crewlet.secrets import redact_config
+
+    store = getattr(app.state, "company_config_store", None)
+    if store is None:
+        return None
+    try:
+        target = await store.get_revision(UUID(revision_id))
+    except ValueError:
+        return None
+    if target is None:
+        return None
+    if against == "active":
+        base = await store.get_active()
+    else:
+        try:
+            base = await store.get_revision(UUID(against))
+        except ValueError:
+            return None
+    if base is None:
+        return None
+    cipher = getattr(app.state, "secret_cipher", None)
+    return {
+        "from": str(base.revision_id),
+        "to": str(target.revision_id),
+        "changes": _structural_diff(
+            redact_config(base.payload, cipher),
+            redact_config(target.payload, cipher),
+        ),
+    }
+
+
 async def get_config(request: Request) -> Response:
     """GET /config — return the active revision payload (JSON or YAML).
 
@@ -369,13 +428,9 @@ async def get_config(request: Request) -> Response:
     markers — the HTTP read paths never emit ciphertext (nor plaintext).
     Use ``crewlet config export`` on the host for a round-trippable dump.
     """
-    from crewlet.secrets import redact_config
-
-    store = _store(request)
-    rev = await store.get_active()
-    if rev is None:
+    payload = await config_document(request.app)
+    if payload is None:
         return JSONResponse({"error": "no_active_revision"}, status_code=404)
-    payload = redact_config(rev.payload, _cipher(request))
     fmt = request.query_params.get("format", "json").lower()
     if fmt == "yaml":
         body = yaml.safe_dump(payload, sort_keys=False, default_flow_style=False)

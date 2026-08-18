@@ -60,19 +60,26 @@ async def _list_scheduled_runs(
         return []
 
 
-async def get_schedules(request: Request) -> JSONResponse:
-    """GET /schedules — configured role/unit schedules + recent run history.
+# How many rows of dispatch history the schedules view shows.  It is a
+# recent-activity tail next to the schedule list, not an audit log —
+# the full history lives in the ``scheduled_runs`` table.
+RECENT_RUNS_LIMIT = 50
 
-    The configured list is resolved once at startup
-    (``app.state.schedules_data``); ``next_run`` is computed per request
-    from each cron expression, and the recent dispatch history is read
-    from the ``scheduled_runs`` ledger (empty without a database).
+
+def schedule_projection(app: Any) -> list[dict[str, Any]]:
+    """The configured schedules with ``next_run`` computed, synchronously.
+
+    Deliberately free of I/O: the live-stream snapshot embeds this on
+    every WebSocket connect, and a snapshot must never touch the
+    database.  Dispatch history is the async half
+    (:func:`recent_scheduled_runs`) and is fetched on demand by the
+    Schedules view.
     """
     schedules: list[dict[str, Any]] = list(
-        getattr(request.app.state, "schedules_data", []) or []
+        getattr(app.state, "schedules_data", []) or []
     )
     now = datetime.now(UTC)
-    enriched = [
+    return [
         {
             **s,
             "next_run": (
@@ -83,6 +90,23 @@ async def get_schedules(request: Request) -> JSONResponse:
         }
         for s in schedules
     ]
-    database = getattr(request.app.state, "database", None)
-    recent = await _list_scheduled_runs(database, limit=50)
-    return JSONResponse({"schedules": enriched, "recent_runs": recent})
+
+
+async def recent_scheduled_runs(app: Any) -> list[dict[str, Any]]:
+    """Recent rows from the ``scheduled_runs`` dispatch ledger."""
+    return await _list_scheduled_runs(
+        getattr(app.state, "database", None), limit=RECENT_RUNS_LIMIT
+    )
+
+
+async def schedules_payload(app: Any) -> dict[str, Any]:
+    """Configured schedules + recent dispatch history."""
+    return {
+        "schedules": schedule_projection(app),
+        "recent_runs": await recent_scheduled_runs(app),
+    }
+
+
+async def get_schedules(request: Request) -> JSONResponse:
+    """GET /schedules — configured role/unit schedules + recent run history."""
+    return JSONResponse(await schedules_payload(request.app))

@@ -285,6 +285,35 @@ def _apply_payload_to_app(app: Any, payload: dict[str, Any]) -> None:
         app.state.tools_data = _tools_data_from_payload(readable)
     _set_webhook_secrets(app, plain)
     app.state.configured = True
+    _broadcast_config_change(app)
+
+
+def _broadcast_config_change(app: Any) -> None:
+    """Tell connected dashboards the org they are showing just changed.
+
+    A revision activation rewrites the org chart, the seat list, the tool
+    surface, and the schedules under every open tab.  Nothing told them:
+    a dashboard picked the new shape up only if the operator happened to
+    reload, so a tab could sit for hours showing seats that no longer
+    exist.  These are the same envelopes the snapshot carries, so a
+    client applies them with the code it already has.
+    """
+    stream = getattr(app.state, "stream", None)
+    if stream is None:
+        return
+    from crewlet.api.routes.agents import agents_payload
+    from crewlet.api.routes.org import schedule_projection
+
+    for kind, data in (
+        ("org", app.state.org_data),
+        ("tools", app.state.tools_data),
+        ("agents", agents_payload(app)),
+        ("schedules", {"schedules": schedule_projection(app)}),
+    ):
+        try:
+            stream.push(kind, data)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("config_change_broadcast_failed", kind=kind)
 
 
 def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
