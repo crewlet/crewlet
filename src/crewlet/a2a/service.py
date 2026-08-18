@@ -43,7 +43,7 @@ class A2AService:
 
     def set_handle_registry(self, registry) -> None:
         """Wire the identity registry so the service can defend its
-        own contract (the bus connects live agents — see
+        own contract (the bus connects agent seats — see
         :meth:`request_channel`).  Set by the engine once the
         registry exists; ``None`` (tests, embedded use) skips the
         guard."""
@@ -70,23 +70,31 @@ class A2AService:
         inherits depth+1 and can enforce the cap.
 
         Raises ``ValueError`` when a registry is wired and ``target``
-        is not a live agent.  This is the chokepoint that creates the
-        inbox wake — without the guard, a human seat or a typo'd handle
-        produces a channel whose wake event lands on a subscriber-less
-        topic: the requester reports success and waits on a reply that
-        can never come.  Callers (``a2a_ask``) surface the error as a
-        tool failure so it stays visible — the agent re-plans, or
-        reaches the target on a human surface (Slack / Jira) instead.
+        is not an agent seat in the org.  This is the chokepoint that
+        creates the inbox wake — without the guard, a human seat or a
+        typo'd handle produces a channel whose wake event lands on a
+        subscriber-less topic: the requester reports success and waits
+        on a reply that can never come.  Callers (``a2a_ask``) surface
+        the error as a tool failure so it stays visible — the agent
+        re-plans, or reaches the target on a human surface (Slack /
+        Jira) instead.
+
+        The question the guard asks is "does this seat exist and does
+        it have an inbox?", NOT "is it running in this process".  A
+        colleague owned by another node is a perfectly good A2A target:
+        the wake lands on its inbox and that node consumes it.  Asking
+        the local pool instead would have made every cross-node ask
+        fail as a typo — the more nodes, the fewer colleagues an agent
+        appears to have.
         """
-        if (
-            self._handle_registry is not None
-            and self._handle_registry.resolve_handle(target) is None
-        ):
-            raise ValueError(
-                f"a2a target '{target}' is not a live agent — the A2A bus "
-                f"connects agents only (human seats and unknown handles "
-                f"have no inbox)"
-            )
+        if self._handle_registry is not None:
+            party = self._handle_registry.resolve_party(target)
+            if party is None or party.is_human:
+                raise ValueError(
+                    f"a2a target '{target}' is not an agent seat — the A2A "
+                    f"bus connects agents only (human seats and unknown "
+                    f"handles have no inbox)"
+                )
         channel_id = f"a2a-{uuid4().hex[:12]}"
         participants = [requester, target]
         await self._bus.create_channel(channel_id, participants)

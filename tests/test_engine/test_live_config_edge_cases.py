@@ -157,6 +157,75 @@ async def test_changed_role_budget_updates_and_drops_live() -> None:
     assert agent_id not in engine.budget_manager._agent_budgets
 
 
+async def test_caps_cover_seats_this_node_does_not_run() -> None:
+    """Caps are a projection of the ORG, not of the local pool.
+
+    ``BudgetManager.spend`` passes ``agent_limit=None`` when it has no
+    local cap for an id, which the shared usage store reads as
+    unlimited.  So a node that seeded caps only for the seats it spawned
+    would run any seat it later took over with no per-agent cap at all.
+    """
+    engine = await _engine_with_started_queue([{"name": "CEO"}])
+    # A company where one seat is not running in this process at all.
+    wider = config_to_organization(
+        make_company(
+            name="Acme",
+            roles=[
+                {"name": "CEO"},
+                {"name": "Eng", "token_budget": 777},
+            ],
+        )
+    )
+    engine._reseed_seat_budgets(wider)
+
+    assert engine.agent_pool.get_all_for_role("Eng") == []
+    cap = engine.budget_manager.get_agent_budget(
+        wider.agent_id_for(wider.get_role("Eng"))
+    )
+    assert cap is not None and cap.max_tokens == 777
+
+
+async def test_reseed_drops_caps_for_seats_the_org_no_longer_has() -> None:
+    """The projection is exact — caps do not accumulate across
+    revisions, or a removed role's (possibly exhausted) cap would
+    outlive it and govern a re-added seat with the same handle."""
+    engine = await _engine_with_started_queue([{"name": "CEO"}])
+    with_eng = config_to_organization(
+        make_company(
+            name="Acme",
+            roles=[{"name": "CEO"}, {"name": "Eng", "token_budget": 777}],
+        )
+    )
+    engine._reseed_seat_budgets(with_eng)
+    eng_id = with_eng.agent_id_for(with_eng.get_role("Eng"))
+    assert engine.budget_manager.get_agent_budget(eng_id) is not None
+
+    without_eng = config_to_organization(
+        make_company(name="Acme", roles=[{"name": "CEO"}])
+    )
+    engine._reseed_seat_budgets(without_eng)
+    assert engine.budget_manager.get_agent_budget(eng_id) is None
+
+
+async def test_reseed_preserves_used_tokens_on_an_unchanged_cap() -> None:
+    """A reseed runs on every org swap, so it must not reset the local
+    usage mirror of seats the revision did not touch."""
+    engine = await _engine_with_started_queue([{"name": "CEO"}])
+    org = config_to_organization(
+        make_company(
+            name="Acme",
+            roles=[{"name": "CEO"}, {"name": "Eng", "token_budget": 777}],
+        )
+    )
+    engine._reseed_seat_budgets(org)
+    eng_id = org.agent_id_for(org.get_role("Eng"))
+    engine.budget_manager.get_agent_budget(eng_id).used_tokens = 400
+
+    engine._reseed_seat_budgets(org)
+    cap = engine.budget_manager.get_agent_budget(eng_id)
+    assert cap.max_tokens == 777 and cap.used_tokens == 400
+
+
 async def test_removed_role_drops_budget_live() -> None:
     engine = await _engine_with_started_queue([{"name": "CEO"}])
     await _spawn_role_live(engine, "Eng", token_budget=5000)

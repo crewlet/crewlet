@@ -177,20 +177,11 @@ async def test_close_nonexistent_channel(
 
 
 # ---------------------------------------------------------------- #
-# Live-agent guard (humans / unknown handles are not on the bus)
+# Agent-seat guard (humans / unknown handles are not on the bus)
 # ---------------------------------------------------------------- #
 
 
-async def test_request_channel_refuses_non_agent_target(
-    service: A2AService, queue: MemoryEventQueue
-) -> None:
-    """With a registry wired, a target that is not a live agent is
-    refused at the chokepoint — no channel, no wake event into a
-    subscriber-less topic."""
-    from tests.conftest import PartyRegistryStub, StubAgent
-
-    service.set_handle_registry(PartyRegistryStub(agents=[StubAgent("bob")]))
-
+def _spy_on(queue: MemoryEventQueue) -> list[tuple[str, Event]]:
     published: list[tuple[str, Event]] = []
     original_publish = queue.publish
 
@@ -199,15 +190,64 @@ async def test_request_channel_refuses_non_agent_target(
         await original_publish(topic, event)
 
     queue.publish = spy  # type: ignore[method-assign]
+    return published
+
+
+async def test_request_channel_refuses_non_agent_target(
+    service: A2AService, queue: MemoryEventQueue
+) -> None:
+    """With a registry wired, a target that is not an agent seat is
+    refused at the chokepoint — no channel, no wake event into a
+    subscriber-less topic."""
+    from crewlet.org.models import Role
+    from tests.conftest import PartyRegistryStub, StubAgent
+
+    sarah = Role(
+        name="Sarah Chen",
+        kind="human",
+        email="sarah@example.com",
+        contact={"slack_user_id": "U0HUMAN"},
+    )
+    service.set_handle_registry(
+        PartyRegistryStub(agents=[StubAgent("bob")], humans=[sarah])
+    )
+    published = _spy_on(queue)
 
     # Live agent: fine.
     await service.request_channel("alice", "bob")
 
-    # Unknown handle (e.g. a 'human' sentinel that is not a live agent):
-    # refused.
-    with pytest.raises(ValueError, match="not a live agent"):
-        await service.request_channel("alice", "human")
-    assert not any(".inbox" in t and "human" in t for t, _ in published)
+    # Unknown handle: refused.
+    with pytest.raises(ValueError, match="not an agent seat"):
+        await service.request_channel("alice", "nobody")
+    # A real human seat: also refused — it resolves, but has no inbox.
+    with pytest.raises(ValueError, match="not an agent seat"):
+        await service.request_channel("alice", "sarah-chen")
+
+    assert not any(
+        ".inbox" in t and ("nobody" in t or "sarah-chen" in t) for t, _ in published
+    )
+
+
+async def test_request_channel_accepts_a_seat_running_elsewhere(
+    service: A2AService, queue: MemoryEventQueue
+) -> None:
+    """The guard asks whether the seat EXISTS, not whether it runs here.
+
+    A colleague owned by another node is a valid target: the wake lands
+    on its inbox and that node consumes it.  Asking the local pool
+    instead made every cross-node ask fail as a typo — the more nodes,
+    the fewer colleagues an agent appeared to have.
+    """
+    from tests.conftest import PartyRegistryStub, StubAgent
+
+    service.set_handle_registry(
+        PartyRegistryStub(agents=[StubAgent("bob")], remote_agents=["carol"])
+    )
+    published = _spy_on(queue)
+
+    channel_id = await service.request_channel("alice", "carol")
+    assert channel_id.startswith("a2a-")
+    assert any(t == "crewlet.agent.carol.inbox" for t, _ in published)
 
 
 async def test_request_channel_unguarded_without_registry(

@@ -309,6 +309,15 @@ class BudgetManager:
         self._agent_budgets.pop(agent_id, None)
         self._changed(agent_id)
 
+    def agent_budget_ids(self) -> list[str]:
+        """Every agent id that currently carries a per-agent cap.
+
+        Lets a caller reconcile the cap set against a new org — the
+        caps are config, so they are a projection of the active
+        revision rather than an accumulation.
+        """
+        return list(self._agent_budgets)
+
     async def spend(self, agent_id: str, tokens: int) -> SpendOutcome:
         """Charge ``tokens`` to the org and this agent, atomically.
 

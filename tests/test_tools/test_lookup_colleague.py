@@ -875,6 +875,31 @@ async def test_lookup_agent_seat_identity_block_carries_kind() -> None:
 
 
 @pytest.mark.asyncio
+async def test_lookup_renders_a_seat_running_on_another_node() -> None:
+    """An agent's colleague card must not depend on where the colleague
+    runs.  Re-resolving through the pool dropped ``role:`` and
+    ``email:`` for any seat this process does not own — a card that
+    reads as a half-real colleague rather than a normal one.
+    """
+    from crewlet.org.models import Role
+
+    _, tool = _registry_and_tool()
+    # ``carol`` exists in the org but is owned by another node, so the
+    # party carries a role but no instance.
+    carol = Role(name="Carol", handle="carol", goal="ship", email="carol@example.com")
+    reg = _Registry(agents=[_Agent("engineer", "Engineer")], remote_agents=[carol])
+
+    result = await tool.execute({"query": "carol"}, _ctx(reg))
+    assert result.success
+    out = result.output
+    assert "kind: agent" in out
+    assert "handle: carol" in out
+    assert "role: Carol" in out
+    assert "email: carol@example.com" in out
+    assert "Human teammate" not in out
+
+
+@pytest.mark.asyncio
 async def test_disambiguation_marks_human_rows() -> None:
     _, tool = _registry_and_tool()
     reg = _Registry(

@@ -914,6 +914,11 @@ class Engine:
             # — alive across an activation, so nothing has to re-attach.
             # Per-agent caps are re-seeded by the org diff below.
             self.budget_manager.update_org_budget(new.token_budget)
+            # Per-seat caps are a projection of the active revision, so
+            # they land the moment it activates — not when the spawn
+            # cascade happens to run.  Idempotent with the reseed in
+            # ``start`` step 4 and the one after every org swap.
+            self._reseed_seat_budgets(self.org)
             self._turn_engine_config = new.turn_engine
             self._learning_config = new.learning
             self._scheduling_config = new.scheduling
@@ -1136,9 +1141,12 @@ class Engine:
             self._inbox_batch_options.max_batch = snapshot[
                 "notification_coalesce_max_batch"
             ]
-            # Budget org cap: restore max_tokens, leave used_tokens
-            # (they may have advanced via concurrent agent activity).
+            # Budget caps: restore the org max_tokens and re-derive the
+            # per-seat caps from the restored org.  Used-tokens are left
+            # alone throughout (they may have advanced via concurrent
+            # agent activity, and the shared store is the truth anyway).
             self.budget_manager.update_org_budget(snapshot["budget_org_max"])
+            self._reseed_seat_budgets(self.org)
             self._turn_engine_config = snapshot["turn_engine_config"]
             if (
                 self.turn_engine is not None
@@ -1674,11 +1682,11 @@ class Engine:
         )
         await self.agent_pool.spawn_from_org(self.org)
 
-        # Set per-agent token budgets from role configs
-        for agent in self.agent_pool.agents:
-            role = self.org.get_role(agent.role_name)
-            if role is not None:
-                self._seed_agent_budget(agent, role)
+        # Set per-seat token budgets from role configs.  Driven by the
+        # ORG, not the pool: a cap must exist for every seat this node
+        # could ever run, and under owner-only seats that is every seat
+        # in the company, not the subset spawned here.
+        self._reseed_seat_budgets(self.org)
 
         # 5. Launch MCP servers (if configured)
         logger.info(
@@ -4231,23 +4239,63 @@ class Engine:
 
         return applied
 
-    def _seed_agent_budget(self, agent: Any, role: Any) -> None:
-        """Apply the role's ``token_budget`` to ``agent`` on the manager.
+    def _seed_seat_budget(self, role: Any, org: Any) -> None:
+        """Apply ``role``'s ``token_budget`` cap to the manager.
 
-        Shared by :meth:`start` step 4 (boot cascade) and the live
-        role-add branch in :meth:`_apply_org_diff`.  A 0 budget means
-        "unlimited" — skip the call so we don't seed a 0 cap that the
-        budget manager would treat as immediately-exhausted.
+        Keyed on the seat's DERIVED id, and seeded for every agent seat
+        in the org — not only the ones spawned in this process.  Caps
+        are config; only *usage* is shared (``PostgresBudgetUsageStore``),
+        and ``BudgetManager.spend`` passes ``agent_limit=None`` when it
+        has no local cap for an id, which the store reads as unlimited.
+        So a node that had not seeded a seat would run that seat's first
+        turn after a takeover with no per-agent cap at all — the one
+        failure mode a budget must not have.  Seeding from the org costs
+        one int per seat and removes the question.
+
+        A 0 budget means "unlimited" — skip the call so we don't seed a
+        0 cap that the budget manager would treat as immediately
+        exhausted.
         """
-        if role.token_budget <= 0:
+        if role.is_human or role.token_budget <= 0:
             return
-        self.budget_manager.set_agent_budget(agent.id_str, role.token_budget)
+        agent_id = org.agent_id_for(role)
+        if not agent_id:
+            return
+        self.budget_manager.set_agent_budget(agent_id, role.token_budget)
         logger.debug(
             "agent_token_budget_set",
-            agent_id=agent.id_str,
+            agent_id=agent_id,
             role=role.name,
             budget=role.token_budget,
         )
+
+    def _reseed_seat_budgets(self, org: Any) -> None:
+        """Make the per-seat token caps a projection of ``org``.
+
+        Caps are config, so they are derived from the active revision
+        rather than accumulated: every agent seat with a positive
+        ``token_budget`` gets its cap (usage history preserved via
+        ``update_agent_budget``), and every cap whose seat is gone —
+        role removed, flipped to human, budget dropped to 0
+        ("unlimited") — is dropped.
+
+        Called on every org swap, including the rollback path.  A
+        rollback that had already applied a per-role budget change used
+        to leave the *failed* revision's caps in place, because only the
+        org-level cap was in the snapshot.
+        """
+        wanted: dict[str, int] = {}
+        for role in org.all_roles():
+            if role.is_human or role.token_budget <= 0:
+                continue
+            agent_id = org.agent_id_for(role)
+            if agent_id:
+                wanted[agent_id] = role.token_budget
+        for agent_id, cap in wanted.items():
+            self.budget_manager.update_agent_budget(agent_id, cap)
+        for agent_id in self.budget_manager.agent_budget_ids():
+            if agent_id not in wanted:
+                self.budget_manager.drop_agent_budget(agent_id)
 
     def _apply_restart_required_subsystem(
         self,
@@ -5826,7 +5874,7 @@ class Engine:
         agent = await self.agent_pool.spawn_role(
             role, org, source="engine.apply_config"
         )
-        self._seed_agent_budget(agent, role)
+        self._seed_seat_budget(role, org)
 
         if self.turn_engine is not None:
             await self._subscribe_agent_inbox(agent)
@@ -5857,10 +5905,6 @@ class Engine:
         for agent in agents:
             for issue_key in self.execution_tracker.get_issues(agent.id_str):
                 self.execution_tracker.untrack(issue_key)
-            # Drop the per-agent budget so a re-added role with the
-            # same id doesn't inherit a stale (possibly exhausted)
-            # counter.
-            self.budget_manager.drop_agent_budget(agent.id_str)
             # Tear down the inbox consumer + its broker-side subscription:
             # a decommissioned seat must not keep a consumer bound to a
             # terminated instance, nor accumulate undeliverable events on
@@ -6057,17 +6101,9 @@ class Engine:
             for agent in agents:
                 agent.definition = new_defn
 
-                # Apply a changed per-role token budget in place.  A
-                # positive cap updates (preserving used-tokens history);
-                # dropping to 0 means "unlimited", so remove the cap.
-                if "token_budget" in changed:
-                    if new_role.token_budget > 0:
-                        self.budget_manager.update_agent_budget(
-                            agent.id_str, new_role.token_budget
-                        )
-                    else:
-                        self.budget_manager.drop_agent_budget(agent.id_str)
-
+                # A changed ``token_budget`` is applied by the
+                # ``_reseed_seat_budgets`` pass after the org swap, which
+                # covers seats this node does not run as well.
                 await self.event_queue.publish(
                     "crewlet.events.role_updated",
                     RoleUpdated(
@@ -6093,6 +6129,11 @@ class Engine:
 
         # Swap org after all agents are updated to avoid partial state
         self.org = new_org
+
+        # Per-seat token caps are a projection of the active org, so
+        # reconcile them against it once, here — rather than per spawned
+        # instance, which skipped every seat this node does not run.
+        self._reseed_seat_budgets(self.org)
 
         # Org config reaches agents directly through the
         # in-memory Organization (rendered into the Plan prompt by

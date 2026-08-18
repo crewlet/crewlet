@@ -176,7 +176,11 @@ colleague-surface tools** during Execute, never via the engine:
   `a2a_ask` against a human returns an actionable error pointing the
   agent at Slack / Jira, and the `A2AService` refuses any non-agent
   target so a typo or a stale `"human"` entry fails visibly
-  instead of waking a subscriber-less topic.
+  instead of waking a subscriber-less topic. The question the guard
+  asks is whether the target is an **agent seat in the org**, not
+  whether it is running in the asking process: a colleague owned by
+  another node is a normal A2A target, because the wake lands on its
+  inbox and that node consumes it.
 
 When a turn only discovers it needs a human at Review, Review returns
 `self_iterate` with a note; the next Plan pass adds the outreach step and
