@@ -90,6 +90,7 @@
           "default": {
             "type": "pulsar",
             "url": "pulsar://localhost:6650",
+            "admin_url": "",
             "tenant": "public",
             "namespace": "default",
             "auth_token": "",
@@ -170,6 +171,11 @@
           "title": "Url",
           "type": "string"
         },
+        "admin_url": {
+          "default": "",
+          "title": "Admin Url",
+          "type": "string"
+        },
         "tenant": {
           "default": "public",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
@@ -246,6 +252,7 @@
       "$ref": "#/$defs/BootstrapProvidersConfig",
       "default": {
         "queue": {
+          "admin_url": "",
           "auth_token": "",
           "namespace": "default",
           "tenant": "public",

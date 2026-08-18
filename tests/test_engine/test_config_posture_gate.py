@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from crewlet.db.config_plane import Posture  # noqa: E402
+from crewlet.db.config_plane import Posture
 from crewlet.engine import Engine  # noqa: E402
 from crewlet.org.models import Organization, OrgUnit, Role  # noqa: E402
 from crewlet.providers.llm.protocol import (  # noqa: E402
@@ -36,6 +36,7 @@ from crewlet.providers.llm.protocol import (  # noqa: E402
     ToolDef,
 )
 from crewlet.queue.memory import MemoryEventQueue  # noqa: E402
+from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic  # noqa: E402
 
 
 class _MockLLM:
@@ -147,9 +148,12 @@ async def test_shedding_pauses_inboxes_under_the_config_reason() -> None:
         handles = [a.handle for a in engine.agent_pool.agents]
         assert handles
         for handle in handles:
-            topic = f"crewlet.agent.{handle}.inbox"
-            assert queue._paused_topics.get(topic) == {"config"}
-        assert queue._paused_topics.get("crewlet.notifications.inbound") == {"config"}
+            assert queue.pause_holds(
+                agent_inbox_topic(handle), agent_inbox_group(handle)
+            ) == {"config"}
+        assert queue.pause_holds("crewlet.notifications.inbound", "notifications") == {
+            "config"
+        }
     finally:
         await engine.stop()
         await queue.stop()
@@ -166,15 +170,15 @@ async def test_converging_does_not_release_a_sandbox_hold() -> None:
     engine, queue = await _engine_with_queue()
     try:
         handle = engine.agent_pool.agents[0].handle
-        topic = f"crewlet.agent.{handle}.inbox"
-        await queue.pause_topic(topic, reason="sandbox")
+        topic, group = agent_inbox_topic(handle), agent_inbox_group(handle)
+        await queue.pause_topic(topic, group, reason="sandbox")
 
         await engine._apply_posture(Posture.SHED)
-        assert queue._paused_topics[topic] == {"sandbox", "config"}
+        assert queue.pause_holds(topic, group) == {"sandbox", "config"}
 
         await engine._apply_posture(Posture.SERVE)
         # Config released its hold; the sandbox's survives.
-        assert queue._paused_topics[topic] == {"sandbox"}
+        assert queue.pause_holds(topic, group) == {"sandbox"}
     finally:
         await engine.stop()
         await queue.stop()
@@ -186,12 +190,12 @@ async def test_a_completing_sandbox_does_not_un_gate_a_diverged_node() -> None:
     engine, queue = await _engine_with_queue()
     try:
         handle = engine.agent_pool.agents[0].handle
-        topic = f"crewlet.agent.{handle}.inbox"
-        await queue.pause_topic(topic, reason="sandbox")
+        topic, group = agent_inbox_topic(handle), agent_inbox_group(handle)
+        await queue.pause_topic(topic, group, reason="sandbox")
         await engine._apply_posture(Posture.SHED)
 
-        await queue.resume_topic(topic, reason="sandbox")
-        assert queue._paused_topics[topic] == {"config"}
+        await queue.resume_topic(topic, group, reason="sandbox")
+        assert queue.pause_holds(topic, group) == {"config"}
     finally:
         await engine.stop()
         await queue.stop()
@@ -208,7 +212,11 @@ async def test_posture_changes_within_a_serving_band_do_not_churn() -> None:
         await engine._apply_posture(Posture.SERVE)
         await engine._apply_posture(Posture.WAIT)
         await engine._apply_posture(Posture.ISOLATED)
-        assert queue._paused_topics == {}
+        handle = engine.agent_pool.agents[0].handle
+        assert (
+            queue.pause_holds(agent_inbox_topic(handle), agent_inbox_group(handle))
+            == set()
+        )
     finally:
         await engine.stop()
         await queue.stop()
@@ -230,7 +238,8 @@ async def test_a_shed_inbox_delivery_is_requeued_not_dropped() -> None:
     engine, queue = await _engine_with_queue()
     try:
         agent = engine.agent_pool.agents[0]
-        topic = f"crewlet.agent.{agent.handle}.inbox"
+        topic = agent_inbox_topic(agent.handle)
+        group = agent_inbox_group(agent.handle)
         handler = engine._make_agent_handler(agent)
         await engine._apply_posture(Posture.SHED)
 
@@ -242,9 +251,8 @@ async def test_a_shed_inbox_delivery_is_requeued_not_dropped() -> None:
         )
         await handler([event])
 
-        # Buffered on the paused topic rather than handled or lost.
-        buffered = queue._paused_topic_buffer.get(topic, [])
-        assert [e.id for e in buffered] == [event.id]
+        # Retained by the paused subscription rather than handled or lost.
+        assert [e.id for e in queue.backlog(topic, group)] == [event.id]
     finally:
         await engine.stop()
         await queue.stop()
@@ -258,7 +266,8 @@ async def test_a_serving_node_handles_the_same_delivery() -> None:
     engine, queue = await _engine_with_queue()
     try:
         agent = engine.agent_pool.agents[0]
-        topic = f"crewlet.agent.{agent.handle}.inbox"
+        topic = agent_inbox_topic(agent.handle)
+        group = agent_inbox_group(agent.handle)
         handled: list[object] = []
         engine._handle_notification = (  # type: ignore[method-assign]
             lambda _agent, event: handled.append(event) or _noop()
@@ -274,7 +283,7 @@ async def test_a_serving_node_handles_the_same_delivery() -> None:
         await handler([event])
 
         assert handled == [event]
-        assert queue._paused_topic_buffer.get(topic, []) == []
+        assert queue.backlog(topic, group) == []
     finally:
         await engine.stop()
         await queue.stop()

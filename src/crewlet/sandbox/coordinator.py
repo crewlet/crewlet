@@ -49,7 +49,7 @@ from crewlet.events.types import (
 )
 from crewlet.notifications.coalesce import conversation_key
 from crewlet.queue.protocol import EventQueue
-from crewlet.queue.topics import agent_inbox_topic
+from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
 from crewlet.sandbox.protocol import CodingAgentResult
@@ -128,7 +128,9 @@ class SandboxCoordinator:
         handle = event.agent_handle
         if not handle:
             return
-        await self._event_queue.pause_topic(agent_inbox_topic(handle))
+        await self._event_queue.pause_topic(
+            agent_inbox_topic(handle), agent_inbox_group(handle)
+        )
         agent = self._get_agent(handle)
         if agent is not None and agent.state == AgentState.IDLE:
             agent.await_sandbox(task_id=event.task_id)
@@ -181,7 +183,10 @@ class SandboxCoordinator:
             # The job is over even though collection failed — free the
             # agent and let its inbox flow again.
             self._free_agent(agent)
-            await self._event_queue.resume_topic(agent_inbox_topic(run.agent_handle))
+            await self._event_queue.resume_topic(
+                agent_inbox_topic(run.agent_handle),
+                agent_inbox_group(run.agent_handle),
+            )
             return
 
         await self._account(run, result)
@@ -204,7 +209,10 @@ class SandboxCoordinator:
             # A clarification wait frees the agent (a human reply can take
             # days) and lets its inbox flow so the answer can arrive.
             self._free_agent(agent)
-            await self._event_queue.resume_topic(agent_inbox_topic(run.agent_handle))
+            await self._event_queue.resume_topic(
+                agent_inbox_topic(run.agent_handle),
+                agent_inbox_group(run.agent_handle),
+            )
             await self._handle_clarification(agent, run, result, event)
             return
 
@@ -389,7 +397,10 @@ class SandboxCoordinator:
                 run=run, manager=self._manager, pending_store=self._pending_store
             )
             self._free_agent(agent)
-            await self._event_queue.resume_topic(agent_inbox_topic(run.agent_handle))
+            await self._event_queue.resume_topic(
+                agent_inbox_topic(run.agent_handle),
+                agent_inbox_group(run.agent_handle),
+            )
             return
         # Free the agent only NOW, immediately before the resume dispatch, so
         # no queued event can take the WORKING slot first (the inbox is still
@@ -434,7 +445,10 @@ class SandboxCoordinator:
                 pending_store=self._pending_store,
             )
             await self._pending_store.set_status(run.turn_id, "done")
-            await self._event_queue.resume_topic(agent_inbox_topic(run.agent_handle))
+            await self._event_queue.resume_topic(
+                agent_inbox_topic(run.agent_handle),
+                agent_inbox_group(run.agent_handle),
+            )
 
     async def _dispatch_resume_execute(
         self,
@@ -529,7 +543,10 @@ class SandboxCoordinator:
                 continue
             if run.status != "running":
                 continue
-            await self._event_queue.pause_topic(agent_inbox_topic(run.agent_handle))
+            await self._event_queue.pause_topic(
+                agent_inbox_topic(run.agent_handle),
+                agent_inbox_group(run.agent_handle),
+            )
             agent = self._get_agent(run.agent_handle)
             if agent is not None:
                 agent.await_sandbox(task_id=run.turn_id)

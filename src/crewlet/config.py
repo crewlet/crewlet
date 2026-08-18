@@ -579,20 +579,35 @@ class QueueConfig(BaseModel):
     """Queue backend type. Currently only ``pulsar`` (Apache Pulsar) is supported."""
     url: str = "pulsar://localhost:6650"
     """Pulsar broker service URL (binary protocol)."""
+    admin_url: str = ""
+    """Pulsar admin HTTP endpoint. Empty = derived from ``url`` by
+    Pulsar's own default port convention (``pulsar://host:6650`` →
+    ``http://host:8080``, ``pulsar+ssl://host:6651`` →
+    ``https://host:8443``).
+
+    The engine needs it to keep **every seat's subscription alive
+    whether or not any node owns the seat** — a durable subscription
+    holds an unowned seat's mail, and creating one needs no consumer
+    only through this endpoint. Set it explicitly whenever the admin
+    endpoint is not on the broker's host at the default port (a proxy,
+    a separate admin service, a non-default port)."""
     tenant: str = Field(default="public", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    """Pulsar tenant that holds all crewlet topics. The engine never
-    talks to the admin API — a non-default tenant must be created
-    out-of-band (``pulsar-admin tenants create <tenant>``)."""
+    """Pulsar tenant that holds all crewlet topics. Tenants are never
+    auto-created — a non-default tenant must exist before start
+    (``pulsar-admin tenants create <tenant>``)."""
     namespace: str = Field(default="default", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     """Namespace under ``tenant`` for all crewlet topics. Like the
     tenant, a non-default namespace is created out-of-band
     (``pulsar-admin namespaces create <tenant>/<namespace>``)."""
     auth_token: str = ""
-    """JWT presented to the broker (token authentication). The token's
-    ``sub`` claim is the engine's *role*; grant that role produce+consume
-    on this engine's namespace only, so engines sharing a cluster cannot
-    touch each other's tenants. Use ``${VAR}`` to read it from the
-    environment. Empty = connect unauthenticated."""
+    """JWT presented to the broker (token authentication), and to the
+    admin endpoint as a bearer token. The token's ``sub`` claim is the
+    engine's *role*; grant that role produce+consume on this engine's
+    namespace only, so engines sharing a cluster cannot touch each
+    other's tenants — plus the namespace-level permission the
+    subscription lifecycle needs, since produce+consume alone does not
+    authorize it. Use ``${VAR}`` to read it from the environment. Empty =
+    connect unauthenticated."""
     tls_trust_certs_path: str = ""
     """CA bundle for ``pulsar+ssl://`` URLs (optional; empty = system
     defaults). Tokens are bearer credentials — use TLS whenever the

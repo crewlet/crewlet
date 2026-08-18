@@ -53,8 +53,10 @@ import pulsar
 from crewlet._logging import get_logger
 from crewlet._tasks import cancel_and_wait
 from crewlet.events.types import Event
+from crewlet.queue.admin import PulsarBrokerAdmin, derive_admin_url
 from crewlet.queue.protocol import (
     BatchOptions,
+    DeferDelivery,
     order_partitions_oldest_first,
     partition_by_key,
 )
@@ -235,15 +237,31 @@ class _Subscription:
     """A live consumer: its consume task, the Pulsar consumer, and the
     dedicated single-thread executor running its blocking ``receive()``.
 
-    ``topic`` / ``group`` identify the durable pair so :meth:`unsubscribe`
+    ``topic`` / ``group`` identify the durable pair so :meth:`detach`
     can find and tear the consumer down (stream subscriptions leave them
-    empty — they return their own unsubscribe callable instead)."""
+    empty — they return their own unsubscribe callable instead).
 
-    task: asyncio.Task[None]
+    ``quiescing`` stops this subscription taking on new work while
+    letting whatever is already running finish.  It is checked at four
+    points — loop top, immediately after a receive returns, inside the
+    batch collector, and immediately before dispatch — because a
+    *topic pause* is checked at only one of those (before the blocking
+    receive), so a message already fetched still dispatches and a
+    positive linger keeps collecting more.  A quiescing subscription
+    leaves collected-but-undispatched messages **unacked**: they return
+    to the successor at ``redeliveryCount`` 0, where a NAK would spend
+    the dead-letter budget on a healthy message.
+
+    ``task`` is assigned right after construction, because the consume
+    closure has to capture this record to see the flag.
+    """
+
     consumer: Any
     executor: ThreadPoolExecutor
     topic: str = ""
     group: str = ""
+    task: asyncio.Task[None] | None = None
+    quiescing: bool = False
 
 
 class PulsarEventQueue:
@@ -262,12 +280,22 @@ class PulsarEventQueue:
         namespace: str = _DEFAULT_NAMESPACE,
         auth_token: str = "",
         tls_trust_certs_path: str = "",
+        admin_url: str = "",
     ) -> None:
         self._url = url
         self._tenant = tenant
         self._namespace = namespace
         self._auth_token = auth_token
         self._tls_trust_certs_path = tls_trust_certs_path
+        # Subscription lifecycle runs over the admin API, not the client:
+        # creating a subscription by SUBSCRIBING joins a Shared
+        # subscription a peer may be actively serving and takes a share
+        # of that seat's traffic into this process (measured), and
+        # deleting one through ``Consumer.unsubscribe`` needs a local
+        # consumer, which would make role decommission depend on which
+        # node happens to hold the seat.  See :mod:`crewlet.queue.admin`.
+        self._admin_url = admin_url or derive_admin_url(url)
+        self._admin: PulsarBrokerAdmin | None = None
         # ``tenant/namespace`` path segment used in every topic name.
         self._ns_path = f"{tenant}/{namespace}"
         self._client: pulsar.Client | None = None
@@ -289,9 +317,15 @@ class PulsarEventQueue:
         # topic's consume loop stops FETCHING, so its messages stay on the
         # broker (no NAK churn) until ``resume_topic`` lets fetching
         # resume.  Reversible, unlike the one-way drain ``pause_delivery``.
-        # topic -> the set of reasons holding it paused. A topic is
-        # delivered only when no reason remains; see the protocol.
-        self._paused_topics: dict[str, set[str]] = {}
+        # (topic, group) -> the set of reasons holding it paused.  A
+        # subscription is delivered only when no reason remains; see the
+        # protocol.  Keyed by the PAIR, not the topic: holds are
+        # process-local state about one attachment, and a topic-keyed
+        # hold both leaked across a detach — so a node that re-acquired a
+        # seat attached into a still-paused topic and went silently deaf
+        # — and gated every group on shared subjects like
+        # ``crewlet.events.*``.
+        self._paused_subs: dict[tuple[str, str], set[str]] = {}
         # In-flight handler tracking: incremented before each handler
         # invocation, decremented in ``finally`` so the counter is exact
         # under exceptions.  ``wait_for_handlers`` waits on ``_idle_event``
@@ -409,14 +443,41 @@ class PulsarEventQueue:
         self._paused = True
         logger.info("pulsar_event_queue_paused")
 
-    async def pause_topic(self, topic: str, *, reason: str = "default") -> None:
-        """Take one reason's hold on a topic (sandbox busy gate, config shed)."""
-        self._paused_topics.setdefault(topic, set()).add(reason)
-        logger.info("pulsar_topic_paused", topic=topic, reason=reason)
+    def _is_sub_paused(self, sub: _Subscription) -> bool:
+        return bool(self._paused_subs.get((sub.topic, sub.group)))
 
-    async def resume_topic(self, topic: str, *, reason: str = "default") -> None:
+    def attachments(self) -> list[tuple[str, str]]:
+        """Every ``(topic, group)`` pair this process has attached to.
+
+        Public because "which seats is this node serving?" is the
+        question seat ownership makes operationally central, and a test
+        should not have to read the backend's registry to ask it.
+        """
+        return [(s.topic, s.group) for s in self._subscriptions]
+
+    def pause_holds(self, topic: str, group: str) -> set[str]:
+        """Reasons currently holding a subscription paused.
+
+        Public because a hold is operator-visible behaviour — which
+        subsystem is gating a seat is the first question when one goes
+        quiet — and because tests must not reach into the backend's
+        internals to ask.
+        """
+        return set(self._paused_subs.get((topic, group), ()))
+
+    async def pause_topic(
+        self, topic: str, group: str, *, reason: str = "default"
+    ) -> None:
+        """Take one reason's hold on a subscription (sandbox gate, shed)."""
+        self._paused_subs.setdefault((topic, group), set()).add(reason)
+        logger.info("pulsar_topic_paused", topic=topic, group=group, reason=reason)
+
+    async def resume_topic(
+        self, topic: str, group: str, *, reason: str = "default"
+    ) -> None:
         """Release one reason's hold; fetch resumes when none remain."""
-        holds = self._paused_topics.get(topic)
+        key = (topic, group)
+        holds = self._paused_subs.get(key)
         if not holds:
             return
         holds.discard(reason)
@@ -424,12 +485,110 @@ class PulsarEventQueue:
             logger.info(
                 "pulsar_topic_still_paused",
                 topic=topic,
+                group=group,
                 released=reason,
                 held_by=sorted(holds),
             )
             return
-        self._paused_topics.pop(topic, None)
-        logger.info("pulsar_topic_resumed", topic=topic, reason=reason)
+        self._paused_subs.pop(key, None)
+        logger.info("pulsar_topic_resumed", topic=topic, group=group, reason=reason)
+
+    # -- subscription lifecycle (attachment vs existence) --
+
+    async def quiesce(self, topic: str, group: str) -> bool:
+        """Stop this process taking NEW work on ``topic``/``group``.
+
+        Leaves the consumer attached and whatever is already running
+        running, so the voluntary release path can let an in-flight turn
+        finish before the seat moves.  Returns whether an attachment
+        existed to quiesce.
+        """
+        matched = [
+            s for s in self._subscriptions if s.topic == topic and s.group == group
+        ]
+        for sub in matched:
+            sub.quiescing = True
+        if matched:
+            logger.info("subscription_quiesced", topic=topic, group=group)
+        return bool(matched)
+
+    async def detach(self, topic: str, group: str) -> bool:
+        """Close this process's consumer(s), leaving the subscription.
+
+        The **non-destructive** half of what ``unsubscribe`` used to do
+        in one call.  The durable subscription and its cursor survive:
+        unacked messages return to whoever attaches next, measured at
+        ``redeliveryCount`` 0, in order.  That is what makes a seat
+        handoff free — and why this must never call
+        ``consumer.unsubscribe()``, which would delete the subscription
+        and discard an unowned seat's mail.
+
+        Idempotent; returns whether an attachment existed.  Pause holds
+        for the pair are dropped, because they are state about *this*
+        attachment: a hold that outlived a detach meant a node that
+        re-acquired the seat attached into a still-paused subscription
+        and went silently deaf.
+        """
+        matched = [
+            s for s in self._subscriptions if s.topic == topic and s.group == group
+        ]
+        if not matched:
+            self._paused_subs.pop((topic, group), None)
+            return False
+        started = time.monotonic()
+        for sub in matched:
+            self._subscriptions.remove(sub)
+            sub.quiescing = True
+            if sub.task is not None:
+                await cancel_and_wait(sub.task)
+            with contextlib.suppress(Exception):
+                # Bridged, like every other close in this module: the
+                # pulsar client is a blocking C++ wrapper, and a bare
+                # call here stalls the whole event loop — every agent
+                # turn and the embedded API with it — for as long as the
+                # broker takes to answer.
+                await asyncio.to_thread(sub.consumer.close)
+            sub.executor.shutdown(wait=False, cancel_futures=True)
+        self._paused_subs.pop((topic, group), None)
+        logger.info(
+            "subscription_detached",
+            topic=topic,
+            group=group,
+            consumers=len(matched),
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
+        return True
+
+    async def ensure_subscription(self, topic: str, group: str) -> bool:
+        """Create the durable subscription if absent, with no consumer.
+
+        See :mod:`crewlet.queue.admin` for why this cannot be done by
+        subscribing.  Returns whether this call created it.
+        """
+        return await self._broker_admin().ensure_subscription(topic, group)
+
+    async def delete_subscription(self, topic: str, group: str) -> bool:
+        """Delete the durable subscription, dropping any retained mail.
+
+        The **destructive** half of the old ``unsubscribe``, and the one
+        a decommissioned role needs so its inbox does not accumulate
+        undeliverable events forever.  Detaches locally first if this
+        process happens to hold the consumer, but does not require it —
+        role removal must not depend on which node ran the seat.
+        """
+        await self.detach(topic, group)
+        return await self._broker_admin().delete_subscription(topic, group)
+
+    def _broker_admin(self) -> PulsarBrokerAdmin:
+        if self._admin is None:
+            self._admin = PulsarBrokerAdmin(
+                self._admin_url,
+                tenant=self._tenant,
+                namespace=self._namespace,
+                auth_token=self._auth_token,
+                tls_trust_certs_path=self._tls_trust_certs_path,
+            )
+        return self._admin
 
     async def wait_for_handlers(self, timeout: float | None = None) -> int:
         """Wait for in-flight handler invocations to complete.
@@ -460,11 +619,12 @@ class PulsarEventQueue:
         # consumer (which unblocks any in-flight ``receive``) before
         # shutting the executor down so its thread can exit.
         for sub in self._subscriptions:
-            sub.task.cancel()
-        if self._subscriptions:
-            await asyncio.gather(
-                *(s.task for s in self._subscriptions), return_exceptions=True
-            )
+            sub.quiescing = True
+            if sub.task is not None:
+                sub.task.cancel()
+        pending = [s.task for s in self._subscriptions if s.task is not None]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         for sub in self._subscriptions:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(sub.consumer.close)
@@ -475,9 +635,10 @@ class PulsarEventQueue:
         # broker isn't left to reap them, close the consumers, and shut
         # down their receive threads.
         for sub in self._stream_subscriptions:
-            sub.task.cancel()
-            with contextlib.suppress(Exception):
-                await asyncio.gather(sub.task, return_exceptions=True)
+            if sub.task is not None:
+                sub.task.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(sub.task, return_exceptions=True)
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(sub.consumer.unsubscribe)
             with contextlib.suppress(Exception):
@@ -494,6 +655,12 @@ class PulsarEventQueue:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(self._client.close)
             self._client = None
+        if self._admin is not None:
+            with contextlib.suppress(Exception):
+                await self._admin.close()
+            self._admin = None
+        # Pause holds are state about attachments that no longer exist.
+        self._paused_subs.clear()
         logger.info("pulsar_event_queue_stopped")
 
     async def _get_producer(self, full_topic: str) -> Any:
@@ -586,24 +753,23 @@ class PulsarEventQueue:
 
         consumer, executor = await self._create_durable_consumer(topic, group)
         loop = asyncio.get_running_loop()
+        sub = _Subscription(
+            consumer=consumer, executor=executor, topic=topic, group=group
+        )
 
         async def _consume() -> None:
-            while self._running:
-                msg = await self._receive_one(consumer, executor, loop, topic, group)
+            while self._running and not sub.quiescing:
+                msg = await self._receive_one(sub, loop)
                 if msg is None:
                     continue
-                await self._process_message(consumer, msg, handler, topic, group)
+                if sub.quiescing:
+                    # Fetched in the race where quiesce landed mid-receive.
+                    # Leave it unacked for the successor rather than NAK.
+                    continue
+                await self._process_message(sub, msg, handler)
 
-        task = asyncio.create_task(_consume())
-        self._subscriptions.append(
-            _Subscription(
-                task=task,
-                consumer=consumer,
-                executor=executor,
-                topic=topic,
-                group=group,
-            )
-        )
+        sub.task = asyncio.create_task(_consume())
+        self._subscriptions.append(sub)
         logger.debug("subscription_added", topic=topic, group=group)
 
     async def subscribe_batch(
@@ -626,10 +792,13 @@ class PulsarEventQueue:
             topic, group, max_batch=options.effective_max_batch
         )
         loop = asyncio.get_running_loop()
+        sub = _Subscription(
+            consumer=consumer, executor=executor, topic=topic, group=group
+        )
 
         async def _consume() -> None:
-            while self._running:
-                msg = await self._receive_one(consumer, executor, loop, topic, group)
+            while self._running and not sub.quiescing:
+                msg = await self._receive_one(sub, loop)
                 if msg is None:
                     continue
                 # The dispatch budget is measured from THIS instant — the
@@ -638,9 +807,14 @@ class PulsarEventQueue:
                 # count against the budget, not reset it.
                 received_at = time.monotonic()
                 msgs = [msg]
-                msgs.extend(
-                    await self._collect_batch(consumer, executor, loop, options)
-                )
+                msgs.extend(await self._collect_batch(sub, loop, options))
+                if sub.quiescing:
+                    # Quiesced mid-collection.  Leave the whole batch
+                    # unacked — a handoff that closes its consumer
+                    # returns these at ``redeliveryCount`` 0, whereas
+                    # NAKing them here would spend the dead-letter
+                    # budget on messages nothing was wrong with.
+                    continue
                 # ``pause_delivery`` may have fired while we lingered.
                 # NAK the whole collected batch so the next engine
                 # subscription gets it promptly.
@@ -650,54 +824,12 @@ class PulsarEventQueue:
                             consumer.negative_acknowledge(m)
                     continue
                 await self._process_batch(
-                    consumer,
-                    msgs,
-                    handler,
-                    batch_key,
-                    topic,
-                    group,
-                    received_at=received_at,
+                    sub, msgs, handler, batch_key, received_at=received_at
                 )
 
-        task = asyncio.create_task(_consume())
-        self._subscriptions.append(
-            _Subscription(
-                task=task,
-                consumer=consumer,
-                executor=executor,
-                topic=topic,
-                group=group,
-            )
-        )
+        sub.task = asyncio.create_task(_consume())
+        self._subscriptions.append(sub)
         logger.debug("batch_subscription_added", topic=topic, group=group)
-
-    async def unsubscribe(self, topic: str, group: str) -> None:
-        """Tear down the durable consumer(s) for ``topic``/``group``.
-
-        Cancels the consume task, deletes the broker-side subscription
-        (``consumer.unsubscribe`` — retained messages for the group are
-        dropped, which is what a decommissioned role's inbox needs), and
-        releases the receive executor. Idempotent — unknown pairs no-op.
-        """
-        matched = [
-            s for s in self._subscriptions if s.topic == topic and s.group == group
-        ]
-        if not matched:
-            return
-        for sub in matched:
-            self._subscriptions.remove(sub)
-            await cancel_and_wait(sub.task)
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(sub.consumer.unsubscribe)
-            with contextlib.suppress(Exception):
-                # Bridged, like every other close in this module: the
-                # pulsar client is a blocking C++ wrapper, and a bare
-                # call here stalls the whole event loop — every agent
-                # turn and the embedded API with it — for as long as the
-                # broker takes to answer.
-                await asyncio.to_thread(sub.consumer.close)
-            sub.executor.shutdown(wait=False, cancel_futures=True)
-        logger.info("unsubscribed", topic=topic, group=group, consumers=len(matched))
 
     async def _create_durable_consumer(
         self, topic: str, group: str, *, max_batch: int = 0
@@ -750,11 +882,8 @@ class PulsarEventQueue:
 
     async def _receive_one(
         self,
-        consumer: Any,
-        executor: ThreadPoolExecutor,
+        sub: _Subscription,
         loop: asyncio.AbstractEventLoop,
-        topic: str,
-        group: str,
     ) -> Any | None:
         """One guarded blocking-poll receive shared by both consume loops.
 
@@ -762,38 +891,49 @@ class PulsarEventQueue:
         just iterate: paused (graceful-shutdown drain — any handler
         started before pause keeps running and acks normally; unfetched
         messages stay on the broker for the next engine subscription),
-        idle poll timeout, or a transient receive error.  A message
-        fetched in the race where ``pause_delivery`` / ``stop`` flipped
-        mid-``receive`` is NAK'd here so it comes back on the next
-        engine subscription promptly instead of waiting out the
-        ack-timeout window.
+        quiescing, idle poll timeout, or a transient receive error.
+
+        A message fetched in the race where ``pause_delivery`` / ``stop``
+        flipped mid-``receive`` is NAK'd here so it comes back on the
+        next engine subscription promptly instead of waiting out the
+        ack-timeout window.  A message fetched in the race where
+        ``quiesce`` flipped is **not** NAK'd — a seat handoff is not a
+        failure, and the successor gets it at ``redeliveryCount`` 0 when
+        this consumer closes.
         """
-        if self._paused or topic in self._paused_topics:
-            # Global drain OR this topic is paused (sandbox busy gate):
-            # don't fetch, so messages accumulate untouched on the broker
-            # and redeliver in order once fetching resumes.
+        if self._paused or self._is_sub_paused(sub):
+            # Global drain OR this subscription is paused (sandbox busy
+            # gate, config shed): don't fetch, so messages accumulate
+            # untouched on the broker and redeliver in order once
+            # fetching resumes.
             await asyncio.sleep(0.1)
+            return None
+        if sub.quiescing:
+            await asyncio.sleep(0.05)
             return None
         try:
             msg = await loop.run_in_executor(
-                executor, consumer.receive, _RECEIVE_TIMEOUT_MS
+                sub.executor, sub.consumer.receive, _RECEIVE_TIMEOUT_MS
             )
         except Exception as exc:  # noqa: BLE001
             if _is_timeout(exc):
                 return None
-            logger.exception("receive_error", topic=topic, group=group, error=str(exc))
+            logger.exception(
+                "receive_error", topic=sub.topic, group=sub.group, error=str(exc)
+            )
             await asyncio.sleep(1)
             return None
+        if sub.quiescing:
+            return msg  # caller checks the flag and leaves it unacked
         if self._paused or not self._running:
             with contextlib.suppress(Exception):
-                consumer.negative_acknowledge(msg)
+                sub.consumer.negative_acknowledge(msg)
             return None
         return msg
 
     async def _collect_batch(
         self,
-        consumer: Any,
-        executor: ThreadPoolExecutor,
+        sub: _Subscription,
         loop: asyncio.AbstractEventLoop,
         options: BatchOptions,
     ) -> list[Any]:
@@ -814,7 +954,10 @@ class PulsarEventQueue:
         max_batch = options.effective_max_batch
         deadline = loop.time() + linger
         while len(collected) + 1 < max_batch:
-            if self._paused or not self._running:
+            if self._paused or not self._running or sub.quiescing:
+                # Quiescing stops the collector too.  A topic pause does
+                # not reach here at all, which is why the sandbox busy
+                # gate kept filling a batch after its pause landed.
                 break
             if linger <= 0:
                 timeout_ms = _DRAIN_RECEIVE_TIMEOUT_MS
@@ -824,7 +967,9 @@ class PulsarEventQueue:
                     break
                 timeout_ms = min(_RECEIVE_TIMEOUT_MS, int(remaining * 1000) + 1)
             try:
-                msg = await loop.run_in_executor(executor, consumer.receive, timeout_ms)
+                msg = await loop.run_in_executor(
+                    sub.executor, sub.consumer.receive, timeout_ms
+                )
             except Exception as exc:  # noqa: BLE001
                 if _is_timeout(exc):
                     if linger <= 0:
@@ -873,12 +1018,10 @@ class PulsarEventQueue:
 
     async def _process_batch(
         self,
-        consumer: Any,
+        sub: _Subscription,
         msgs: list[Any],
         handler: Callable[[list[Event]], Awaitable[None]],
         batch_key: Callable[[Event], str],
-        topic: str,
-        group: str,
         received_at: float | None = None,
     ) -> None:
         """Partition *msgs* by key and run *handler* per partition.
@@ -906,6 +1049,7 @@ class PulsarEventQueue:
         the ack-ordering, deferral, and cancellation paths are
         unit-testable with a fake consumer + msgs, no live broker.
         """
+        consumer, topic, group = sub.consumer, sub.topic, sub.group
         # Deserialize up front; corrupt payloads are acked and dropped
         # individually so one bad message never poisons its batch.
         entries: list[tuple[Any, Event]] = []
@@ -928,8 +1072,16 @@ class PulsarEventQueue:
         budget_seconds = _BATCH_DISPATCH_BUDGET_MS / 1000.0
 
         for index, (key, part) in enumerate(parts):
+            if sub.quiescing:
+                # Quiesced between partitions: stop dispatching and
+                # leave everything from here on unacked for the
+                # successor.  Not a deferral-by-republish — that would
+                # send these to the topic tail while the successor's
+                # prefetched siblings replay from the head, reordering
+                # the conversation this whole mechanism exists to keep.
+                return
             if index > 0 and time.monotonic() - started > budget_seconds:
-                await self._defer_partitions(consumer, parts[index:], topic, group)
+                await self._defer_partitions(sub, parts[index:])
                 return
             events = [event for _, event in part]
             with self._in_flight_guard():
@@ -937,6 +1089,17 @@ class PulsarEventQueue:
                     await handler(events)
                     for msg, _ in part:
                         consumer.acknowledge(msg)
+                except DeferDelivery as deferral:
+                    sub.quiescing = True
+                    logger.info(
+                        "delivery_deferred",
+                        topic=topic,
+                        group=group,
+                        batch_key=key,
+                        event_count=len(events),
+                        reason=str(deferral) or "unspecified",
+                    )
+                    return
                 except asyncio.CancelledError:
                     # Force-stop mid-batch: NAK this partition AND the
                     # partitions we never reached, so none of them sit
@@ -960,10 +1123,8 @@ class PulsarEventQueue:
 
     async def _defer_partitions(
         self,
-        consumer: Any,
+        sub: _Subscription,
         parts: list[tuple[str, list[tuple[Any, Event]]]],
-        topic: str,
-        group: str,
     ) -> None:
         """Requeue partitions whose dispatch would breach the ack budget.
 
@@ -986,6 +1147,7 @@ class PulsarEventQueue:
         so a graceful drain waits for the requeue to finish instead of
         stopping the queue mid-deferral.
         """
+        consumer, topic, group = sub.consumer, sub.topic, sub.group
         remaining: list[tuple[Any, Event]] = [
             pair for _, part in parts for pair in part
         ]
@@ -1103,9 +1265,10 @@ class PulsarEventQueue:
         async def _unsubscribe() -> None:
             with contextlib.suppress(ValueError):
                 self._stream_subscriptions.remove(entry)
-            entry.task.cancel()
-            with contextlib.suppress(Exception):
-                await asyncio.gather(entry.task, return_exceptions=True)
+            if entry.task is not None:
+                entry.task.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(entry.task, return_exceptions=True)
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(entry.consumer.unsubscribe)
             with contextlib.suppress(Exception):
@@ -1117,18 +1280,23 @@ class PulsarEventQueue:
 
     async def _process_message(
         self,
-        consumer: Any,
+        sub: _Subscription,
         msg: Any,
         handler: Callable[[Event], Awaitable[None]],
-        topic: str,
-        group: str,
     ) -> None:
         """Run *handler* over one received Pulsar msg with ack/nak.
 
         Extracted from the consume loop so the shutdown-sensitive paths
         (cancellation NAK, ack/nak ordering, in-flight bookkeeping) are
         unit-testable with a fake consumer + msg, no live broker.
+
+        Three outcomes, not two: return acks, raising NAKs, and raising
+        :class:`~crewlet.queue.protocol.DeferDelivery` leaves the message
+        unacked and quiesces the subscription.  A handler that has lost
+        the right to do this work needs the third — it must neither
+        claim the message nor spend its redelivery budget.
         """
+        consumer, topic, group = sub.consumer, sub.topic, sub.group
         event = self._deserialize_or_ack(consumer, msg, topic, group)
         if event is None:
             return
@@ -1136,6 +1304,15 @@ class PulsarEventQueue:
             try:
                 await handler(event)
                 consumer.acknowledge(msg)
+            except DeferDelivery as deferral:
+                sub.quiescing = True
+                logger.info(
+                    "delivery_deferred",
+                    topic=topic,
+                    group=group,
+                    event_type=event.type,
+                    reason=str(deferral) or "unspecified",
+                )
             except asyncio.CancelledError:
                 # Handler cancelled (force-stop / second signal).  NAK so
                 # Pulsar redelivers promptly to the next engine

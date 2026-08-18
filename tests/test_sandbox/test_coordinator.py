@@ -15,7 +15,7 @@ from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.events.types import SandboxRunCompleted, SandboxRunStarted
 from crewlet.org.models import Organization, OrgUnit, Role
 from crewlet.queue.memory import MemoryEventQueue
-from crewlet.queue.topics import agent_inbox_topic
+from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
 from crewlet.sandbox import FakeCodingAgentRunner, FakeSandboxProvider, SandboxManager
 from crewlet.sandbox.coordinator import (
     COMPLETIONS_TOPIC,
@@ -137,7 +137,7 @@ async def test_on_run_started_pauses_inbox_and_leaves_working_turn_alone() -> No
         SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
     )
     assert agent.state == AgentState.WORKING  # untouched — the turn owns it
-    assert agent_inbox_topic("eng") in queue._paused_topics
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 
 
@@ -160,7 +160,7 @@ async def test_on_run_started_recovers_idle_agent_to_busy() -> None:
         SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
     )
     assert agent.state == AgentState.AWAITING_SANDBOX
-    assert agent_inbox_topic("eng") in queue._paused_topics
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 
 
@@ -225,7 +225,7 @@ async def test_completion_keeps_agent_busy_until_resume_dispatch() -> None:
     await queue.start()
     agent = _mk_agent()
     agent.await_sandbox(task_id="t-1")
-    await queue.pause_topic(agent_inbox_topic("eng"))
+    await queue.pause_topic(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     store = MemoryPendingSandboxRunStore()
     await store.create(_run())
     manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
@@ -266,7 +266,7 @@ async def test_completion_keeps_agent_busy_until_resume_dispatch() -> None:
     assert observed[0] == f"collect:{AgentState.AWAITING_SANDBOX}"
     assert observed[1] == str(AgentState.IDLE)
     # Settled (no re-suspend): the box is done and the inbox resumed.
-    assert agent_inbox_topic("eng") not in queue._paused_topics
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 
 
@@ -630,7 +630,7 @@ async def test_recover_repauses_running_agents() -> None:
     await coord.recover()
 
     # The running job re-pauses the agent's inbox and re-enters busy.
-    assert agent_inbox_topic("eng") in queue._paused_topics
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     assert agent.state == AgentState.AWAITING_SANDBOX
     await queue.stop()
 

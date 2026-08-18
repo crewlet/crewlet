@@ -53,7 +53,7 @@ from crewlet.observability import ObservabilityManager
 from crewlet.org.models import Organization
 from crewlet.providers.llm.protocol import LLMProvider
 from crewlet.queue.protocol import BatchOptions, EventQueue
-from crewlet.queue.topics import agent_inbox_topic
+from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
 from crewlet.secrets.resolver import refresh_secret_snapshot
 from crewlet.task.delegation import DelegationHandler
 from crewlet.task.tracker import ExecutionTracker
@@ -453,6 +453,11 @@ class Engine:
         self.turn_engine: TurnEngine | None = None
         self._extension_manager = ExtensionManager()
         self._pending_extensions = list(extensions or [])
+        # Observability hooks registered before ``start`` — see
+        # ``_subscribe_hook``.  A subscription needs a live broker
+        # connection, so they cannot be attached at registration time.
+        self._pending_hooks: list[tuple[str, str, _EventHandler]] = []
+        self._queue_started = False
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -1329,16 +1334,21 @@ class Engine:
         if shed == was_shed:
             return
 
-        topics = [agent_inbox_topic(a.handle) for a in self.agent_pool.agents]
-        topics.append("crewlet.notifications.inbound")
-        for topic in topics:
+        pairs = [
+            (agent_inbox_topic(a.handle), agent_inbox_group(a.handle))
+            for a in self.agent_pool.agents
+        ]
+        pairs.append(("crewlet.notifications.inbound", "notifications"))
+        for topic, group in pairs:
             try:
                 if shed:
-                    await self.event_queue.pause_topic(topic, reason="config")
+                    await self.event_queue.pause_topic(topic, group, reason="config")
                 else:
-                    await self.event_queue.resume_topic(topic, reason="config")
+                    await self.event_queue.resume_topic(topic, group, reason="config")
             except Exception:
-                logger.exception("config_posture_topic_failed", topic=topic)
+                logger.exception(
+                    "config_posture_topic_failed", topic=topic, group=group
+                )
         logger.warning(
             "config_posture_changed",
             posture=str(posture),
@@ -1632,6 +1642,8 @@ class Engine:
             # 2. Start event queue
             logger.info("start_step", step="2/8", action="start_queues")
             await self.event_queue.start()
+            self._queue_started = True
+            await self._apply_pending_hooks()
 
             # 2.5 Start A2A bus (if configured)
             if self._a2a_bus is not None:
@@ -2604,7 +2616,7 @@ class Engine:
             return
         await self.event_queue.subscribe_batch(
             topic=agent_inbox_topic(agent.handle),
-            group=f"agent-{agent.handle}",
+            group=agent_inbox_group(agent.handle),
             handler=self._make_agent_handler(agent),
             batch_key=conversation_key,
             options=self._inbox_batch_options,
@@ -2640,7 +2652,10 @@ class Engine:
             # every inbox once the first provider lands and the engine can
             # actually run turns.
             if self.turn_engine is None:
-                await self.event_queue.pause_topic(agent_inbox_topic(agent.handle))
+                await self.event_queue.pause_topic(
+                    agent_inbox_topic(agent.handle),
+                    agent_inbox_group(agent.handle),
+                )
                 await self._requeue_inbox_events(agent, events)
                 return
             # Busy on a detached sandbox job: park (requeue + ack) rather
@@ -3618,6 +3633,7 @@ class Engine:
         # 8. Stop event queue, close storage
         logger.debug("stopping_event_queue")
         await _timed("event_queue", self.event_queue.stop())
+        self._queue_started = False
 
         # Close every provider's pooled httpx clients before we
         # take down the storage / telemetry layers. Providers that
@@ -3700,6 +3716,7 @@ class Engine:
             if hasattr(provider, "close"):
                 await _quiet(provider.close())
         await _quiet(self.event_queue.stop())
+        self._queue_started = False
         if hasattr(self.storage, "close"):
             await _quiet(self.storage.close())
 
@@ -3968,7 +3985,14 @@ class Engine:
 
     # Observability hooks
     async def on_task_state_change(self, callback: _EventHandler) -> None:
-        """Register a callback for any task state changes."""
+        """Register a callback for any task state changes.
+
+        Callable before or after :meth:`start`.  Before, the
+        registration is held and applied when the queue comes up — a
+        subscription needs a live broker connection, so the natural
+        "register hooks, then start" order would otherwise raise on the
+        production backend while working in tests.
+        """
         group = f"hook-{id(callback)}"
         for event_type in [
             "task_created",
@@ -3978,16 +4002,33 @@ class Engine:
             "task_failed",
             "task_delegated",
         ]:
-            await self.event_queue.subscribe(
-                f"crewlet.events.{event_type}", group, callback
-            )
+            await self._subscribe_hook(f"crewlet.events.{event_type}", group, callback)
 
     async def on_agent_spawn(self, callback: _EventHandler) -> None:
-        """Register a callback for agent spawn events."""
+        """Register a callback for agent spawn events.
+
+        Callable before or after :meth:`start` — see
+        :meth:`on_task_state_change`.
+        """
         group = f"hook-{id(callback)}"
-        await self.event_queue.subscribe(
-            "crewlet.events.agent_spawned", group, callback
-        )
+        await self._subscribe_hook("crewlet.events.agent_spawned", group, callback)
+
+    async def _subscribe_hook(
+        self, topic: str, group: str, callback: _EventHandler
+    ) -> None:
+        """Subscribe an observability hook now, or when the queue starts."""
+        if self._queue_started:
+            await self.event_queue.subscribe(topic, group, callback)
+            return
+        self._pending_hooks.append((topic, group, callback))
+
+    async def _apply_pending_hooks(self) -> None:
+        """Attach the hooks registered before the queue was up."""
+        pending, self._pending_hooks = self._pending_hooks, []
+        for topic, group, callback in pending:
+            await self.event_queue.subscribe(topic, group, callback)
+        if pending:
+            logger.debug("pending_hooks_subscribed", count=len(pending))
 
     # --- Runtime org mutations ---
 
@@ -5691,7 +5732,9 @@ class Engine:
             # Events that arrived while there was NO turn engine were parked
             # (topic paused + requeued by the inbox handler) — now that
             # turns can run, let them flow. No-op for never-paused topics.
-            await self.event_queue.resume_topic(agent_inbox_topic(agent.handle))
+            await self.event_queue.resume_topic(
+                agent_inbox_topic(agent.handle), agent_inbox_group(agent.handle)
+            )
             logger.info(
                 "agent_inbox_subscribed_live",
                 handle=agent.handle,
@@ -5909,15 +5952,14 @@ class Engine:
             # a decommissioned seat must not keep a consumer bound to a
             # terminated instance, nor accumulate undeliverable events on
             # a durable subscription forever.
-            if agent.handle in self._subscribed_inboxes:
-                try:
-                    await self.event_queue.unsubscribe(
-                        agent_inbox_topic(agent.handle),
-                        f"agent-{agent.handle}",
-                    )
-                except Exception:
-                    logger.exception("inbox_unsubscribe_failed", handle=agent.handle)
-                self._subscribed_inboxes.discard(agent.handle)
+            try:
+                await self.event_queue.delete_subscription(
+                    agent_inbox_topic(agent.handle),
+                    agent_inbox_group(agent.handle),
+                )
+            except Exception:
+                logger.exception("inbox_unsubscribe_failed", handle=agent.handle)
+            self._subscribed_inboxes.discard(agent.handle)
             self._purge_cli_llm_workspaces(agent.handle)
             await self.agent_pool.terminate(agent)
             logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)

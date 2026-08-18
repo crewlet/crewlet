@@ -81,6 +81,10 @@ from crewlet.queue.pulsar import (  # noqa: E402
 )
 
 PULSAR_URL = "pulsar://localhost:6650"
+# The broker's admin HTTP endpoint, where a subscription can be created
+# and deleted with no consumer attached.  Derived from PULSAR_URL by the
+# same convention ``QueueConfig`` uses when ``admin_url`` is left empty.
+_ADMIN_URL = "http://localhost:8080"
 
 
 def _pulsar_available() -> bool:
@@ -522,3 +526,137 @@ async def test_measure_redelivery_count_after_an_ack_timeout(queue, client) -> N
         "dead-letter budget rationale in SCALING_PLAN 5.2 item 11 needs "
         "re-deriving"
     )
+
+
+# ---------------------------------------------------------------------------
+# Subscription existence as an org invariant (phase 5.2, decision (a))
+# ---------------------------------------------------------------------------
+#
+# The invariant: a seat's durable subscription exists whether or not any
+# node owns the seat, so a publish into an unowned seat is *held* rather
+# than dropped.  Establishing it by SUBSCRIBING is what the design review
+# called fatal, and the first test below is the measurement that says so.
+# The rest establish that the admin API can create and delete a
+# subscription with no consumer at all, which is why ``BrokerAdmin``
+# exists.
+
+
+async def test_measure_joining_a_shared_subscription_steals_traffic(
+    queue, client
+) -> None:
+    """Pre-creating a subscription by SUBSCRIBING is not safe.
+
+    A seat's subscription is Shared, and a second consumer joining one
+    that an owner is actively serving takes a share of that seat's live
+    traffic into its own prefetch — for as long as it stays attached,
+    plus the ack timeout if it dies rather than closing.  Every node
+    doing this for every seat at boot manufactures exactly the
+    double-consumer state seat ownership exists to prevent.
+
+    This is why ``ensure_subscription`` goes through the admin API
+    instead: no consumer, so nothing to share with.
+    """
+    topic = f"crewlet.test.join.{uuid4().hex[:8]}"
+    full = queue._full_topic(topic)
+    sub = "seat-owner"
+
+    owner = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
+    joiner = _RawConsumer(client, full, sub, queue_size=_RECEIVER_QUEUE_SIZE)
+    await asyncio.sleep(0.5)  # let both register with the broker
+    await _publish(queue, topic, 20)
+    await asyncio.sleep(1.0)
+
+    by_owner = owner.drain(timeout_ms=700, limit=20, deadline_s=8.0)
+    by_joiner = joiner.drain(timeout_ms=700, limit=20, deadline_s=8.0)
+    joiner.close()
+    owner.close()
+
+    _report(
+        "shared_join_steals_traffic",
+        owner=len(by_owner),
+        joiner=len(by_joiner),
+    )
+    assert by_joiner, (
+        "a consumer joining a Shared subscription received nothing — if "
+        "this ever becomes true, decision (a) could pre-create by "
+        "subscribing and BrokerAdmin would not be needed"
+    )
+
+
+async def test_admin_creates_a_subscription_with_no_consumer(queue) -> None:
+    """The invariant, established without attaching anything.
+
+    Also covers the case that matters most: the topic does not exist
+    yet.  A brand-new company's seats have never been published to, so
+    ``ensure_subscription`` must create the topic as a side effect
+    rather than failing.
+    """
+    from crewlet.queue.admin import PulsarBrokerAdmin
+
+    admin = PulsarBrokerAdmin(_ADMIN_URL)
+    topic = f"crewlet.test.precreate.{uuid4().hex[:8]}"
+    group = "agent-precreate"
+
+    assert await admin.subscriptions(topic) == []
+    assert await admin.ensure_subscription(topic, group) is True
+    assert await admin.subscriptions(topic) == [group]
+    # Idempotent: the broker answers 409 on the second create, which is
+    # success, not an error — every node may run the ensure pass.
+    assert await admin.ensure_subscription(topic, group) is False
+
+    await admin.close()
+
+
+async def test_a_precreated_subscription_holds_an_unowned_seats_mail(
+    queue, client
+) -> None:
+    """The property decision (a) exists for.
+
+    Publish into a seat nobody owns, then claim it.  Without the
+    pre-created subscription the publish is dropped on the floor — no
+    dead letter, no producer error, nothing to alert on.
+    """
+    from crewlet.queue.admin import PulsarBrokerAdmin
+
+    admin = PulsarBrokerAdmin(_ADMIN_URL)
+    topic = f"crewlet.test.unowned.{uuid4().hex[:8]}"
+    group = "agent-unowned"
+    await admin.ensure_subscription(topic, group)
+
+    await _publish(queue, topic, 5)  # nobody is attached
+
+    claimer = _RawConsumer(
+        client, queue._full_topic(topic), group, queue_size=_RECEIVER_QUEUE_SIZE
+    )
+    held = claimer.drain(timeout_ms=2000, limit=5, deadline_s=10.0)
+    claimer.close()
+    await admin.close()
+
+    _report("unowned_seat_backlog", held=sorted(held))
+    assert sorted(held) == list(range(5)), (
+        "mail published to an unowned seat did not survive until someone "
+        "claimed it — the subscription-existence invariant is not holding"
+    )
+
+
+async def test_admin_deletes_a_subscription_with_no_consumer(queue) -> None:
+    """Decommission, without needing the node that ran the seat.
+
+    ``Consumer.unsubscribe()`` needs a local consumer, which means role
+    removal would depend on which node happens to hold the seat.  The
+    admin path does not, and tolerates the already-gone case so a retried
+    decommission is not an error.
+    """
+    from crewlet.queue.admin import PulsarBrokerAdmin
+
+    admin = PulsarBrokerAdmin(_ADMIN_URL)
+    topic = f"crewlet.test.decommission.{uuid4().hex[:8]}"
+    group = "agent-decommission"
+    await admin.ensure_subscription(topic, group)
+
+    assert await admin.delete_subscription(topic, group) is True
+    assert await admin.subscriptions(topic) == []
+    # Already gone — 404 from the broker, which is the desired end state.
+    assert await admin.delete_subscription(topic, group) is False
+
+    await admin.close()

@@ -56,7 +56,7 @@ class TestMemoryEventQueue:
         await q.subscribe("topic.a", "grp", handler_a)
         await q.subscribe("topic.b", "grp", handler_b)
 
-        await q.pause_topic("topic.a")
+        await q.pause_topic("topic.a", "grp")
         await q.publish("topic.a", Event(type="a1"))
         await q.publish("topic.a", Event(type="a2"))
         # A different topic is unaffected while topic.a is paused.
@@ -65,14 +65,14 @@ class TestMemoryEventQueue:
         assert got_a == []  # buffered, not delivered, not dropped
         assert got_b == ["b1"]
 
-        await q.resume_topic("topic.a")
+        await q.resume_topic("topic.a", "grp")
         await asyncio.sleep(0.05)
         # Flushed in publish order.
         assert got_a == ["a1", "a2"]
         await q.stop()
 
-    async def test_unsubscribe_stops_delivery_for_group(self) -> None:
-        """unsubscribe(topic, group) tears down exactly that pair."""
+    async def test_detach_stops_delivery_for_group(self) -> None:
+        """detach(topic, group) tears down exactly that pair's consumers."""
         q = MemoryEventQueue()
         await q.start()
         got_a: list[str] = []
@@ -89,17 +89,26 @@ class TestMemoryEventQueue:
         await q.publish("topic.a", Event(type="e1"))
         assert got_a == ["e1"] and got_other == ["e1"]
 
-        await q.unsubscribe("topic.a", "grp")
+        assert await q.detach("topic.a", "grp") is True
         await q.publish("topic.a", Event(type="e2"))
-        # The removed pair stops receiving; the other group is untouched.
+        # The detached pair stops receiving; the other group is untouched.
         assert got_a == ["e1"]
         assert got_other == ["e1", "e2"]
-        # Idempotent: unknown pairs no-op.
-        await q.unsubscribe("topic.a", "grp")
-        await q.unsubscribe("nope", "grp")
+        # e2 is RETAINED for whoever attaches next — that is the whole
+        # point of detach being non-destructive.
+        assert [e.type for e in q.backlog("topic.a", "grp")] == ["e2"]
+
+        # Re-attaching replays it: a seat that comes back finds its mail.
+        await q.subscribe("topic.a", "grp", handler_a)
+        assert got_a == ["e1", "e2"]
+
+        # Idempotent, and returns whether an attachment existed.
+        assert await q.detach("topic.a", "grp") is True
+        assert await q.detach("topic.a", "grp") is False
+        assert await q.detach("nope", "grp") is False
         await q.stop()
 
-    async def test_unsubscribe_removes_batch_subscription(self) -> None:
+    async def test_detach_removes_batch_subscription(self) -> None:
         from crewlet.queue.protocol import BatchOptions
 
         q = MemoryEventQueue()
@@ -119,16 +128,99 @@ class TestMemoryEventQueue:
         await q.publish("topic.b", Event(type="e1"))
         assert len(batches) == 1
 
-        await q.unsubscribe("topic.b", "grp")
+        await q.detach("topic.b", "grp")
         await q.publish("topic.b", Event(type="e2"))
         assert len(batches) == 1  # no further delivery
+        # Retained, not dropped.
+        assert [e.type for e in q.backlog("topic.b", "grp")] == ["e2"]
+        await q.stop()
+
+    async def test_delete_subscription_discards_retained_mail(self) -> None:
+        """The destructive half: what a decommissioned role needs.
+
+        Its inbox must not accumulate undeliverable events forever, and
+        deleting must not require a local consumer — role removal cannot
+        depend on which node happened to run the seat.
+        """
+        q = MemoryEventQueue()
+        await q.start()
+        assert await q.ensure_subscription("topic.gone", "grp") is True
+        await q.publish("topic.gone", Event(type="e1"))
+        assert len(q.backlog("topic.gone", "grp")) == 1
+
+        assert await q.delete_subscription("topic.gone", "grp") is True
+        assert q.backlog("topic.gone", "grp") == []
+        # Publishing into a deleted subscription retains nothing.
+        await q.publish("topic.gone", Event(type="e2"))
+        assert q.backlog("topic.gone", "grp") == []
+        # Already gone is the desired end state, not an error.
+        assert await q.delete_subscription("topic.gone", "grp") is False
+        await q.stop()
+
+    async def test_an_unowned_subscription_holds_its_mail(self) -> None:
+        """The property seat ownership rests on.
+
+        A subscription with nothing attached retains what is published
+        to it and replays it on attach. Without this, a seat between
+        owners loses every event published in the gap.
+        """
+        q = MemoryEventQueue()
+        await q.start()
+        assert await q.ensure_subscription("crewlet.agent.alice.inbox", "agent-alice")
+        for n in range(3):
+            await q.publish("crewlet.agent.alice.inbox", Event(type=f"e{n}"))
+        assert len(q.backlog("crewlet.agent.alice.inbox", "agent-alice")) == 3
+
+        got: list[str] = []
+
+        async def handler(event: Event) -> None:
+            got.append(event.type)
+
+        await q.subscribe("crewlet.agent.alice.inbox", "agent-alice", handler)
+        assert got == ["e0", "e1", "e2"]  # in order
+        await q.stop()
+
+    async def test_publishing_to_no_subscription_retains_nothing(self) -> None:
+        """Which is exactly why ensure_subscription exists."""
+        q = MemoryEventQueue()
+        await q.start()
+        await q.publish("nobody.listening", Event(type="lost"))
+        assert q.backlog("nobody.listening", "grp") == []
+        await q.stop()
+
+    async def test_defer_delivery_leaves_the_event_and_stops_consuming(self) -> None:
+        """The third handler outcome, and the one a lost seat needs.
+
+        Neither claims the work (ack) nor spends the message's
+        dead-letter budget (NAK).
+        """
+        from crewlet.queue.protocol import DeferDelivery
+
+        q = MemoryEventQueue()
+        await q.start()
+        seen: list[str] = []
+
+        async def handler(event: Event) -> None:
+            seen.append(event.type)
+            raise DeferDelivery("lease moved")
+
+        await q.subscribe("topic.d", "grp", handler)
+        await q.publish("topic.d", Event(type="e1"))
+        await q.publish("topic.d", Event(type="e2"))
+
+        # Handled once, then the subscription stopped taking work.
+        assert seen == ["e1"]
+        # Both events are still there, in order, with no redelivery
+        # accrued against them.
+        assert [e.type for e in q.backlog("topic.d", "grp")] == ["e1", "e2"]
+        assert q.dead_letters("topic.d", "grp") == []
         await q.stop()
 
     async def test_resume_topic_unpaused_is_noop(self) -> None:
         q = MemoryEventQueue()
         await q.start()
-        # Resuming a topic that was never paused must not error.
-        await q.resume_topic("never.paused")
+        # Resuming a subscription that was never paused must not error.
+        await q.resume_topic("never.paused", "grp")
         await q.stop()
 
     async def test_consumer_group_competing(self) -> None:
@@ -167,9 +259,9 @@ class TestMemoryEventQueue:
         async def h2(event: Event) -> None:
             group2.append(event)
 
+        await q.start()
         await q.subscribe("topic.y", "g1", h1)
         await q.subscribe("topic.y", "g2", h2)
-        await q.start()
 
         await q.publish("topic.y", Event(type="t"))
         await asyncio.sleep(0.15)
@@ -191,8 +283,8 @@ class TestMemoryEventQueue:
             if call_count < 3:
                 raise RuntimeError("transient failure")
 
-        await q.subscribe("topic.flaky", "grp", flaky_handler)
         await q.start()
+        await q.subscribe("topic.flaky", "grp", flaky_handler)
 
         await q.publish("topic.flaky", Event(type="t"))
         await asyncio.sleep(0.15)
@@ -250,6 +342,34 @@ class TestMemoryEventQueue:
         await q.stop()
         await q.stop()  # idempotent
 
+    async def test_members_of_a_group_compete(self) -> None:
+        """Each event goes to exactly ONE member, and the group shares
+        the load round-robin.
+
+        Delivering always to the first-registered member made the
+        double-attach split-brain invisible: two nodes consuming one
+        seat looked like one, so a test asserting "exactly one delivery"
+        passed while a real Shared subscription split the traffic and
+        ran two interleaved turn streams.
+        """
+        q = MemoryEventQueue()
+        await q.start()
+        called_by: list[str] = []
+
+        async def a(event: Event) -> None:
+            called_by.append("a")
+
+        async def b(event: Event) -> None:
+            called_by.append("b")
+
+        await q.subscribe("topic", "grp", a)
+        await q.subscribe("topic", "grp", b)
+        for _ in range(4):
+            await q.publish("topic", Event(type="t"))
+        await q.stop()
+
+        assert called_by == ["a", "b", "a", "b"]
+
     async def test_redelivery_rotates_across_members(self) -> None:
         """On failure, redelivery tries the next member in the group."""
         q = MemoryEventQueue(max_redeliveries=3)
@@ -263,19 +383,28 @@ class TestMemoryEventQueue:
             called_by.append("b")
 
         # Two members in the same group: "a" always fails, "b" succeeds.
+        await q.start()
         await q.subscribe("topic", "grp", always_fail)
         await q.subscribe("topic", "grp", succeeds)
-        await q.start()
 
         await q.publish("topic", Event(type="t"))
         await asyncio.sleep(0.15)
         await q.stop()
 
-        # Attempt 0 -> member[0] (a, fails), attempt 1 -> member[1] (b, ok).
+        # First delivery -> member[0] (a, fails); the redelivery advances
+        # the round-robin cursor to member[1] (b, ok).
         assert called_by == ["a", "b"]
 
-    async def test_all_redeliveries_exhausted_drops_event(self) -> None:
-        """Event is dropped when all redelivery attempts fail."""
+    async def test_exhausted_redeliveries_dead_letter_the_event(self) -> None:
+        """A poison message is PRESERVED, not destroyed.
+
+        ``max_redeliveries`` counts redeliveries *after* the first
+        delivery — N+1 total attempts — and the exhausted message moves
+        to ``dlq-{topic}-{group}``, exactly as the Pulsar dead-letter
+        policy does. Counting total attempts and then dropping made
+        every retry-count assertion off by one and every
+        "poison message is recoverable" claim false.
+        """
         q = MemoryEventQueue(max_redeliveries=2)
         attempts = 0
 
@@ -284,15 +413,16 @@ class TestMemoryEventQueue:
             attempts += 1
             raise RuntimeError("permanent failure")
 
-        await q.subscribe("topic", "grp", always_fail)
         await q.start()
+        await q.subscribe("topic", "grp", always_fail)
 
         await q.publish("topic", Event(type="t"))
         await asyncio.sleep(0.15)
-        await q.stop()
 
-        # Handler was called max_redeliveries times, then the event was dropped.
-        assert attempts == 2
+        assert attempts == 3  # first delivery + 2 redeliveries
+        assert q.backlog("topic", "grp") == []
+        assert [e.type for e in q.dead_letters("topic", "grp")] == ["t"]
+        await q.stop()
 
     async def test_subscribe_after_start(self) -> None:
         """Subscriptions added after start() still receive events."""
@@ -570,8 +700,9 @@ class TestMemoryEventQueueBatch:
         await asyncio.sleep(0.2)
         await q.stop()
 
-        assert attempts["c1"] == 2  # retried up to max_redeliveries
+        assert attempts["c1"] == 3  # first delivery + 2 redeliveries
         assert attempts["c2"] == 1  # unaffected by c1's failure
+        assert len(q.dead_letters("t", "g")) == 1
 
     async def test_max_batch_chunks_oversized_buffers(self) -> None:
         from crewlet.queue.protocol import BatchOptions
@@ -673,13 +804,17 @@ class TestMemoryEventQueueBatch:
         await asyncio.sleep(0.05)
 
         assert batches == []
-        assert q._batch_flush_tasks == {}
-        assert q._batch_pending == {}
+        # RETAINED, not dropped: the linger buffer IS the backlog, and a
+        # subscription's mail outlives every attachment.
+        assert [e.type for e in q.backlog("t", "g")] == ["a"]
 
-    async def test_pause_during_linger_drops_pending_with_log(self) -> None:
-        """Lingered events caught by ``pause_delivery`` are dropped —
-        the same fate paused publishes meet in this backend (no
-        persistence) — and never delivered after the pause."""
+    async def test_pause_during_linger_retains_pending(self) -> None:
+        """Lingered events caught by ``pause_delivery`` are RETAINED.
+
+        The Pulsar backend leaves them on the broker for the next
+        engine subscription; the twin leaves them in the backlog, which
+        is the same statement. Dropping them meant a graceful drain
+        silently destroyed whatever was mid-window."""
         from crewlet.queue.protocol import BatchOptions
 
         q = MemoryEventQueue()
@@ -699,10 +834,10 @@ class TestMemoryEventQueueBatch:
         await q.publish("t", Event(type="a", payload={"conv": "c1"}))
         await q.pause_delivery()
         await asyncio.sleep(0.15)
-        await q.stop()
 
         assert batches == []
-        assert q._batch_pending == {}
+        assert [e.type for e in q.backlog("t", "g")] == ["a"]
+        await q.stop()
 
 
 class TestBatchOptionsAndOrdering:

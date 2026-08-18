@@ -21,6 +21,8 @@ from __future__ import annotations
 AGENT_INBOX_PREFIX = "crewlet.agent."
 #: Subject suffix for per-agent inboxes.
 AGENT_INBOX_SUFFIX = ".inbox"
+#: Subject suffix for per-agent sandbox control.
+AGENT_CONTROL_SUFFIX = ".control"
 
 
 def agent_inbox_topic(handle: str) -> str:
@@ -38,3 +40,41 @@ def agent_inbox_topic(handle: str) -> str:
     if not handle:
         return ""
     return f"{AGENT_INBOX_PREFIX}{handle}{AGENT_INBOX_SUFFIX}"
+
+
+def agent_inbox_group(handle: str) -> str:
+    """Return the durable consumer group for the seat's inbox.
+
+    One group per seat, so membership *is* ownership: the node that
+    attaches a consumer to ``agent-{handle}`` is the node that receives
+    that seat's work.  Nothing computes "which node" — routing falls out
+    of who subscribed.
+
+    Empty for an empty handle, for the same reason
+    :func:`agent_inbox_topic` is.
+    """
+    if not handle:
+        return ""
+    return f"agent-{handle}"
+
+
+def agent_control_topic(handle: str) -> str:
+    """Return the seat's sandbox-control subject.
+
+    ``agent_control_topic("alice")`` → ``"crewlet.agent.alice.control"``.
+
+    Separate from the inbox because a detached sandbox run PAUSES the
+    inbox: a completion riding the inbox would queue behind the very
+    pause it exists to lift.  Attached and detached alongside the inbox,
+    so a completion reaches the seat's owner and only its owner.
+    """
+    if not handle:
+        return ""
+    return f"{AGENT_INBOX_PREFIX}{handle}{AGENT_CONTROL_SUFFIX}"
+
+
+def agent_control_group(handle: str) -> str:
+    """Return the durable consumer group for the seat's control topic."""
+    if not handle:
+        return ""
+    return f"agent-{handle}-control"
