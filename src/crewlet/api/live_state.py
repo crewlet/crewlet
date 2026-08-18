@@ -409,7 +409,12 @@ class LiveState:
         elif etype in _AFK_EVENTS:
             agent.state = "afk"
             agent.afk_reason = payload.get("kind") or etype
-            agent.live_call = None
+            # A call already frozen as failed is the most informative
+            # thing on the agent's page — the prompt it died on, the
+            # tools that had run, the error. The AFK event that follows
+            # a failed phase would otherwise wipe it a moment later.
+            if not (agent.live_call or {}).get("failed"):
+                agent.live_call = None
             # ``llm_unavailable`` / ``budget_exhausted`` / a guard breach
             # each carry their own reason; keep it where the dashboard
             # reads failures from, so one panel explains every stop.

@@ -59,7 +59,7 @@ export function createDashboardView({ store }) {
     const spendTrend = bucketSeries(tokens ? tokens.by_turn || [] : [], {
       minutes: TREND_MINUTES,
       buckets: TREND_BUCKETS,
-      valueOf: (turn) => turn.total_tokens || 0,
+      value: (turn) => turn.total_tokens || 0,
     });
 
     return `
@@ -86,10 +86,23 @@ export function createDashboardView({ store }) {
         <div class="widget pink clickable" data-action="view-tools" data-k="w:tools">
           <div class="widget-head">${icon("wrench", "sm")} Tools</div>
           <div class="widget-big">${fmtNum((state.tools || []).length)}</div>
-          <div class="widget-foot">registered across every seat</div>
-          ${tokens && totals ? `<div class="widget-bar">${phaseBar(tokens.by_phase, totals.total_tokens)}</div>` : ""}
+          <div class="widget-foot">${esc(toolSources(state))}</div>
         </div>
-      </div>`;
+      </div>
+      ${
+        tokens && totals && totals.total_tokens
+          ? `<div class="card phase-panel" data-k="phase-panel">${phaseBar(tokens.by_phase, totals.total_tokens)}</div>`
+          : ""
+      }`;
+  }
+
+  // Where the tool surface comes from, rather than a bare count.
+  function toolSources(state) {
+    const sources = new Set(
+      (state.tools || []).map((t) => (t.source || "builtin").replace(/^mcp[:_-]?/i, "")),
+    );
+    if (!sources.size) return "none registered";
+    return [...sources].sort().join(" · ");
   }
 
   // ---- the live board ----
@@ -158,8 +171,16 @@ export function createDashboardView({ store }) {
 
   function liveBoard(state) {
     const agents = state.agents || [];
-    const live = agents.filter((a) => a.live_call && a.live_call.turn_id !== undefined);
-    const stopped = agents.filter((a) => !a.live_call && a.last_error);
+    // A failed call is still *a call* — the projection keeps it on the
+    // agent so its detail page can show what died. It is not live, so it
+    // belongs in the stopped half of this board, not the running one.
+    const isRunning = (a) =>
+      a.live_call &&
+      a.live_call.turn_id !== undefined &&
+      !a.live_call.failed &&
+      a.state !== "afk";
+    const live = agents.filter(isRunning);
+    const stopped = agents.filter((a) => !isRunning(a) && a.last_error);
     if (!live.length && !stopped.length) {
       return (
         sectionHead("activity", "Live now", 0, null) +

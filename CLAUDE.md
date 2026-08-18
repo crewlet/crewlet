@@ -596,15 +596,45 @@ src/crewlet/          # Main package
                       #     in-flight live_call, so state survives a browser
                       #     refresh without per-read DB scans; + active-
                       #     sandboxes set from the SandboxRun* events →
-                      #     dashboard Running-sandboxes panel),
+                      #     dashboard Running-sandboxes panel; + last_error
+                      #     and a frozen failed live_call so a stopped seat
+                      #     says WHY; + the live token rollup (records kept
+                      #     in the window, aggregated through api/tokens.py —
+                      #     one implementation, never a second one in JS);
+                      #     apply_event returns a Change naming what moved),
                       #   streaming.py (StreamService: ingest → projection +
-                      #     /ws/stream fan-out + one shared health tick);
+                      #     /ws/stream fan-out + one shared health tick +
+                      #     DERIVED PUSHES — agents/sandboxes/tokens
+                      #     envelopes carry the RESULT of applying an event,
+                      #     so a dashboard mirrors the projection instead of
+                      #     re-deriving it),
+                      #   queries.py (the /ws/stream request/response channel:
+                      #     agent / agent_memory / event / events / trace /
+                      #     tokens / schedules / config* — each a thin adapter
+                      #     over the SAME function the REST route calls, so
+                      #     the two surfaces cannot answer differently;
+                      #     config* gated by auth.resolve_operator);
                       #   serves the dashboard from the top-level static/
                       #     (see static/ below)
   static/             # Web assets served by the API. static/dashboard/ is
-                      #   the zero-build modular ES-module dashboard (reactive
-                      #   store, reconnecting WS client, hash router, per-view
-                      #   modules; llm.js renders each LLM invocation with
+                      #   the zero-build modular ES-module dashboard.
+                      #   THE WEBSOCKET IS THE ONLY DATA CHANNEL: socket.js
+                      #   (pushes + a query(what, params) Promise channel;
+                      #   the REST snapshot is degraded-mode only), store.js
+                      #   (a MIRROR of the server projection — it derives
+                      #   nothing, and wakes subscribers per SLICE so a
+                      #   health tick does not redraw the page), patch.js
+                      #   (keyed in-place DOM patching — rendering with
+                      #   innerHTML on every envelope is what made the page
+                      #   strobe; every repeated row needs a data-k),
+                      #   scheduler.js (rAF coalescing), records.js (ONE
+                      #   normalizer for an LLM record, pass-through rather
+                      #   than a field whitelist — four hand-maintained
+                      #   whitelists are how a phase failure got deleted on
+                      #   its way to the screen). Views are pure
+                      #   render(state) -> markup + a `slices` list;
+                      #   hash router, per-view modules; llm.js renders each
+                      #   LLM invocation with
                       #   collapsible, height-capped prompt messages so a long
                       #   system prompt cannot bury the response, plus a
                       #   Source chip/block naming the event that triggered the
@@ -639,7 +669,13 @@ src/crewlet/          # Main package
                       #   deriving "what it is doing" from live state only.
                       #   See docs/reference/dashboard-design.md
   extensions/         # Extension system
-tests/                # Mirror structure of src/crewlet/
+tests/                # Mirror structure of src/crewlet/.
+                      #   test_dashboard/ is the exception: the dashboard
+                      #   is JavaScript, so its suites are ES modules under
+                      #   test_dashboard/js/ (a three-function harness +
+                      #   a vendored DOM, no npm and no build step) run
+                      #   under whatever `node` is on PATH by a pytest
+                      #   wrapper that SKIPS when there is none
 examples/             # Working examples (the Nimbus example org:
                       #   nimbus.config.yaml + nimbus.company.yaml +
                       #   nimbus-docs/ + tool-skills/). The MINIMAL

@@ -126,8 +126,14 @@ export function sectionHead(iconId, title, count, link) {
 // cost no request and no server work.
 
 // Bucket timestamped items into `buckets` equal slices ending now, and
-// return the per-bucket totals. `valueOf` defaults to counting items.
-export function bucketSeries(items, { minutes = 60, buckets = 24, valueOf } = {}) {
+// return the per-bucket totals. `value` maps an item to its contribution
+// and defaults to counting items.
+//
+// Deliberately not named `valueOf`: destructuring that name off an
+// options object yields `Object.prototype.valueOf` rather than
+// `undefined` when the caller omits it, so the "no mapper given" branch
+// never runs and every call throws.
+export function bucketSeries(items, { minutes = 60, buckets = 24, value } = {}) {
   const now = Date.now();
   const span = minutes * 60_000;
   const width = span / buckets;
@@ -138,7 +144,7 @@ export function bucketSeries(items, { minutes = 60, buckets = 24, valueOf } = {}
     const age = now - at;
     if (age < 0 || age > span) continue;
     const idx = Math.min(buckets - 1, Math.floor((span - age) / width));
-    series[idx] += valueOf ? valueOf(item) : 1;
+    series[idx] += value ? value(item) : 1;
   }
   return series;
 }

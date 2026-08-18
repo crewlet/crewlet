@@ -107,7 +107,19 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
       groups.get(r.turn_id).items.push(r);
     }
     const live = recordFromLiveCall(liveAgent().live_call);
-    if (live) {
+    // A phase that finished publishes a history record, and the
+    // projection keeps a frozen copy of the same call when it failed —
+    // rendering both would show one phase twice, the durable record
+    // beside its own snapshot. The record wins; it is the fuller one.
+    const alreadyRecorded =
+      live &&
+      llm.some(
+        (r) =>
+          r.turn_id === live.turn_id &&
+          r.phase === live.phase &&
+          (r.iteration || 0) === (live.iteration || 0),
+      );
+    if (live && !alreadyRecorded) {
       const tid = live.turn_id || "live";
       if (!groups.has(tid)) groups.set(tid, { items: [], live: [] });
       groups.get(tid).live.push(live);
@@ -341,10 +353,14 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         ? '<div class="skel skel-row"></div>'
         : empty("cpu", "No LLM invocations yet");
     }
+    // The newest failed turn opens itself — that is the one an operator
+    // came to read. Older failures stay collapsed: auto-opening every
+    // one of them buries the page in transcripts of the same outage.
+    const newestFailed = groups.find((g) => g.failed);
     return groups
       .map((g) => {
         const autoOpen =
-          ((g.isLive || g.failed) && !userCollapsed.has(g.turn_id)) ||
+          ((g.isLive || g === newestFailed) && !userCollapsed.has(g.turn_id)) ||
           openTurns.has(g.turn_id);
         const phaseCount = {};
         let total = 0;

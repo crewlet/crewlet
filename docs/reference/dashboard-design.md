@@ -19,14 +19,14 @@ placeholder or a coming-soon stub.
 
 | Nav | Route | Reads |
 |---|---|---|
-| Dashboard | `#/dashboard` | `/stream/snapshot` + `/tokens/breakdown` |
+| Dashboard | `#/dashboard` | the snapshot's `agents` / `events` / `sandboxes` / `org` / `tools` / `tokens` |
 | Company → Overview | `#/company` | `/org` |
 | Company → People Directory | `#/people` | `/org` + live agent state |
 | Company → Org Chart | `#/org` | `/org` + live agent state |
 | Company → Audit log | `#/audit` | `/config/audit` *(auth-gated)* |
 | Agents | `#/agents` | `/org` + live agent state |
-| Activity | `#/events` | `/events`, live `/ws/stream` |
-| Tokens | `#/tokens` | `/tokens/breakdown` |
+| Activity | `#/events` | the snapshot's `events`, then live `event` pushes |
+| Tokens | `#/tokens` | the pushed spend rollup; a `tokens` query for any other window |
 | Tools | `#/tools` | `/tools` |
 | Schedules | `#/schedules` | `/schedules` |
 | Configuration | `#/config` | `/config` *(auth-gated, secrets redacted server-side)* |
@@ -193,12 +193,69 @@ Status badges are mono/uppercase because they are codes. A badge carrying
 prose (a task title) adds `.text`, which returns it to the sans face and
 sentence case.
 
+## Rendering
+
+Views are pure: `render(state)` returns markup and touches no DOM. The
+shell patches that markup into `#view` with a keyed patcher
+(`js/patch.js`) on the next animation frame, so a re-render updates only
+what changed. A view also declares the store slices it reads, so a health
+tick wakes the header alone and a streaming round wakes only the views
+showing agents.
+
+This is load-bearing, not an optimisation. Rendering with
+`innerHTML = markup` on every websocket envelope — which is what the
+dashboard used to do, several times a second while a turn ran — replaced
+every node on screen: it restarted the container's entrance animation
+(so the page strobed rather than updated), reset scroll inside every
+panel, dropped text selection mid-read, and re-collapsed anything
+expanded.
+
+Two rules keep it working:
+
+- **Every row in a repeated list carries `data-k`.** The patcher matches
+  on that key, so a new event arriving at the top of a feed inserts one
+  node instead of rewriting the list beneath it. Never key by array
+  index — that is the same as not keying at all.
+- **Toggle state lives in the view, not the DOM.** An `onAction` handler
+  updates its own set and calls `refresh()`; it never flips a class
+  directly, because the next patch renders from state and would revert
+  it.
+
 ## Motion
 
-The view container carries `.cascade-enter`, so a route change rises its
-children in with a short stagger (`fade-up`, 0.45s, ≤ 0.18s delay). Controls
-settle with `scale(0.97)` on `:active`. Everything is disabled under
-`prefers-reduced-motion: reduce`.
+Entrance motion belongs to the thing that arrived. A view's children
+rise once on mount (`fade-up`, 0.32s); a row the patcher genuinely
+inserts is marked `.is-entering` and arrives on its own (`row-in`,
+0.26s). Nothing re-animates because something else updated.
+
+Motion otherwise marks **live state only**, so movement on screen always
+means something is running:
+
+- `live-halo` — a 1.6s pulse in `currentColor`, so one keyframe serves
+  every hue. On live badges and working dots.
+- `breathe` — a 2.6s pulse on the idle indicator. Waiting is drawn as
+  waiting; a busy row has its own motion already.
+- `pip-lit` — the round-budget pips on a live phase row, lit in
+  sequence with a per-pip delay, so a phase held for a second still
+  reads as progressing.
+
+Controls settle with `scale(0.97)` on `:active`. Everything is disabled
+under `prefers-reduced-motion: reduce`.
+
+## Failure
+
+`--red` / `--red-ink` is the reserved status hue and never a categorical
+slot, because an operations dashboard needs red to keep meaning "this
+broke". A failed phase takes it everywhere it appears: the phase rail,
+the row badge, the `.failure` block that leads a failed response, and
+the `.failure-card` on the agent header that names *why* a seat stopped.
+
+The rule for a failed call is that it stays on screen. The projection
+freezes it rather than clearing it, and the response block renders the
+error above whatever partial work the phase managed — the prompt it died
+on, the tools that had already run. "No response text yet" is a
+statement about a call still in flight and is never shown for one that
+ended.
 
 ---
 
@@ -216,3 +273,8 @@ settle with `scale(0.97)` on `:active`. Everything is disabled under
    that leads to an empty screen is worse than no nav item.
 7. **Need the org tree?** Go through `flattenSeats` / `flattenUnits` in
    `js/org.js`, so lead and `mcp_env` inheritance stay resolved in one place.
+8. **New data?** It arrives over the websocket — a snapshot section and a
+   push, or a query. A view that reaches for `fetch` is reintroducing the
+   split-transport bug the refactor removed.
+9. **New repeated row? Give it a `data-k`.** And never derive state the
+   server already projects; mirror what it pushes.

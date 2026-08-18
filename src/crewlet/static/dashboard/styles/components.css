@@ -1197,12 +1197,37 @@
 /* =====================================================================
    Sparklines
    ===================================================================== */
+/* The sparkline draws in `currentColor`, and a widget sets that to its
+   own hue — so the trend line reads as part of the tile rather than as a
+   grey line sitting on it, and one SVG serves every hue. */
+.widget.green {
+  color: var(--green);
+}
+.widget.purple {
+  color: var(--purple);
+}
+.widget.pink {
+  color: var(--pink);
+}
+.widget.blue {
+  color: var(--blue);
+}
+.widget .widget-head,
+.widget .widget-big,
+.widget .widget-foot {
+  color: var(--text);
+}
+.widget .widget-head {
+  color: var(--text-muted);
+}
+.widget .widget-foot {
+  color: var(--text-muted);
+}
 .spark {
   display: block;
   width: 100%;
   height: 28px;
   margin-top: 10px;
-  color: inherit;
   overflow: visible;
 }
 .spark-area {
