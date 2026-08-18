@@ -1026,8 +1026,8 @@ uses and `_spawn_role_live` currently inverts.
 
 #### Review outcome (pre-implementation, 5 lenses + completeness critic)
 
-**Four lenses `implement-with-changes`, one `redesign-needed`** (the
-per-seat control topic). A marked improvement on the previous round's
+**Five `implement-with-changes`, one `redesign-needed`** (the per-seat
+control topic). A marked improvement on the previous round's
 three-of-four `redesign-needed`, and the core reframings were endorsed
 independently by several lenses: subscription existence as an org
 invariant, the pause-gap diagnosis in (d) — verified in code by three
@@ -1095,6 +1095,90 @@ with the twin moved in lockstep.
 **Exit criteria are ungated.** They lead with "the chaos suite", which
 does not exist and which no work item builds. Either a work item builds
 it or the criteria name tests that exist.
+
+**The completeness critic found the largest thing in the review, and it
+is one gap wearing six costumes.**
+
+Decision (e) — agents exist only on the seat's owner — is right, and it
+breaks every handler that resolves a recipient through the **local agent
+pool** while consuming from a **fleet-wide competing-consumer group**.
+There are at least six, and three of them are fatal:
+
+- **Notification ingress.** `crewlet.notifications.inbound` has one
+  fleet-wide group. A Slack mention of `engineer` is won by whichever
+  node happens to take it; that node resolves the recipient through its
+  own pool, finds nothing, and the delivery is *terminally dropped*.
+  With N nodes that is (N−1)/N of all inbound. This is the primary
+  ingress path.
+- **Internal task routing** (`events/subscriptions.py`) has the same
+  shape and needs **two** local seats to succeed — the completing agent
+  and its manager — so it fails more often than ingress, and one of its
+  three drop paths is silent.
+- **The scheduler** cannot fire for a seat this node does not own, and
+  the miss is unrecoverable by construction: the at-most-once
+  `scheduled_runs` claim is taken *before* the publish, so a non-owner
+  marks the fire done and nothing runs it.
+
+And three more that are serious rather than fatal: cross-node `a2a_ask`
+is refused by a guard whose error message asserts something false; the
+colleague surface shrinks to the node's own seats, so an agent stops
+seeing its own org chart and can fuzzy-match onto the wrong colleague;
+and the learning workers' reflection budget gate silently becomes a
+no-op.
+
+**The unifying fix is one sentence: resolution must be org-derived, not
+instance-derived.** Routing needs only `handle → (inbox topic,
+agent_id)`, and both are already derivable from the org that every node
+has — `agent_id` deterministically, via `derive_agent_id(org.name,
+handle)`. The live `AgentInstance` is an *execution* detail and must stop
+being a *routing* one. That is a single work item, it blocks the phase,
+and it is the largest one in it.
+
+Two further gaps worth naming because they are not fixed by that:
+
+- **Placement reads a per-node, possibly-stale org** while the control
+  plane deliberately keeps a lagging node `SERVING` (that is phase 4's
+  central rule). So during a rollout the fleet disagrees about the seat
+  *set*, and therefore about capacity. Placement must become
+  epoch-aware: refuse to **claim** under a stale epoch, but never refuse
+  to **release**.
+- **`ctx.agent_pool` changes meaning for extensions** — a documented
+  public API that silently becomes "this node's seats", typically empty
+  at `on_engine_start`. At minimum this needs saying in the design and
+  in `docs/`.
+
+**Two corrections to (c) that the first lens made concrete, and that
+change what the phase can honestly claim:**
+
+- **"Never republish, never NAK" is not expressible by a handler today.**
+  The queue offers exactly two outcomes: ack on return, NAK on raise.
+  A third is needed — a `DeferDelivery` sentinel meaning *leave unacked,
+  stop this subscription* — or the fenced path cannot be written.
+- **Fencing protects database state, never outbound effects.** The
+  fenced path's property is **bounded duplication**, not no duplication,
+  and the plan must say so. `run_sandbox` makes it vivid: it acquires a
+  real billed E2B box *before* the pending row is written, so no
+  epoch-fenced insert can undo a box that is already pushing commits.
+  What bounds the window is the in-turn fence — checked before each
+  round, before each write-capable tool, and inside the sub-agent loop —
+  so **5.7 moves into this phase too**, because nothing else bounds it
+  at all.
+
+And the concrete fix for the stale ownership check: make it
+**freshness-based rather than membership-based**. A successful renew at
+time *t* proves exclusivity through *t + ttl*, so admit a turn only when
+`now - renewed_at <= heartbeat_seconds`. Every started turn is then
+certified owned for at least 30 s, and the `LeaseError` grace stops
+admitting *new* turns at the first failed renew while still keeping the
+seat so in-flight work can finish. Exposed as `may_start(handle) -> int
+| None` returning the epoch — not as `owns()`.
+
+**Net effect on the phase.** It absorbs 5.5 (epoch-fenced writes) and 5.7
+(in-turn fencing), and gains an org-derived resolution layer as its
+largest work item. That is four original sub-phases in one, which is a
+large phase — but every attempt to draw the line elsewhere has produced a
+state the reviews call fatal, and the reason is always the same: a seat
+is not a thing you can half-own.
 
 #### Exit criteria
 
