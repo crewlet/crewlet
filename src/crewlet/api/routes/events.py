@@ -38,7 +38,11 @@ async def events_query(
     store = app.state.event_store
     if store is None:
         return []
-    limit = max(1, min(int(limit), MAX_EVENT_LIMIT))
+    # Clamped, not rejected: this is a scan over the event history and an
+    # unbounded ``?limit=`` is a way to ask the database for everything.
+    # The ceiling is documented in docs/reference/api-endpoints.md so a
+    # paginating caller knows the page size it will actually get.
+    limit = max(0, min(int(limit), MAX_EVENT_LIMIT))
     return await safe_store_query(
         store.list_events(
             limit=limit,

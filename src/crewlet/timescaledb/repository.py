@@ -306,7 +306,10 @@ class TimescaleDBEventStore:
             else:
                 states[role].pop("afk_reason", None)
 
-        # Step 2b: AFK is sticky until the agent does real work again.
+        # Step 2b: AFK is sticky until the agent does real work again —
+        # or is respawned, which is a NEW instance of the seat and cannot
+        # inherit what stopped the last one (otherwise the hold outlives
+        # an engine restart and a healthy seat reads as broken).
         # Every engine-detected failure publishes its AFK event and then
         # ``TaskFailed`` microseconds later, so step 2 — which just takes
         # the latest state-affecting event — always saw ``task_failed``
@@ -323,7 +326,8 @@ class TimescaleDBEventStore:
             FROM {EVENTS_TABLE}
             WHERE event_type IN (
                     'llm_unavailable','turn.guard_breach','budget_exhausted',
-                    'task_started','agent_phase_started','agent_turn_progress'
+                    'task_started','agent_phase_started','agent_turn_progress',
+                    'agent_spawned'
                 )
               AND agent_role = ANY($1::text[])
               AND event_time >= now() - INTERVAL '7 days'

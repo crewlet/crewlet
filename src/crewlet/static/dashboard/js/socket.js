@@ -157,6 +157,9 @@ export class LiveSocket {
       case "agents":
         this.store.applyAgents(msg.data);
         break;
+      case "seats":
+        this.store.applySeats(msg.data);
+        break;
       case "sandboxes":
         this.store.applySandboxes(msg.data);
         break;

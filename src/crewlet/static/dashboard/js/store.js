@@ -107,6 +107,26 @@ export class Store {
     this._emit("agents");
   }
 
+  /**
+   * The complete seat list, replacing what is on screen.
+   *
+   * Distinct from `applyAgents`, which merges changed overlays by role:
+   * a merge cannot express a deletion, so a revision that removes a role
+   * would leave its card rendered until the next reload.
+   */
+  applySeats(rows) {
+    if (!Array.isArray(rows)) return;
+    // Keep the live overlay each seat already carries — the config
+    // payload is static config and knows nothing about what a seat is
+    // doing right now.
+    const live = new Map(this.state.agents.map((a) => [a.role, a]));
+    this.state.agents = rows.map((row) => {
+      const current = live.get(row.role);
+      return current ? { ...current, ...row } : row;
+    });
+    this._emit("agents");
+  }
+
   applySandboxes(list) {
     this.state.sandboxes = list || [];
     this._emit("sandboxes", "agents");

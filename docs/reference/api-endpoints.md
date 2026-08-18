@@ -16,7 +16,7 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
 | `GET` | `/tools` | Registered tools (builtins + discovered MCP tools) |
-| `GET` | `/events` | Recent engine events from the event store |
+| `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, ordered by timestamp |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |

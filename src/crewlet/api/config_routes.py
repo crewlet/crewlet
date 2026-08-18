@@ -428,6 +428,10 @@ async def get_config(request: Request) -> Response:
     markers — the HTTP read paths never emit ciphertext (nor plaintext).
     Use ``crewlet config export`` on the host for a round-trippable dump.
     """
+    # Keep the store check on the request path: a missing store is a
+    # broken deployment and must not be reported as "no revision yet",
+    # which is what collapsing both onto a 404 would do.
+    _store(request)
     payload = await config_document(request.app)
     if payload is None:
         return JSONResponse({"error": "no_active_revision"}, status_code=404)

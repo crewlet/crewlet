@@ -136,6 +136,28 @@ test("losing the socket clears health but keeps the last state", () => {
   assert.strictEqual(store.state.agents.length, 2, "state was discarded on drop");
 });
 
+test("a seat push replaces the list, so a deleted role disappears", () => {
+  // `applyAgents` merges by role and cannot express a deletion. A
+  // revision that removes a role has to be able to take its card off the
+  // screen, which is why the config-change broadcast uses its own kind.
+  const store = new Store();
+  store.applySnapshot(snapshot());
+  store.applySeats([{ id: "1", role: "CEO", goal: "Run the company" }]);
+  assert.deepStrictEqual(
+    store.state.agents.map((a) => a.role),
+    ["CEO"],
+  );
+});
+
+test("a seat push keeps the live state the config payload does not know", () => {
+  const store = new Store();
+  store.applySnapshot(snapshot());
+  store.applyAgents([{ role: "CEO", state: "working" }]);
+  store.applySeats([{ id: "1", role: "CEO", goal: "Run the company" }]);
+  assert.strictEqual(store.state.agents[0].state, "working");
+  assert.strictEqual(store.state.agents[0].goal, "Run the company");
+});
+
 test("an empty token rollup does not overwrite a real one", () => {
   // The REST fallback snapshot has no rollup section; applying it must
   // not blank the spend view.

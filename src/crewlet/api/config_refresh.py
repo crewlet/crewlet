@@ -304,10 +304,15 @@ def _broadcast_config_change(app: Any) -> None:
     from crewlet.api.routes.agents import agents_payload
     from crewlet.api.routes.org import schedule_projection
 
+    # ``seats``, not ``agents``: an ``agents`` envelope is a set of
+    # CHANGED overlays and a client merges it per role, which can add and
+    # update but never remove. A revision that deletes a role has to be
+    # able to take its card off the screen, so the whole list goes as its
+    # own kind and replaces.
     for kind, data in (
         ("org", app.state.org_data),
         ("tools", app.state.tools_data),
-        ("agents", agents_payload(app)),
+        ("seats", agents_payload(app)),
         ("schedules", {"schedules": schedule_projection(app)}),
     ):
         try:

@@ -67,12 +67,12 @@ _HEALTH_INTERVAL_SECONDS = 5.0
 # refresh and 250 retained rows were undeliverable.
 SNAPSHOT_EVENT_LIMIT = EVENT_FEED_LIMIT
 
-# Minimum gap between spend-rollup pushes.  The rollup is the one
-# derived payload big enough to be worth rate-limiting (a few tens of KB
-# with the per-turn table), and it only moves when a phase completes --
-# a few times a second at most across a busy company.  One push per
-# second keeps the Tokens view live to the eye while collapsing a burst
-# of phase completions into a single frame.
+# How often the service checks whether the spend rollup moved.  The
+# rollup is re-aggregated from the projection's records, which costs tens
+# of milliseconds, so it is deliberately not computed per event: a burst
+# of phase completions collapses into one push.  One second keeps the
+# Tokens view live to the eye, and the work happens on the background
+# tick rather than inside the publish that triggered it.
 _TOKENS_PUSH_INTERVAL_SECONDS = 1.0
 
 
@@ -293,17 +293,22 @@ class StreamService:
         if change.sandboxes:
             self._fan_out("sandboxes", self._live.active_sandboxes())
         if change.tokens:
+            # Marked only. Aggregating here would run inside the caller's
+            # ``publish()`` — which, on the embedded deployment, is the
+            # engine's own event loop mid-turn. The background tick owns
+            # the actual rollup.
             self._tokens_dirty = True
-            self._flush_tokens()
 
-    def _flush_tokens(self, *, force: bool = False) -> None:
-        """Send the spend rollup, at most once per coalescing window."""
+    def _flush_tokens(self) -> None:
+        """Send the spend rollup if a phase completed since the last one.
+
+        Called from the shared background tick rather than from the
+        publish path, so re-aggregating the window never delays an
+        agent's tool round or a queue dispatch.
+        """
         if not self._tokens_dirty or not self._clients:
             return
-        now = time.monotonic()
-        if not force and now - self._tokens_pushed_at < _TOKENS_PUSH_INTERVAL_SECONDS:
-            return
-        self._tokens_pushed_at = now
+        self._tokens_pushed_at = time.monotonic()
         self._tokens_dirty = False
         self._fan_out("tokens", self.token_rollup())
 
@@ -385,12 +390,20 @@ class StreamService:
                 await task
 
     async def _health_loop(self) -> None:
+        """The service's one background timer: health, and the spend push.
+
+        Ticks at ``_TOKENS_PUSH_INTERVAL_SECONDS`` and pushes health only
+        every ``health_interval``, so the rollup stays responsive without
+        a second task and without the health envelope getting chattier.
+        """
+        elapsed = 0.0
         while True:
-            await asyncio.sleep(self._health_interval)
-            # Flush a spend rollup that the coalescing window held back —
-            # otherwise the last phase completion of a burst would sit
-            # unsent until the next one arrived.
-            self._flush_tokens(force=True)
+            await asyncio.sleep(_TOKENS_PUSH_INTERVAL_SECONDS)
+            elapsed += _TOKENS_PUSH_INTERVAL_SECONDS
+            self._flush_tokens()
+            if elapsed < self._health_interval:
+                continue
+            elapsed = 0.0
             if self._health_fn is None:
                 continue
             try:

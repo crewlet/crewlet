@@ -76,13 +76,24 @@ EVENT_FEED_LIMIT = 400
 # magnitude beyond any real overlap and costs well under a megabyte.
 _TOKEN_DEDUPE_LIMIT = 8000
 
-# Memory backstop on retained per-phase spend records.  The real bound
-# is the rollup window (records older than ``TOKEN_WINDOW_DAYS`` are
-# pruned on write); this cap only matters for an org busy enough to emit
-# more than this inside the window.  Each record is a flat dict of ~14
-# small fields — roughly 400 bytes — so 20k of them is about 8 MB, and
-# the aggregation over them takes single-digit milliseconds.
-_SPEND_RECORD_LIMIT = 20_000
+# Window the LIVE spend rollup covers — the one held in memory, shipped
+# in every snapshot and pushed as phases complete.  Deliberately shorter
+# than ``TOKEN_WINDOW_DAYS``: "live" means what is happening now, and the
+# rollup is re-aggregated from its records each time it is pushed, so its
+# cost is set by how many records the window holds.  Any wider window the
+# Tokens view offers is a store query (``/tokens/breakdown``) instead,
+# which is not on any hot path.
+LIVE_SPEND_WINDOW_HOURS = 24
+
+# Memory and latency backstop on retained per-phase spend records.  The
+# real bound is the window above; this only binds for an org emitting
+# more than this in a day.  Measured: ``aggregate_phase_events`` costs
+# ~13 ms over 2k records, ~32 ms over 5k and ~200 ms over 20k, so the cap
+# sets the worst-case aggregation — 8k keeps it near 80 ms, affordable at
+# most once a second on a background task.  Truncation drops the OLDEST
+# records, so an org past the cap sees a rollup covering slightly less
+# than a day rather than a wrong total.
+_SPEND_RECORD_LIMIT = 8_000
 
 # Window the projection hydrates per-agent token totals over, in days.
 # Matches the dashboard's default token-rollup window
@@ -190,9 +201,12 @@ class AgentLive:
             "total_tokens": self.total_tokens,
             "live_call": self.live_call,
             "last_error": self.last_error,
+            # Always present, even when empty. The overlay is now MERGED
+            # into a client's row rather than replacing it, so an omitted
+            # key reads as "unchanged" — leaving a recovered agent
+            # wearing the reason it was AFK for.
+            "afk_reason": self.afk_reason,
         }
-        if self.afk_reason:
-            overlay["afk_reason"] = self.afk_reason
         return overlay
 
 
@@ -360,8 +374,15 @@ class LiveState:
             agent._state_ts = ts
 
         if etype == "agent_spawned":
-            if agent.state in ("offline", "terminated"):
+            # A spawn is a NEW instance of the seat, so whatever stopped
+            # the last one is not this one's state.  Without this the
+            # sticky-AFK hold outlives an engine restart and a healthy
+            # seat renders as broken until it happens to do some work.
+            if agent.state in ("offline", "terminated", "afk"):
                 agent.state = "idle"
+                agent.afk_reason = ""
+                agent.last_error = None
+                agent.live_call = None
         elif etype == "task_started":
             agent.state = "working"
             agent.current_task = payload.get("task_id") or None
@@ -689,16 +710,32 @@ class LiveState:
         return True
 
     def _prune_spend(self, now_iso: str) -> None:
-        """Drop spend records that have aged out of the rollup window."""
+        """Drop spend records that have aged out of the live window.
+
+        Order-independent by construction.  Popping from the left is only
+        correct while the deque is timestamp-ordered, and it is not
+        reliably: the API subscribes to the event stream before it
+        hydrates, so a live event can land ahead of the older records
+        hydration then appends behind it.  One recent record at the head
+        is enough to make a head-popping loop exit immediately and never
+        prune again — the window would silently stop being a window.
+
+        The sweep runs only when there is something to drop, so the
+        common case costs one pass of timestamp comparisons and no
+        allocation.
+        """
         if not now_iso:
             return
         try:
             now = datetime.fromisoformat(now_iso)
         except ValueError:
             return
-        cutoff = (now - timedelta(days=TOKEN_WINDOW_DAYS)).isoformat()
-        while self._phase_spend and self._phase_spend[0]["timestamp"] < cutoff:
-            self._phase_spend.popleft()
+        cutoff = (now - timedelta(hours=LIVE_SPEND_WINDOW_HOURS)).isoformat()
+        if not any(r["timestamp"] < cutoff for r in self._phase_spend):
+            return
+        kept = [r for r in self._phase_spend if r["timestamp"] >= cutoff]
+        self._phase_spend.clear()
+        self._phase_spend.extend(kept)
 
     def token_rollup(
         self, role_handle_map: dict[str, str] | None = None
@@ -709,7 +746,11 @@ class LiveState:
         rollup = aggregate_phase_events(
             list(self._phase_spend), role_handle_map=role_handle_map or {}
         )
-        return {"since_days": TOKEN_WINDOW_DAYS, "agent_role": "", **rollup}
+        return {
+            "since_days": max(1, LIVE_SPEND_WINDOW_HOURS // 24),
+            "agent_role": "",
+            **rollup,
+        }
 
     # -- buffer ----------------------------------------------------------
 
@@ -807,7 +848,9 @@ class LiveState:
     async def _hydrate_spend(self, store: Any) -> None:
         """Seed the spend rollup so the first snapshot is not blank."""
         try:
-            records = await store.list_phase_token_events(since_days=TOKEN_WINDOW_DAYS)
+            records = await store.list_phase_token_events(
+                since_days=max(1, LIVE_SPEND_WINDOW_HOURS // 24)
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("live_state_hydrate_spend_failed", error=str(exc))
             return
@@ -817,6 +860,12 @@ class LiveState:
                     continue
                 _remember(self._counted_phase_ids, event_id)
             self._phase_spend.append(record)
+        # Hydration runs after the stream is already live, so anything
+        # that arrived in between sits ahead of these older records.
+        # Restore the ordering the window reads best.
+        ordered = sorted(self._phase_spend, key=lambda r: r["timestamp"])
+        self._phase_spend.clear()
+        self._phase_spend.extend(ordered)
 
     async def _hydrate_events(self, store: Any) -> None:
         try:

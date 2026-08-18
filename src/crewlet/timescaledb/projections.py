@@ -127,8 +127,12 @@ def phase_token_record(
     """Project an ``agent_phase_completed`` row to the Tokens-view shape.
 
     Kept minimal — only the fields the breakdown aggregation needs.
-    Heavy payload fields (``system_prompt``, ``response``, …) stay out so
-    a wide time window doesn't transfer megabytes.
+    Heavy payload fields stay out so a wide window doesn't transfer
+    megabytes: the prompts and the response obviously, but also
+    ``tool_executions``, whose ``result`` strings are never length-capped
+    (a whole page, a sandbox transcript) and which no consumer of this
+    record reads.  The live projection retains these records for its
+    rollup window, so anything carried here is carried resident.
     """
     return {
         "event_id": event_id,
@@ -145,5 +149,4 @@ def phase_token_record(
         "output_tokens": int(payload.get("output_tokens", 0) or 0),
         "total_tokens": int(payload.get("total_tokens", 0) or 0),
         "failed": bool(payload.get("failed", False)),
-        "tool_executions": payload.get("tool_executions", []) or [],
     }

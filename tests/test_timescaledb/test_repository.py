@@ -376,7 +376,11 @@ async def test_list_phase_token_events_parses_payload(
     assert row["input_tokens"] == 100
     assert row["output_tokens"] == 50
     assert row["total_tokens"] == 150
-    assert row["tool_executions"] == [{"tool_name": "submit_plan"}]
+    # Deliberately absent: the breakdown aggregation never reads tool
+    # output, and the live projection holds these records resident for
+    # its rollup window — an uncapped tool result carried here would be
+    # carried in memory for the life of the window.
+    assert "tool_executions" not in row
 
 
 async def test_get_agent_states_leaves_tokens_at_zero(

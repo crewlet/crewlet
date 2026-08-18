@@ -25,6 +25,14 @@ from crewlet.api.streaming import build_health_envelope, envelope
 
 logger = get_logger("api.routes")
 
+# Queries a single socket may have in flight at once.  Queries run
+# concurrently so a store scan cannot stall the live feed, but each one
+# can take a database connection from a pool the engine shares — an
+# unbounded fan-out from one tab would starve the engine's own writes.
+# Four covers the most a dashboard screen issues at once (the agent page
+# opens with three) and makes a burst queue rather than pile up.
+_MAX_INFLIGHT_QUERIES = 4
+
 
 def _stream(app: Any) -> Any:
     return getattr(app.state, "stream", None)
@@ -127,8 +135,15 @@ async def stream_websocket(websocket: WebSocket) -> None:
     inbound_task: asyncio.Task[Any] | None = None
     get_task: asyncio.Task[str] | None = None
 
+    query_slots = asyncio.Semaphore(_MAX_INFLIGHT_QUERIES)
+
     async def _answer_query(parsed: dict[str, Any]) -> None:
-        """Run one client query and send its single reply frame."""
+        """Run one client query and send its single reply frame.
+
+        Never raises: a query task that died with an exception would
+        leave the client waiting for a reply that is never coming, and
+        the socket has no other way to say so.
+        """
         req_id = parsed.get("id")
         what = str(parsed.get("what", ""))
         params = parsed.get("params")
@@ -136,19 +151,28 @@ async def stream_websocket(websocket: WebSocket) -> None:
             params = {}
         token = parsed.get("token")
         try:
-            data = await run_query(
-                websocket.app,
-                what,
-                params,
-                token=token if isinstance(token, str) else "",
+            async with query_slots:
+                data = await run_query(
+                    websocket.app,
+                    what,
+                    params,
+                    token=token if isinstance(token, str) else "",
+                )
+            body = json.dumps(
+                {"kind": "result", "id": req_id, "what": what, "data": data}
             )
         except QueryError as exc:
             body = json.dumps(
                 {"kind": "error", "id": req_id, "what": what, "error": exc.code}
             )
-        else:
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Serialisation blew up, or a handler raised outside
+            # ``run_query``'s own guard.
+            logger.exception("stream_query_reply_failed", what=what)
             body = json.dumps(
-                {"kind": "result", "id": req_id, "what": what, "data": data}
+                {"kind": "error", "id": req_id, "what": what, "error": "query_failed"}
             )
         await _send(websocket, body, lock)
 

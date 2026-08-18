@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from crewlet.api import live_state
 from crewlet.api.live_state import LiveState
 
 
@@ -557,6 +558,238 @@ class TestSandboxProjection:
         live = LiveState()
         live.apply_event(_env("sandbox_run_started", {"role": "Eng"}, event_id="s1"))
         assert live.active_sandboxes() == []
+
+
+class TestSpendWindow:
+    """The live spend rollup's window has to stay a window."""
+
+    def _phase(self, live: LiveState, event_id: str, ts: str, tokens: int = 10) -> None:
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {
+                    "role": "Lead",
+                    "agent_id": "rt-1",
+                    "turn_id": "t1",
+                    "phase": "plan",
+                    "model": "m",
+                    "input_tokens": tokens,
+                    "output_tokens": 0,
+                    "total_tokens": tokens,
+                },
+                ts=ts,
+                event_id=event_id,
+            )
+        )
+
+    def test_records_inside_the_window_are_aggregated(self) -> None:
+        live = LiveState()
+        self._phase(live, "p1", "2026-06-14T12:00:00+00:00", tokens=10)
+        self._phase(live, "p2", "2026-06-14T12:30:00+00:00", tokens=5)
+        assert live.token_rollup()["totals"]["total_tokens"] == 15
+
+    def test_a_re_delivered_phase_is_not_counted_twice(self) -> None:
+        live = LiveState()
+        self._phase(live, "p1", "2026-06-14T12:00:00+00:00", tokens=10)
+        self._phase(live, "p1", "2026-06-14T12:00:00+00:00", tokens=10)
+        assert live.token_rollup()["totals"]["calls"] == 1
+
+    def test_records_older_than_the_window_are_dropped(self) -> None:
+        live = LiveState()
+        self._phase(live, "old", "2026-06-13T06:00:00+00:00", tokens=99)
+        self._phase(live, "new", "2026-06-14T12:00:00+00:00", tokens=7)
+        totals = live.token_rollup()["totals"]
+        assert totals["total_tokens"] == 7
+        assert totals["calls"] == 1
+
+    def test_pruning_survives_an_out_of_order_head(self) -> None:
+        """Hydration lands behind live events, so order is not guaranteed.
+
+        The API subscribes to the stream before it hydrates, so a live
+        event can sit ahead of the older records hydration then appends.
+        A prune that only pops from the head sees a recent record there,
+        exits, and never prunes again — the window silently stops being
+        one.
+        """
+        live = LiveState()
+        # A live event arrives first...
+        self._phase(live, "live", "2026-06-14T12:00:00+00:00", tokens=7)
+        # ...then hydration appends older records behind it.
+        for i, ts in enumerate(
+            ["2026-06-10T01:00:00+00:00", "2026-06-11T01:00:00+00:00"]
+        ):
+            live._phase_spend.append(
+                {
+                    "event_id": f"h{i}",
+                    "timestamp": ts,
+                    "agent_id": "rt-1",
+                    "agent_role": "Lead",
+                    "phase": "plan",
+                    "model": "m",
+                    "turn_id": "t0",
+                    "iteration": 1,
+                    "input_tokens": 100,
+                    "output_tokens": 0,
+                    "total_tokens": 100,
+                }
+            )
+        # The next fold must clear everything outside the window.
+        self._phase(live, "next", "2026-06-14T12:05:00+00:00", tokens=3)
+        totals = live.token_rollup()["totals"]
+        assert totals["total_tokens"] == 10, "stale records survived the prune"
+        assert totals["calls"] == 2
+
+    def test_the_rollup_reports_the_window_it_covers(self) -> None:
+        assert live_state.LIVE_SPEND_WINDOW_HOURS == 24
+        assert LiveState().token_rollup()["since_days"] == 1
+
+
+class TestAfkLifecycle:
+    """AFK is sticky, but not immortal."""
+
+    def _afk(self, live: LiveState) -> None:
+        live.apply_event(
+            _env(
+                "llm_unavailable",
+                {"role": "Lead", "agent_id": "rt-1", "last_error_kind": "rate_limit"},
+                ts="2026-06-14T12:00:00+00:00",
+                event_id="a1",
+            )
+        )
+
+    def test_task_failed_does_not_clear_the_failure_that_caused_it(self) -> None:
+        live = LiveState()
+        self._afk(live)
+        live.apply_event(
+            _env(
+                "task_failed",
+                {"role": "Lead", "agent_id": "rt-1", "task_id": "T-1"},
+                ts="2026-06-14T12:00:01+00:00",
+                event_id="a2",
+            )
+        )
+        overlay = live.agent_overlay("Lead")
+        assert overlay["state"] == "afk"
+        assert overlay["afk_reason"] == "llm_unavailable"
+
+    def test_real_work_clears_it(self) -> None:
+        live = LiveState()
+        self._afk(live)
+        live.apply_event(
+            _env(
+                "task_started",
+                {"role": "Lead", "agent_id": "rt-1", "task_id": "T-2"},
+                ts="2026-06-14T12:10:00+00:00",
+                event_id="a3",
+            )
+        )
+        overlay = live.agent_overlay("Lead")
+        assert overlay["state"] == "working"
+        assert overlay["afk_reason"] == ""
+        assert overlay["last_error"] is None
+
+    def test_a_respawn_clears_it(self) -> None:
+        """A spawn is a new instance; it cannot inherit the old one's stop.
+
+        Otherwise the hold outlives an engine restart and a healthy seat
+        renders as broken until it happens to do some work.
+        """
+        live = LiveState()
+        self._afk(live)
+        live.apply_event(
+            _env(
+                "agent_spawned",
+                {"role": "Lead", "agent_id": "rt-2"},
+                ts="2026-06-15T09:00:00+00:00",
+                event_id="a4",
+            )
+        )
+        overlay = live.agent_overlay("Lead")
+        assert overlay["state"] == "idle"
+        assert overlay["afk_reason"] == ""
+        assert overlay["last_error"] is None
+
+
+class TestPhaseFailureProjection:
+    """A failed phase must reach the screen, not vanish."""
+
+    def _fail(self, live: LiveState) -> None:
+        live.apply_event(
+            _env(
+                "agent_phase_started",
+                {"role": "Lead", "agent_id": "rt-1", "turn_id": "t1", "phase": "plan"},
+                ts="2026-06-14T12:00:00+00:00",
+                event_id="s1",
+            )
+        )
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {
+                    "role": "Lead",
+                    "agent_id": "rt-1",
+                    "turn_id": "t1",
+                    "phase": "plan",
+                    "failed": True,
+                    "error": "429 slow down",
+                    "error_kind": "rate_limit",
+                    "response": "I was part way through",
+                },
+                ts="2026-06-14T12:00:05+00:00",
+                event_id="s2",
+            )
+        )
+
+    def test_the_failure_lands_on_the_agent(self) -> None:
+        live = LiveState()
+        self._fail(live)
+        error = live.agent_overlay("Lead")["last_error"]
+        assert error["kind"] == "rate_limit"
+        assert error["message"] == "429 slow down"
+        assert error["phase"] == "plan"
+
+    def test_the_failed_call_stays_on_screen(self) -> None:
+        live = LiveState()
+        self._fail(live)
+        call = live.agent_overlay("Lead")["live_call"]
+        assert call is not None, "the call the reader needs was cleared"
+        assert call["failed"] is True
+        assert call["in_progress"] is False
+        assert call["response"] == "I was part way through"
+
+    def test_a_following_afk_event_does_not_wipe_it(self) -> None:
+        live = LiveState()
+        self._fail(live)
+        live.apply_event(
+            _env(
+                "llm_unavailable",
+                {"role": "Lead", "agent_id": "rt-1", "last_error_kind": "rate_limit"},
+                ts="2026-06-14T12:00:06+00:00",
+                event_id="s3",
+            )
+        )
+        assert live.agent_overlay("Lead")["live_call"] is not None
+
+    def test_a_clean_phase_clears_the_call_as_before(self) -> None:
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "agent_phase_started",
+                {"role": "Lead", "agent_id": "rt-1", "turn_id": "t1", "phase": "plan"},
+                event_id="c1",
+            )
+        )
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {"role": "Lead", "agent_id": "rt-1", "turn_id": "t1", "phase": "plan"},
+                ts="2026-06-14T12:00:05+00:00",
+                event_id="c2",
+            )
+        )
+        overlay = live.agent_overlay("Lead")
+        assert overlay["live_call"] is None
+        assert overlay["last_error"] is None
 
 
 if __name__ == "__main__":  # pragma: no cover
