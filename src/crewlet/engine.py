@@ -54,7 +54,12 @@ from crewlet.observability import ObservabilityManager
 from crewlet.org.models import Organization
 from crewlet.providers.llm.protocol import LLMProvider
 from crewlet.queue.protocol import BatchOptions, EventQueue
-from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
+from crewlet.queue.topics import (
+    agent_control_group,
+    agent_control_topic,
+    agent_inbox_group,
+    agent_inbox_topic,
+)
 from crewlet.secrets.resolver import refresh_secret_snapshot
 from crewlet.task.delegation import DelegationHandler
 from crewlet.task.tracker import ExecutionTracker
@@ -5763,9 +5768,20 @@ class Engine:
             token_usage_repo=token_usage_repo,
         )
         try:
-            await self._sandbox_coordinator.subscribe()
-            await self._sandbox_coordinator.recover()
-            logger.info("sandbox_coordinator_started")
+            # No fleet-wide subscribe and no fleet-wide recover: both are
+            # per-seat, done by the acquire hook, because only the node
+            # that owns a seat can resume its runs. This path can start
+            # AFTER seats were claimed (a provider arriving late), so
+            # catch up on whatever is already held.
+            held = self._seat_host.held_handles if self._seat_host is not None else ()
+            for handle in held:
+                await self._sandbox_coordinator.recover_seat(
+                    handle,
+                    owner=self._incarnation,
+                    epoch=self._seat_host.epoch_for(handle) or 0,
+                )
+                await self._sandbox_coordinator.attach_seat(handle)
+            logger.info("sandbox_coordinator_started", seats=len(held))
         except Exception as exc:
             logger.error("sandbox_coordinator_start_failed", error=str(exc))
 
@@ -6148,6 +6164,13 @@ class Engine:
                     agent_inbox_topic(handle), agent_inbox_group(handle)
                 ):
                     created += 1
+                # The seat's control topic needs the same invariant: a
+                # detached run outlives its node, so a completion can
+                # land while the seat is between owners.
+                if await self.event_queue.ensure_subscription(
+                    agent_control_topic(handle), agent_control_group(handle)
+                ):
+                    created += 1
             except Exception:
                 logger.exception("seat_subscription_ensure_failed", seat=handle)
         logger.info("seat_subscriptions_ensured", seats=len(handles), created=created)
@@ -6186,11 +6209,14 @@ class Engine:
 
         # Recover an interrupted detached sandbox run BEFORE the consumer
         # attaches: the run may have left the seat paused and parked, and
-        # a delivery arriving first would start a turn beside it.
+        # a delivery arriving first would start a turn beside it. Then
+        # take over the seat's control topic, so completions for its runs
+        # reach this node and only this node.
         if self._sandbox_coordinator is not None:
             await self._sandbox_coordinator.recover_seat(
                 handle, owner=self._incarnation, epoch=lease.epoch
             )
+            await self._sandbox_coordinator.attach_seat(handle)
 
         # LAST, and unconditionally. An owned seat is always attached:
         # making the attachment depend on the turn engine existing left a
@@ -6241,6 +6267,8 @@ class Engine:
         await self._detach_agent_inbox(handle)
 
         if self._sandbox_coordinator is not None:
+            with contextlib.suppress(Exception):
+                await self._sandbox_coordinator.detach_seat(handle)
             with contextlib.suppress(Exception):
                 await self._sandbox_coordinator.release_seat(handle)
 
@@ -6349,12 +6377,14 @@ class Engine:
         if handle:
             # Destructive, and deliberately so: a decommissioned seat's
             # inbox must not accumulate undeliverable events forever.
-            try:
-                await self.event_queue.delete_subscription(
-                    agent_inbox_topic(handle), agent_inbox_group(handle)
-                )
-            except Exception:
-                logger.exception("inbox_unsubscribe_failed", handle=handle)
+            for topic, group in (
+                (agent_inbox_topic(handle), agent_inbox_group(handle)),
+                (agent_control_topic(handle), agent_control_group(handle)),
+            ):
+                try:
+                    await self.event_queue.delete_subscription(topic, group)
+                except Exception:
+                    logger.exception("inbox_unsubscribe_failed", handle=handle)
             self._subscribed_inboxes.discard(handle)
             # Keyed on the handle, not on a live instance: under seat
             # ownership the release above already terminated it, and on a

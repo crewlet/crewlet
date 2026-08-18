@@ -44,6 +44,7 @@ from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.events.types import SandboxRunCompleted
+from crewlet.queue.topics import agent_control_topic
 from crewlet.sandbox.coordinator import COMPLETIONS_TOPIC
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
@@ -255,21 +256,32 @@ class SandboxWaiter:
         return "done" if done else "running"
 
     async def _publish_completion(self, run: PendingSandboxRun) -> None:
-        await self._event_queue.publish(
-            COMPLETIONS_TOPIC,
-            SandboxRunCompleted(
-                source=run.role,
-                agent_id=run.agent_id,
-                agent_handle=run.agent_handle,
-                role=run.role,
-                turn_id=run.turn_id,
-                sandbox_id=run.sandbox_id,
-                coding_agent=run.coding_agent,
-                # Carry the original trace so the completion turn nests.
-                trace_id=run.trace_id,
-                span_id=run.span_id,
-            ),
+        """Announce the completion, and route the resume to the owner.
+
+        Two publishes, two purposes. The ``crewlet.events.*`` copy is an
+        ANNOUNCEMENT: the dashboard's broadcast stream watches that
+        subject space, and dropping it would blank the Running-sandboxes
+        panel. The per-seat control copy is a COMMAND, and it goes to the
+        seat's own topic because only the node holding that seat has the
+        suspended Execute conversation to resume — a single fleet-wide
+        group would hand it to a non-owner (N-1)/N of the time.
+        """
+        completion = SandboxRunCompleted(
+            source=run.role,
+            agent_id=run.agent_id,
+            agent_handle=run.agent_handle,
+            role=run.role,
+            turn_id=run.turn_id,
+            sandbox_id=run.sandbox_id,
+            coding_agent=run.coding_agent,
+            # Carry the original trace so the completion turn nests.
+            trace_id=run.trace_id,
+            span_id=run.span_id,
         )
+        await self._event_queue.publish(COMPLETIONS_TOPIC, completion)
+        control = agent_control_topic(run.agent_handle)
+        if control:
+            await self._event_queue.publish(control, completion)
 
 
 __all__ = ["SandboxWaiter"]

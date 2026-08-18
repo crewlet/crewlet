@@ -43,6 +43,7 @@ from crewlet.config import (
 from crewlet.events.types import SandboxRunStarted
 from crewlet.providers.llm.protocol import LLMProvider, Message
 from crewlet.queue.protocol import EventQueue
+from crewlet.queue.topics import agent_control_topic
 from crewlet.sandbox.coding_agents._detached import clear_run_artifacts
 from crewlet.sandbox.coding_agents.ask import ask_brief_instruction
 from crewlet.sandbox.credentials import build_sandbox_env, cli_credential_files
@@ -621,21 +622,25 @@ async def launch_sandbox_run(
         )
         await pending_store.create(run)
 
-    await event_queue.publish(
-        "crewlet.events.sandbox_run_started",
-        SandboxRunStarted(
-            source=turn.agent.role_name,
-            agent_id=turn.agent.id_str,
-            agent_handle=turn.agent.handle,
-            role=turn.agent.role_name,
-            turn_id=turn.turn_id,
-            sandbox_id=sandbox.id,
-            coding_agent=launch.coding_agent,
-            conversation_key=conversation_key,
-            task_id=turn.task_id,
-            task=(launch.brief or turn.task_description or "").strip()[:160],
-        ),
+    started = SandboxRunStarted(
+        source=turn.agent.role_name,
+        agent_id=turn.agent.id_str,
+        agent_handle=turn.agent.handle,
+        role=turn.agent.role_name,
+        turn_id=turn.turn_id,
+        sandbox_id=sandbox.id,
+        coding_agent=launch.coding_agent,
+        conversation_key=conversation_key,
+        task_id=turn.task_id,
+        task=(launch.brief or turn.task_description or "").strip()[:160],
     )
+    # Announced under ``crewlet.events.*`` for the dashboard's broadcast
+    # stream; ACTED ON via the seat's own control topic, so the busy gate
+    # is applied by the node that owns the seat and nobody else.
+    await event_queue.publish("crewlet.events.sandbox_run_started", started)
+    control = agent_control_topic(turn.agent.handle)
+    if control:
+        await event_queue.publish(control, started)
 
     logger.info(
         "sandbox_run_started",

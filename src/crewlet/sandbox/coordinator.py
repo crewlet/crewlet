@@ -30,6 +30,7 @@ inbox), so the paused inbox never blocks the wake-up.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -49,15 +50,48 @@ from crewlet.events.types import (
 )
 from crewlet.notifications.coalesce import conversation_key
 from crewlet.queue.protocol import EventQueue
-from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
+from crewlet.queue.topics import (
+    agent_control_group,
+    agent_control_topic,
+    agent_inbox_group,
+    agent_inbox_topic,
+)
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
 from crewlet.sandbox.protocol import CodingAgentResult
 
 logger = get_logger("sandbox.coordinator")
 
+
+class SandboxResumeUnavailable(RuntimeError):
+    """This node cannot resume the run the completion refers to.
+
+    Not a failure of the run — a failure of ROUTING. The suspended
+    Execute conversation lives in the pending row and can only be
+    resumed where the seat's instance is, so the completion has to go
+    back and reach that node instead of being settled here.
+    """
+
+
+# Where the sandbox lifecycle is ANNOUNCED, for observability. These stay
+# under ``crewlet.events.*`` because that is what the dashboard's
+# broadcast stream watches — moving them would blank the
+# Running-sandboxes panel. Nothing ACTS on them.
 STARTED_TOPIC = "crewlet.events.sandbox_run_started"
 COMPLETIONS_TOPIC = "crewlet.events.sandbox_run_completed"
+
+# Where the sandbox lifecycle is ACTED ON: one control topic per seat,
+# attached and detached alongside that seat's inbox.
+#
+# Routing then falls out of who subscribed, exactly as it does for the
+# inbox, rather than from any "which node" computation. A single
+# fleet-wide group could not work: it delivers a completion to whichever
+# node wins it, which is a non-owner (N-1)/N of the time, and that node
+# has no suspended Execute conversation to resume.
+#
+# It cannot ride the inbox either. While a seat is AWAITING_SANDBOX its
+# inbox is PAUSED — that is the busy gate — so a completion arriving
+# there would queue behind the very pause it exists to lift.
 _GROUP = "sandbox-coordinator"
 
 # The reason this subsystem holds a seat's inbox paused.
@@ -100,22 +134,65 @@ class SandboxCoordinator:
         """Swap the sandbox manager (live-reload of ``providers.sandbox``)."""
         self._manager = manager
 
-    async def subscribe(self) -> None:
-        """Subscribe to the engine-wide started / completed control topics."""
-        await self._event_queue.subscribe(STARTED_TOPIC, _GROUP, self._on_started_event)
+    async def attach_seat(self, handle: str) -> None:
+        """Consume one seat's sandbox control topic.
+
+        Called from the seat acquire hook, so the node that owns the seat
+        is the node that resumes its runs — and only that node.
+        """
+        if not handle:
+            return
         await self._event_queue.subscribe(
-            COMPLETIONS_TOPIC, _GROUP, self._on_completed_event
+            agent_control_topic(handle),
+            agent_control_group(handle),
+            self._on_control_event,
         )
-        logger.info("sandbox_coordinator_subscribed")
+        logger.info("sandbox_control_attached", seat=handle)
+
+    async def detach_seat(self, handle: str) -> None:
+        """Stop consuming a seat's control topic. Non-destructive.
+
+        The subscription and any undelivered completion survive for the
+        seat's next owner — a completion published while the seat is
+        between owners must not be lost, and the box it refers to is
+        still real.
+        """
+        if not handle:
+            return
+        with contextlib.suppress(Exception):
+            await self._event_queue.detach(
+                agent_control_topic(handle), agent_control_group(handle)
+            )
+        logger.info("sandbox_control_detached", seat=handle)
+
+    async def ensure_seat_subscription(self, handle: str) -> None:
+        """Make a seat's control subscription exist, owner or not.
+
+        Same invariant as the inbox: a completion published while nobody
+        is attached has to be held, not dropped. A detached run outlives
+        its node, so this window is not hypothetical.
+        """
+        if not handle:
+            return
+        await self._event_queue.ensure_subscription(
+            agent_control_topic(handle), agent_control_group(handle)
+        )
+
+    async def delete_seat_subscription(self, handle: str) -> None:
+        """Destructive teardown, for a decommissioned seat."""
+        if not handle:
+            return
+        with contextlib.suppress(Exception):
+            await self._event_queue.delete_subscription(
+                agent_control_topic(handle), agent_control_group(handle)
+            )
 
     # -- event adapters ----------------------------------------------------
 
-    async def _on_started_event(self, event: Event) -> None:
+    async def _on_control_event(self, event: Event) -> None:
         if isinstance(event, SandboxRunStarted):
             await self.on_run_started(event)
-
-    async def _on_completed_event(self, event: Event) -> None:
-        if isinstance(event, SandboxRunCompleted):
+        elif isinstance(event, SandboxRunCompleted):
             await self.on_run_completed(event)
 
     # -- kick-off → busy ---------------------------------------------------
@@ -492,13 +569,23 @@ class SandboxCoordinator:
 
         turn_engine = self._get_turn_engine()
         if turn_engine is None or agent is None:
-            logger.warning(
-                "sandbox_resume_skipped",
-                turn_id=run.turn_id,
-                have_engine=turn_engine is not None,
-                have_agent=agent is not None,
+            # RAISE, never return. Returning let the caller fall through
+            # to settling the run `done` and tearing the box down — with
+            # the suspended Execute conversation, the agent's whole
+            # in-progress turn, discarded. Raising reverts the claim so
+            # the completion redelivers to a node that can actually
+            # resume it.
+            #
+            # The per-seat control topic makes this rare rather than
+            # routine (a completion reaches its seat's owner by
+            # construction), but "rare" is not "never": a lease can move
+            # between the publish and the receive.
+            raise SandboxResumeUnavailable(
+                f"cannot resume run {run.turn_id!r} for seat "
+                f"{run.agent_handle!r}: "
+                f"turn_engine={'yes' if turn_engine is not None else 'no'} "
+                f"agent={'yes' if agent is not None else 'no'}"
             )
-            return
         st = run.execute_state or {}
         try:
             plan = (
@@ -718,4 +805,9 @@ def _answer_text(event: Event) -> str:
     return str(event.payload.get("task_description", "") or "")
 
 
-__all__ = ["COMPLETIONS_TOPIC", "STARTED_TOPIC", "SandboxCoordinator"]
+__all__ = [
+    "COMPLETIONS_TOPIC",
+    "STARTED_TOPIC",
+    "SandboxCoordinator",
+    "SandboxResumeUnavailable",
+]

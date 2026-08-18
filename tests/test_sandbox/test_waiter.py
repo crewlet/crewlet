@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from crewlet.queue.topics import agent_control_topic
 from crewlet.sandbox import FakeCodingAgentRunner, FakeSandboxProvider, SandboxManager
 from crewlet.sandbox.coordinator import COMPLETIONS_TOPIC
 from crewlet.sandbox.pending_store import (
@@ -57,14 +58,18 @@ async def test_tick_fires_completion_when_job_done() -> None:
     fired = await waiter.tick_once()
 
     assert fired == 1
-    assert len(queue.published) == 1
-    topic, event = queue.published[0]
-    assert topic == COMPLETIONS_TOPIC
-    assert event.type == "sandbox_run_completed"
-    assert event.turn_id == "t-1"
-    assert event.agent_handle == "eng"
-    # The original trace rides along so the completion turn nests.
-    assert event.trace_id == "trace-1"
+    # Two publishes, two purposes. The ``crewlet.events.*`` copy is an
+    # ANNOUNCEMENT the dashboard's broadcast stream watches; the per-seat
+    # control copy is a COMMAND, routed to whoever holds the seat,
+    # because only that node has the suspended Execute conversation.
+    topics = [t for t, _e in queue.published]
+    assert topics == [COMPLETIONS_TOPIC, agent_control_topic("eng")]
+    for _topic, event in queue.published:
+        assert event.type == "sandbox_run_completed"
+        assert event.turn_id == "t-1"
+        assert event.agent_handle == "eng"
+        # The original trace rides along so the completion turn nests.
+        assert event.trace_id == "trace-1"
 
 
 async def test_tick_no_fire_when_job_still_running() -> None:
