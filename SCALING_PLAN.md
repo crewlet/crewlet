@@ -966,9 +966,47 @@ uses and `_spawn_role_live` currently inverts.
 | Does a close-driven handoff increment `redeliveryCount`? | **No**, count 0 at the successor | republish-then-ack dropped; C3/C4 retired |
 | Does the cursor survive a change of owner? | **Yes**, no replay, no loss | owner-only Shared confirmed |
 | Attach / release cost | 4.9 ms / 9 ms | the boot pre-create in (a) is affordable |
-| Does ack-timeout redelivery increment the counter? | **Yes**, 0 → 1 | `_INBOX_MAX_REDELIVER = 3` becomes "three node deaths per message"; raised to 10 (item 11) |
+| Does ack-timeout redelivery increment the counter? | **Yes**, 0 → 1 | `_INBOX_MAX_REDELIVER = 3` becomes "three node deaths per message"; raised to 10 (item 12) |
+| Do the broker's reapers delete an unattached subscription? | **Both reapers are live**; not caught within 150 s at a 1-minute setting | the conservative broker config is required, not optional (item 11) |
 
-11. **`_INBOX_MAX_REDELIVER`: 3 → 10.** Measured: an ack-timeout
+11. **Broker reaper configuration becomes load-bearing, and today's
+    compose config contradicts decision (a).**
+
+    Two reapers are enabled by default and both delete the thing (a)
+    depends on. `brokerDeleteInactiveTopicsEnabled=true` with a 60 s
+    sweep removes an idle topic outright — observed in the broker log
+    doing exactly that to a test topic ("Topic deleted successfully due
+    to inactivity"). And `subscriptionExpirationTimeMinutes` deletes a
+    subscription whose last-active is older than the threshold —
+    also observed ("The subscription was deleted due to expiration").
+
+    The repo's own `docker-compose.yml` sets that to **30 minutes**,
+    deliberately, and justifies it in a comment: *"Non-lossy for live
+    work: the engine's own subscriptions have a connected consumer the
+    whole time it runs."* **That premise is exactly what this phase
+    breaks.** Under owner-only attachment a seat's subscription has no
+    connected consumer for as long as the seat is unowned, so the
+    setting silently becomes lossy — a seat nobody claims for half an
+    hour loses its subscription and, with it, the backlog decision (a)
+    exists to preserve.
+
+    So the phase must ship the operator configuration alongside the
+    code: subscription expiry off (or far above any credible unowned
+    window) and inactive-topic deletion off or set to
+    `delete_when_subscriptions_caught_up`, with the compose comment
+    rewritten to say why. An operator who upgrades the engine without
+    changing the broker gets a fleet that loses a quiet seat's mail, and
+    nothing in the engine can detect it.
+
+    *Measurement status:* with expiry forced to 1 minute, a detached
+    subscription — empty and backlogged alike — still held its message
+    after 150 s, so the reaper is not as eager as the setting suggests.
+    That is **not** evidence the 30-minute window is safe; it only means
+    the two tests did not catch it. The conservative configuration is
+    required either way, and a long-running test belongs in the chaos
+    suite rather than the harness.
+
+12. **`_INBOX_MAX_REDELIVER`: 3 → 10.** Measured: an ack-timeout
     redelivery — the `kill -9`, wedged-node and watchdog-`os._exit` path
     — increments the counter. Three was sized for a single-node world
     where a redelivery means "the handler failed", i.e. a poison
