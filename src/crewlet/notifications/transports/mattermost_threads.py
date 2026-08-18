@@ -6,12 +6,19 @@ Mattermost-specific is how a mention is written: unlike Slack, which
 rewrites mentions into ``<@U123>`` markup before delivery, Mattermost
 stores them literally as ``@username`` in the message text.
 
-The websocket event does carry a **server-computed** ``mentions`` list of
-user ids, and that is what the transport prefers — it is exact, and it
-resolves ``@all`` / ``@channel`` / ``@here`` against real channel
-membership, which no regex can do.  The grammar here is the fallback for
-the one path where that list is unavailable: the reconnect backfill,
-which re-reads posts over REST and gets no mention list with them.
+The websocket event also carries a **server-computed** ``mentions``
+list, but the two answer different questions and the transport uses each
+for its own (see
+:meth:`~crewlet.notifications.transports.mattermost.MattermostTransport._detect_follow`).
+The list says *whether* this bot was a target — authoritatively, and
+including group mentions, notification keywords and ``@all`` /
+``@channel`` / ``@here`` resolved against real membership, none of which
+a regex can see.  It cannot say *why*: the server rewrites the field per
+connection, so a bare ``@channel`` and being named personally both
+arrive as this bot's own id.  Only the text tells those apart, which is
+what the grammar below is for — on every post, not just on the reconnect
+backfill, where posts re-read over REST carry no mention list and the
+grammar is left doing both jobs alone.
 """
 
 from __future__ import annotations

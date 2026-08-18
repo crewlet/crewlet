@@ -409,9 +409,9 @@ event):
 
 ### Reconnects and the gap
 
-Mattermost's websocket **replays nothing**: a connection that drops and comes
-back has simply missed whatever happened in between, with no cursor,
-sequence gap or resume token to detect it with.
+A connection that drops and comes back has missed whatever happened in
+between, and this fleet covers the gap by re-reading rather than by asking
+the server to replay it.
 
 Each seat therefore records the newest post it has seen and, on reconnect,
 re-reads every channel it is a member of since that point and replays the gap
@@ -441,9 +441,23 @@ skipped rather than silently truncated:
 mattermost_backfill_window_exceeded handle=engineer skipped_seconds=3612.4 window_seconds=900.0
 ```
 
-Reconnect backoff is capped at 5 minutes. A seat that cannot connect is a
-configuration problem an operator has to see, so the retry stays visible in
-the logs rather than backing off into silence.
+Reconnect backoff is capped at 5 minutes and jittered by up to a quarter of
+the delay — every seat drops at the same instant when the server restarts,
+and each reconnect is a backfill walking that seat's channels, not one
+request. A seat that cannot connect is a configuration problem an operator
+has to see, so the retry stays visible in the logs rather than backing off
+into silence. The schedule resets only after a connection that stayed *live*
+for a minute: Mattermost closes without a close frame, so an ordinary
+disconnect and a server hanging up on sight look identical otherwise.
+
+> **Not yet used: Mattermost's reliable websockets.** The server can replay
+> a dropped connection's missed events from a 128-event queue when the
+> client reconnects with `connection_id` + `sequence_number` — exact, where
+> a time-windowed re-read is approximate. It honours those parameters only
+> when the upgrade request is already authenticated, and this fleet
+> authenticates *after* the handshake, so adopting it means moving every
+> seat to an `Authorization` header on the upgrade — a change to how every
+> seat connects, and to how a revoked token surfaces.
 
 ### Outbound
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -74,6 +75,14 @@ MAX_BACKFILL_WINDOW_SECONDS = 900.0
 #: single backfill window yields while staying trivially small in memory.
 _DEDUPE_RING = 512
 
+#: Proportional jitter added to each reconnect delay.  Every seat drops
+#: at the same instant when the server restarts or the network blips, so
+#: an unjittered schedule reconnects the whole fleet in lockstep — and
+#: each reconnect is not one request but a backfill walking every channel
+#: that seat is in.  A quarter of the delay is enough to smear the herd
+#: without making the schedule unrecognisable in logs.
+_BACKOFF_JITTER = 0.25
+
 #: How long a connection must survive before the reconnect backoff is
 #: allowed to drop back to the bottom of the schedule.  A socket the
 #: server accepts and then closes immediately looks, to the loop, exactly
@@ -85,10 +94,20 @@ _DEDUPE_RING = 512
 #: at, so a genuinely healthy socket is never mistaken for a flapping one.
 _STABLE_CONNECTION_SECONDS = 60.0
 
-#: Websocket ping interval.  Mattermost closes an idle connection after
-#: roughly 30 s of silence, so the client pings well inside that.
-_PING_INTERVAL = 10.0
-_PING_TIMEOUT = 20.0
+#: Websocket keepalive.  Sized to the server's ACTUAL deadlines, which
+#: are far longer than this once claimed: ``web_conn.go`` sets
+#: ``pongWaitTime = 100s`` (the read deadline) and pings the client every
+#: ``pingInterval = 60s``; Mattermost's own web client pings at 30 s.
+#:
+#: The point of pinging at all is to notice a half-open TCP connection —
+#: the server's pings already keep its deadline fresh. A 10 s/20 s pair
+#: meant any 20-second stall in this process (a backfill walking a
+#: seat's channels, a GC pause, a burst of publishes) tore down a
+#: perfectly healthy socket and re-ran the whole reconnect, backfill
+#: included. 30 s/60 s detects a dead peer inside the server's own
+#: 100 s window while tolerating a stall an order of magnitude longer.
+_PING_INTERVAL = 30.0
+_PING_TIMEOUT = 60.0
 
 #: How long to wait for the server to acknowledge the authentication
 #: challenge.  It is a single round trip on a socket that has already
@@ -141,9 +160,22 @@ class _SeatState:
     seen_posts: list[str] = field(default_factory=list)
     seen_lookup: set[str] = field(default_factory=set)
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: ``time.monotonic()`` at the moment this connection started reading
+    #: LIVE traffic — set once the handshake, identity read and backfill
+    #: are behind it.  ``None`` until then, and reset on every attempt.
+    live_since: float | None = field(default=None, repr=False)
+
+    def already_seen(self, post_id: str) -> bool:
+        """Whether this post has already been forwarded."""
+        return post_id in self.seen_lookup
 
     def remember(self, post_id: str) -> bool:
-        """Record *post_id*; ``False`` when it was already seen."""
+        """Record *post_id*; ``False`` when it was already seen.
+
+        Called only AFTER a successful publish: a post recorded here is
+        one the fleet has committed to having delivered, and the
+        reconnect backfill will never offer it again.
+        """
         if post_id in self.seen_lookup:
             return False
         self.seen_lookup.add(post_id)
@@ -398,34 +430,21 @@ class MattermostEventFleet:
         """Connect, authenticate, read — forever, with backoff."""
         attempt = 0
         while self._running:
-            started = time.monotonic()
+            seat.live_since = None
             try:
                 await self._connect_once(seat)
-                # A clean return means the server closed the socket.  That
-                # is a normal reconnect ONLY if the connection lasted:
-                # a server that accepts and immediately hangs up returns
-                # cleanly too, and resetting on that turns the schedule
-                # into a one-second reconnect storm that never escalates.
-                if time.monotonic() - started >= _STABLE_CONNECTION_SECONDS:
-                    attempt = 0
-                else:
-                    attempt += 1
-                    logger.warning(
-                        "mattermost_ws_closed_early",
-                        handle=seat.handle,
-                        attempt=attempt,
-                        seconds=round(time.monotonic() - started, 2),
-                    )
             except asyncio.CancelledError:
                 raise
             except MattermostAuthError as exc:
+                # Never reaches the live-read phase, so it is never
+                # "stable": a revoked token climbs the schedule instead of
+                # reconnecting once a second forever.
                 logger.error(
                     "mattermost_ws_auth_rejected",
                     handle=seat.handle,
                     attempt=attempt + 1,
                     error=str(exc),
                 )
-                attempt += 1
             except Exception as exc:
                 logger.warning(
                     "mattermost_ws_connection_failed",
@@ -433,13 +452,41 @@ class MattermostEventFleet:
                     attempt=attempt + 1,
                     error=str(exc),
                 )
+            # Stability is judged on EVERY exit, not just a clean return.
+            # Mattermost closes without a close frame, so an ordinary
+            # disconnect after hours of healthy traffic surfaces here as
+            # ``ConnectionClosedError`` — an exception. Resetting only on
+            # the clean path would ratchet a perfectly healthy seat up to
+            # the 5-minute ceiling and leave it there for the life of the
+            # process.
+            #
+            # And it is timed from the LIVE READ, not from the start of
+            # the attempt: the handshake, the identity read and a backfill
+            # that issues one REST call per channel can themselves take a
+            # minute, which would make a socket that died on its first
+            # frame look like a connection that lasted.
+            lived = (
+                time.monotonic() - seat.live_since
+                if seat.live_since is not None
+                else 0.0
+            )
+            if lived >= _STABLE_CONNECTION_SECONDS:
+                attempt = 0
+            else:
                 attempt += 1
+                if seat.live_since is not None:
+                    logger.warning(
+                        "mattermost_ws_closed_early",
+                        handle=seat.handle,
+                        attempt=attempt,
+                        seconds=round(lived, 2),
+                    )
             if not self._running:
                 return
             delay = RECONNECT_BACKOFF_SECONDS[
                 min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)
             ]
-            await asyncio.sleep(delay)
+            await asyncio.sleep(delay * (1.0 + random.uniform(0.0, _BACKOFF_JITTER)))
 
     async def _connect_once(self, seat: _SeatState) -> None:
         """One connection's lifetime: auth, backfill the gap, then read."""
@@ -467,6 +514,10 @@ class MattermostEventFleet:
             await self._anchor_cursor(seat)
             for raw in early:
                 await self._handle_frame(seat, raw)
+            # From here on the connection is doing its job; how long it
+            # lasts from this point is what tells the reconnect loop
+            # whether this seat is healthy or flapping.
+            seat.live_since = time.monotonic()
             async for raw in socket:
                 await self._handle_frame(seat, raw)
 
@@ -650,15 +701,8 @@ class MattermostEventFleet:
         ring had already seen it.
         """
         post_id = str(post.get("id") or "")
-        if not post_id or not seat.remember(post_id):
+        if not post_id or seat.already_seen(post_id):
             return False
-
-        # The cursor advances on CREATION time, matching what the
-        # backfill selects on.  Taking it from ``update_at`` would let an
-        # edit push the cursor past posts that had not arrived yet.
-        create_at = int(post.get("create_at") or post.get("update_at") or 0)
-        if create_at > seat.last_event_ms:
-            seat.last_event_ms = create_at
 
         payload = {
             "body": {
@@ -674,12 +718,27 @@ class MattermostEventFleet:
             "handle": seat.handle,
             "headers": {},
         }
-        await self._publish(payload)
+        if not await self._publish(payload):
+            # Nothing is recorded for a post that did not land: leaving
+            # the cursor and the dedupe ring untouched is what lets the
+            # next reconnect's backfill redeliver it. Advancing them
+            # first meant a queue hiccup dropped the message permanently,
+            # with the gap already marked as covered.
+            return False
+
+        seat.remember(post_id)
+        # The cursor advances on CREATION time, matching what the
+        # backfill selects on.  Taking it from ``update_at`` would let an
+        # edit push the cursor past posts that had not arrived yet.
+        create_at = int(post.get("create_at") or post.get("update_at") or 0)
+        if create_at > seat.last_event_ms:
+            seat.last_event_ms = create_at
         return True
 
-    async def _publish(self, payload: dict[str, Any]) -> None:
+    async def _publish(self, payload: dict[str, Any]) -> bool:
+        """Publish one envelope; ``False`` when it did not land."""
         if self._queue is None:
-            return
+            return False
         try:
             await self._queue.publish(
                 INBOUND_TOPIC,
@@ -687,8 +746,11 @@ class MattermostEventFleet:
             )
         except Exception as exc:
             # A publish failure must not tear down the socket — the next
-            # message still deserves a chance to land.
+            # message still deserves a chance to land — but it must not
+            # be recorded as delivered either.
             logger.warning("mattermost_publish_failed", error=str(exc))
+            return False
+        return True
 
 
 def _decode_embedded(value: Any) -> Any:

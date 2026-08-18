@@ -10,8 +10,10 @@ from unittest import mock
 
 import pytest
 
+from crewlet.mattermost import events as events_module
 from crewlet.mattermost.client import MattermostError
 from crewlet.mattermost.events import (
+    _BACKOFF_JITTER,
     _STABLE_CONNECTION_SECONDS,
     MAX_BACKFILL_WINDOW_SECONDS,
     RECONNECT_BACKOFF_SECONDS,
@@ -21,6 +23,9 @@ from crewlet.mattermost.events import (
 )
 
 BOT_ID = "botuserid00000000000000000"
+
+#: The module's own ``random``, so tests can pin the reconnect jitter.
+events_random = events_module.random
 
 
 class _QueueStub:
@@ -425,7 +430,10 @@ class TestSeatLifecycle:
 
         fleet._connect_once = _instant_close  # type: ignore[method-assign]
         fleet._running = True
-        with mock.patch.object(asyncio, "sleep", _record_sleep):
+        with (
+            mock.patch.object(asyncio, "sleep", _record_sleep),
+            mock.patch.object(events_random, "uniform", lambda a, b: 0.0),
+        ):
             await fleet._seat_loop(seat)
 
         # The loop returns before sleeping on the pass that stops it.
@@ -440,9 +448,10 @@ class TestSeatLifecycle:
         attempts = 0
         clock = [1000.0]
 
-        async def _long_connection(_seat: Any) -> None:
+        async def _long_connection(seat_: Any) -> None:
             nonlocal attempts
             attempts += 1
+            seat_.live_since = clock[0]
             clock[0] += _STABLE_CONNECTION_SECONDS + 1
             if attempts >= 3:
                 fleet._running = False
@@ -455,6 +464,7 @@ class TestSeatLifecycle:
         with (
             mock.patch.object(asyncio, "sleep", _record_sleep),
             mock.patch.object(time, "monotonic", lambda: clock[0]),
+            mock.patch.object(events_random, "uniform", lambda a, b: 0.0),
         ):
             await fleet._seat_loop(seat)
 
@@ -716,8 +726,150 @@ class TestAuthRejectionReachesTheOperator:
         with (
             caplog.at_level("ERROR"),
             mock.patch.object(asyncio, "sleep", _record_sleep),
+            mock.patch.object(events_random, "uniform", lambda a, b: 0.0),
         ):
             await fleet._seat_loop(seat)
 
         assert "mattermost_ws_auth_rejected" in caplog.text
         assert delays == list(RECONNECT_BACKOFF_SECONDS[1:3])
+
+
+class TestBackoffAfterALivedConnection:
+    """Mattermost closes without a close frame, so an ordinary disconnect
+    after hours of healthy traffic arrives as an EXCEPTION. Judging
+    stability only on the clean-return path ratcheted a healthy seat up to
+    the 5-minute ceiling and left it there for the life of the process."""
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_but_long_lived_connection_resets_the_backoff(self):
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        delays: list[float] = []
+        attempts = 0
+        clock = [1000.0]
+
+        async def _drop_after_a_long_life(seat_: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            seat_.live_since = clock[0]
+            clock[0] += _STABLE_CONNECTION_SECONDS + 5
+            if attempts >= 3:
+                fleet._running = False
+            raise ConnectionError("no close frame")
+
+        async def _record_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        fleet._connect_once = _drop_after_a_long_life  # type: ignore[method-assign]
+        fleet._running = True
+        with (
+            mock.patch.object(asyncio, "sleep", _record_sleep),
+            mock.patch.object(time, "monotonic", lambda: clock[0]),
+            mock.patch.object(events_random, "uniform", lambda a, b: 0.0),
+        ):
+            await fleet._seat_loop(seat)
+
+        assert delays == [RECONNECT_BACKOFF_SECONDS[0]] * 2
+
+    @pytest.mark.asyncio
+    async def test_a_drop_before_live_traffic_still_escalates(self):
+        """The handshake, identity read and backfill can take a minute on
+        their own, so stability is timed from the live read — not from the
+        start of the attempt."""
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        delays: list[float] = []
+        attempts = 0
+        clock = [1000.0]
+
+        async def _die_during_setup(_seat: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            clock[0] += 300  # a long, entirely unproductive attempt
+            if attempts >= 3:
+                fleet._running = False
+            raise ConnectionError("dropped mid-backfill")
+
+        async def _record_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        fleet._connect_once = _die_during_setup  # type: ignore[method-assign]
+        fleet._running = True
+        with (
+            mock.patch.object(asyncio, "sleep", _record_sleep),
+            mock.patch.object(time, "monotonic", lambda: clock[0]),
+            mock.patch.object(events_random, "uniform", lambda a, b: 0.0),
+        ):
+            await fleet._seat_loop(seat)
+
+        assert delays == list(RECONNECT_BACKOFF_SECONDS[1:3])
+
+
+class TestReconnectJitter:
+    """Every seat drops at the same instant when the server restarts, and
+    each reconnect is not one request but a backfill walking every channel
+    that seat is in."""
+
+    @pytest.mark.asyncio
+    async def test_the_delay_is_smeared(self):
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        delays: list[float] = []
+        attempts = 0
+
+        async def _fail(_seat: Any) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts >= 2:
+                fleet._running = False
+            raise ConnectionError("down")
+
+        async def _record_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        fleet._connect_once = _fail  # type: ignore[method-assign]
+        fleet._running = True
+        with (
+            mock.patch.object(asyncio, "sleep", _record_sleep),
+            mock.patch.object(events_random, "uniform", lambda a, b: b),
+        ):
+            await fleet._seat_loop(seat)
+
+        base = RECONNECT_BACKOFF_SECONDS[1]
+        assert delays == [pytest.approx(base * (1 + _BACKOFF_JITTER))]
+
+
+class TestUndeliveredPosts:
+    @pytest.mark.asyncio
+    async def test_a_failed_publish_is_left_redeliverable(self):
+        """Advancing the cursor and the dedupe ring before the publish
+        landed meant a queue hiccup dropped the message permanently, with
+        the gap already marked as covered."""
+
+        class _BrokenQueue:
+            async def publish(self, topic: str, event: Any) -> None:
+                raise RuntimeError("broker unavailable")
+
+        fleet = _fleet(_BrokenQueue())
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+
+        await fleet._handle_frame(seat, _frame("p1"))
+
+        assert seat.last_event_ms == 0
+        assert not seat.already_seen("p1")
+
+    @pytest.mark.asyncio
+    async def test_a_delivered_post_advances_both(self):
+        queue = _QueueStub()
+        fleet = _fleet(queue)
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+
+        await fleet._handle_frame(seat, _frame("p1"))
+
+        assert seat.last_event_ms == 1700000000000
+        assert seat.already_seen("p1")
