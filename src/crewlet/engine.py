@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -65,6 +66,16 @@ from crewlet.tools.run_sandbox_tool import register_run_sandbox_tool
 from crewlet.tools.spawn_subagent_tool import register_spawn_subagent_tool
 
 logger = get_logger("engine")
+
+# Why a seat's inbox is held while this node has no turn engine.
+#
+# Its OWN reason. Pause holds are reason-scoped precisely so one
+# subsystem cannot un-gate another's, and three independent things gate
+# an agent inbox: this park, the sandbox busy gate, and the
+# config-divergence shed. Sharing the default with the sandbox gate made
+# the late turn-engine build's blanket resume release a live run's hold
+# — delivering messages to an agent whose turn is suspended mid-run.
+_NO_TURN_ENGINE_PAUSE_REASON = "no_turn_engine"
 
 # Type alias for event handler callbacks (replaces old EventBus.EventHandler).
 _EventHandler = Callable[[Event], Awaitable[None]]
@@ -367,6 +378,7 @@ class Engine:
         # Control-plane state — see crewlet.db.config_plane.
         self._config_plane_store: Any = None
         self._node_id: str = ""
+        self._incarnation: str = ""
         self._applied_epoch: int = 0
         self._apply_attempts: int = 0
         self._ticks_behind: int = 0
@@ -458,6 +470,10 @@ class Engine:
         # connection, so they cannot be attached at registration time.
         self._pending_hooks: list[tuple[str, str, _EventHandler]] = []
         self._queue_started = False
+        # Seat placement. Constructed in ``start`` once the storage
+        # backend is known — see ``_build_seat_host``.
+        self._seat_host: Any = None
+        self._seat_host_started = False
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -536,7 +552,16 @@ class Engine:
         # pool again — without this guard each agent got TWO competing
         # consumers in one process, so two of its events could dispatch
         # concurrently and the loser NAK'd toward the dead-letter topic.
-        self._subscribed_inboxes: set[str] = set()
+        self._subscribed_inboxes: dict[str, int] = {}
+        """Attached seat inboxes, ``handle -> lease epoch``.
+
+        Written and cleared ONLY by the seat hooks, so it says exactly
+        what this process is consuming. It used to be a set maintained by
+        whatever happened to subscribe, and its idempotence guard made a
+        re-attach a silent no-op: a seat released by any path that forgot
+        to discard the handle came back owned in the lease table and dark
+        in the process, with the absence of a log line as the only
+        signal."""
         # Fire-and-forget requeue tasks (memory-backend re-entrancy guard in
         # the inbox handler); held so they aren't garbage-collected mid-run.
         self._requeue_tasks: set[asyncio.Task[None]] = set()
@@ -1334,11 +1359,11 @@ class Engine:
         if shed == was_shed:
             return
 
-        pairs = [
-            (agent_inbox_topic(a.handle), agent_inbox_group(a.handle))
-            for a in self.agent_pool.agents
-        ]
-        pairs.append(("crewlet.notifications.inbound", "notifications"))
+        # Seat inboxes are handled by RELEASING the seats below — a
+        # diverged node must stop holding them, not merely stop reading
+        # them, or it reserves fleet capacity it refuses to use. What is
+        # left here is the ingress topic, which belongs to no seat.
+        pairs = [("crewlet.notifications.inbound", "notifications")]
         for topic, group in pairs:
             try:
                 if shed:
@@ -1349,6 +1374,24 @@ class Engine:
                 logger.exception(
                     "config_posture_topic_failed", topic=topic, group=group
                 )
+        # Ownership follows posture. A node that cannot apply the
+        # current epoch must not merely stop serving its seats — it must
+        # stop HOLDING them, or it reserves fleet capacity for itself
+        # while refusing to use it, and its seats stay dark until it
+        # converges. Fenced, not voluntary: it is not draining
+        # gracefully, it is diverged, and a peer should have the seat
+        # now rather than when this node's current turn happens to end.
+        if self._seat_host is not None:
+            from crewlet.seat.host import ReleaseReason
+
+            try:
+                if shed:
+                    await self._seat_host.begin_drain()
+                    await self._seat_host.release_all(ReleaseReason.POSTURE)
+                elif self._running and not self._shutting_down:
+                    await self._seat_host.resume_claiming()
+            except Exception:
+                logger.exception("config_posture_seat_handoff_failed")
         logger.warning(
             "config_posture_changed",
             posture=str(posture),
@@ -1687,18 +1730,31 @@ class Engine:
         if self._tier_b_done:
             return
 
-        # 4. Spawn agents
+        # 4. Seat placement — NOT "spawn every agent".
+        #
+        # An agent instance is process-local state that is never
+        # persisted: its ``AgentState`` (WORKING, AWAITING_SANDBOX) lives
+        # only here. Spawning one on every node therefore does not give
+        # the fleet a warm spare, it gives it N copies of a state machine
+        # that disagree — a non-owner's instance strands in
+        # AWAITING_SANDBOX and the seat comes home poisoned.
+        #
+        # So the pool holds exactly the seats this node OWNS, and the
+        # placement host decides which those are. The actual spawning
+        # happens in ``_acquire_seat``, which also attaches the consumer
+        # — last, after the seat is established.
         role_count = len(list(self.org.all_roles()))
         logger.info(
-            "start_step", step="4/8", action="spawn_agents", role_count=role_count
+            "start_step", step="4/8", action="place_seats", role_count=role_count
         )
-        await self.agent_pool.spawn_from_org(self.org)
-
         # Set per-seat token budgets from role configs.  Driven by the
         # ORG, not the pool: a cap must exist for every seat this node
         # could ever run, and under owner-only seats that is every seat
         # in the company, not the subset spawned here.
         self._reseed_seat_budgets(self.org)
+        if self._seat_host is None:
+            self._seat_host = self._build_seat_host()
+        await self._ensure_seat_subscriptions()
 
         # 5. Launch MCP servers (if configured)
         logger.info(
@@ -2484,15 +2540,14 @@ class Engine:
                 summarize_max_tokens=summarize_max_tokens,
             )
 
-        # 7.5 Subscribe per-agent handlers on the event queue
-        logger.info(
-            "start_step",
-            step="7.5/8",
-            action="subscribe_agent_handlers",
-            agent_count=len(self.agent_pool.agents),
-        )
-        for agent in self.agent_pool.agents:
-            await self._subscribe_agent_inbox(agent)
+        # 7.5 Claim seats. The host's first sweep runs inline, so by the
+        # time ``start`` returns this node has established (and attached)
+        # its share — the same guarantee the old spawn-everything step
+        # gave, minus the seats that are not ours.
+        logger.info("start_step", step="7.5/8", action="claim_seats")
+        if self._seat_host is not None and not self._seat_host_started:
+            await self._seat_host.start()
+            self._seat_host_started = True
 
         # Notification service wakes agents via the EventQueue inbox
         # subscriptions above; no direct engine coupling is needed.
@@ -2595,7 +2650,9 @@ class Engine:
         )
         logger.info("engine_started", org=self.org.name)
 
-    async def _subscribe_agent_inbox(self, agent: AgentInstance) -> None:
+    async def _subscribe_agent_inbox(
+        self, agent: AgentInstance, epoch: int = 0
+    ) -> None:
         """Subscribe *agent*'s inbox with batched per-conversation delivery.
 
         Events that queue up while the agent is busy (or within the
@@ -2606,14 +2663,29 @@ class Engine:
         ``BatchOptions`` instance is mutated in place by live config
         reloads.
 
-        IDEMPOTENT per agent handle: boot and the late turn-engine path
-        (:meth:`_ensure_turn_engine_after_providers`) both walk the pool,
-        and a second subscribe would create a second competing consumer in
-        this process — two of the agent's events could then dispatch
-        concurrently, with the loser NAK'd toward the dead-letter topic.
+        Attaching a consumer is what makes this node the seat's owner in
+        practice, so this RAISES rather than silently skipping when asked
+        to attach something it believes attached. The old guard returned
+        quietly, which meant a seat whose release forgot to clear the set
+        came back owned in the lease table and dark in the process — the
+        absence of a log line being the only signal.
+
+        ``epoch`` records which claim this attachment belongs to, so a
+        release can tell "the consumer I attached" from "a consumer a
+        later claim attached".
         """
+        if not agent.handle:
+            raise ValueError(
+                "cannot attach an inbox for an empty handle — a seat with "
+                "no handle is not routable (see crewlet.queue.topics)"
+            )
         if agent.handle in self._subscribed_inboxes:
-            return
+            raise RuntimeError(
+                f"inbox for seat {agent.handle!r} is already attached at "
+                f"epoch {self._subscribed_inboxes[agent.handle]}; attaching "
+                f"twice would put two competing consumers on one seat"
+            )
+        started = time.monotonic()
         await self.event_queue.subscribe_batch(
             topic=agent_inbox_topic(agent.handle),
             group=agent_inbox_group(agent.handle),
@@ -2621,7 +2693,44 @@ class Engine:
             batch_key=conversation_key,
             options=self._inbox_batch_options,
         )
-        self._subscribed_inboxes.add(agent.handle)
+        self._subscribed_inboxes[agent.handle] = epoch
+        logger.info(
+            "inbox_attached",
+            seat=agent.handle,
+            epoch=epoch,
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
+
+    async def _detach_agent_inbox(self, handle: str) -> None:
+        """Stop consuming a seat's inbox, leaving the subscription.
+
+        Raises :class:`~crewlet.seat.host.SeatReleaseError` when the
+        detach cannot be proven, so the caller fails closed and keeps the
+        lease rather than handing a seat to a peer while this process may
+        still be consuming it.
+        """
+        from crewlet.seat.host import SeatReleaseError
+
+        epoch = self._subscribed_inboxes.pop(handle, None)
+        started = time.monotonic()
+        try:
+            await self.event_queue.detach(
+                agent_inbox_topic(handle), agent_inbox_group(handle)
+            )
+        except Exception as exc:
+            # Put it back: this process is still attached, and the
+            # bookkeeping must say so.
+            if epoch is not None:
+                self._subscribed_inboxes[handle] = epoch
+            raise SeatReleaseError(
+                f"could not detach the inbox consumer for seat {handle!r}: {exc}"
+            ) from exc
+        logger.info(
+            "inbox_detached",
+            seat=handle,
+            epoch=epoch,
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
 
     def _make_agent_handler(
         self, agent: AgentInstance
@@ -2645,6 +2754,38 @@ class Engine:
 
             if not events:
                 return
+            # Same-id dedupe FIRST, before any parking branch: at-least-
+            # once delivery — and the requeue machinery's own republish
+            # edges (a publish that timed out client-side but landed, a
+            # partial requeue followed by a partition NAK) — can put two
+            # copies of one event in the same drain. Identical ids mean
+            # identical payloads by construction, so dropping the extras
+            # is the one always-safe dedupe.
+            #
+            # It runs before the parking branches because those
+            # REPUBLISH: deduping afterwards meant every park pushed the
+            # duplicates back onto the topic, so copies multiplied across
+            # shed / sandbox / park cycles instead of holding steady, and
+            # were only ever collapsed by a drain that finally got
+            # through.
+            events = self._dedupe_inbox_events(agent, events)
+            if not events:
+                return
+            # Ownership. This node consumes the seat only while it holds
+            # the seat's lease; the branch is what stops a node that has
+            # lost it from starting work a peer may already be doing.
+            #
+            # ``DeferDelivery``, not a requeue: a requeue sends these to
+            # the topic tail while the successor replays its prefetched
+            # siblings from the head, which reorders the conversation.
+            # And not a NAK, which would spend the dead-letter budget on
+            # messages nothing is wrong with. Leave them unacked and stop
+            # consuming — the successor gets them in order, at
+            # redeliveryCount 0.
+            if not self._may_serve_seat(agent.handle):
+                from crewlet.queue.protocol import DeferDelivery
+
+                raise DeferDelivery(f"seat {agent.handle!r} is not owned here")
             # No turn engine yet (booted with zero LLM providers): PARK the
             # events instead of consuming-and-dropping them.  Pause the
             # topic first so the requeued copies buffer on the queue, then
@@ -2655,6 +2796,7 @@ class Engine:
                 await self.event_queue.pause_topic(
                     agent_inbox_topic(agent.handle),
                     agent_inbox_group(agent.handle),
+                    reason=_NO_TURN_ENGINE_PAUSE_REASON,
                 )
                 await self._requeue_inbox_events(agent, events)
                 return
@@ -2704,29 +2846,6 @@ class Engine:
                 self._requeue_tasks.add(requeue)
                 requeue.add_done_callback(self._requeue_tasks.discard)
                 return
-            # Same-id dedupe FIRST: at-least-once delivery — and the
-            # deferral / requeue machinery's own republish edges (a
-            # publish that timed out client-side but landed, a partial
-            # requeue followed by a partition NAK) — can put two copies
-            # of one event in the same drain.  Identical ids mean
-            # identical payloads by construction, so dropping the
-            # extras is the one always-safe dedupe; without it the
-            # copies would either double-count inside a digest or run
-            # two full turns via the degrade path.
-            seen_ids: set[Any] = set()
-            deduped: list[Event] = []
-            for event in events:
-                if event.id in seen_ids:
-                    logger.info(
-                        "inbox_duplicate_dropped",
-                        agent_handle=agent.handle,
-                        event_type=event.type,
-                        event_id=str(event.id),
-                    )
-                    continue
-                seen_ids.add(event.id)
-                deduped.append(event)
-            events = deduped
             try:
                 if len(events) > 1:
                     merged = await self._coalesce_inbox_events(agent, events)
@@ -3442,9 +3561,14 @@ class Engine:
     async def stop(self) -> None:
         """Graceful shutdown.
 
-        The order is critical: pause delivery *before* draining so no
-        new turns start while we wait for in-flight ones to finish.
+        The order is critical:
 
+        0. Release every owned seat, one at a time, through the
+           voluntary path — BEFORE pausing delivery. ``pause_delivery``
+           is one-way and node-wide, so past it this node serves nothing
+           while its heartbeat still renews every lease it holds: the
+           seats are blackholed for the whole drain, unservable here and
+           unclaimable anywhere else.
         1. Pause event delivery (no new messages dispatched to handlers)
         2. Stop work producers: deadline timers and the cron scheduler
            (no new auto-fired events), and flip the turn engine's
@@ -3499,9 +3623,31 @@ class Engine:
 
         logger.info("engine_stopping", org=self.org.name)
 
-        # 1. Pause event delivery FIRST so no new turns start while we
-        #    wait for in-flight ones to finish.  Publishes still work --
-        #    a turn that's already running can still emit TaskCompleted
+        # 0. Hand the seats back BEFORE pausing delivery.
+        #
+        # Order matters more than it looks. ``pause_delivery`` is
+        # one-way and node-wide: past it, this node consumes nothing —
+        # but its heartbeat keeps renewing every seat it holds, so those
+        # seats are blackholed for the entire drain. No peer can take
+        # them (the lease is live) and this node will not serve them
+        # (delivery is paused). Releasing first lets peers pick each seat
+        # up as it goes idle, which is the whole point of a graceful
+        # drain.
+        #
+        # ``begin_drain`` also drops this node's presence lease, so peers
+        # recompute their share over the nodes that will actually serve.
+        if self._seat_host is not None:
+            try:
+                await self._seat_host.begin_drain()
+                await _timed("seat_release", self._seat_host.release_all())
+                await _timed("seat_host", self._seat_host.stop())
+            except Exception as exc:
+                logger.error("seat_host_stop_failed", error=str(exc))
+            self._seat_host_started = False
+
+        # 1. Pause event delivery so no new turns start while we wait
+        #    for in-flight ones to finish.  Publishes still work -- a
+        #    turn that's already running can still emit TaskCompleted
         #    / TaskFailed before the queue is closed for good in step 9.
         logger.debug("pausing_event_delivery")
         try:
@@ -5715,30 +5861,35 @@ class Engine:
         )
 
     async def _ensure_turn_engine_after_providers(self) -> None:
-        """Build the turn engine + subscribe agent inboxes once the
-        first LLM provider lands post-activation.
+        """Build the turn engine and un-park the seats once the first LLM
+        provider lands post-activation.
 
         No-op when the engine already exists or no providers are
-        configured.  After building, subscribe inbox handlers for every
-        already-spawned agent so a role added *before* the provider PUT
-        also starts consuming its inbox (the role-add path only
-        subscribes when ``turn_engine`` is already present)."""
+        configured.
+
+        Iterates the seats this node OWNS, not the agent pool. The pool
+        retains terminated instances, so walking it re-subscribed
+        decommissioned seats — resurrecting a dead seat's consumer with a
+        handler closed over a TERMINATED instance. And the resume names
+        the park's own reason, so it cannot release a live sandbox hold
+        on a seat that is mid-run.
+        """
         if self.turn_engine is not None or not self._llm_providers:
             return
         self._build_turn_engine()
         logger.info("turn_engine_built_live")
-        for agent in self.agent_pool.agents:
-            await self._subscribe_agent_inbox(agent)
-            # Events that arrived while there was NO turn engine were parked
-            # (topic paused + requeued by the inbox handler) — now that
-            # turns can run, let them flow. No-op for never-paused topics.
+        held = self._seat_host.held_handles if self._seat_host is not None else ()
+        for handle in held:
+            # Events that arrived while there was NO turn engine were
+            # parked (subscription paused + requeued by the inbox
+            # handler) — now that turns can run, let them flow. No-op for
+            # never-paused subscriptions.
             await self.event_queue.resume_topic(
-                agent_inbox_topic(agent.handle), agent_inbox_group(agent.handle)
+                agent_inbox_topic(handle),
+                agent_inbox_group(handle),
+                reason=_NO_TURN_ENGINE_PAUSE_REASON,
             )
-            logger.info(
-                "agent_inbox_subscribed_live",
-                handle=agent.handle,
-            )
+            logger.info("agent_inbox_unparked_live", handle=handle)
         # The sandbox coordinator needs the (now-built) turn engine to
         # dispatch completion turns; start it on this late path too.
         if self._sandbox_coordinator is None:
@@ -5903,66 +6054,312 @@ class Engine:
         )
         return True
 
-    async def _spawn_role_live(self, role: Any, org: Any) -> None:
-        """Spawn one agent seat into the live engine (apply_config path).
+    # ── seat ownership ───────────────────────────────────────────────
 
-        Mirrors the boot cascade: AgentPool spawn, budget seed, inbox
-        subscription, then (post-Tier-B) the per-role MCP instances and
-        Slack app.  The Slack app is registered per-role here because
-        ``register_slack_apps_from_org(..., self.org)`` would iterate
-        the OLD org until ``_apply_org_diff`` swaps it at the end; the
-        broader Jira / GitHub refreshes that walk ``self.org`` run
-        after the swap.
+    def _build_seat_host(self) -> Any:
+        """Construct the placement host. Always — including single-node.
+
+        Backed by a real ``LeaseStore`` when a database is configured and
+        by a ``MemoryLeaseStore`` otherwise, so the single-node case is
+        the *degenerate* case of the fleet case rather than a second code
+        path. Every seat is then established through one sequence, and
+        the ordering bug that lived in the live-add path cannot come back
+        by only fixing boot.
+
+        A memory-backed store is private to this process, so every node
+        using one believes it owns the whole company. That is correct for
+        one node and catastrophic for two, which is why it is said out
+        loud at boot rather than left as a debug line.
         """
-        agent = await self.agent_pool.spawn_role(
-            role, org, source="engine.apply_config"
+        from crewlet.config import resolve_node_incarnation
+        from crewlet.db.client import Database
+        from crewlet.db.leases import LeaseStore, MemoryLeaseStore
+        from crewlet.seat.host import SeatHost
+
+        bootstrap = getattr(self, "_bootstrap", None)
+        self._incarnation = resolve_node_incarnation(bootstrap)
+        if isinstance(self.storage, Database):
+            leases: Any = LeaseStore(self.storage)
+        else:
+            leases = MemoryLeaseStore()
+            logger.warning(
+                "seat_placement_is_process_local",
+                node=self._node_id,
+                hint=(
+                    "no database configured, so seat leases are held in "
+                    "this process only and it will claim every seat. "
+                    "Correct for a single node; running a second node "
+                    "against the same broker in this mode gives two "
+                    "processes the same agents. Configure "
+                    "providers.database.dsn to run a fleet."
+                ),
+            )
+        return SeatHost(
+            leases=leases,
+            owner=self._incarnation,
+            node_id=self._node_id,
+            seats=self._agent_seat_handles,
+            on_acquire=self._acquire_seat,
+            on_release=self._release_seat,
         )
-        self._seed_seat_budget(role, org)
 
-        if self.turn_engine is not None:
-            await self._subscribe_agent_inbox(agent)
-        logger.info("agent_spawned", agent_id=agent.id_str, role=role.name)
+    def _agent_seat_handles(self) -> list[str]:
+        """Every agent seat in the ACTIVE org, read fresh each sweep.
 
-        # Spawn per-role MCP instances (atlassian / per-agent slack /
-        # etc.).  ``_start_mcp_servers`` only fires at first
-        # activation; for roles added live via ``apply_config`` we
-        # mirror the per-role spawn loop so the agent's tools are
-        # available on its first turn.  Guard on ``_tier_b_done`` so
-        # the first-activation path doesn't double-spawn.
+        A snapshot taken at construction would keep claiming seats a live
+        config apply removed, and miss the ones it added.
+        """
+        return [r.get_handle() for r in self.org.all_roles() if not r.is_human]
+
+    async def _ensure_seat_subscriptions(self) -> None:
+        """Make every seat's inbox subscription exist, owner or not.
+
+        The invariant an unowned seat rests on: a durable subscription
+        retains what is published to it, so mail that lands during a
+        lease gap, a claim ramp, or a full fleet restart is held rather
+        than dropped on the floor — no dead letter, no producer error,
+        nothing to alert on.
+
+        Behind the ``seat-subscriptions`` singleton lease, because this
+        only needs doing once per company and there is no reason for
+        every node to walk every seat at every boot.
+        """
+        from crewlet.db.leases import worker_resource
+
+        handles = self._agent_seat_handles()
+        if not handles:
+            return
+        lease = None
+        if self._seat_host is not None:
+            with contextlib.suppress(Exception):
+                lease = await self._seat_host.leases.try_acquire(
+                    worker_resource("seat-subscriptions"),
+                    owner=self._incarnation,
+                    ttl_seconds=60.0,
+                    gated=False,
+                )
+            if lease is None:
+                logger.debug("seat_subscriptions_held_elsewhere")
+                return
+        created = 0
+        for handle in handles:
+            try:
+                if await self.event_queue.ensure_subscription(
+                    agent_inbox_topic(handle), agent_inbox_group(handle)
+                ):
+                    created += 1
+            except Exception:
+                logger.exception("seat_subscription_ensure_failed", seat=handle)
+        logger.info("seat_subscriptions_ensured", seats=len(handles), created=created)
+
+    async def _acquire_seat(self, handle: str, lease: Any) -> None:
+        """Establish a seat this node has just claimed, consumer LAST.
+
+        The ordering is the whole method. A seat is *established* — its
+        instance exists, its budget cap is seeded, its per-role MCP
+        children are up, its interrupted sandbox run is recovered — and
+        only then does it start receiving work. Attaching the consumer
+        first means the seat can win a delivery and run its first turn
+        with an empty tool surface, which is exactly what
+        ``_spawn_role_live`` used to do (subscribe at 5823, MCP at 5833)
+        while boot did the reverse.
+
+        Raising is how a takeover reports failure: the host releases the
+        lease, backs the seat off, and a peer gets a clear run at it.
+        """
+        role = self.org.agent_seat_by_handle(handle)
+        if role is None:
+            raise RuntimeError(
+                f"claimed seat {handle!r} has no agent role in the active org"
+            )
+        agent = self.agent_pool.get_by_handle(handle)
+        if agent is None:
+            agent = await self.agent_pool.spawn_role(
+                role, self.org, source="seat.acquire"
+            )
+        self._seed_seat_budget(role, self.org)
+
         if self._tier_b_done:
             await self._respawn_role_mcp(role)
             self._register_role_slack_app(role)
             await self._register_role_mattermost_bot(role)
 
-    async def _decommission_role_live(self, role_name: str, old_org: Any) -> None:
-        """Tear down a role's agent instance + per-role MCP (apply_config path).
+        # Recover an interrupted detached sandbox run BEFORE the consumer
+        # attaches: the run may have left the seat paused and parked, and
+        # a delivery arriving first would start a turn beside it.
+        if self._sandbox_coordinator is not None:
+            await self._sandbox_coordinator.recover_seat(
+                handle, owner=self._incarnation, epoch=lease.epoch
+            )
 
-        Safe for human seats and never-spawned roles —
-        ``get_all_for_role`` simply returns no agents.
+        # LAST, and unconditionally. An owned seat is always attached:
+        # making the attachment depend on the turn engine existing left a
+        # seat owned in the lease table and deaf in the process, waiting
+        # on a resume pass that keyed off the pool rather than off
+        # ownership. A node booted with zero LLM providers parks its
+        # deliveries in the handler instead, under its own pause reason.
+        await self._subscribe_agent_inbox(agent, epoch=lease.epoch)
+        logger.info("seat_established", seat=handle, epoch=lease.epoch)
+
+    async def _release_seat(self, handle: str, lease: Any, reason: Any) -> None:
+        """Give a seat up. What that means depends entirely on ``reason``.
+
+        **Voluntary** (drain, role gone): quiesce so nothing new is
+        picked up, let the in-flight turn finish under a bounded wait,
+        then detach. The seat leaves cleanly and its work is not
+        duplicated.
+
+        **Fenced** (lease lost, acquire failed, posture): detach FIRST
+        and abandon whatever is running. A peer may already be serving
+        this seat, so waiting for a turn to finish only widens the
+        window in which two nodes run one agent — and nothing is
+        republished, which would hand that peer a second copy of work it
+        is already doing.
+
+        Either way this must be idempotent and tolerant of partial
+        state: a failed acquire releases the same seat, so the MCP
+        children may be half-spawned and the consumer may never have
+        attached.
         """
-        # Let whatever this seat is mid-way through finish before its
-        # tools, budget and inbox consumer are taken away.  Bounded, so a
-        # wedged turn cannot block the decommission indefinitely.
-        await self._drain_seat(role_name)
-        agents = self.agent_pool.get_all_for_role(role_name)
-        for agent in agents:
+        from crewlet.seat.host import ReleaseReason
+
+        fenced = bool(getattr(reason, "fenced", False))
+        if not fenced:
+            # Stop taking new work, then let the running turn finish.
+            with contextlib.suppress(Exception):
+                await self.event_queue.quiesce(
+                    agent_inbox_topic(handle), agent_inbox_group(handle)
+                )
+            if reason != ReleaseReason.ROLE_GONE:
+                await self._drain_seat_by_handle(handle)
+
+        # Detach before tearing anything else down: while the consumer is
+        # attached this node is still the seat's owner in practice.
+        # Raises SeatReleaseError if it cannot be proven, and the host
+        # then keeps the lease rather than handing on a seat we may still
+        # be consuming.
+        await self._detach_agent_inbox(handle)
+
+        if self._sandbox_coordinator is not None:
+            with contextlib.suppress(Exception):
+                await self._sandbox_coordinator.release_seat(handle)
+
+        role = self.org.agent_seat_by_handle(handle)
+        if role is not None:
+            with contextlib.suppress(Exception):
+                await self._stop_role_mcp(role)
+        agent = self.agent_pool.get_by_handle(handle)
+        if agent is not None:
             for issue_key in self.execution_tracker.get_issues(agent.id_str):
                 self.execution_tracker.untrack(issue_key)
-            # Tear down the inbox consumer + its broker-side subscription:
-            # a decommissioned seat must not keep a consumer bound to a
-            # terminated instance, nor accumulate undeliverable events on
-            # a durable subscription forever.
+            with contextlib.suppress(Exception):
+                await self.agent_pool.terminate(agent)
+        logger.info("seat_relinquished", seat=handle, reason=str(reason))
+
+    def _may_serve_seat(self, handle: str) -> bool:
+        """Whether a NEW turn may start on this seat, right now.
+
+        Freshness-based — see
+        :meth:`~crewlet.seat.host.SeatHost.may_start`. A membership check
+        would read a snapshot up to a full lease TTL stale, which is
+        exactly the window it exists to close.
+        """
+        if self._seat_host is None:
+            return True
+        return self._seat_host.may_start(handle) is not None
+
+    def _dedupe_inbox_events(
+        self, agent: AgentInstance, events: list[Event]
+    ) -> list[Event]:
+        """Drop repeat ids from one drain. See the handler for why."""
+        seen_ids: set[Any] = set()
+        deduped: list[Event] = []
+        for event in events:
+            if event.id in seen_ids:
+                logger.info(
+                    "inbox_duplicate_dropped",
+                    agent_handle=agent.handle,
+                    event_type=event.type,
+                    event_id=str(event.id),
+                )
+                continue
+            seen_ids.add(event.id)
+            deduped.append(event)
+        return deduped
+
+    async def _drain_seat_by_handle(self, handle: str) -> bool:
+        """Bounded wait for a seat's in-flight turn, keyed by HANDLE.
+
+        ``_drain_seat`` keys by role name because every config-apply
+        primitive does; the seat host keys by handle because that is what
+        a lease names. One mapping, in one place, rather than each caller
+        guessing.
+        """
+        role = self.org.agent_seat_by_handle(handle)
+        if role is None:
+            return True
+        return await self._drain_seat(role.name)
+
+    async def _spawn_role_live(self, role: Any, org: Any) -> None:
+        """Establish one agent seat into the live engine (apply_config path).
+
+        Delegates the seat itself to the placement host so a live-added
+        role goes through exactly the same establish-then-attach sequence
+        as a takeover — this path used to invert it, subscribing the
+        inbox before spawning the per-role MCP children.
+
+        Without a claim the seat is simply not this node's to run: the
+        sweep will pick it up here or a peer will.
+        """
+        self._seed_seat_budget(role, org)
+        logger.info("seat_added_to_org", role=role.name, handle=role.get_handle())
+
+    async def _decommission_role_live(self, role_name: str, old_org: Any) -> None:
+        """Retire a role: release the seat here, then delete its inbox.
+
+        Two halves with different scopes. **Releasing the seat** is local
+        and only this node can do it — through the ordinary voluntary
+        path, so the teardown sequence is the same one every other
+        release uses. **Deleting the subscription** is fleet-wide and
+        must happen exactly once, after the seat is released and no node
+        will re-claim it; it goes through the admin API, which needs no
+        local consumer, so it does not depend on which node ran the seat.
+
+        Safe for human seats and never-spawned roles.
+        """
+        from crewlet.seat.host import ReleaseReason
+
+        old_role = old_org.get_role(role_name)
+        handle = old_role.get_handle() if old_role is not None else ""
+
+        if handle and self._seat_host is not None:
+            # Bounded drain first (the role still exists for a moment
+            # longer), then the standard release.
+            await self._drain_seat(role_name)
+            await self._seat_host.release(handle, ReleaseReason.ROLE_GONE)
+        else:
+            await self._drain_seat(role_name)
+            for agent in self.agent_pool.get_all_for_role(role_name):
+                for issue_key in self.execution_tracker.get_issues(agent.id_str):
+                    self.execution_tracker.untrack(issue_key)
+                self._subscribed_inboxes.pop(agent.handle, None)
+                await self.agent_pool.terminate(agent)
+                logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)
+
+        if handle:
+            # Destructive, and deliberately so: a decommissioned seat's
+            # inbox must not accumulate undeliverable events forever.
             try:
                 await self.event_queue.delete_subscription(
-                    agent_inbox_topic(agent.handle),
-                    agent_inbox_group(agent.handle),
+                    agent_inbox_topic(handle), agent_inbox_group(handle)
                 )
             except Exception:
-                logger.exception("inbox_unsubscribe_failed", handle=agent.handle)
-            self._subscribed_inboxes.discard(agent.handle)
-            self._purge_cli_llm_workspaces(agent.handle)
-            await self.agent_pool.terminate(agent)
-            logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)
+                logger.exception("inbox_unsubscribe_failed", handle=handle)
+            self._subscribed_inboxes.discard(handle)
+            # Keyed on the handle, not on a live instance: under seat
+            # ownership the release above already terminated it, and on a
+            # node that never held the seat there was never one to ask.
+            self._purge_cli_llm_workspaces(handle)
 
         # Release the seat's Mattermost bot: its websocket, its HTTP
         # client and its handle-registry entries.  Unlike every other
@@ -5979,10 +6376,8 @@ class Engine:
         # ``_role_mcp_tools`` entry that a later role reusing the name
         # would surface.  Guard on the spawn cascade — before it runs
         # there are no per-role instances to stop.
-        if self._tier_b_done:
-            old_role = old_org.get_role(role_name)
-            if old_role is not None:
-                await self._stop_role_mcp(old_role)
+        if self._tier_b_done and old_role is not None:
+            await self._stop_role_mcp(old_role)
         self._role_mcp_tools.pop(role_name, None)
 
     async def _unregister_role_mattermost_bot(
@@ -6176,6 +6571,16 @@ class Engine:
         # reconcile them against it once, here — rather than per spawned
         # instance, which skipped every seat this node does not run.
         self._reseed_seat_budgets(self.org)
+
+        # Placement reconciles against the NEW org: added seats become
+        # claimable, removed ones are released. It has to run after the
+        # swap because the host reads its seat list from ``self.org``.
+        if self._tier_b_done:
+            if self._seat_host is None:
+                self._seat_host = self._build_seat_host()
+            await self._ensure_seat_subscriptions()
+            with contextlib.suppress(Exception):
+                await self._seat_host.sweep()
 
         # Org config reaches agents directly through the
         # in-memory Organization (rendered into the Plan prompt by

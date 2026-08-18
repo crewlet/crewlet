@@ -60,6 +60,17 @@ STARTED_TOPIC = "crewlet.events.sandbox_run_started"
 COMPLETIONS_TOPIC = "crewlet.events.sandbox_run_completed"
 _GROUP = "sandbox-coordinator"
 
+# The reason this subsystem holds a seat's inbox paused.
+#
+# Its OWN reason, not the default. Pause holds are reason-scoped
+# precisely so one subsystem cannot un-gate another's, and three
+# independent things gate an agent inbox: this busy gate, the
+# config-divergence shed, and the no-turn-engine park. Sharing the
+# default with the park meant the late turn-engine build's blanket
+# resume released a live sandbox hold — delivering messages to an agent
+# whose turn is suspended mid-run.
+_SANDBOX_PAUSE_REASON = "sandbox"
+
 
 class SandboxCoordinator:
     """Drives the engine-side detached sandbox lifecycle."""
@@ -129,7 +140,9 @@ class SandboxCoordinator:
         if not handle:
             return
         await self._event_queue.pause_topic(
-            agent_inbox_topic(handle), agent_inbox_group(handle)
+            agent_inbox_topic(handle),
+            agent_inbox_group(handle),
+            reason=_SANDBOX_PAUSE_REASON,
         )
         agent = self._get_agent(handle)
         if agent is not None and agent.state == AgentState.IDLE:
@@ -186,6 +199,7 @@ class SandboxCoordinator:
             await self._event_queue.resume_topic(
                 agent_inbox_topic(run.agent_handle),
                 agent_inbox_group(run.agent_handle),
+                reason=_SANDBOX_PAUSE_REASON,
             )
             return
 
@@ -212,6 +226,7 @@ class SandboxCoordinator:
             await self._event_queue.resume_topic(
                 agent_inbox_topic(run.agent_handle),
                 agent_inbox_group(run.agent_handle),
+                reason=_SANDBOX_PAUSE_REASON,
             )
             await self._handle_clarification(agent, run, result, event)
             return
@@ -400,6 +415,7 @@ class SandboxCoordinator:
             await self._event_queue.resume_topic(
                 agent_inbox_topic(run.agent_handle),
                 agent_inbox_group(run.agent_handle),
+                reason=_SANDBOX_PAUSE_REASON,
             )
             return
         # Free the agent only NOW, immediately before the resume dispatch, so
@@ -448,6 +464,7 @@ class SandboxCoordinator:
             await self._event_queue.resume_topic(
                 agent_inbox_topic(run.agent_handle),
                 agent_inbox_group(run.agent_handle),
+                reason=_SANDBOX_PAUSE_REASON,
             )
 
     async def _dispatch_resume_execute(
@@ -516,22 +533,30 @@ class SandboxCoordinator:
 
     # -- restart recovery --------------------------------------------------
 
-    async def recover(self) -> None:
-        """Re-attach to still-active runs on boot so a restart never orphans.
+    async def recover_seat(self, handle: str, *, owner: str, epoch: int) -> None:
+        """Re-attach to a seat's still-active runs as this node claims it.
 
-        Running jobs re-pause their agents' inboxes and re-enter the busy
+        Per-seat, and inside the acquire hook, because a fleet-wide boot
+        scan is wrong twice over: every node would re-pause, re-park and
+        reap runs belonging to seats its peers own, and a node that
+        claims a seat later — a takeover, not a boot — would never
+        recover it at all.
+
+        Running jobs re-pause this seat's inbox and re-enter the busy
         state; the poll waiter then drives them to completion.
-        Clarification / re-seed runs are left for their answer — their boxes
-        are paused, and the waiter's reaper expires them on TTL.
+        Clarification / re-seed runs are left for their answer — their
+        boxes are paused, and the waiter's reaper expires them on TTL.
 
-        A ``resumed`` row can only mean the previous engine died between
-        claiming a completion and settling it. Nothing will ever pick it up
-        again — the at-most-once claim already flipped, so the redelivered
-        completion is refused — and its box is sitting paused. Reap it here:
-        this is the one moment the row is unambiguously abandoned (no live
-        process holds it), so it is safe to do what no TTL would.
+        A ``resumed`` row means the engine that owned this seat died
+        between claiming a completion and settling it. Nothing will ever
+        pick it up — the at-most-once claim already flipped, so a
+        redelivered completion is refused — and its box sits paused.
+        Reaping it is safe HERE and only here: taking the seat's lease is
+        what proves no live process holds the row. A boot-time scan
+        proved nothing of the sort, because a peer could be mid-resume on
+        a seat this node never owned.
         """
-        active = await self._pending_store.list_active()
+        active = await self._pending_store.list_active_for_seat(handle)
         if not active:
             return
         recovered = 0
@@ -543,20 +568,36 @@ class SandboxCoordinator:
                 continue
             if run.status != "running":
                 continue
+            await self._pending_store.claim_ownership(
+                run.turn_id, owner=owner, epoch=epoch
+            )
             await self._event_queue.pause_topic(
                 agent_inbox_topic(run.agent_handle),
                 agent_inbox_group(run.agent_handle),
+                reason=_SANDBOX_PAUSE_REASON,
             )
             agent = self._get_agent(run.agent_handle)
             if agent is not None:
                 agent.await_sandbox(task_id=run.turn_id)
             recovered += 1
         logger.info(
-            "sandbox_runs_recovered",
+            "sandbox_seat_recovered",
+            seat=handle,
+            epoch=epoch,
             running=recovered,
             abandoned=abandoned,
             active=len(active),
         )
+
+    async def release_seat(self, handle: str) -> None:
+        """Stop tracking a seat's runs; the row is the durable state.
+
+        Nothing is torn down: a detached run belongs to the
+        ``pending_sandbox_run`` row, not to this process, and the seat's
+        next owner recovers it through :meth:`recover_seat`. Reaping the
+        box here would destroy work the successor is about to resume.
+        """
+        logger.debug("sandbox_seat_released", seat=handle)
 
     async def _reap_abandoned_tail(self, run: PendingSandboxRun) -> None:
         """Tear down a ``resumed`` run left behind by a dead engine."""

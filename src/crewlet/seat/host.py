@@ -409,6 +409,19 @@ class SeatHost:
         await self._release_node_presence()
         logger.info("seat_host_draining", node=self.node_id, held=len(self._held))
 
+    async def resume_claiming(self) -> None:
+        """Undo :meth:`begin_drain`: claim again, and count again.
+
+        The posture path needs this — a node that shed its seats on
+        divergence and then converged must rejoin the fleet rather than
+        sit out until it restarts.
+        """
+        if not self._draining:
+            return
+        self._draining = False
+        await self._renew_node_presence()
+        logger.info("seat_host_resumed", node=self.node_id)
+
     async def stop(self) -> None:
         if not self._running:
             return

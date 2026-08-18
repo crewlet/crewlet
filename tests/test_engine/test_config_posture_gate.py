@@ -26,6 +26,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+import pytest
+
 from crewlet.db.config_plane import Posture
 from crewlet.engine import Engine  # noqa: E402
 from crewlet.org.models import Organization, OrgUnit, Role  # noqa: E402
@@ -141,61 +143,95 @@ async def test_unset_posture_admits() -> None:
 # ── the pause is reason-scoped ───────────────────────────────────────
 
 
-async def test_shedding_pauses_inboxes_under_the_config_reason() -> None:
+async def test_shedding_releases_the_nodes_seats() -> None:
+    """A diverged node must stop HOLDING its seats, not merely stop
+    reading them.
+
+    Pausing alone leaves the node owning seats it refuses to serve: it
+    reserves fleet capacity for itself, no peer can take the work, and
+    the seats stay dark until it converges. Releasing hands them to
+    nodes that can actually apply the current epoch.
+    """
     engine, queue = await _engine_with_queue()
     try:
-        await engine._apply_posture(Posture.SHED)
         handles = [a.handle for a in engine.agent_pool.agents]
         assert handles
+        assert set(engine._seat_host.held_handles) == set(handles)
+
+        await engine._apply_posture(Posture.SHED)
+
+        assert engine._seat_host.held_handles == ()
         for handle in handles:
-            assert queue.pause_holds(
-                agent_inbox_topic(handle), agent_inbox_group(handle)
-            ) == {"config"}
-        assert queue.pause_holds("crewlet.notifications.inbound", "notifications") == {
-            "config"
-        }
+            # Detached, not merely paused: nothing of this seat is left
+            # in this process for a peer to collide with.
+            assert (agent_inbox_topic(handle), agent_inbox_group(handle)) not in (
+                queue.attachments()
+            )
     finally:
         await engine.stop()
         await queue.stop()
 
 
-async def test_converging_does_not_release_a_sandbox_hold() -> None:
+async def test_shedding_still_pauses_the_ingress_topic() -> None:
+    """``crewlet.notifications.inbound`` belongs to no seat, so releasing
+    seats does not cover it — a shedding node must stop taking inbound
+    webhooks too, and pausing leaves them on the broker for a peer."""
+    engine, queue = await _engine_with_queue()
+    try:
+        await engine._apply_posture(Posture.SHED)
+        assert queue.pause_holds("crewlet.notifications.inbound", "notifications") == {
+            "config"
+        }
+        await engine._apply_posture(Posture.SERVE)
+        assert queue.pause_holds("crewlet.notifications.inbound", "notifications") == (
+            set()
+        )
+    finally:
+        await engine.stop()
+        await queue.stop()
+
+
+async def test_a_converged_node_claims_its_seats_again() -> None:
+    """Shedding is not a one-way door: a node that diverged and then
+    caught up has to rejoin the fleet, not sit out until it restarts."""
+    engine, queue = await _engine_with_queue()
+    try:
+        before = set(engine._seat_host.held_handles)
+        await engine._apply_posture(Posture.SHED)
+        assert engine._seat_host.held_handles == ()
+
+        await engine._apply_posture(Posture.SERVE)
+        await engine._seat_host.sweep()
+        assert set(engine._seat_host.held_handles) == before
+    finally:
+        await engine.stop()
+        await queue.stop()
+
+
+async def test_one_subsystem_cannot_release_anothers_hold() -> None:
     """The reason scoping, stated as the failure it prevents.
 
-    A seat parked on a detached sandbox run has its inbox paused by the
-    coordinator.  If the config shed and the sandbox gate shared one
-    hold, a node converging back to SERVE would resume that seat's inbox
-    mid-run — delivering messages to an agent whose turn is suspended.
+    Three independent things gate an agent inbox: the sandbox busy gate,
+    the config-divergence shed, and the no-turn-engine park. With one
+    flat hold, a completing sandbox run would un-gate a node serving a
+    stale company — and the late turn-engine build's blanket resume
+    would release a live sandbox hold, delivering messages to an agent
+    whose turn is suspended mid-run.
     """
     engine, queue = await _engine_with_queue()
     try:
         handle = engine.agent_pool.agents[0].handle
         topic, group = agent_inbox_topic(handle), agent_inbox_group(handle)
+
         await queue.pause_topic(topic, group, reason="sandbox")
+        await queue.pause_topic(topic, group, reason="no_turn_engine")
+        assert queue.pause_holds(topic, group) == {"sandbox", "no_turn_engine"}
 
-        await engine._apply_posture(Posture.SHED)
-        assert queue.pause_holds(topic, group) == {"sandbox", "config"}
-
-        await engine._apply_posture(Posture.SERVE)
-        # Config released its hold; the sandbox's survives.
+        await queue.resume_topic(topic, group, reason="no_turn_engine")
         assert queue.pause_holds(topic, group) == {"sandbox"}
-    finally:
-        await engine.stop()
-        await queue.stop()
-
-
-async def test_a_completing_sandbox_does_not_un_gate_a_diverged_node() -> None:
-    """The mirror image: the sandbox releasing its own hold must not
-    hand work to a node that cannot apply the current config."""
-    engine, queue = await _engine_with_queue()
-    try:
-        handle = engine.agent_pool.agents[0].handle
-        topic, group = agent_inbox_topic(handle), agent_inbox_group(handle)
-        await queue.pause_topic(topic, group, reason="sandbox")
-        await engine._apply_posture(Posture.SHED)
 
         await queue.resume_topic(topic, group, reason="sandbox")
-        assert queue.pause_holds(topic, group) == {"config"}
+        assert queue.pause_holds(topic, group) == set()
     finally:
         await engine.stop()
         await queue.stop()
@@ -225,21 +261,21 @@ async def test_posture_changes_within_a_serving_band_do_not_churn() -> None:
 # ── refusal is republish-then-ack ────────────────────────────────────
 
 
-async def test_a_shed_inbox_delivery_is_requeued_not_dropped() -> None:
-    """A delivery that arrives on a shedding node goes back on the topic.
+async def test_a_shed_inbox_delivery_is_deferred_not_dropped() -> None:
+    """A delivery arriving on a node that has shed its seats is DEFERRED.
 
-    Not NAK'd (three redeliveries at 1s would dead-letter it), and above
-    all not consumed-and-dropped — the copy has to survive for a node
-    that can read it.  This branch catches deliveries already in flight
-    when the pause landed, which is why both have to work.
+    Not acked (that claims work this node will not do), not NAK'd (three
+    redeliveries at 1 s would dead-letter a healthy event), and not
+    republished (that sends it to the topic tail while its prefetched
+    siblings replay from the head, reordering the conversation). Left
+    unacked, so the seat's next owner gets it in order.
     """
     from crewlet.events.types import ExternalNotification
+    from crewlet.queue.protocol import DeferDelivery
 
     engine, queue = await _engine_with_queue()
     try:
         agent = engine.agent_pool.agents[0]
-        topic = agent_inbox_topic(agent.handle)
-        group = agent_inbox_group(agent.handle)
         handler = engine._make_agent_handler(agent)
         await engine._apply_posture(Posture.SHED)
 
@@ -249,10 +285,8 @@ async def test_a_shed_inbox_delivery_is_requeued_not_dropped() -> None:
             sender="U123",
             content="hello",
         )
-        await handler([event])
-
-        # Retained by the paused subscription rather than handled or lost.
-        assert [e.id for e in queue.backlog(topic, group)] == [event.id]
+        with pytest.raises(DeferDelivery):
+            await handler([event])
     finally:
         await engine.stop()
         await queue.stop()

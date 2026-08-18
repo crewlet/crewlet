@@ -78,6 +78,20 @@ class PendingSandboxRun:
     budget_remaining: int = 0
     delegation_depth: int = 0
     delegation_chain: list[str] = field(default_factory=list)
+    owner: str = ""
+    """Process incarnation of the node that owns this run's seat.
+
+    A run outlives the process that started it — the box is real and
+    billed, the row is the durable state — and its seat can move between
+    nodes while the coding agent is still working. Empty means unclaimed:
+    what an in-flight run looks like the instant before its seat's new
+    owner recovers it."""
+    owner_epoch: int = 0
+    """The seat lease's epoch at the moment of the claim: the fencing
+    token. Every mutation on a live run carries ``WHERE owner_epoch =
+    $mine``, so a node whose lease moved cannot write even if it has not
+    noticed yet — the ownership check is an optimization, the fence is
+    the guarantee."""
     pause_ttl_seconds: float = 0.0
     paused_at: datetime | None = None
     """When this run's sandbox was paused, or ``None`` if it isn't.
@@ -120,6 +134,8 @@ def _row_to_run(row: dict[str, Any]) -> PendingSandboxRun:
         coding_agent=row.get("coding_agent", ""),
         command_id=row.get("command_id", ""),
         status=row.get("status", "running"),
+        owner=row.get("owner") or "",
+        owner_epoch=int(row.get("owner_epoch") or 0),
         plan=decode_jsonb_dict(row.get("plan")),
         task_description=row.get("task_description", ""),
         success_criteria=decode_jsonb_str_list(row.get("success_criteria")),
@@ -176,7 +192,13 @@ class PendingSandboxRunStore(Protocol):
         """Flip ``running`` → ``awaiting_clarification`` (agent goes free)."""
         ...
 
-    async def set_status(self, turn_id: str, status: str) -> None:
+    async def claim_ownership(self, turn_id: str, *, owner: str, epoch: int) -> bool:
+        """Take a run for this node at ``epoch``; monotonic in the epoch."""
+        ...
+
+    async def set_status(
+        self, turn_id: str, status: str, *, epoch: int | None = None
+    ) -> bool:
         """Set a terminal / re-seed status (done | failed | reseed)."""
         ...
 
@@ -222,7 +244,17 @@ class PendingSandboxRunStore(Protocol):
         ...
 
     async def list_active(self) -> list[PendingSandboxRun]:
-        """Rows still awaiting their tail (for startup recovery + the poll)."""
+        """Rows still awaiting their tail (for the poll waiter)."""
+        ...
+
+    async def list_active_for_seat(self, agent_handle: str) -> list[PendingSandboxRun]:
+        """Active rows for ONE seat, for its owner's recovery pass.
+
+        Recovery is per-seat rather than fleet-wide: a node may only
+        touch runs for seats it holds. A boot-time scan of every active
+        row would have each node re-pausing, re-parking and reaping runs
+        belonging to seats its peers own.
+        """
         ...
 
     async def find_awaiting_by_conversation(
@@ -356,13 +388,73 @@ class PostgresPendingSandboxRunStore:
         )
         return row is not None
 
-    async def set_status(self, turn_id: str, status: str) -> None:
-        await self._db.execute(
-            "UPDATE pending_sandbox_run SET status = $2, updated_at = now() "
-            "WHERE turn_id = $1",
+    async def claim_ownership(self, turn_id: str, *, owner: str, epoch: int) -> bool:
+        """Take a run for this node at ``epoch``. Monotonic in the epoch.
+
+        Refuses to move a run BACKWARDS: a node whose stale view still
+        names it the owner cannot reclaim a run whose seat has since gone
+        to a peer at a higher epoch. Adopting an unclaimed row (``owner``
+        NULL, from before ownership existed) is allowed and is how
+        existing runs migrate.
+        """
+        row = await self._db.fetchrow(
+            """
+            UPDATE pending_sandbox_run
+            SET owner = $2, owner_epoch = $3, updated_at = now()
+            WHERE turn_id = $1
+              AND (owner_epoch IS NULL OR owner_epoch <= $3)
+            RETURNING turn_id
+            """,
+            turn_id,
+            owner,
+            int(epoch),
+        )
+        return row is not None
+
+    async def set_status(
+        self, turn_id: str, status: str, *, epoch: int | None = None
+    ) -> bool:
+        """Move a run to ``status``; ``False`` when the fence refused.
+
+        ``epoch`` is the caller's seat-lease epoch. Passing it makes the
+        write conditional on this node still owning the run, which is
+        what stops a node that lost the seat from settling a run its
+        successor is already resuming. ``None`` skips the fence, for the
+        paths that legitimately have no seat (the waiter's own reaping of
+        a run whose box vanished).
+        """
+        if epoch is None:
+            await self._db.execute(
+                "UPDATE pending_sandbox_run SET status = $2, updated_at = now() "
+                "WHERE turn_id = $1",
+                turn_id,
+                status,
+            )
+            return True
+        row = await self._db.fetchrow(
+            """
+            UPDATE pending_sandbox_run
+            SET status = $2, updated_at = now()
+            WHERE turn_id = $1
+              AND (owner_epoch IS NULL OR owner_epoch = $3)
+            RETURNING turn_id
+            """,
             turn_id,
             status,
+            int(epoch),
         )
+        if row is None:
+            logger.warning(
+                "pending_run_write_fenced",
+                turn_id=turn_id,
+                status=status,
+                epoch=epoch,
+                hint=(
+                    "this run's seat has moved to another node; the write "
+                    "was refused rather than racing its new owner"
+                ),
+            )
+        return row is not None
 
     async def attach_sandbox(
         self,
@@ -415,6 +507,17 @@ class PostgresPendingSandboxRunStore:
             "WHERE status IN ('running', 'awaiting_clarification', 'reseed', "
             "'resumed') "
             "ORDER BY created_at ASC"
+        )
+        return [_row_to_run(r) for r in rows]
+
+    async def list_active_for_seat(self, agent_handle: str) -> list[PendingSandboxRun]:
+        rows = await self._db.execute(
+            "SELECT * FROM pending_sandbox_run "
+            "WHERE agent_handle = $1 "
+            "AND status IN ('running', 'awaiting_clarification', 'reseed', "
+            "'resumed') "
+            "ORDER BY created_at ASC",
+            agent_handle,
         )
         return [_row_to_run(r) for r in rows]
 
@@ -486,10 +589,31 @@ class MemoryPendingSandboxRunStore:
             run.session_id = session_id
         return True
 
-    async def set_status(self, turn_id: str, status: str) -> None:
+    async def claim_ownership(self, turn_id: str, *, owner: str, epoch: int) -> bool:
         run = self._runs.get(turn_id)
-        if run is not None:
-            run.status = status
+        if run is None or run.owner_epoch > int(epoch):
+            return False
+        run.owner = owner
+        run.owner_epoch = int(epoch)
+        return True
+
+    async def set_status(
+        self, turn_id: str, status: str, *, epoch: int | None = None
+    ) -> bool:
+        run = self._runs.get(turn_id)
+        if run is None:
+            return False
+        if epoch is not None and run.owner_epoch and run.owner_epoch != int(epoch):
+            logger.warning(
+                "pending_run_write_fenced",
+                turn_id=turn_id,
+                status=status,
+                epoch=epoch,
+                owner_epoch=run.owner_epoch,
+            )
+            return False
+        run.status = status
+        return True
 
     async def attach_sandbox(
         self,
@@ -527,6 +651,13 @@ class MemoryPendingSandboxRunStore:
 
     async def list_active(self) -> list[PendingSandboxRun]:
         return [r for r in self._runs.values() if r.status in _ACTIVE]
+
+    async def list_active_for_seat(self, agent_handle: str) -> list[PendingSandboxRun]:
+        return [
+            r
+            for r in self._runs.values()
+            if r.status in _ACTIVE and r.agent_handle == agent_handle
+        ]
 
     async def find_awaiting_by_conversation(
         self, conversation_key: str

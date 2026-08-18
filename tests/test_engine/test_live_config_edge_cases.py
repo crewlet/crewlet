@@ -19,15 +19,22 @@ from crewlet.queue.memory import MemoryEventQueue  # noqa: E402
 
 
 async def _engine_with_started_queue(roles: list[dict]):
-    """Engine whose event queue is started — the org-diff add/remove
-    branches publish AgentSpawned / RoleUpdated, which a stopped
-    MemoryEventQueue rejects."""
+    """A STARTED engine on a started queue.
+
+    Both halves matter. The org-diff add/remove branches publish
+    AgentSpawned / RoleUpdated, which a stopped MemoryEventQueue
+    rejects — and seats are established by the placement host, which
+    only runs on a started engine. An unstarted engine owns no seats, so
+    a live role add correctly spawns nothing there.
+    """
     eq = MemoryEventQueue()
     await eq.start()
-    return await make_engine(
+    engine = await make_engine(
         company=make_company(name="Acme", roles=roles),
         event_queue=eq,
     )
+    await engine.start()
+    return engine
 
 
 # ── _dispatch_org_diff covers every role field ─────────────────────────
@@ -572,7 +579,7 @@ async def test_live_role_add_goes_through_agent_pool() -> None:
     spy.assert_awaited_once()
     # ``source`` is what the audit trail keys off to distinguish
     # boot-time spawns from live additions.
-    assert spy.await_args.kwargs["source"] == "engine.apply_config"
+    assert spy.await_args.kwargs["source"] == "seat.acquire"
 
 
 # Jira and GitHub handle refreshes run concurrently

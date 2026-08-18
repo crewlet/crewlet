@@ -225,7 +225,12 @@ async def test_completion_keeps_agent_busy_until_resume_dispatch() -> None:
     await queue.start()
     agent = _mk_agent()
     agent.await_sandbox(task_id="t-1")
-    await queue.pause_topic(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+    # The coordinator's OWN hold reason — pause holds are reason-scoped
+    # so the sandbox gate, the config shed and the no-turn-engine park
+    # cannot release each other's.
+    await queue.pause_topic(
+        agent_inbox_topic("eng"), agent_inbox_group("eng"), reason="sandbox"
+    )
     store = MemoryPendingSandboxRunStore()
     await store.create(_run())
     manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
@@ -627,7 +632,7 @@ async def test_recover_repauses_running_agents() -> None:
         turn_engine=_TurnEngineStub(),
     )
 
-    await coord.recover()
+    await coord.recover_seat("eng", owner="node-a:1", epoch=1)
 
     # The running job re-pauses the agent's inbox and re-enters busy.
     assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
@@ -658,7 +663,7 @@ async def test_recover_reaps_a_tail_abandoned_by_a_dead_engine() -> None:
         turn_engine=_TurnEngineStub(),
     )
 
-    await coord.recover()
+    await coord.recover_seat("eng", owner="node-a:1", epoch=1)
 
     assert provider.sandboxes[0].closed is True
     row = await store.get("t-dead")

@@ -17,9 +17,14 @@ from crewlet.config import (
     CompanyConfig,
     DatabaseConfig,
     KnowledgeStoreConfig,
+    LLMProviderConfig,
+    ProvidersConfig,
     QueueConfig,
 )
 from crewlet.engine import Engine
+from crewlet.events.types import Event
+from crewlet.queue.memory import MemoryEventQueue
+from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
 
 
 def _make_bootstrap() -> BootstrapConfig:
@@ -153,55 +158,59 @@ async def test_provider_added_post_activation_builds_turn_engine(
 ) -> None:
     """Per-entity bootstrap: an empty stub activation boots with zero
     LLM providers (so ``start()`` cannot build the turn engine), then
-    ``PUT /config/llm-providers`` adds one.  The provider diff must
-    build the turn engine and subscribe agent inboxes -- otherwise
-    routed notifications sit unconsumed and the agent never takes a
-    turn.
+    ``PUT /config/llm-providers`` adds one.  The provider diff must build
+    the turn engine and let the parked seats flow -- otherwise routed
+    notifications sit unconsumed and the agent never takes a turn.
+
+    The seat's inbox is attached the moment the seat is CLAIMED, not
+    when the turn engine appears: an owned seat is always attached, and
+    a node with no turn engine parks its deliveries in the handler
+    instead. So what the late path owes is the un-park, under the park's
+    own reason -- resuming under the default would release a live
+    sandbox hold on a seat mid-run.
     """
-    from unittest.mock import AsyncMock as A
-    from unittest.mock import MagicMock
-
-    from crewlet.config import LLMProviderConfig, ProvidersConfig
-
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-for-construction")
     bootstrap = _make_bootstrap()
-    engine = Engine.from_bootstrap(bootstrap)
+    queue = MemoryEventQueue()
+    await queue.start()
+    engine = Engine.from_bootstrap(bootstrap, event_queue=queue)
 
-    # Simulate the post-``start()`` state of a stub bootstrap: the
-    # Tier-B spawn ran (so ``_tier_b_done``) but with zero providers,
-    # leaving the turn engine unbuilt.
-    await engine.apply_config(CompanyConfig(name="Acme AI"))
-    engine._tier_b_done = True
-    engine.event_queue = MagicMock()
-    engine.event_queue.subscribe_batch = A()
-    # The late path also resumes each inbox topic (events that arrived
-    # before the turn engine existed were parked via pause + requeue).
-    engine.event_queue.resume_topic = A()
+    # A company with a seat but NO providers: start() runs the Tier-B
+    # cascade, claims the seat and attaches it, and leaves the turn
+    # engine unbuilt.
+    await engine.apply_config(CompanyConfig(name="Acme AI", roles=[{"name": "CEO"}]))
+    await engine.start()
     assert engine.turn_engine is None
+    assert engine._seat_host.held_handles == ("ceo",)
+    assert (
+        agent_inbox_topic("ceo"),
+        agent_inbox_group("ceo"),
+    ) in queue.attachments()
 
-    # Seed an already-spawned agent to prove inbox subscription fires
-    # for the reverse-order (role-before-provider) case.
-    fake_agent = MagicMock()
-    fake_agent.handle = "agent-ceo"
-    engine.agent_pool._agents.append(fake_agent)
+    # A delivery arriving now is parked, under the park's own reason.
+    agent = engine.agent_pool.get_by_handle("ceo")
+    assert agent is not None
+    await engine._make_agent_handler(agent)([Event(type="task_assigned", source="t")])
+    assert queue.pause_holds(agent_inbox_topic("ceo"), agent_inbox_group("ceo")) == {
+        "no_turn_engine"
+    }
 
     await engine.apply_config(
         CompanyConfig(
             name="Acme AI",
+            roles=[{"name": "CEO"}],
             providers=ProvidersConfig(
                 llm={"default": LLMProviderConfig(model="gpt-4o-mini")}
             ),
         )
     )
 
-    # Turn engine now exists and the pre-existing agent's inbox is
-    # subscribed (batched, per-conversation delivery).
     assert engine.turn_engine is not None
-    subscribed_topics = [
-        call.kwargs.get("topic")
-        for call in engine.event_queue.subscribe_batch.await_args_list
-    ]
-    assert "crewlet.agent.agent-ceo.inbox" in subscribed_topics
+    assert queue.pause_holds(agent_inbox_topic("ceo"), agent_inbox_group("ceo")) == (
+        set()
+    )
+    await engine.stop()
+    await queue.stop()
 
 
 async def test_apply_config_scalars_change_is_live() -> None:
