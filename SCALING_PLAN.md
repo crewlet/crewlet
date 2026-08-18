@@ -793,6 +793,40 @@ mail and not the work. They will be implemented and reviewed together.
   with an epoch re-check inside it, so a heartbeat carrying a stale lease
   cannot tear down a claim a sweep made while it was awaiting.
 
+### 5.2a — Org-derived resolution — IN PROGRESS
+
+Split out of the revised 5.2 and shipped first, because it is not
+actually multi-node work. Six paths resolve a recipient through the live
+`AgentInstance` when all they need is the **org**, and that is a latent
+fragility today: a seat that exists but has not been spawned — during the
+boot cascade, after a failed `_spawn_role_live`, mid-config-apply — is
+invisible to routing that goes through the pool. Owner-only seats turn a
+latent fragility into a guaranteed one, which is how the review found it.
+
+The rule: **routing needs a handle and an agent id, both derivable from
+the org. The live instance is an execution detail and must stop being a
+routing one.**
+
+**Landed:** `HandleRegistry` resolves agent seats from the org, with the
+live instance attached when this process has one. `ResolvedParty` gains
+`is_local` (the execution question), `agent_id` (derived via
+`derive_agent_id(org.name, handle)`, so every process computes the same
+id with no database and no instance) and `inbox_topic`. `all_parties()`
+enumerates the **org** rather than the pool — the colleague surface
+builds its fuzzy-match corpus from it, and a missing colleague does not
+merely fail to match, it lets the match land on the wrong one. Pool-only
+construction (no org reference at all) still falls back to the pool.
+
+`agent is None` now has two causes and callers must not conflate them: a
+human seat, which never has an instance, and an agent seat that is not
+running here. `kind` distinguishes them; `is_local` answers the
+execution question.
+
+**Remaining in 5.2a:** the notification-ingress recipient resolution, the
+internal task routing in `events/subscriptions.py`, the scheduler's
+`_fire`, the A2A `request_channel` guard, and seeding budget caps for
+every org seat on every node.
+
 ### 5.2 — Seat ownership: inbox, takeover, and sandbox control (REVISED, one phase)
 
 Replaces the original 5.2, 5.3 and 5.6. They were three phases on paper
