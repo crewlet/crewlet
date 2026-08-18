@@ -432,6 +432,21 @@ class LiveState:
             agent.current_task = None
             agent.current_phase = None
             agent.current_iteration = 0
+            # A task that failed says so.  ``TaskFailed`` carries the
+            # error and nothing else recorded it, so a task that died for
+            # a reason the engine does not treat as AFK -- an unhandled
+            # handler exception, a rejected delegation -- left the seat
+            # looking like a healthy idle one, with the cause visible
+            # only as one line in the feed.
+            if etype == "task_failed":
+                agent.last_error = {
+                    "kind": "task_failed",
+                    "message": payload.get("error", "") or "",
+                    "phase": "",
+                    "turn_id": payload.get("turn_id", "") or "",
+                    "at": str(envelope.get("timestamp", "")),
+                    "event_id": envelope.get("id", ""),
+                }
             # An engine-detected failure publishes its AFK event
             # (``llm_unavailable`` / ``budget_exhausted`` / a guard
             # breach) and ``TaskFailed`` microseconds apart, in that

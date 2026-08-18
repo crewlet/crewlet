@@ -854,5 +854,60 @@ class TestPhaseFailureProjection:
         assert overlay["live_call"] is None
         assert overlay["last_error"] is None
 
+    def test_a_failed_task_records_why(self) -> None:
+        """``TaskFailed`` is a failure and must say so on the seat.
+
+        It was folded in with ``task_completed`` and recorded nothing, so
+        a task that died for a reason the engine does not treat as AFK --
+        an unhandled handler exception, a rejected delegation -- left a
+        seat rendering as healthy and idle, with the cause visible only
+        as one line in the feed.
+        """
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "task_started",
+                {"role": "Lead", "agent_id": "rt-1", "task_id": "T-9"},
+                event_id="t1",
+            )
+        )
+        live.apply_event(
+            _env(
+                "task_failed",
+                {
+                    "role": "Lead",
+                    "agent_id": "rt-1",
+                    "task_id": "T-9",
+                    "error": "handler raised ValueError",
+                },
+                ts="2026-06-14T12:00:05+00:00",
+                event_id="t2",
+            )
+        )
+        error = live.agent_overlay("Lead")["last_error"]
+        assert error is not None, "a failed task left the seat looking healthy"
+        assert error["kind"] == "task_failed"
+        assert error["message"] == "handler raised ValueError"
+
+    def test_the_next_task_clears_it(self) -> None:
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "task_failed",
+                {"role": "Lead", "agent_id": "rt-1", "error": "boom"},
+                event_id="t1",
+            )
+        )
+        live.apply_event(
+            _env(
+                "task_started",
+                {"role": "Lead", "agent_id": "rt-1", "task_id": "T-10"},
+                ts="2026-06-14T12:00:05+00:00",
+                event_id="t2",
+            )
+        )
+        assert live.agent_overlay("Lead")["last_error"] is None
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
