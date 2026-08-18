@@ -210,7 +210,8 @@ upgrade to a WebSocket (corporate proxies, etc.).
                       in-flight LLM call, or null between turns) +
                       last_error (the phase failure that stopped this
                       seat, or null) */ }, ... ],
-  "events":    [ { /* recent event row, newest first */ }, ... ],
+  "events":    [ { /* recent event row, newest first — payload-free, plus
+                      a `failed` boolean */ }, ... ],
   "sandboxes": [ { /* in-flight detached coding run */ }, ... ],
   "tools":     [ { "name": "...", "description": "...", "source": "..." } ],
   "org":       { /* /org payload */ },
@@ -218,6 +219,20 @@ upgrade to a WebSocket (corporate proxies, etc.).
   "schedules": [ { /* configured schedule + computed next_run */ }, ... ]
 }
 ```
+
+Each `events` row is the payload-free feed shape — `id`, `type`,
+`timestamp`, `source`, `actor`, `summary`, `category`, `trace_id`,
+`span_id`, `parent_span_id`, `topic` — plus **`failed`**: `true` when the
+work the event reports did not succeed.  It is `true` for an event carrying
+its own `failed` field (a phase or turn that died) and for an event type that
+*is* a failure (`task_failed`, `llm_unavailable`, `budget_exhausted`,
+`turn.guard_breach`).  Deciding it once, here, is what lets a dashboard mark
+failures without re-deriving them from a type list of its own.
+
+The flag survives a restart: the event-store writer stamps a `failed` tag on
+those events, and the projection reads it back when it hydrates its feed from
+history.  `list_events` deliberately never selects the payload column, so
+without the tag every historical failure would read back as a success.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, response, tool_executions, rounds,
@@ -236,7 +251,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `kind` | When | `data` |
 |--------|------|--------|
 | `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
-| `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload`.  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
+| `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |

@@ -205,6 +205,26 @@ async def test_extract_tags_from_task_event() -> None:
     assert tags == {"agent_id": "a-1", "task_id": "T-1"}
 
 
+async def test_failed_events_are_tagged() -> None:
+    """A failed phase is a filterable dimension, not just a payload field.
+
+    ``list_events`` never selects the payload column, so a dashboard
+    hydrating its feed from history has no other way to know a phase
+    died -- and a feed that renders a failed turn identically to a
+    successful one is the whole point of carrying this.
+    """
+    failed = AgentPhaseCompleted(
+        source="pm", role="PM", phase="execute", failed=True, error_kind="rate_limit"
+    )
+    assert EventStoreWriter._extract_tags(failed)["failed"] == "true"
+
+
+async def test_successful_events_carry_no_failed_tag() -> None:
+    """Only set when true, so the tag doubles as a filter."""
+    ok = AgentPhaseCompleted(source="pm", role="PM", phase="execute")
+    assert "failed" not in EventStoreWriter._extract_tags(ok)
+
+
 async def test_trace_fields_written_to_store(
     writer: EventStoreWriter, store: MemoryEventStore
 ) -> None:

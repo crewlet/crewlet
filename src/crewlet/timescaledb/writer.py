@@ -189,6 +189,15 @@ class EventStoreWriter:
             tags["recipient"] = recipient
         if closed_by := getattr(event, "closed_by", ""):
             tags["closed_by"] = closed_by
+        # Whether the work this event reports actually failed.  A tag
+        # rather than a payload read because ``list_events`` deliberately
+        # never selects the payload column, so a dashboard hydrating its
+        # feed from history has no other way to know a phase died -- and
+        # a feed that renders a failed turn identically to a successful
+        # one is the bug this dimension exists to close.  Only set when
+        # true, so the tag doubles as a ``tags->>'failed'`` filter.
+        if getattr(event, "failed", False):
+            tags["failed"] = "true"
         # Tag turns triggered by A2A for cross-referencing.
         if (a2a_ctx := getattr(event, "a2a_context", None)) and (
             a2a_ch := a2a_ctx.get("channel_id", "")

@@ -363,6 +363,46 @@ class TestEventBuffer:
         live.apply_event(_env("provider_fallback", {"role": "Lead"}, category=""))
         assert live.recent_events() == []
 
+    def test_feed_row_carries_the_failure_flag(self) -> None:
+        """A feed row says whether the work it reports failed.
+
+        The dashboard renders failed rows in red and filters on them, and
+        the buffer is payload-free -- so without this the only way to
+        tell a dead turn from a live one was to read the prose.
+        """
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {"role": "Lead", "phase": "execute", "failed": True},
+                event_id="dead",
+            )
+        )
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {"role": "Lead", "phase": "review"},
+                event_id="ok",
+                ts="2026-06-14T12:01:00+00:00",
+            )
+        )
+        flags = {e["id"]: e["failed"] for e in live.recent_events()}
+        assert flags == {"dead": True, "ok": False}
+
+    def test_failure_by_event_type_needs_no_payload_flag(self) -> None:
+        """Some events ARE the failure; they carry no ``failed`` field."""
+        live = LiveState()
+        for i, etype in enumerate(sorted(live_state._FAILURE_EVENTS)):
+            live.apply_event(
+                _env(
+                    etype,
+                    {"role": "Lead"},
+                    event_id=f"f{i}",
+                    ts=f"2026-06-14T12:0{i}:00+00:00",
+                )
+            )
+        assert all(e["failed"] for e in live.recent_events())
+
 
 class TestMergeAgents:
     def test_overlay_onto_static_rows(self) -> None:
@@ -421,6 +461,16 @@ class _FakeStore:
                 "category": "lifecycle",
                 "summary": "spawned",
             },
+            {
+                "id": "e0",
+                "type": "agent_phase_completed",
+                "timestamp": "2026-06-14T11:59:00",
+                "category": "system",
+                "summary": "execute failed",
+                # ``list_events`` never selects the payload column, so
+                # the failure survives history only as this tag.
+                "tags": {"failed": "true"},
+            },
         ]
 
     async def get_agent_states(self, roles: list[str]) -> dict[str, Any]:
@@ -442,7 +492,20 @@ class TestHydration:
         assert overlay["current_phase"] == "execute"
         assert overlay["total_tokens"] == 150
         # list_events is newest-first; the buffer returns it newest-first.
-        assert [e["id"] for e in live.recent_events()] == ["e2", "e1"]
+        assert [e["id"] for e in live.recent_events()] == ["e2", "e1", "e0"]
+
+    async def test_hydrated_failures_survive_a_restart(self) -> None:
+        """A failure read back from history is still a failure.
+
+        The feed row is payload-free and the store's ``list_events`` does
+        not fetch payloads, so the flag rides the ``failed`` tag -- lose
+        it and every historical failure renders as a success the moment
+        the API restarts.
+        """
+        live = LiveState()
+        await live.hydrate(_FakeStore(), ["Lead"])
+        flags = {e["id"]: e["failed"] for e in live.recent_events()}
+        assert flags == {"e2": False, "e1": False, "e0": True}
 
     async def test_hydrate_only_states_does_not_double_count_tokens(self) -> None:
         live = LiveState()
@@ -790,7 +853,6 @@ class TestPhaseFailureProjection:
         overlay = live.agent_overlay("Lead")
         assert overlay["live_call"] is None
         assert overlay["last_error"] is None
-
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
