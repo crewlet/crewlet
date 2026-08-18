@@ -48,10 +48,18 @@ export function createDashboardView({ store }) {
   // a sentence rather than a bare count because "2" on its own is the
   // kind of number that means nothing without its denominator, and this
   // is the first thing on the page.
-  function headline(pulse) {
+  function headline(pulse, health) {
     const total = pulse.rows.length;
     const working = pulse.working;
-    if (!total) return { figure: "—", rest: "no agent seats configured" };
+    if (!total) {
+      // "No agent seats configured" is true of an unconfigured engine
+      // too, and it is the wrong sentence for it: it reads as a company
+      // whose config simply has no agents in it, which sends the reader
+      // looking at YAML that is not being used at all.
+      return health && health.configured === false
+        ? { figure: "—", rest: "no company configuration is active" }
+        : { figure: "—", rest: "no agent seats configured" };
+    }
     if (working) {
       return { figure: String(working), rest: `of ${total} seats working` };
     }
@@ -61,7 +69,7 @@ export function createDashboardView({ store }) {
   function hero(state, pulse) {
     const tokens = state.tokens;
     const totals = tokens ? tokens.totals : null;
-    const head = headline(pulse);
+    const head = headline(pulse, state.health);
     const stopped = (state.agents || []).filter(
       (a) => a.state === "afk" || a.last_error,
     ).length;

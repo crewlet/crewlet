@@ -10,7 +10,11 @@ import pytest
 from starlette.testclient import TestClient
 
 from crewlet.api.app import create_app
-from crewlet.api.streaming import StreamService, serialize_event
+from crewlet.api.streaming import (
+    StreamService,
+    build_health_envelope,
+    serialize_event,
+)
 from crewlet.events.types import (
     AgentPhaseCompleted,
     AgentPhaseStarted,
@@ -214,6 +218,7 @@ class TestStreamSnapshot:
             is_running = True
             shutting_down = False
             in_flight_count = 3
+            started_at = "2026-04-01T12:00:00+00:00"
 
         app = create_app(
             event_queue=_MockQueue(),
@@ -225,6 +230,8 @@ class TestStreamSnapshot:
             body = client.get("/stream/snapshot").json()
             assert body["health"]["in_flight"] == 3
             assert body["health"]["shutting_down"] is False
+            assert body["health"]["engine"] is True
+            assert body["health"]["engine_started_at"] == "2026-04-01T12:00:00+00:00"
 
     def test_snapshot_carries_in_flight_live_call(
         self, app, stream: StreamService
@@ -612,6 +619,26 @@ class TestStreamQueries:
             assert env["kind"] == "result"
             assert env["data"]["since_days"] == 30
 
+    def test_stream_query_answers_facts_about_this_socket(self, app) -> None:
+        """Per-socket facts cannot ride the shared health tick.
+
+        ``_fan_out`` encodes ONE JSON string and hands the same string to
+        every client -- that is the design -- so a per-client field there
+        would force one encode per client per tick.  They are answered on
+        request instead, which is also when an operator wants them.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "stream")
+            assert env["kind"] == "result"
+            data = env["data"]
+            assert data["dropped"] == 0
+            assert data["clients"] == 1
+            assert data["capacity"] > 0
+            # ``drops`` resets on every reconnect, so the counter ships
+            # with the window it accumulated over or it cannot be read.
+            assert data["connected_at"]
+
     def test_config_query_requires_an_operator_token(self, app) -> None:
         """The socket enforces exactly what the /config middleware does."""
         with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
@@ -698,3 +725,157 @@ class TestTaskEventAttribution:
             TaskStarted(task_id="T-1", agent_id="rt-1", source="Lead", role="Lead")
         )
         assert tags["agent_role"] == "Lead"
+
+
+# ---------------------------------------------------------------------------
+# health envelope
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEnvelope:
+    """The one function backing ``GET /health``, the snapshot and the tick.
+
+    Every field here was a field the dashboard could not have rendered
+    before, and the omission was not neutral: an engine with no active
+    company revision -- one accepting and discarding every inbound
+    webhook -- reported ``status: "ok"`` and looked, on every screen,
+    exactly like a correctly configured engine with nothing to do.
+    """
+
+    def _app(self, store, **kwargs):
+        return create_app(
+            event_queue=_MockQueue(),
+            event_store=store,
+            agent_roles=AGENT_ROLES,
+            **kwargs,
+        )
+
+    def test_an_unconfigured_engine_says_so(self, store) -> None:
+        app = self._app(store)
+        with TestClient(app):
+            # What ``attach_config_refresh`` leaves behind when no
+            # revision is active. An app built without a Tier B config
+            # store is ``configured`` by construction, so the flag is
+            # set here rather than a whole config store stood up to
+            # arrive at the same one boolean.
+            app.state.configured = False
+            body = build_health_envelope(app)
+        assert body["configured"] is False
+        assert body["status"] == "unconfigured"
+
+    def test_a_configured_engine_is_ok(self, store) -> None:
+        app = self._app(store)
+        with TestClient(app):
+            app.state.configured = True
+            body = build_health_envelope(app)
+        assert body["status"] == "ok"
+
+    def test_a_draining_engine_outranks_unconfigured(self, store) -> None:
+        """Precedence is ``shutting_down > unconfigured > ok``.
+
+        A draining engine is draining first, whatever else is true of
+        it: the reader's next action is to wait, not to import a config.
+        """
+
+        class _Eng:
+            is_running = True
+            shutting_down = True
+            in_flight_count = 1
+            started_at = ""
+
+        app = self._app(store, engine=_Eng())
+        with TestClient(app):
+            app.state.configured = False
+            body = build_health_envelope(app)
+        assert body["configured"] is False
+        assert body["status"] == "shutting_down"
+
+    def test_no_engine_is_stated_rather_than_implied(self, store) -> None:
+        """The standalone API cannot answer ``in_flight`` at all.
+
+        Without the ``engine`` flag a client cannot tell "nothing is
+        running" from "this process cannot know", so it renders a
+        confident zero for both.
+        """
+        app = self._app(store)
+        with TestClient(app):
+            body = build_health_envelope(app)
+        assert body["engine"] is False
+        assert "in_flight" not in body
+
+    def test_a_store_with_no_database_is_memory_not_durable(self, store) -> None:
+        """ "A store is wired" is not "history survives a restart".
+
+        With no database the CLI still wraps in-memory legs in a
+        ``CompositeEventStore``, so the presence check an operator would
+        naturally make answers yes while every event is one process
+        death from gone.
+        """
+        app = self._app(store)
+        with TestClient(app):
+            assert build_health_envelope(app)["event_store"] == "memory"
+
+    def test_no_store_at_all_is_its_own_answer(self) -> None:
+        app = create_app(event_queue=_MockQueue(), agent_roles=AGENT_ROLES)
+        with TestClient(app):
+            assert build_health_envelope(app)["event_store"] == "none"
+
+    def test_the_queue_backend_is_read_off_the_protocol(self, store) -> None:
+        """Not sniffed from the class name, which lies once wrapped."""
+        from crewlet.queue.memory import MemoryEventQueue
+
+        app = create_app(
+            event_queue=MemoryEventQueue(),
+            event_store=store,
+            agent_roles=AGENT_ROLES,
+        )
+        with TestClient(app):
+            assert build_health_envelope(app)["queue"] == "memory"
+
+    def test_feed_hydrated_is_false_when_the_store_could_not_be_read(self) -> None:
+        """A projection that failed to seed must not claim it seeded.
+
+        Every hydration leg swallows its own store error -- that is what
+        best-effort means for the projection -- so watching for an
+        exception cannot tell a seeded feed from an empty one.
+        """
+
+        class _BrokenStore:
+            async def get_agent_states(self, roles):
+                raise RuntimeError("no")
+
+            async def list_token_usage_events(self, since_days):
+                raise RuntimeError("no")
+
+            async def list_phase_token_events(self, since_days):
+                raise RuntimeError("no")
+
+            async def list_events(self, **kwargs):
+                raise RuntimeError("no")
+
+        app = create_app(
+            event_queue=_MockQueue(),
+            event_store=_BrokenStore(),
+            agent_roles=AGENT_ROLES,
+        )
+        with TestClient(app):
+            assert build_health_envelope(app)["feed_hydrated"] is False
+
+    def test_feed_hydrated_is_true_after_a_clean_seed(self, store) -> None:
+        app = self._app(store)
+        with TestClient(app):
+            assert build_health_envelope(app)["feed_hydrated"] is True
+
+    def test_the_health_route_and_the_push_answer_identically(self, store) -> None:
+        """One builder, three surfaces.
+
+        The REST route, the handshake snapshot and the five-second tick
+        must never be able to disagree about whether the engine is
+        healthy -- that is exactly the class of bug a second
+        implementation introduces.
+        """
+        app = self._app(store)
+        with TestClient(app) as client:
+            route = client.get("/health").json()
+            snapshot = client.get("/stream/snapshot").json()["health"]
+        assert route == snapshot

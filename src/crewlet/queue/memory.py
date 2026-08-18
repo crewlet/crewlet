@@ -204,6 +204,10 @@ class MemoryEventQueue:
         """Number of handler invocations currently mid-flight."""
         return self._in_flight
 
+    @property
+    def backend(self) -> str:
+        return "memory"
+
     async def start(self) -> None:
         if self._running:
             return

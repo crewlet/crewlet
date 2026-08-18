@@ -98,6 +98,9 @@
 
   /* ---- Z layers ---- */
   --z-header: 20;
+  /* Above the mobile off-canvas sidebar (60), below a toast: a toast
+     acknowledging an action must never be hidden by a popover. */
+  --z-pop: 70;
   --z-toast: 80;
 }
 

@@ -157,6 +157,7 @@ async def stream_websocket(websocket: WebSocket) -> None:
                     what,
                     params,
                     token=token if isinstance(token, str) else "",
+                    client=client,
                 )
             body = json.dumps(
                 {"kind": "result", "id": req_id, "what": what, "data": data}

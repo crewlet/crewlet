@@ -98,7 +98,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 
 | Route | Behaviour while unconfigured |
 |-------|------------------------------|
-| `GET /health` | `200 {"status": "ok", "configured": false}` |
+| `GET /health` | `200 {"status": "unconfigured", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |
@@ -107,7 +107,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs; body logged at WARNING; returns `200 {"status": "dropped", "reason": "unconfigured"}` to avoid retry storms |
 
-Transition out of unconfigured: the first `crewlet.config.revision_activated` arrives → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard's `configured: false` banner clears automatically as `/health` reports `configured: true`.
+Transition out of unconfigured: the first `crewlet.config.revision_activated` arrives → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
 
 ---
 

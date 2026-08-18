@@ -12,6 +12,7 @@ when a ``CompanyConfigStore`` is supplied and gated by
 from __future__ import annotations
 
 import contextlib
+from datetime import UTC, datetime
 from typing import Any
 
 from starlette.applications import Starlette
@@ -186,6 +187,10 @@ def create_app(
         exception_handlers={ClientDisconnect: _client_disconnected},
         lifespan=_lifespan,
     )
+    # This API process's start. Read by the health envelope, and kept
+    # distinct from the engine's own start time: on the standalone
+    # deployment those are two processes on two clocks.
+    app.state.started_at = datetime.now(UTC).isoformat()
     app.state.event_queue = event_queue
     app.state.agent_roles = agent_roles or []
     app.state.org_data = org_data or {}

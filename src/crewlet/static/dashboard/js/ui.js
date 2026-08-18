@@ -36,6 +36,39 @@ export function empty(iconId, title, sub = "") {
     </div>`;
 }
 
+/**
+ * The empty state a view should show, chosen from what the client knows.
+ *
+ * Three cases hide behind one empty list, and every list view had
+ * collapsed them into two:
+ *
+ *   - the socket is down, so nothing can be concluded → `skeleton`
+ *   - the engine has no active company configuration, so this list is
+ *     empty because NOTHING is configured and nothing will run
+ *   - the engine is configured and this particular list is empty
+ *
+ * Only the third deserves "No agents configured". The second was
+ * rendering as the third, which is the whole complaint: an unconfigured
+ * engine looked exactly like a correctly-configured idle one, on every
+ * screen at once, and the one fact that explained all of it — `configured`
+ * — had been on the wire the entire time and reached no pixel.
+ *
+ * `skeleton` is a THUNK, not markup: the views that pass
+ * `skeletonCards(6)` would otherwise build it on every render whether or
+ * not it is the branch taken.
+ */
+export function emptyOrPending(state, skeleton, iconId, title, sub = "") {
+  if (!state.connected) return skeleton();
+  if (state.health && state.health.configured === false) {
+    return empty(
+      "database",
+      "No company configuration is active",
+      "Nothing is running. Import one with `crewlet config import`.",
+    );
+  }
+  return empty(iconId, title, sub);
+}
+
 export function badge(text, cls = "") {
   return `<span class="badge ${cls}">${esc(text)}</span>`;
 }

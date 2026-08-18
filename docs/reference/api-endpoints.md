@@ -10,7 +10,7 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check + `configured` flag |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)) |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
@@ -205,7 +205,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
 
 ```json
 {
-  "health":    { "status": "ok", "in_flight": 0, "shutting_down": false },
+  "health":    { /* the health envelope — see below */ },
   "agents":    [ { /* /agents row: live state + tokens + live_call (the
                       in-flight LLM call, or null between turns) +
                       last_error (the phase failure that stopped this
@@ -234,6 +234,54 @@ The flag survives a restart: the event-store writer stamps a `failed` tag on
 those events, and the projection reads it back when it hydrates its feed from
 history.  `list_events` deliberately never selects the payload column, so
 without the tag every historical failure would read back as a success.
+
+### The health envelope
+
+One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
+the snapshot's `health` section, and the 5-second push, so those three
+surfaces cannot disagree about whether the engine is healthy — and a
+reconnect restores every field without a second round trip.
+
+```json
+{
+  "status": "ok",
+  "configured": true,
+  "engine": true,
+  "version": "0.4.0",
+  "started_at": "2026-04-01T12:00:00+00:00",
+  "queue": "pulsar",
+  "event_store": "durable",
+  "feed_hydrated": true,
+  "clients": 3,
+  "in_flight": 2,
+  "engine_started_at": "2026-04-01T11:58:03+00:00",
+  "shutting_down": false
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
+| `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
+| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `version` | The `crewlet` version this process is running. |
+| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
+| `queue` | The event queue's backend — `pulsar` or `memory`. Read off the `EventQueue` protocol, never sniffed from a class name. Display only; nothing may branch on it. |
+| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
+| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
+| `clients` | Dashboards currently connected to this API process. |
+| `in_flight` | Handler invocations mid-flight (embedded API only). |
+| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+
+Per-socket facts — how many envelopes *this* connection dropped, how deep
+its queue is — are deliberately **not** here. The tick encodes one JSON
+string and hands the same string to every client, so a per-client field
+would force one encode per client per tick; they are answered on demand
+by the `stream` query instead.
+
+`GET /health` always returns **200**, including when `status` is
+`unconfigured`: the status code is liveness, and an engine waiting for a
+configuration is alive. A readiness probe should read `configured`.
 
 ### Paging the event history
 
@@ -318,7 +366,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
-| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection) with the engine's `in_flight_count` and `shutting_down` flag. `shutting_down` flips `true` (and `status` reads `"shutting_down"`) from the first moment of a graceful stop, so the dashboard shows the drain while it happens — the API server itself keeps serving until the engine has fully stopped. | `{ status, in_flight?, shutting_down? }` |
+| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unauthorized`, `unknown_query`, `no_event_store`, `query_failed`. |
 | `pong`     | Reply to a client `ping`. | `null` |
@@ -342,6 +390,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}` |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |
+| `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | `GET /config/audit` *(operator token required)* |
 | `config_diff` | `{revision_id}` | `GET /config/revisions/{id}/diff` *(operator token required)* |

@@ -17,9 +17,15 @@ import { parseRoute, navigate, onRouteChange } from "./router.js";
 import { patch } from "./patch.js";
 import { schedule, cancel } from "./scheduler.js";
 import { $, delegate } from "./dom.js";
-import { esc, relTime } from "./format.js";
+import { esc } from "./format.js";
 import { icon } from "./icons.js";
 import { apiToken } from "./authToken.js";
+import {
+  dotClass,
+  renderHealthPopover,
+  bannerFor,
+  bannerTone,
+} from "./health.js";
 
 import { createDashboardView } from "./views/dashboard.js";
 import { createEventsView } from "./views/events.js";
@@ -233,36 +239,66 @@ function renderNav() {
   });
 }
 
-// ---- chrome (live dot + in-flight pill) ----
+// ---- chrome (live dot + health popover + in-flight pill) ----
+
+// Popover state. `healthStream` holds the reply to the `stream` query —
+// per-socket facts (dropped envelopes, queue depth) that cannot ride the
+// shared health tick, because that tick encodes ONE JSON string for
+// every client. It is fetched on open and cleared on close, so what the
+// popover shows is always from this viewing rather than the last one.
+let healthOpen = false;
+let healthStream = null;
+
+function toggleHealth(open) {
+  healthOpen = open === undefined ? !healthOpen : open;
+  $("#live-dot-btn").setAttribute("aria-expanded", healthOpen ? "true" : "false");
+  if (healthOpen) {
+    healthStream = null;
+    ctx
+      .query("stream")
+      .then((data) => {
+        if (!healthOpen) return;
+        healthStream = data;
+        renderChrome();
+      })
+      .catch(() => {
+        // A store-less or standalone deployment can decline this one
+        // query while the rest of the popover is perfectly answerable.
+        // The row stays on "…" rather than the whole surface failing.
+      });
+  } else {
+    healthStream = null;
+  }
+  renderChrome();
+}
+
 function renderChrome() {
   schedule("chrome", () => {
     const state = store.state;
     const health = state.health || {};
-    const dot = $("#live-dot");
-    dot.className =
-      "live-dot " +
-      (health.status === "ok"
-        ? "ok"
-        : health.status === "shutting_down"
-          ? "drain"
-          : state.connected
-            ? "ok"
-            : "down");
+    $("#live-dot").className = "live-dot " + dotClass(health, state.connected);
 
-    // Degraded mode: the socket is down and the client is polling REST
-    // every few seconds. The dot alone does not read as "this data may
-    // be stale" — and a dashboard that is quietly wrong is worse than
-    // one that says it cannot see.
-    const banner = $("#degraded");
-    if (state.connected) {
-      banner.hidden = true;
-    } else {
-      banner.hidden = false;
-      const last = state.events && state.events[0];
-      $("#degraded-text").textContent = last
-        ? `Not connected to the engine — showing the last state received, from ${relTime(last.timestamp)}.`
-        : "Not connected to the engine — retrying.";
+    const pop = $("#health-pop");
+    pop.hidden = !healthOpen;
+    if (healthOpen) {
+      patch(
+        pop,
+        renderHealthPopover(health, healthStream, state.events, state.connected),
+      );
+    } else if (pop.firstChild) {
+      pop.innerHTML = "";
     }
+
+    // Always-on chrome for the two conditions that must never wait for
+    // a click: a socket that is down (the page is polling REST and may
+    // be stale) and an engine with no active company configuration
+    // (every inbound webhook is being dropped). A dashboard that is
+    // quietly wrong is worse than one that says it cannot see.
+    const banner = $("#degraded");
+    const text = bannerFor(health, state.connected, state.events);
+    banner.hidden = !text;
+    banner.className = "degraded " + bannerTone(health, state.connected);
+    if (text) $("#degraded-text").textContent = text;
 
     const footer = $("#chrome-footer");
     const pill = $("#inflight");
@@ -304,12 +340,33 @@ function initDelegation() {
   // One document-level click delegate. App-level navigation is handled
   // here; anything else is forwarded to the active view, so views never
   // attach (and leak) their own listeners on the reused #view element.
+  // Dismissal is its OWN document listener, not a branch in the
+  // delegate: the delegate only fires when the click landed inside
+  // something carrying `data-action`, so a popover that closed from
+  // there would stay open for every click on ordinary page content —
+  // which is most of the page.
+  document.addEventListener("click", (ev) => {
+    if (!healthOpen) return;
+    if (ev.target.closest("#health-pop, #live-dot-btn")) return;
+    toggleHealth(false);
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && healthOpen) toggleHealth(false);
+  });
+
   delegate(document.body, "click", (action, el, ev) => {
     if (action === "nav") navigate("/" + el.dataset.nav);
     else if (action === "nav-group") toggleGroup(el.dataset.group);
-    else if (action === "agent")
+    else if (action === "health") toggleHealth();
+    else if (action === "reconnect") {
+      socket.reconnect();
+      toggleHealth(false);
+    } else if (action === "agent")
       navigate("/agents/" + encodeURIComponent(el.dataset.id));
-    else if (action === "view-events") navigate("/events");
+    else if (action === "view-events") {
+      if (healthOpen) toggleHealth(false);
+      navigate("/events");
+    }
     else if (action === "view-tokens") navigate("/tokens");
     else if (action === "view-tools") navigate("/tools");
     else if (action === "view-agents") navigate("/agents");

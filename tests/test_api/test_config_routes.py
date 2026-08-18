@@ -482,11 +482,21 @@ def test_put_config_attributes_revision_to_token_id(
 
 def test_health_reports_configured_flag(client: TestClient) -> None:
     """`configured` starts False when a Tier B store is wired but no
-    revision has been primed yet (the canonical unconfigured state)."""
+    revision has been primed yet (the canonical unconfigured state).
+
+    ``status`` says so too.  It used to read ``"ok"`` here, which meant
+    an engine with no active company revision -- one dropping every
+    inbound webhook it receives -- was indistinguishable from a healthy
+    idle one, except that all its screens were empty.  A boolean nobody
+    renders is not a signal.
+
+    The HTTP status stays 200 regardless: liveness is the status code,
+    and an unconfigured process is very much alive.
+    """
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "ok"
+    assert body["status"] == "unconfigured"
     assert body["configured"] is False
 
 

@@ -17,7 +17,7 @@ import {
   CONTACT_FIELDS,
 } from "../state.js";
 import { flattenSeats, managerOf } from "../org.js";
-import { empty, sectionHead, skeletonRows } from "../ui.js";
+import { emptyOrPending, sectionHead, skeletonRows } from "../ui.js";
 
 export function createPeopleView({ refresh }) {
   // Which kind of seat the directory shows. Local view state, so every
@@ -88,10 +88,12 @@ export function createPeopleView({ refresh }) {
     render(state) {
       const seats = flattenSeats(state.org);
       if (!seats.length) {
-        // An org with no seats and one whose `/org` payload has not landed
-        // yet flatten to the same empty list, so the connection decides
-        // which of the two the reader is shown.
-        return state.connected ? empty("users", "No seats configured") : skeletonRows(6);
+        return emptyOrPending(
+          state,
+          () => skeletonRows(6),
+          "users",
+          "No seats configured",
+        );
       }
       // Role name → live agent row, first match wins (matching the `find`
       // this replaced). Hoisted so a large directory doesn't rescan the

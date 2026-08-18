@@ -85,21 +85,21 @@ def _int(params: dict[str, Any], key: str, default: int) -> int:
 # -- handlers ---------------------------------------------------------
 
 
-async def _agent(app: Any, params: dict[str, Any]) -> Any:
+async def _agent(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     detail = await agent_detail(app, _str(params, "id"))
     if detail is None:
         raise QueryError("not_found")
     return detail
 
 
-async def _agent_memory(app: Any, params: dict[str, Any]) -> Any:
+async def _agent_memory(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     memory = await agent_memory(app, _str(params, "id"))
     if memory is None:
         raise QueryError("not_found")
     return memory
 
 
-async def _event(app: Any, params: dict[str, Any]) -> Any:
+async def _event(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     if app.state.event_store is None:
         raise QueryError("no_event_store")
     event = await event_detail(app, _str(params, "id"))
@@ -108,7 +108,7 @@ async def _event(app: Any, params: dict[str, Any]) -> Any:
     return event
 
 
-async def _events(app: Any, params: dict[str, Any]) -> Any:
+async def _events(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     # Guarded like ``_event`` and ``_trace``.  Without it a store-less
     # deployment answers an empty page, which a pager reads as "you have
     # reached the beginning of history" -- an answer that silently
@@ -129,13 +129,13 @@ async def _events(app: Any, params: dict[str, Any]) -> Any:
     )
 
 
-async def _trace(app: Any, params: dict[str, Any]) -> Any:
+async def _trace(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     if app.state.event_store is None:
         raise QueryError("no_event_store")
     return await trace_events(app, _str(params, "trace_id"))
 
 
-async def _tokens(app: Any, params: dict[str, Any]) -> Any:
+async def _tokens(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     return await tokens_breakdown(
         app,
         since_days=_int(params, "since_days", DEFAULT_WINDOW_DAYS),
@@ -144,23 +144,23 @@ async def _tokens(app: Any, params: dict[str, Any]) -> Any:
     )
 
 
-async def _schedules(app: Any, params: dict[str, Any]) -> Any:
+async def _schedules(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     return await schedules_payload(app)
 
 
-async def _config(app: Any, params: dict[str, Any]) -> Any:
+async def _config(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     from crewlet.api.config_routes import config_document
 
     return await config_document(app)
 
 
-async def _config_audit(app: Any, params: dict[str, Any]) -> Any:
+async def _config_audit(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     from crewlet.api.config_audit import list_revisions
 
     return await list_revisions(app, limit=_int(params, "limit", 50))
 
 
-async def _config_diff(app: Any, params: dict[str, Any]) -> Any:
+async def _config_diff(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     from crewlet.api.config_routes import revision_diff
 
     diff = await revision_diff(app, _str(params, "revision_id"))
@@ -169,7 +169,33 @@ async def _config_diff(app: Any, params: dict[str, Any]) -> Any:
     return diff
 
 
-Handler = Callable[[Any, dict[str, Any]], Awaitable[Any]]
+async def _stream(app: Any, params: dict[str, Any], client: Any) -> Any:
+    """Facts about THIS socket.
+
+    Dropped envelopes cannot ride the health tick: ``_fan_out`` encodes
+    one JSON string and puts the same string on every client's queue --
+    that is the design -- so a per-client field there would force one
+    encode per client per tick.  They are also not a five-second number:
+    you want them when you open the health surface.
+
+    ``connected_at`` ships with the counter because ``drops`` resets on
+    every reconnect, and a monotonic counter with no window is a figure
+    that cannot be read.
+    """
+    stream = getattr(app.state, "stream", None)
+    if client is None or stream is None:
+        raise QueryError("not_found")
+    return {
+        "client_id": client.id,
+        "dropped": client.drops,
+        "queued": client.queue.qsize(),
+        "capacity": client.queue.maxsize,
+        "connected_at": client.connected_at,
+        "clients": stream.client_count,
+    }
+
+
+Handler = Callable[[Any, dict[str, Any], Any], Awaitable[Any]]
 
 # ``what`` → handler.  The boolean is whether the query is operator-only
 # (the ``/config`` surface); everything else is as public as the REST
@@ -182,6 +208,10 @@ _QUERIES: dict[str, tuple[Handler, bool]] = {
     "trace": (_trace, False),
     "tokens": (_tokens, False),
     "schedules": (_schedules, False),
+    # Named ``stream``, not ``health``: a query must never share a name
+    # with a push kind, or a reader of the protocol has to know which
+    # direction a frame was travelling to know what it means.
+    "stream": (_stream, False),
     "config": (_config, True),
     "config_audit": (_config_audit, True),
     "config_diff": (_config_diff, True),
@@ -194,6 +224,7 @@ async def run_query(
     params: dict[str, Any],
     *,
     token: str = "",
+    client: Any = None,
 ) -> Any:
     """Answer one query, or raise :class:`QueryError` with a code."""
     entry = _QUERIES.get(what)
@@ -203,7 +234,12 @@ async def run_query(
     if needs_operator and resolve_operator(app, token) is None:
         raise QueryError("unauthorized")
     try:
-        return await handler(app, params)
+        # ``client`` is passed positionally to every handler; all but
+        # ``_stream`` ignore it. Smuggling it through ``params`` instead
+        # was the shorter diff and the wrong one: ``params`` comes off
+        # the wire from a browser and must never be a channel for
+        # server-side objects.
+        return await handler(app, params, client)
     except QueryError:
         raise
     except Exception:

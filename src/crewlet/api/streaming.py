@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from crewlet import __version__
 from crewlet._logging import get_logger
 from crewlet.api.live_state import EVENT_FEED_LIMIT, Change, LiveState
 from crewlet.events.types import Event, event_failed
@@ -83,6 +84,10 @@ class StreamClient:
     id: str
     queue: asyncio.Queue[str]
     drops: int = 0
+    # When this socket connected. ``drops`` resets on every reconnect, so
+    # reporting the counter without the window it accumulated over would
+    # be a figure with no denominator.
+    connected_at: str = ""
 
 
 def _now_iso() -> str:
@@ -130,22 +135,73 @@ def serialize_event(topic: str, event: Event) -> dict[str, Any]:
     }
 
 
+def _queue_backend(app: Any) -> str:
+    """The event queue's backend name, for operator display only.
+
+    Read duck-typed off the Protocol, exactly as ``in_flight_count`` is.
+    Sniffing ``type(...).__name__`` instead would lie the moment a queue
+    is wrapped, and the Protocol is where this codebase declares what a
+    provider can answer.
+    """
+    return str(getattr(getattr(app.state, "event_queue", None), "backend", "") or "")
+
+
+def _event_store_kind(app: Any) -> str:
+    """``durable`` | ``memory`` | ``none``.
+
+    Three-valued rather than a boolean because "a store is wired" does
+    not mean "history survives a restart": with no database the CLI
+    still wraps two in-memory legs in a ``CompositeEventStore``, so the
+    presence check an operator would naturally make answers yes while
+    every event is one process death from gone.
+    """
+    if getattr(app.state, "event_store", None) is None:
+        return "none"
+    return "durable" if getattr(app.state, "database", None) is not None else "memory"
+
+
 def build_health_envelope(app: Any) -> dict[str, Any]:
     """Snapshot the engine-health fields the dashboard renders.
 
-    ``in_flight`` / ``shutting_down`` are only present on the embedded
-    API (where an engine reference is attached); the standalone API
-    omits them.  ``status`` flips to ``"shutting_down"`` during a
-    graceful drain so the dashboard's live dot tracks the drain instead
-    of staying green.
+    This one function backs all three health surfaces -- ``GET /health``,
+    the snapshot's ``health`` section, and the periodic push -- so a
+    field added here reaches every one of them, and a reconnect restores
+    it without a second round trip.
+
+    ``engine`` is what makes the ABSENCE of ``in_flight`` explicit
+    rather than implicit.  The standalone API has no engine to ask, and
+    without the flag a client cannot tell "nothing is running" from "this
+    process cannot know", so it renders a confident zero for both.
+
+    ``status`` carries a ``unconfigured`` state now.  ``configured`` has
+    been on the wire since this function was written and nothing rendered
+    it, which meant an engine with no active company revision -- one
+    dropping every inbound webhook -- looked exactly like a healthy idle
+    one, just with empty screens.  Precedence is
+    ``shutting_down > unconfigured > ok``: a draining engine is draining
+    first, whatever else is true of it.
     """
     engine = getattr(app.state, "engine", None)
+    stream = getattr(app.state, "stream", None)
+    configured = bool(getattr(app.state, "configured", False))
     body: dict[str, Any] = {
-        "status": "ok",
-        "configured": bool(getattr(app.state, "configured", False)),
+        "status": "ok" if configured else "unconfigured",
+        "configured": configured,
+        "engine": engine is not None,
+        "version": __version__,
+        # The API process's own start. Deliberately separate from the
+        # engine's: on the standalone deployment they are two processes
+        # on two clocks, and one merged "uptime" would be the
+        # two-different-windows error in a new place.
+        "started_at": str(getattr(app.state, "started_at", "") or ""),
+        "queue": _queue_backend(app),
+        "event_store": _event_store_kind(app),
+        "feed_hydrated": bool(stream is not None and stream.hydrated),
+        "clients": stream.client_count if stream is not None else 0,
     }
     if engine is not None:
         body["in_flight"] = engine.in_flight_count
+        body["engine_started_at"] = str(getattr(engine, "started_at", "") or "")
         shutting_down = engine.shutting_down or not engine.is_running
         body["shutting_down"] = shutting_down
         if shutting_down:
@@ -188,6 +244,11 @@ class StreamService:
         self._health_task: asyncio.Task[Any] | None = None
         self._health_fn: Callable[[], dict[str, Any]] | None = None
         self._hydrated_once = False
+        # Whether the projection was successfully seeded from history.
+        # A BOOLEAN, never the exception text: asyncpg errors carry host,
+        # user and DSN fragments, and ``GET /health`` is served outside
+        # the auth middleware. The reason stays in the structured log.
+        self._hydrated_ok = False
         # Static context the derived pushes need: the configured roles
         # (for role→handle on the spend rollup) and the app whose state
         # holds org / tools / schedules.  Set by :meth:`bind`.
@@ -210,6 +271,11 @@ class StreamService:
     def client_count(self) -> int:
         return len(self._clients)
 
+    @property
+    def hydrated(self) -> bool:
+        """Whether the projection was seeded from history without error."""
+        return self._hydrated_ok
+
     # -- client lifecycle ------------------------------------------------
 
     def register(self) -> StreamClient:
@@ -217,6 +283,7 @@ class StreamService:
         client = StreamClient(
             id=f"ws-{self._counter}",
             queue=asyncio.Queue(maxsize=self._client_queue_size),
+            connected_at=_now_iso(),
         )
         self._clients[client.id] = client
         logger.debug("stream_client_registered", client_id=client.id)
@@ -385,8 +452,9 @@ class StreamService:
         hydration re-reads cleanly so the standalone path can hydrate
         baseline state after its roles arrive via config refresh.
         """
-        await self._live.hydrate(store, roles, only_states=self._hydrated_once)
+        seeded = await self._live.hydrate(store, roles, only_states=self._hydrated_once)
         self._hydrated_once = True
+        self._hydrated_ok = seeded
 
     # -- shared health tick ----------------------------------------------
 

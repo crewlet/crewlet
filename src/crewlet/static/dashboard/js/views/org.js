@@ -11,7 +11,7 @@ import {
   stateBadgeClass,
   stateLabel,
 } from "../state.js";
-import { empty, skeletonRows } from "../ui.js";
+import { emptyOrPending, skeletonRows } from "../ui.js";
 
 export function createOrgView() {
   // Keys the patcher matches rows on. A node is identified by *where it sits
@@ -69,12 +69,15 @@ export function createOrgView() {
     render(state) {
       const org = state.org || {};
       if (!org.name && !(org.units || []).length && !(org.roles || []).length) {
-        // An empty tree means two different things: before the snapshot lands
-        // there is simply nothing to say yet, while a connected engine
-        // reporting no org is the real answer.
-        return state.connected
-          ? empty("building", "Organization data unavailable")
-          : skeletonRows(6);
+        // An empty tree means three different things — nothing received
+        // yet, no configuration at all, or a configuration with no org —
+        // and `emptyOrPending` is where that is decided once.
+        return emptyOrPending(
+          state,
+          () => skeletonRows(6),
+          "building",
+          "Organization data unavailable",
+        );
       }
       // Role name → live agent row. First match wins, matching the `find`
       // this replaced; the lookup is hoisted so a deep tree doesn't rescan

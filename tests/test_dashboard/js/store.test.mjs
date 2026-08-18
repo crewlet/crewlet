@@ -36,6 +36,18 @@ test("a snapshot populates every slice", () => {
   assert.strictEqual(store.state.agents.length, 2);
   assert.strictEqual(store.state.org.name, "Acme");
   assert.strictEqual(store.state.tokens.totals.total_tokens, 10);
+});
+
+test("a snapshot does not claim the socket is up", () => {
+  // Connection state belongs to the transport, which knows whether the
+  // socket is open. A snapshot is also what degraded mode fetches over
+  // REST while the socket is DOWN, so deriving `connected` from its
+  // contents announced a live connection that did not exist — and the
+  // header said "live" for as long as the polling kept working.
+  const store = new Store();
+  store.applySnapshot(snapshot());
+  assert.strictEqual(store.state.connected, false);
+  store.setConnected(true);
   assert.strictEqual(store.state.connected, true);
 });
 

@@ -2,7 +2,7 @@
 
 import { esc, escAttr } from "../format.js";
 import { icon } from "../icons.js";
-import { empty, sectionHead, skeletonRows } from "../ui.js";
+import { emptyOrPending, sectionHead, skeletonRows } from "../ui.js";
 
 function sourceBadge(source) {
   const s = (source || "builtin").toLowerCase();
@@ -25,12 +25,15 @@ export function createToolsView({ store }) {
     render(state) {
       const tools = state.tools || [];
       if (!tools.length) {
-        // A tool registry that is genuinely empty and one that has not
-        // arrived yet look identical in the store, so the connection
-        // decides which of the two the reader is shown.
-        return state.connected
-          ? sectionHead("wrench", "Tools", 0) + empty("wrench", "No tools registered")
-          : skeletonRows(5);
+        return (
+          sectionHead("wrench", "Tools", state.connected ? 0 : null) +
+          emptyOrPending(
+            state,
+            () => skeletonRows(5),
+            "wrench",
+            "No tools registered",
+          )
+        );
       }
       const groups = {};
       for (const t of tools) {

@@ -92,10 +92,11 @@ export class Store {
     if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
     this.state.budget = snap.budget || {};
     if (snap.schedules) this.state.schedules = snap.schedules;
-    if (snap.health) {
-      this.state.health = snap.health;
-      this.state.connected = snap.health.status !== "unknown";
-    }
+    // NOT `connected`. That belongs to the transport, which knows
+    // whether the socket is open; deriving it from a payload's contents
+    // meant a snapshot arriving over the degraded-mode REST fallback
+    // announced a live connection that did not exist.
+    if (snap.health) this.state.health = snap.health;
     this._emit(
       "agents",
       "events",

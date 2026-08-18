@@ -3,7 +3,7 @@
 import { flattenSeats } from "../org.js";
 import { seatCard } from "../cards.js";
 import { buildPulse } from "../pulse.js";
-import { empty, sectionHead, skeletonCards } from "../ui.js";
+import { emptyOrPending, sectionHead, skeletonCards } from "../ui.js";
 
 // Seat order on the index: what needs attention, then what is happening,
 // then everything else.
@@ -42,9 +42,12 @@ export function createAgentsView({ store }) {
             unitPath: [],
           })));
       if (!list.length) {
-        return state.connected
-          ? empty("user", "No agents configured")
-          : skeletonCards(6);
+        return emptyOrPending(
+          state,
+          () => skeletonCards(6),
+          "user",
+          "No agents configured",
+        );
       }
       const byRole = new Map(agents.map((a) => [a.role || a.name, a]));
       const sandboxByRole = new Map((state.sandboxes || []).map((s) => [s.role, s]));

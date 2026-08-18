@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -306,6 +307,7 @@ class Engine:
         self._scheduling_config = scheduling_config
         self._scheduler: Any = None
         self._budget_reporter: Any = None
+        self._started_at: str = ""
         self._embeddings = embeddings
         self._episode_store: Any = None
         self._skill_variables: dict[str, str] = {}
@@ -1179,6 +1181,12 @@ class Engine:
         7. Set up turn engine
         8. Register extensions and subscriptions
         """
+        # Stamped before either branch below: ``start()`` is re-entrant
+        # (an unconfigured boot runs only Tier A, and activation re-calls
+        # it for the Tier B cascade), and the engine has been up since
+        # the first of those, not the second.
+        if not self._started_at:
+            self._started_at = datetime.now(UTC).isoformat()
         if not getattr(self, "_tier_a_done", False):
             logger.info("engine_starting", org=self.org.name)
 
@@ -3489,6 +3497,18 @@ class Engine:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def started_at(self) -> str:
+        """When this engine first started, ISO-8601, or ``""``.
+
+        Stamped once at the top of :meth:`start`, before either of the
+        two places ``_running`` can flip -- the unconfigured early
+        return and the full startup cascade.  Keying off ``_running``
+        instead would report an engine that came up unconfigured, and is
+        very much running, as never started.
+        """
+        return self._started_at
 
     @property
     def shutting_down(self) -> bool:

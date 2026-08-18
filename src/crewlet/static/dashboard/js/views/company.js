@@ -3,7 +3,7 @@
 import { esc, escAttr, fmtNum } from "../format.js";
 import { icon } from "../icons.js";
 import { flattenSeats, flattenUnits } from "../org.js";
-import { empty, sectionHead, skeletonCards } from "../ui.js";
+import { emptyOrPending, sectionHead, skeletonCards } from "../ui.js";
 
 // One figure in the header grid. Keyed by its label: the set is fixed and
 // the label is what identifies a tile across renders, so a changing value
@@ -26,16 +26,13 @@ export function createCompanyView({ store }) {
     render(state) {
       const org = state.org || {};
       if (!org.name && !(org.units || []).length && !(org.roles || []).length) {
-        // An org that is genuinely unconfigured and one whose `/org` payload
-        // has not landed yet are the same empty object here, so the
-        // connection decides which of the two the reader is shown.
-        return state.connected
-          ? empty(
-              "building",
-              "No company configured",
-              "Import a company config with `crewlet config import`.",
-            )
-          : skeletonCards(4);
+        return emptyOrPending(
+          state,
+          () => skeletonCards(4),
+          "building",
+          "No company configured",
+          "Import a company config with `crewlet config import`.",
+        );
       }
 
       const seats = flattenSeats(org);

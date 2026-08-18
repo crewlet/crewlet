@@ -1571,8 +1571,14 @@
   color: var(--red-ink);
 }
 
-/* Degraded mode. The connection dot alone never read as "what you are
-   looking at may be stale" — this does. */
+/* The always-on health banner. The connection dot alone never read as
+   "what you are looking at may be stale" — this does.
+
+   Two tones, and the distinction is the point: `down` (red) means the
+   page cannot see the engine, `warn` (amber) means it can see it fine
+   and the engine is not doing what the reader assumes — no active
+   company configuration, so every inbound webhook is discarded. Both
+   are things you must be told without asking; only one is an outage. */
 .degraded {
   display: flex;
   align-items: center;
@@ -1580,13 +1586,113 @@
   margin: 0;
   padding: 9px 30px;
   font-size: 12.5px;
+}
+/* Both tones are declared. Neither is the bare `.degraded` default:
+   a banner with no tone would then inherit whichever colour happened to
+   be written first, and `bannerTone` returning a name nobody styled
+   would show as a correctly-worded warning in body text. */
+.degraded.down {
   color: var(--red-ink);
   background: color-mix(in srgb, var(--red) 10%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--red) 26%, transparent);
 }
+.degraded.warn {
+  color: var(--amber-ink);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
+}
 
+/* Red is reserved: it means something FAILED. */
 .warn-ink {
   color: var(--red-ink);
+}
+/* Amber means something needs attention and nothing has broken. */
+.caution-ink {
+  color: var(--amber-ink);
+}
+
+/* ---------------------------------------------------------------------------
+ * The health popover
+ * ---------------------------------------------------------------------------
+ * The panel material, over an opaque ground: `--bg-card` is a warm alpha
+ * in the dark theme, so a floating surface has to supply its own ground
+ * underneath or the page shows straight through it. Layering the wash
+ * over `--bg` composes the same material rather than inventing a second
+ * one.
+ */
+.health-pop {
+  background: linear-gradient(var(--bg-card), var(--bg-card)) var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  padding: 12px 14px 14px;
+  font-size: 12px;
+  animation: pop-in var(--dur) var(--ease);
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.hp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.hp-status {
+  font-weight: 600;
+  color: var(--heading);
+  text-transform: capitalize;
+}
+.hp-version {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.hp-section {
+  margin: 12px 0 5px;
+}
+/* Label left, value right, note on its own line beneath — a note is a
+   sentence and wrapping it into the value column turns every row into a
+   different height. */
+.hp-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 3px 0;
+}
+.hp-label {
+  color: var(--text-muted);
+}
+.hp-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.hp-note {
+  grid-column: 1 / -1;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.hp-action {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--bg-hover);
+  color: var(--accent-ink);
+  cursor: pointer;
+  text-align: center;
+  transition: background var(--dur);
+}
+.hp-action:hover {
+  background: var(--bg-active);
 }
 
 /* =====================================================================

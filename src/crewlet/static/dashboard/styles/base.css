@@ -173,6 +173,21 @@ code,
   gap: 10px;
   padding: 16px 18px 12px;
 }
+/* Anchored to the dot in the sidebar, but a child of <body> — see the
+   comment on the element in index.html for why it cannot live inside
+   the sidebar at all. `fixed` rather than `absolute` because the anchor
+   it wants is the viewport: the sidebar is `overflow-y: auto` (and so
+   `overflow-x: auto` too), so anything positioned against it wider than
+   the 250px column is clipped and anything taller scrolls away with the
+   nav. */
+.health-pop-wrap {
+  position: fixed;
+  top: 44px;
+  left: 12px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  z-index: var(--z-pop);
+}
 .brand img {
   width: 22px;
   height: 22px;
@@ -185,6 +200,29 @@ code,
   letter-spacing: var(--track-display);
   margin: 0;
   flex: 1;
+}
+/* The dot is the button's whole visible surface, so the hit target has
+   to come from the button: a 7px target is a 7px target no matter how
+   much meaning sits behind it. */
+.live-dot-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur);
+}
+.live-dot-btn:hover {
+  background: var(--bg-hover);
+}
+.live-dot-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .live-dot {
   width: 7px;
@@ -201,6 +239,10 @@ code,
   background: var(--red);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 16%, transparent);
 }
+/* `warn` and `drain` share the amber: an unconfigured engine and a
+   draining one are both "running, but not doing what you think". They
+   are told apart by the banner and the popover, not by a 7px dot. */
+.live-dot.warn,
 .live-dot.drain {
   background: var(--amber);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 16%, transparent);

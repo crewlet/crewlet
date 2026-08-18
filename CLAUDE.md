@@ -638,7 +638,23 @@ src/crewlet/          # Main package
                       #   `failed` flag says so. buildPulse is pure and
                       #   runs ONCE per render, threaded through to the
                       #   hero grid AND every seat card's strip so the two
-                      #   cannot disagree about a seat). Views are pure
+                      #   cannot disagree about a seat), health.js (THE
+                      #   ENGINE HEALTH SURFACE — a popover on the live
+                      #   dot, plus the two conditions that escalate into
+                      #   always-on chrome because they must never wait
+                      #   for a click: a dead socket, and an engine with
+                      #   NO ACTIVE COMPANY CONFIG, which discards every
+                      #   inbound webhook and used to render exactly like
+                      #   a healthy idle one. Booleans from the engine
+                      #   are read THREE-VALUED — losing the socket
+                      #   clears the health slice, so `=== false ? bad :
+                      #   good` renders "Configuration: active" on a page
+                      #   that cannot see the engine; the dot's
+                      #   status→class map is a table for the same
+                      #   reason. emptyOrPending in ui.js is where
+                      #   socket-down / nothing-configured / genuinely-
+                      #   empty are told apart once, for every list view).
+                      #   Views are pure
                       #   render(state) -> markup + a `slices` list;
                       #   hash router, per-view modules; turnRail() in ui.js
                       #   draws an in-flight turn as an object (phases spent

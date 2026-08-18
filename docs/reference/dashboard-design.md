@@ -29,6 +29,7 @@ placeholder or a coming-soon stub.
 | Company → Audit log | `#/audit` | `/config/audit` *(auth-gated)* |
 | Agents | `#/agents` | `/org` + live agent state |
 | Activity | `#/events` | the snapshot's `events`, then live `event` pushes, then the `events` query for stored history |
+| Engine health | the dot in the brand | the pushed `health` envelope + the `stream` query — a popover, not a screen (see [Health](#health)) |
 | Trace | `#/traces/{trace_id}` | the `trace` query — reached from a row, never from the nav |
 | Tokens | `#/tokens` | the pushed spend rollup; a `tokens` query for any other window |
 | Tools | `#/tools` | `/tools` |
@@ -121,6 +122,55 @@ is exactly the placeholder screen rule 6 forbids.
 `traceNodes.js` owns the node markup, the span arrangement, and the
 "is this worth opening" test, because three surfaces render the same
 thing and had begun to render it three ways.
+
+### Health
+
+The whole health surface used to be one 7px dot with three colours. Everything
+behind it had been on the wire the entire time and reached no pixel: whether a
+company configuration is even active, whether the event store is durable or
+will evaporate on the next restart, whether the activity feed was seeded from
+history, how many envelopes this tab has silently dropped.
+
+`js/health.js` renders it in a **popover on the dot** (`#health-pop`, a child
+of `<body>` — the sidebar is `position: sticky`, which always creates a
+stacking context, so a popover inside it paints under `.main` whatever
+z-index it carries). A health screen would be backed by real data, so it would
+not literally break the no-placeholder-screens rule — but it would break its
+purpose. Health has to be seen when you were *not* looking for it, and a
+screen you navigate to is one you open after you already suspect a problem.
+
+Two conditions escalate out of the popover into always-on chrome, because they
+must never wait for a click:
+
+| Condition | Chrome |
+|---|---|
+| The socket is down | Red dot, red banner naming how old the state on screen is |
+| No company configuration is active | Amber dot, amber banner — the engine is running and **discarding every inbound webhook** |
+
+The second is the one this surface exists for. An unconfigured engine used to
+render identically to a correctly-configured idle one: green dot, `status: ok`,
+and every list empty. It now says so in the banner, in the popover, in the
+overview's headline, and in every empty list — `emptyOrPending` in `js/ui.js`
+is where those three cases (socket down / nothing configured / this list is
+genuinely empty) are told apart once, instead of each view collapsing them
+into two.
+
+Nothing in the popover asserts a fact it cannot currently see. Losing the
+socket **clears** the health slice — a five-second-old tick is not evidence
+about now — so every field arrives `undefined`, and a plain
+`=== false ? bad : good` would render "Configuration: active" on a page that
+cannot reach the engine at all. Booleans from the engine are read three-valued,
+and the dot's status→class mapping is a lookup table rather than a ternary
+chain for the same reason: the chain's final `else` sent every unrecognised
+status to green, so a state added on the server would have *arrived* on screen
+as healthy.
+
+Per-socket facts (dropped envelopes, queue depth, tabs connected) come from
+the `stream` query, not the shared tick — the tick encodes one JSON string for
+every client by design, so a per-client field would force one encode per client
+per tick. A tab that has dropped envelopes is offered a reconnect, because a
+dropped envelope is gone: the server discards the *oldest* queued frame and
+never re-sends it, so a fresh handshake snapshot is the only repair.
 
 ### The turn rail
 
@@ -418,6 +468,13 @@ on, the tools that had already run. "No response text yet" is a
 statement about a call still in flight and is never shown for one that
 ended.
 
+Amber is the other half of that rule. `--amber` / `--amber-ink` (`.caution-ink`)
+means *needs attention, nothing has broken* — an engine with no event store, a
+provider chain that fell through and recovered, a company configuration that is
+not active. An engine with no event store has not failed, and painting it the
+same colour as a crashed turn trains the reader to ignore the colour that
+matters.
+
 **Every feed row carries a `failed` boolean**, decided once on the server
 (`live_state._light_event`): the event's own `failed` field, or a type that
 *is* a failure (`task_failed`, `llm_unavailable`, `budget_exhausted`,
@@ -458,7 +515,12 @@ operator went looking for them.
    split-transport bug the refactor removed.
 9. **New repeated row? Give it a `data-k`.** And never derive state the
    server already projects; mirror what it pushes.
-10. **New figure? Say what window it covers, and do not divide two windows
+10. **New engine fact? Decide what it renders as when it is unknown.** The
+    health slice is cleared on disconnect, so every field it carries arrives
+    `undefined` at exactly the moment the reader most needs the truth. A
+    two-way read of a three-way fact renders the unknown case as the healthy
+    one.
+11. **New figure? Say what window it covers, and do not divide two windows
     into each other.** Two numbers on one screen that disagree is worse than
     one number with a caveat. The budget bar is the one ratio on the page,
     and only because its numerator and denominator are the same engine run.

@@ -910,7 +910,7 @@ class LiveState:
 
     async def hydrate(
         self, store: Any, roles: list[str], *, only_states: bool = False
-    ) -> None:
+    ) -> bool:
         """Seed the projection from the event store at startup.
 
         Reads the baseline agent states, the recent-events tail, and the
@@ -925,24 +925,35 @@ class LiveState:
         seeded the (role-independent) token and event buffers.  Token and
         event hydration *add* to running totals, so they must run exactly
         once.
+
+        Returns whether the seeding actually happened.  Each leg swallows
+        its own store error (that is what "best effort" means for the
+        projection), so a caller that only watched for an exception could
+        not tell a seeded projection from an empty one — and the health
+        surface reporting "feed seeded from history" is exactly that
+        claim.  ``False`` is also the honest answer when there is no
+        store to read: nothing was seeded, and the reader is told so
+        rather than shown a green tick over an empty feed.
         """
         if store is None:
-            return
-        await self._hydrate_states(store, roles)
+            return False
+        ok = await self._hydrate_states(store, roles)
         if only_states:
-            return
-        await self._hydrate_tokens(store)
-        await self._hydrate_spend(store)
-        await self._hydrate_events(store)
+            return ok
+        ok = await self._hydrate_tokens(store) and ok
+        ok = await self._hydrate_spend(store) and ok
+        return await self._hydrate_events(store) and ok
 
-    async def _hydrate_states(self, store: Any, roles: list[str]) -> None:
+    async def _hydrate_states(self, store: Any, roles: list[str]) -> bool:
         if not roles:
-            return
+            # No roles configured yet is not a store failure — the
+            # standalone API hydrates once before its config lands.
+            return True
         try:
             states = await store.get_agent_states(roles)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("live_state_hydrate_states_failed", error=str(exc))
-            return
+            return False
         for role, st in states.items():
             agent = self._ensure_agent(role)
             agent.state = st.get("state", "offline")
@@ -952,15 +963,16 @@ class LiveState:
             agent.current_iteration = int(st.get("current_iteration", 0) or 0)
             if "afk_reason" in st:
                 agent.afk_reason = st.get("afk_reason", "") or ""
+        return True
 
-    async def _hydrate_tokens(self, store: Any) -> None:
+    async def _hydrate_tokens(self, store: Any) -> bool:
         try:
             token_events = await store.list_token_usage_events(
                 since_days=TOKEN_WINDOW_DAYS
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("live_state_hydrate_tokens_failed", error=str(exc))
-            return
+            return False
         for ev in token_events:
             role = ev.get("agent_role", "")
             if not role:
@@ -971,8 +983,9 @@ class LiveState:
             agent.total_tokens += int(ev.get("total_tokens", 0) or 0)
             if event_id := ev.get("event_id", ""):
                 _remember(self._counted_token_ids, event_id)
+        return True
 
-    async def _hydrate_spend(self, store: Any) -> None:
+    async def _hydrate_spend(self, store: Any) -> bool:
         """Seed the spend rollup so the first snapshot is not blank."""
         try:
             records = await store.list_phase_token_events(
@@ -980,7 +993,7 @@ class LiveState:
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("live_state_hydrate_spend_failed", error=str(exc))
-            return
+            return False
         for record in sorted(records, key=lambda r: r.get("timestamp", "")):
             if event_id := record.get("event_id", ""):
                 if event_id in self._counted_phase_ids:
@@ -993,13 +1006,14 @@ class LiveState:
         ordered = sorted(self._phase_spend, key=lambda r: r["timestamp"])
         self._phase_spend.clear()
         self._phase_spend.extend(ordered)
+        return True
 
-    async def _hydrate_events(self, store: Any) -> None:
+    async def _hydrate_events(self, store: Any) -> bool:
         try:
             events = await store.list_events(limit=self._events.maxlen or 400)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("live_state_hydrate_events_failed", error=str(exc))
-            return
+            return False
         # ``list_events`` is newest-first; the buffer is chronological.
         # Every store row decides its own ``failed`` now (from the tag
         # the writer stamps, since that read never selects the payload
@@ -1008,3 +1022,4 @@ class LiveState:
         # the hydrated one alike.
         for row in reversed(events):
             self._events.append(_light_event(row, failed=bool(row.get("failed"))))
+        return True
