@@ -11,9 +11,16 @@ const WINDOWS = [
   { d: 30, label: "30d" },
 ];
 
-export function createTokensView({ store, api, navigate }) {
-  let root;
-  let win = store.state.tokens ? store.state.tokens.window : 7;
+export function createTokensView({ store, query, refresh }) {
+  // The live rollup the server pushes covers one window (its own), and
+  // that is the default here. Ask for any other window and this view
+  // queries for it and holds the answer locally — the pushed rollup
+  // keeps updating underneath and takes over again when the window
+  // returns to the live one.
+  const liveWindow = (store.state.tokens && store.state.tokens.since_days) || 7;
+  let win = liveWindow;
+  let queried = null; // {window, data} for a non-live window
+  let loading = false;
 
   function statGrid(t) {
     const cell = (label, value, sub) => `
@@ -172,51 +179,54 @@ export function createTokensView({ store, api, navigate }) {
     </div>`;
   }
 
-  function render() {
-    const cached = store.state.tokens;
-    if (!cached || !cached.data) {
-      root.innerHTML = windowBar() + skeletonCards(4);
-      return;
-    }
-    const d = cached.data;
-    if (!d.by_phase || !d.by_phase.length) {
-      root.innerHTML = windowBar() + empty("zap", `No phase events in the last ${win}d`);
-      return;
-    }
-    root.innerHTML = `
-      ${windowBar()}
-      ${statGrid(d.totals)}
-      <div class="card" style="padding:18px 20px">${phaseBar(d.by_phase, d.totals.total_tokens)}</div>
-      ${phaseTable(d.by_phase)}
-      ${modelTable(d.by_model || [])}
-      ${workerTable(d.by_worker || [])}
-      ${agentMatrix(d.by_agent || [], d.by_phase)}
-      ${turnTable(d.by_turn || [])}`;
+  function rollup(state) {
+    if (win === liveWindow) return state.tokens;
+    return queried && queried.window === win ? queried.data : null;
   }
 
   async function load() {
-    const d = await api.tokens({ sinceDays: win });
-    if (d && !d._error) store.setTokens(win, d);
-    if (root && root.isConnected) render();
+    loading = true;
+    refresh();
+    try {
+      const data = await query("tokens", { since_days: win });
+      queried = { window: win, data };
+    } catch {
+      queried = { window: win, data: null };
+    }
+    loading = false;
+    refresh();
   }
 
   return {
-    mount(el) {
-      root = el;
-      render();
-      // (Re)load unless the cached window already matches.
-      if (
-        !(store.state.tokens && store.state.tokens.window === win && store.state.tokens.data)
-      ) {
-        load();
+    // The live window re-renders as the server pushes new spend; a
+    // queried window is static until the reader changes it back.
+    slices: ["tokens"],
+
+    render(state) {
+      const d = rollup(state);
+      if (loading || !d) return windowBar() + skeletonCards(4);
+      if (!d.by_phase || !d.by_phase.length) {
+        return windowBar() + empty("zap", `No phase events in the last ${win}d`);
       }
+      return `
+        ${windowBar()}
+        ${statGrid(d.totals)}
+        <div class="card phase-panel">${phaseBar(d.by_phase, d.totals.total_tokens)}</div>
+        ${phaseTable(d.by_phase)}
+        ${modelTable(d.by_model || [])}
+        ${workerTable(d.by_worker || [])}
+        ${agentMatrix(d.by_agent || [], d.by_phase)}
+        ${turnTable(d.by_turn || [])}`;
     },
+
     // "agent" navigation is handled globally; we only own the window switch.
     onAction(action, t) {
-      if (action === "win") {
-        win = Number(t.dataset.d);
-        store.setTokens(win, null);
-        render();
+      if (action !== "win") return;
+      win = Number(t.dataset.d);
+      if (win === liveWindow) {
+        queried = null;
+        refresh();
+      } else {
         load();
       }
     },

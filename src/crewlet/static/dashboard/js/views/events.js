@@ -22,13 +22,11 @@ function isInspectable(e) {
   );
 }
 
-export function createEventsView({ store, navigate }) {
-  let root;
+export function createEventsView({ navigate, refresh }) {
   const expanded = new Set();
   const cats = new Set();
   const agents = new Set();
   let sortAsc = false;
-  let lastSig = "";
 
   function filtered(state) {
     let evs = state.events || [];
@@ -100,7 +98,7 @@ export function createEventsView({ store, navigate }) {
 
     if (solo) {
       return `
-        <div class="trace" data-trace="${esc(g.key)}">
+        <div class="trace" data-k="t:${esc(g.key)}" data-trace="${esc(g.key)}">
           <div class="trace-head ${inspectRoot ? "expandable" : ""}" ${inspectRoot ? `data-action="open" data-id="${esc(r.id)}"` : ""}>
             <span style="width:14px"></span>
             <span class="node-dot ${catClass(r.category)}"></span>
@@ -119,7 +117,7 @@ export function createEventsView({ store, navigate }) {
         const insp = isInspectable(c);
         const skipped = c.type === "notification_skipped";
         return `
-        <div class="trace-child ${insp ? "clickable" : ""} ${skipped ? "skipped" : ""}"
+        <div class="trace-child ${insp ? "clickable" : ""} ${skipped ? "skipped" : ""}" data-k="c:${esc(c.id)}"
              ${insp ? `data-action="open" data-id="${esc(c.id)}"` : ""}>
           <span class="node-dot ${catClass(c.category)}" style="width:7px;height:7px"></span>
           <span class="trace-summary">${eventSummary(c)}</span>
@@ -133,7 +131,7 @@ export function createEventsView({ store, navigate }) {
       .join("");
 
     return `
-      <div class="trace ${open ? "open" : ""}" data-trace="${esc(g.key)}">
+      <div class="trace ${open ? "open" : ""}" data-k="t:${esc(g.key)}" data-trace="${esc(g.key)}">
         <div class="trace-head expandable" data-action="toggle" data-key="${esc(g.key)}">
           ${icon("chevron", "chevron")}
           <span class="node-dot ${catClass(r.category)}"></span>
@@ -144,71 +142,58 @@ export function createEventsView({ store, navigate }) {
             <span class="row-ts" data-ts="${esc(g.last)}">${esc(relTime(g.last))}</span>
           </div>
         </div>
-        <div class="trace-kids">${kids}</div>
+        <div class="trace-kids">${open ? kids : ""}</div>
       </div>`;
   }
 
-  function render(state) {
-    const evs = filtered(state);
-    const sig = sortAsc + "|" + [...cats].join(",") + "|" + [...agents].join(",") + "|" +
-      evs.map((e) => e.id).join(",");
-    if (sig === lastSig && root.querySelector(".trace")) {
-      // Same events → just refresh relative timestamps in place so we
-      // preserve scroll position and expansion state.
-      root.querySelectorAll(".row-ts[data-ts]").forEach((el) => {
-        el.textContent = relTime(el.dataset.ts);
-      });
-      return;
-    }
-    lastSig = sig;
-    const groups = groupTraces(evs);
-    root.innerHTML = `
-      <div class="sec"><span class="sec-title">${icon("inbox", "sm")} Traces
-        <span class="sec-count">${evs.length}</span></span></div>
-      ${filterBar(state)}
-      ${
-        groups.length
-          ? '<div class="list">' + groups.map(renderTrace).join("") + "</div>"
-          : empty("inbox", "No events", cats.size || agents.size ? "No events match the selected filters" : "Activity will appear here as agents work")
-      }`;
-  }
-
   return {
-    mount(el) {
-      root = el;
-      root.innerHTML = skeletonRows(6);
-      render(store.state);
+    slices: ["events", "health"],
+
+    render(state) {
+      if (!state.connected && !(state.events || []).length) return skeletonRows(6);
+      const evs = filtered(state);
+      const groups = groupTraces(evs);
+      return `
+        <div class="sec"><span class="sec-title">${icon("inbox", "sm")} Traces
+          <span class="sec-count">${evs.length}</span></span></div>
+        ${filterBar(state)}
+        ${
+          groups.length
+            ? '<div class="list">' + groups.map(renderTrace).join("") + "</div>"
+            : empty(
+                "inbox",
+                "No events",
+                cats.size || agents.size
+                  ? "No events match the selected filters"
+                  : "Activity will appear here as agents work",
+              )
+        }`;
     },
+
     onAction(action, t) {
       if (action === "toggle") {
         const k = t.dataset.key;
-        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
-        lastSig = "";
-        render(store.state);
+        if (expanded.has(k)) expanded.delete(k);
+        else expanded.add(k);
       } else if (action === "open") {
         navigate("/events/" + encodeURIComponent(t.dataset.id));
+        return;
       } else if (action === "cat") {
         const c = t.dataset.cat;
-        cats.has(c) ? cats.delete(c) : cats.add(c);
-        lastSig = "";
-        render(store.state);
+        if (cats.has(c)) cats.delete(c);
+        else cats.add(c);
       } else if (action === "cat-all") {
         cats.clear();
-        lastSig = "";
-        render(store.state);
       } else if (action === "actor") {
         const a = t.dataset.actor;
-        agents.has(a) ? agents.delete(a) : agents.add(a);
-        lastSig = "";
-        render(store.state);
+        if (agents.has(a)) agents.delete(a);
+        else agents.add(a);
       } else if (action === "sort") {
         sortAsc = !sortAsc;
-        lastSig = "";
-        render(store.state);
+      } else {
+        return;
       }
-    },
-    update(state) {
-      if (root && root.isConnected) render(state);
+      refresh();
     },
   };
 }

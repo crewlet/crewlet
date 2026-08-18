@@ -1,6 +1,6 @@
 // Tools view: builtin + MCP tools grouped by source.
 
-import { esc } from "../format.js";
+import { esc, escAttr } from "../format.js";
 import { icon } from "../icons.js";
 import { empty, sectionHead, skeletonRows } from "../ui.js";
 
@@ -19,30 +19,37 @@ function sourceLabel(source) {
 }
 
 export function createToolsView({ store }) {
-  let root;
+  return {
+    slices: ["tools", "health"],
 
-  function render(state) {
-    const tools = state.tools || [];
-    if (!tools.length) {
-      root.innerHTML =
-        sectionHead("wrench", "Tools", 0) + empty("wrench", "No tools registered");
-      return;
-    }
-    const groups = {};
-    for (const t of tools) {
-      const src = t.source || "builtin";
-      (groups[src] ||= []).push(t);
-    }
-    const order = Object.keys(groups).sort((a, b) =>
-      a === "builtin" ? -1 : b === "builtin" ? 1 : a.localeCompare(b),
-    );
+    render(state) {
+      const tools = state.tools || [];
+      if (!tools.length) {
+        // A tool registry that is genuinely empty and one that has not
+        // arrived yet look identical in the store, so the connection
+        // decides which of the two the reader is shown.
+        return state.connected
+          ? sectionHead("wrench", "Tools", 0) + empty("wrench", "No tools registered")
+          : skeletonRows(5);
+      }
+      const groups = {};
+      for (const t of tools) {
+        const src = t.source || "builtin";
+        (groups[src] ||= []).push(t);
+      }
+      const order = Object.keys(groups).sort((a, b) =>
+        a === "builtin" ? -1 : b === "builtin" ? 1 : a.localeCompare(b),
+      );
 
-    const sections = order
-      .map((src) => {
-        const cards = groups[src]
-          .map(
-            (t) => `
-          <div class="tool-card">
+      const sections = order
+        .map((src) => {
+          const cards = groups[src]
+            // A tool name is unique only within its source, so the card key
+            // carries the source too — otherwise the same name served by two
+            // MCP servers would collide in the patcher's key index.
+            .map(
+              (t) => `
+          <div class="tool-card" data-k="tool:${escAttr(src)}:${escAttr(t.name)}">
             <div class="tool-card-name">${icon("wrench", "sm")} ${esc(t.name)}</div>
             <div class="tool-card-desc">${esc(t.description || "No description")}</div>
             ${
@@ -51,30 +58,20 @@ export function createToolsView({ store }) {
                 : ""
             }
           </div>`,
-          )
-          .join("");
-        return `
-        <div class="tool-group">
+            )
+            .join("");
+          return `
+        <div class="tool-group" data-k="src:${escAttr(src)}">
           <div class="tool-group-head">
             <span class="source-badge ${sourceBadge(src)}">${esc(sourceLabel(src))}</span>
             <span class="sec-count">${groups[src].length}</span>
           </div>
           <div class="tool-grid">${cards}</div>
         </div>`;
-      })
-      .join("");
+        })
+        .join("");
 
-    root.innerHTML = sectionHead("wrench", "Available Tools", tools.length) + sections;
-  }
-
-  return {
-    mount(el) {
-      root = el;
-      if (!(store.state.tools || []).length) root.innerHTML = skeletonRows(5);
-      render(store.state);
-    },
-    update(state) {
-      if (root && root.isConnected) render(state);
+      return sectionHead("wrench", "Available Tools", tools.length) + sections;
     },
   };
 }

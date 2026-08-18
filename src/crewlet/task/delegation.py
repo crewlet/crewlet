@@ -123,6 +123,11 @@ class DelegationHandler:
         await self._queue.publish(
             "crewlet.events.task_completed",
             TaskCompleted(
+                # No ``role``, deliberately. This is the task engine
+                # rolling a parent up from its children, not a seat
+                # finishing a turn — ``assignee`` is an agent id, and
+                # naming a role here would flip that agent to idle on
+                # the dashboard while its own turn is still running.
                 source="delegation",
                 task_id=parent_task.id_str,
                 agent_id=parent_task.assignee,

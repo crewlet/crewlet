@@ -11,8 +11,11 @@ import {
   toolsAvailable,
   promptSections,
   responseBody,
+  failureBlock,
+  failureOf,
   tokenStats,
 } from "../llm.js";
+import { recordFromEvent, recordFromPhase } from "../records.js";
 
 const A2A = new Set([
   "a2a_channel_opened",
@@ -44,34 +47,37 @@ function adfText(node) {
   return out;
 }
 
-export function createEventDetailView({ api, navigate, params }) {
-  let root;
+export function createEventDetailView({ query, navigate, refresh, params }) {
   let raw = null;
+  let loading = true;
+  let loadError = "";
+  const openPrompts = new Set();
+  const collapsedThinks = new Set();
+  const openTools = new Set();
 
   function renderLLM(p, ev) {
-    const rec = {
-      model: p.model || "",
-      phase: p.phase || "turn",
-      notes: p.notes || "",
-      prompt_messages: p.prompt_messages,
-      system_prompt: p.system_prompt,
-      user_prompt: p.user_prompt,
-      prompt: p.prompt,
-      response: p.response,
-      input_tokens: p.input_tokens,
-      output_tokens: p.output_tokens,
-      total_tokens: p.total_tokens,
-      tool_executions: p.tool_executions || [],
-      tools_available: p.tools_available || [],
-      tool_catalogue: p.tool_catalogue || [],
-    };
+    // The record comes from the shared normalizer rather than a field
+    // list written out here. This view used to keep its own copy of that
+    // list, which is how a failed phase reached this screen with its
+    // failure quietly stripped off.
+    const rec = recordFromEvent(ev) || recordFromPhase(p, ev.timestamp);
+    const failure = failureOf(rec);
     return `
+      ${failure ? failureBlock(failure) : ""}
       ${tokenStats(rec)}
       ${toolsAvailable(rec)}
-      <div class="block-label">Prompt</div>${promptSections(rec)}
+      <div class="block-label">Prompt</div>${promptSections(rec, {
+        keyPrefix: "ev",
+        isOpen: (k, long) => (openPrompts.has(k) ? true : !long),
+      })}
       <div class="block-label">Response</div>${responseBody(rec.response, rec.tool_executions, {
+        keyPrefix: "ev",
+        thinkOpen: (k) => !collapsedThinks.has(k),
+        toolOpen: (k) => openTools.has(k),
         codingAgent: isCodingAgentPhase(rec),
         model: rec.model,
+        failure,
+        inProgress: false,
       })}`;
   }
 
@@ -266,9 +272,9 @@ export function createEventDetailView({ api, navigate, params }) {
       body = renderGeneric(p);
     }
 
-    root.innerHTML = `
+    return `
       <div class="back-link" data-action="back">${icon("chevron", "sm")} Back to activity</div>
-      <div class="card" style="padding:18px">
+      <div class="card event-detail">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
           <span class="badge info">${esc(title)}</span>
           <span class="row-ts">${esc(fmtDateTime(ev.timestamp))}</span>
@@ -286,33 +292,65 @@ export function createEventDetailView({ api, navigate, params }) {
   }
 
   async function load(id) {
-    const ev = await api.event(id);
-    if (!ev || ev._error) {
-      root.innerHTML = `<div class="back-link" data-action="back">${icon("chevron", "sm")} Back</div>${empty("inbox", "Event not found")}`;
-      return;
+    try {
+      raw = await query("event", { id });
+    } catch (err) {
+      loadError = err.message;
     }
-    render(ev);
+    loading = false;
+    refresh();
   }
 
   return {
-    mount(el) {
-      root = el;
-      root.innerHTML = '<div class="skel skel-row" style="margin:24px 0"></div>';
+    slices: [],
+
+    mount() {
       load(params.id);
     },
-    onAction(action, target) {
-      if (action === "back") navigate("/events");
-      else if (action === "copy")
-        copyToClipboard(JSON.stringify(raw || {}, null, 2)).then(() => toast("Copied"));
-      else if (action === "toggle-prompt")
-        target.closest(".msg-block")?.classList.toggle("open");
-      else if (action === "toggle-think")
-        target.closest(".think")?.classList.toggle("open");
-      else if (action === "toggle-tool") {
-        const k = target.dataset.tkey;
-        const sel = window.CSS && CSS.escape ? CSS.escape(k) : k;
-        root.querySelector(`[data-tool-key="${sel}"]`)?.classList.toggle("open");
+
+    render() {
+      const back = `<div class="back-link" data-action="back">${icon("chevron", "sm")} Back</div>`;
+      if (loading) return back + '<div class="skel skel-row" style="margin:24px 0"></div>';
+      if (loadError || !raw) {
+        return (
+          back +
+          empty(
+            "inbox",
+            loadError === "no_event_store"
+              ? "No event store configured"
+              : "Event not found",
+            loadError === "offline" ? "Reconnecting…" : "",
+          )
+        );
       }
+      return render(raw);
+    },
+
+    onAction(action, target) {
+      if (action === "back") {
+        navigate("/events");
+        return;
+      }
+      if (action === "copy") {
+        copyToClipboard(JSON.stringify(raw || {}, null, 2)).then(() => toast("Copied"));
+        return;
+      }
+      if (action === "toggle-prompt") {
+        const k = target.dataset.pkey;
+        if (openPrompts.has(k)) openPrompts.delete(k);
+        else openPrompts.add(k);
+      } else if (action === "toggle-think") {
+        const k = target.dataset.tkey;
+        if (collapsedThinks.has(k)) collapsedThinks.delete(k);
+        else collapsedThinks.add(k);
+      } else if (action === "toggle-tool") {
+        const k = target.dataset.tkey;
+        if (openTools.has(k)) openTools.delete(k);
+        else openTools.add(k);
+      } else {
+        return;
+      }
+      refresh();
     },
   };
 }

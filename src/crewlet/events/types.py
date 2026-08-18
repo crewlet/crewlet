@@ -265,6 +265,17 @@ class TaskStarted(Event):
     type: str = "task_started"
     task_id: str = ""
     agent_id: str = ""
+    role: str = ""
+    """The agent's role name — its seat, and the key every projection
+    groups an agent by.
+
+    Load-bearing, not decorative: the event store tags a row's
+    ``agent_role`` from this field and the dashboard's live projection
+    keys on it, so a task event published without one is invisible to
+    both.  That is exactly what happened — an agent's current task never
+    appeared on a dashboard, and a seat stayed "working" past the end of
+    its turn, because the task lifecycle events carried the role only in
+    ``source``, which neither consumer reads."""
 
     @property
     def summary(self) -> str:
@@ -280,6 +291,17 @@ class TaskCompleted(Event):
     task_id: str = ""
     agent_id: str = ""
     result: str = ""
+    role: str = ""
+    """The agent's role name — its seat, and the key every projection
+    groups an agent by.
+
+    Load-bearing, not decorative: the event store tags a row's
+    ``agent_role`` from this field and the dashboard's live projection
+    keys on it, so a task event published without one is invisible to
+    both.  That is exactly what happened — an agent's current task never
+    appeared on a dashboard, and a seat stayed "working" past the end of
+    its turn, because the task lifecycle events carried the role only in
+    ``source``, which neither consumer reads."""
 
     @property
     def summary(self) -> str:
@@ -295,6 +317,17 @@ class TaskFailed(Event):
     task_id: str = ""
     agent_id: str = ""
     error: str = ""
+    role: str = ""
+    """The agent's role name — its seat, and the key every projection
+    groups an agent by.
+
+    Load-bearing, not decorative: the event store tags a row's
+    ``agent_role`` from this field and the dashboard's live projection
+    keys on it, so a task event published without one is invisible to
+    both.  That is exactly what happened — an agent's current task never
+    appeared on a dashboard, and a seat stayed "working" past the end of
+    its turn, because the task lifecycle events carried the role only in
+    ``source``, which neither consumer reads."""
 
     @property
     def summary(self) -> str:

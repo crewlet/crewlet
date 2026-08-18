@@ -360,8 +360,14 @@ code,
   padding: 26px 30px 60px;
 }
 
-/* The site reveals content with a short rise; `cascade-enter` staggers the
-   first few children of a view the way its sections stagger on scroll. */
+/* Entrance motion belongs to the thing that arrived, not to the screen.
+   `#view` used to carry a staggered cascade over its top-level children,
+   which was fine for a page load and disastrous once the view re-rendered
+   on every websocket envelope: each render inserted brand-new children,
+   restarting a 450ms fade-from-invisible on the whole screen several times
+   a second. That is what "the dashboard refreshes multiple times" looked
+   like. Renders now patch in place (js/patch.js), so the only thing that
+   animates is a row the patcher actually inserted, marked `.is-entering`. */
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -372,23 +378,27 @@ code,
     transform: none;
   }
 }
-.cascade-enter > * {
-  animation: fade-up 0.45s var(--ease) both;
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-.cascade-enter > *:nth-child(1) {
-  animation-delay: 0s;
+.view > * {
+  animation: fade-up 0.32s var(--ease) both;
 }
-.cascade-enter > *:nth-child(2) {
-  animation-delay: 45ms;
+.is-entering {
+  animation: row-in 0.26s var(--ease) both;
 }
-.cascade-enter > *:nth-child(3) {
-  animation-delay: 90ms;
-}
-.cascade-enter > *:nth-child(4) {
-  animation-delay: 0.135s;
-}
-.cascade-enter > *:nth-child(n + 5) {
-  animation-delay: 0.18s;
+/* A view's own children animate on mount only. Re-render patches them in
+   place, so they never re-trigger — but a row the patcher inserts into an
+   already-mounted list should still arrive, hence the override above. */
+.view > *.is-entering {
+  animation: row-in 0.26s var(--ease) both;
 }
 
 @keyframes pulse {

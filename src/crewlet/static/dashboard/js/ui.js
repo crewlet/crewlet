@@ -115,3 +115,61 @@ export function sectionHead(iconId, title, count, link) {
       ${link ? `<span class="sec-link" data-action="${esc(link.action)}">${esc(link.label)} →</span>` : ""}
     </div>`;
 }
+
+// ---------------------------------------------------------------------
+// Sparklines
+// ---------------------------------------------------------------------
+// Every widget on the overview showed one number and no history, so a
+// dashboard that was busy looked exactly like one that had been idle for
+// an hour. These draw a trend from data the client already has — the
+// activity feed's timestamps, the spend rollup's per-turn rows — so they
+// cost no request and no server work.
+
+// Bucket timestamped items into `buckets` equal slices ending now, and
+// return the per-bucket totals. `valueOf` defaults to counting items.
+export function bucketSeries(items, { minutes = 60, buckets = 24, valueOf } = {}) {
+  const now = Date.now();
+  const span = minutes * 60_000;
+  const width = span / buckets;
+  const series = new Array(buckets).fill(0);
+  for (const item of items || []) {
+    const at = Date.parse(item.timestamp || item.ended_at || "");
+    if (!at) continue;
+    const age = now - at;
+    if (age < 0 || age > span) continue;
+    const idx = Math.min(buckets - 1, Math.floor((span - age) / width));
+    series[idx] += valueOf ? valueOf(item) : 1;
+  }
+  return series;
+}
+
+// An area sparkline with a dot on the last point. Drawn as inline SVG in
+// `currentColor` so one function serves every hue, and given an explicit
+// height so a widget's layout never shifts when the data arrives.
+export function sparkline(series, { height = 28, fill = true } = {}) {
+  const points = series || [];
+  if (points.length < 2) return `<div class="spark" style="height:${height}px"></div>`;
+  const max = Math.max(...points, 1);
+  const stepX = 100 / (points.length - 1);
+  const y = (v) => (1 - v / max) * (height - 4) + 2;
+  const line = points.map((v, i) => `${(i * stepX).toFixed(2)},${y(v).toFixed(2)}`);
+  const last = points[points.length - 1];
+  return `
+    <svg class="spark" viewBox="0 0 100 ${height}" preserveAspectRatio="none" aria-hidden="true">
+      ${fill ? `<polygon class="spark-area" points="0,${height} ${line.join(" ")} 100,${height}"></polygon>` : ""}
+      <polyline class="spark-line" points="${line.join(" ")}"></polyline>
+      <circle class="spark-dot" cx="100" cy="${y(last).toFixed(2)}" r="2"></circle>
+    </svg>`;
+}
+
+// A stat widget: label, headline number, a supporting line, and a trend.
+export function statWidget({ hue, iconId, label, value, foot, series, action }) {
+  const clickable = action ? ` clickable" data-action="${escAttr(action)}` : "";
+  return `
+    <div class="widget ${hue}${clickable}" data-k="w:${escAttr(label)}">
+      <div class="widget-head">${icon(iconId, "sm")} ${esc(label)}</div>
+      <div class="widget-big">${esc(String(value))}</div>
+      <div class="widget-foot">${foot || ""}</div>
+      ${series ? sparkline(series) : ""}
+    </div>`;
+}

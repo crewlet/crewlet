@@ -260,6 +260,11 @@ export function responseBody(response, toolExecutions, opts = {}) {
   // native LLM response — render it with its own findings / activity / error
   // sections (markdown + a collapsible step log).
   if (opts.codingAgent) return codingAgentBody(response, opts);
+  // A failed phase leads with WHY. Everything the phase managed before it
+  // died still renders underneath — the prompt it was working, the tools
+  // that had already run — because that partial work is most of what
+  // makes a failure diagnosable.
+  const failurePrefix = opts.failure ? failureBlock(opts.failure) : "";
   const {
     keyPrefix = "",
     thinkOpen = () => true,
@@ -347,7 +352,7 @@ export function responseBody(response, toolExecutions, opts = {}) {
             : "",
       )
       .join("");
-    return out || '<div class="empty-sub">No response text yet</div>';
+    return failurePrefix + (out || emptyResponse(opts));
   }
 
   // Distribute tool calls across inter-paragraph slots, preserving order.
@@ -369,7 +374,74 @@ export function responseBody(response, toolExecutions, opts = {}) {
       html += `<div class="resp-para">${esc(para)}${badges}</div>${details}`;
     }
   });
-  return html || '<div class="empty-sub">No response text yet</div>';
+  return failurePrefix + (html || emptyResponse(opts));
+}
+
+// What to say when a record carries no response text.
+//
+// "No response text yet" is a statement about an in-flight call, and
+// showing it for a call that will never answer is how a hard failure
+// used to read as a hang. A finished call with nothing in it says so;
+// a failed one has already rendered its reason above and does not need
+// a placeholder at all.
+function emptyResponse(opts = {}) {
+  if (opts.failure) return "";
+  if (opts.inProgress === false) {
+    return '<div class="empty-sub">This call produced no response text.</div>';
+  }
+  return '<div class="empty-sub">No response text yet</div>';
+}
+
+// Human labels for the failure classes the engine reports. The key is
+// ``error_kind`` — the classified provider error where there was one,
+// otherwise the exception type or guard-breach kind.
+const FAILURE_LABEL = {
+  rate_limit: "Rate limited",
+  auth: "Authentication rejected",
+  timeout: "Timed out",
+  overloaded: "Provider overloaded",
+  connection: "Could not reach the provider",
+  budget_exhausted: "Token budget exhausted",
+  llm_unavailable: "No LLM provider available",
+  unhandled_exception: "Unhandled error",
+  scheduled_timeout: "Ran past its time cap",
+  stall: "Stalled",
+  max_iter: "Hit the round cap",
+  depth_cap: "Delegation too deep",
+  fatal: "Provider rejected the call",
+};
+
+export function failureLabel(kind) {
+  const key = String(kind || "").toLowerCase();
+  return FAILURE_LABEL[key] || (key ? triggerLabel(key) : "Failed");
+}
+
+// The failure banner shown at the top of a failed call.
+export function failureBlock(failure) {
+  if (!failure) return "";
+  const kind = failure.kind || failure.error_kind || "";
+  const message = failure.message || failure.error || "";
+  return `
+    <div class="failure">
+      <div class="failure-head">
+        ${icon("alert", "sm")}
+        <span class="failure-title">${esc(failureLabel(kind))}</span>
+        ${kind ? `<span class="failure-kind">${esc(kind)}</span>` : ""}
+      </div>
+      ${message ? `<pre class="failure-msg">${esc(message)}</pre>` : ""}
+    </div>`;
+}
+
+// Normalize the failure a record carries into the shape the block above
+// renders, or ``null`` when the record did not fail. Records arrive from
+// two places — the event store's LLM history and the live projection's
+// in-flight call — and this is the one place that difference is
+// reconciled.
+export function failureOf(record) {
+  if (!record) return null;
+  if (record.error && typeof record.error === "object") return record.error;
+  if (!record.failed) return null;
+  return { kind: record.error_kind || "", message: record.error || "" };
 }
 
 // One-line stats row (in / out / total tokens).

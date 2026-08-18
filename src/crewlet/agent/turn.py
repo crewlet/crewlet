@@ -784,6 +784,7 @@ class TurnEngine:
             await self._publish(
                 TaskFailed(
                     source=agent.role_name,
+                    role=agent.role_name,
                     task_id=turn.task_id,
                     agent_id=agent.id_str,
                     error=str(exc),
@@ -842,6 +843,7 @@ class TurnEngine:
             await self._publish(
                 TaskStarted(
                     source=agent.role_name,
+                    role=agent.role_name,
                     task_id=turn.task_id,
                     agent_id=agent.id_str,
                 ),
@@ -886,6 +888,7 @@ class TurnEngine:
                         await self._publish(
                             TaskFailed(
                                 source=agent.role_name,
+                                role=agent.role_name,
                                 task_id=turn.task_id,
                                 agent_id=agent.id_str,
                                 error=f"scheduled task exceeded {secs}s",
@@ -900,6 +903,7 @@ class TurnEngine:
                 await self._publish(
                     TaskCompleted(
                         source=agent.role_name,
+                        role=agent.role_name,
                         task_id=turn.task_id,
                         agent_id=agent.id_str,
                         result=final_text[:2000],
@@ -942,6 +946,7 @@ class TurnEngine:
             await self._publish(
                 TaskFailed(
                     source=agent.role_name,
+                    role=agent.role_name,
                     task_id=turn.task_id,
                     agent_id=agent.id_str,
                     error=f"LLM unavailable: {exc.last_exc}",
@@ -965,6 +970,7 @@ class TurnEngine:
             await self._publish(
                 TaskFailed(
                     source=agent.role_name,
+                    role=agent.role_name,
                     task_id=turn.task_id,
                     agent_id=agent.id_str,
                     error=str(exc),
