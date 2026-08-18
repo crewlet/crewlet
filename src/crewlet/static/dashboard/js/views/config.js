@@ -56,16 +56,23 @@ export function createConfigView({ query, refresh, setToken }) {
   let raw = false;
   let retryTimer = 0;
   let retryDelay = RETRY_MS;
+  // A reply can land after the reader has navigated away. Clearing the
+  // timer in `destroy` is not enough on its own: the late reply would
+  // arm a NEW one, and that poll outlives the view it was reading for
+  // with nothing left to clear it.
+  let disposed = false;
 
   async function load() {
     // No token: `render` shows the gate, and asking would only earn an
     // `unauthorized` the reader cannot act on any differently.
-    if (!apiToken()) return;
+    if (disposed || !apiToken()) return;
     clearTimeout(retryTimer);
     retryTimer = 0;
     try {
       active = await query("config", {});
+      if (disposed) return;
     } catch (err) {
+      if (disposed) return;
       loadError = err.message;
       if (RETRIABLE.has(loadError)) {
         retryTimer = setTimeout(load, retryDelay);
@@ -84,6 +91,7 @@ export function createConfigView({ query, refresh, setToken }) {
     // config store) costs that line and nothing else on the screen.
     query("config_audit", {})
       .then((audit) => {
+        if (disposed) return;
         revisions = (audit && audit.revisions) || [];
         refresh();
       })
@@ -186,6 +194,7 @@ export function createConfigView({ query, refresh, setToken }) {
     },
 
     destroy() {
+      disposed = true;
       clearTimeout(retryTimer);
     },
   };

@@ -318,6 +318,10 @@ class TimescaleDBEventStore:
         # AFK when its newest event among {failure, real work} is a
         # failure.  ``task_completed`` / ``task_failed`` are deliberately
         # NOT "real work" here — they are the failure's own epilogue.
+        # ``agent_spawned`` and ``agent_terminated`` are in the set for
+        # the opposite reason: neither is a failure, so either one being
+        # newest breaks the hold.  Without them a respawned seat reads as
+        # AFK forever, and a terminated one reads as AFK rather than gone.
         sql_afk = f"""
             SELECT DISTINCT ON (agent_role)
                 agent_role,
@@ -327,7 +331,7 @@ class TimescaleDBEventStore:
             WHERE event_type IN (
                     'llm_unavailable','turn.guard_breach','budget_exhausted',
                     'task_started','agent_phase_started','agent_turn_progress',
-                    'agent_spawned'
+                    'agent_spawned','agent_terminated'
                 )
               AND agent_role = ANY($1::text[])
               AND event_time >= now() - INTERVAL '7 days'

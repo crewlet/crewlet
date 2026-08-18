@@ -76,28 +76,48 @@ function patchChildren(oldParent, newParent) {
     if (key !== null && !keyed.has(key)) keyed.set(key, node);
   }
 
+  // Every node the new markup accounted for, whether reused or created.
+  // Removal is "everything that survived and was not claimed", which is
+  // the only rule that stays correct when two siblings share a key: the
+  // second one can never be matched (the index holds the first), so a
+  // rule that removes only *indexed* leftovers would leave it in place
+  // AND insert a replacement — leaking one node per render, forever.
+  // Views should not emit a duplicate key, but a key derived from data
+  // can collide, and a slow leak is a bad way to find out.
+  const claimed = new Set();
+
   let cursor = oldParent.firstChild;
   for (const wanted of newNodes) {
     const key = keyOf(wanted);
     let match = null;
 
-    if (key !== null && keyed.has(key)) {
-      match = keyed.get(key);
-      keyed.delete(key);
-    } else if (key === null && cursor && keyOf(cursor) === null) {
+    if (key !== null) {
+      const candidate = keyed.get(key);
+      if (candidate !== undefined && !claimed.has(candidate)) {
+        match = candidate;
+        keyed.delete(key);
+      }
+    } else if (
+      cursor &&
+      keyOf(cursor) === null &&
+      !claimed.has(cursor) &&
+      compatible(cursor, wanted)
+    ) {
       // Unkeyed nodes match positionally, but only against a compatible
       // node — swapping a <div> for a <span> in place would leave the
       // wrong element type carrying the right attributes.
-      match = compatible(cursor, wanted) ? cursor : null;
+      match = cursor;
     }
 
     if (match === null) {
       const fresh = wanted.cloneNode(true);
       oldParent.insertBefore(fresh, cursor);
+      claimed.add(fresh);
       if (key !== null) markEntering(fresh);
       continue;
     }
 
+    claimed.add(match);
     if (match !== cursor) {
       oldParent.insertBefore(match, cursor);
     } else {
@@ -106,15 +126,9 @@ function patchChildren(oldParent, newParent) {
     patchNode(match, wanted);
   }
 
-  // Anything still ahead of the cursor, plus every keyed node the new
-  // markup did not claim, is gone.
-  while (cursor) {
-    const next = cursor.nextSibling;
-    const key = keyOf(cursor);
-    if (key === null || keyed.has(key)) cursor.remove();
-    cursor = next;
+  for (const node of oldNodes) {
+    if (!claimed.has(node) && node.parentNode === oldParent) node.remove();
   }
-  for (const orphan of keyed.values()) orphan.remove();
 }
 
 function compatible(a, b) {
@@ -141,25 +155,31 @@ function patchNode(oldNode, newNode) {
 }
 
 function patchAttrs(oldEl, newEl) {
+  // The entrance marker is patch-owned, never render-owned, so it has to
+  // survive an update that lands mid-animation — including one whose
+  // markup carries no `class` at all, which the removal sweep below
+  // would otherwise strip along with the class attribute.
+  const entering = oldEl.classList.contains("is-entering");
+
   const wanted = newEl.attributes;
   for (let i = 0; i < wanted.length; i++) {
     const { name, value } = wanted[i];
     if (LIVE_PROPS.has(name) && oldEl === document.activeElement) continue;
-    // The entrance marker is patch-owned, never render-owned.
     if (name === "class") {
-      const keep = oldEl.classList.contains("is-entering") ? " is-entering" : "";
-      const next = value + keep;
+      const next = entering ? `${value} is-entering` : value;
       if (oldEl.getAttribute("class") !== next) oldEl.setAttribute("class", next);
       continue;
     }
     if (oldEl.getAttribute(name) !== value) oldEl.setAttribute(name, value);
   }
+
   // Remove attributes the new markup dropped.
   const existing = oldEl.attributes;
   for (let i = existing.length - 1; i >= 0; i--) {
     const name = existing[i].name;
     if (!newEl.hasAttribute(name)) oldEl.removeAttribute(name);
   }
+  if (entering) oldEl.classList.add("is-entering");
 }
 
 function markEntering(node) {

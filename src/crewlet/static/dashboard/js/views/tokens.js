@@ -17,10 +17,20 @@ export function createTokensView({ store, query, refresh }) {
   // queries for it and holds the answer locally — the pushed rollup
   // keeps updating underneath and takes over again when the window
   // returns to the live one.
-  const liveWindow = (store.state.tokens && store.state.tokens.since_days) || 7;
+  // Read the window the server actually pushes, and re-read it once the
+  // rollup arrives: mounting this view cold (a deep link, a reload) has
+  // no rollup yet, and guessing left the selector highlighting "7d" over
+  // a rollup covering a day.
+  const LIVE_WINDOW_FALLBACK = 1;
+  let liveWindow = liveOf(store.state) || LIVE_WINDOW_FALLBACK;
   let win = liveWindow;
   let queried = null; // {window, data} for a non-live window
   let loading = false;
+
+  function windowLabel() {
+    const match = WINDOWS.find((w) => w.d === win);
+    return match ? match.label : `${win}d`;
+  }
 
   function statGrid(t) {
     const cell = (label, value, sub) => `
@@ -30,7 +40,7 @@ export function createTokensView({ store, query, refresh }) {
         ${sub ? `<div class="stat-sub">${esc(sub)}</div>` : ""}
       </div>`;
     return `<div class="stat-grid">
-      ${cell("Total tokens", fmtNum(t.total_tokens), `last ${win}d`)}
+      ${cell("Total tokens", fmtNum(t.total_tokens), `last ${windowLabel()}`)}
       ${cell("Input", fmtNum(t.input_tokens))}
       ${cell("Output", fmtNum(t.output_tokens))}
       ${cell("Phase calls", fmtNum(t.calls))}
@@ -179,7 +189,18 @@ export function createTokensView({ store, query, refresh }) {
     </div>`;
   }
 
+  function liveOf(state) {
+    return state.tokens && state.tokens.since_days ? state.tokens.since_days : 0;
+  }
+
   function rollup(state) {
+    // The pushed rollup names its own window. Adopt it the first time it
+    // lands so the selector agrees with what is on screen.
+    const pushed = liveOf(state);
+    if (pushed && pushed !== liveWindow) {
+      if (win === liveWindow) win = pushed;
+      liveWindow = pushed;
+    }
     if (win === liveWindow) return state.tokens;
     return queried && queried.window === win ? queried.data : null;
   }
@@ -206,7 +227,7 @@ export function createTokensView({ store, query, refresh }) {
       const d = rollup(state);
       if (loading || !d) return windowBar() + skeletonCards(4);
       if (!d.by_phase || !d.by_phase.length) {
-        return windowBar() + empty("zap", `No phase events in the last ${win}d`);
+        return windowBar() + empty("zap", `No phase events in the last ${windowLabel()}`);
       }
       return `
         ${windowBar()}

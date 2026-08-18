@@ -130,4 +130,27 @@ test("repeated parses do not reuse a stale template", () => {
   assert.strictEqual(root.children[0].getAttribute("data-k"), "two");
 });
 
+test("duplicate keys do not leak a node per render", () => {
+  // Views should not emit a duplicate key, but a key derived from data
+  // can collide — two policies with the same text, two seats sharing a
+  // role name. Removing only the *indexed* leftovers left the second
+  // sibling in place AND inserted a replacement for it, growing the DOM
+  // by one node on every render, forever.
+  const markup = `<i data-k="dup">a</i><i data-k="dup">b</i>`;
+  patch(root, markup);
+  for (let i = 0; i < 5; i++) patch(root, markup);
+  assert.strictEqual(root.children.length, 2);
+});
+
+test("the entrance marker survives an update with no class attribute", () => {
+  patch(root, `<i data-k="x" class="row">x</i>`);
+  const node = root.querySelector('[data-k="x"]');
+  node.classList.add("is-entering");
+  patch(root, `<i data-k="x">x</i>`);
+  assert.ok(
+    node.classList.contains("is-entering"),
+    "the marker was stripped mid-animation",
+  );
+});
+
 run();

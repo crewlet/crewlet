@@ -24,10 +24,27 @@ const A2A = new Set([
   "a2a_channel_closed",
 ]);
 
+/**
+ * Mark a value as markup that `kv` must not escape.
+ *
+ * Everything else `kv` renders is escaped. It used to interpolate every
+ * value raw and rely on each caller to remember `esc` — and most of
+ * these values are webhook payload fields (a Jira summary, a Slack
+ * channel name, a GitHub PR title), i.e. text an outsider can choose. A
+ * caller that forgot was a stored-XSS hole, and the default has to be
+ * the safe one.
+ */
+function raw(html) {
+  return { __html: html };
+}
+
 function kv(rows) {
   const body = rows
     .filter(([, v]) => v !== undefined && v !== null && v !== "")
-    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`)
+    .map(([k, v]) => {
+      const value = v && typeof v === "object" && "__html" in v ? v.__html : esc(v);
+      return `<dt>${esc(k)}</dt><dd>${value}</dd>`;
+    })
     .join("");
   return `<dl class="kv">${body}</dl>`;
 }
@@ -110,7 +127,7 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
       specific = kv([
         ["Event", body.webhookEvent],
         ["Issue", issue.key],
-        ["Summary", esc(f.summary || "")],
+        ["Summary", f.summary || ""],
         ["Status", f.status?.name],
         ["Assignee", f.assignee?.displayName],
       ]);
@@ -156,8 +173,8 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
         ["Action", body.action],
         ["Sender", body.sender?.login],
         ["Repo", body.repository?.full_name],
-        ["PR", pr ? `#${pr.number} ${esc(pr.title || "")}` : ""],
-        ["Issue", issue ? `#${issue.number} ${esc(issue.title || "")}` : ""],
+        ["PR", pr ? `#${pr.number} ${pr.title || ""}` : ""],
+        ["Issue", issue ? `#${issue.number} ${issue.title || ""}` : ""],
       ]);
     }
     return `
@@ -182,8 +199,8 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
       return (
         head +
         kv([
-          ["Recipient", esc(p.handle || "")],
-          ["Reason", esc(p.reason || "")],
+          ["Recipient", p.handle || ""],
+          ["Reason", p.reason || ""],
         ])
       );
     }
@@ -191,11 +208,11 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
       return (
         head +
         kv([
-          ["Agent", esc(p.agent_handle || "")],
-          ["Conversation", esc(p.conversation_key || "")],
+          ["Agent", p.agent_handle || ""],
+          ["Conversation", p.conversation_key || ""],
           ["Messages", p.count],
-          ["First", p.first_at ? esc(fmtDateTime(p.first_at)) : ""],
-          ["Last", p.last_at ? esc(fmtDateTime(p.last_at)) : ""],
+          ["First", p.first_at ? fmtDateTime(p.first_at) : ""],
+          ["Last", p.last_at ? fmtDateTime(p.last_at) : ""],
         ])
       );
     }
@@ -212,9 +229,9 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
     let out =
       head +
       kv([
-        ["Sender", esc(p.sender || "")],
-        ["Subject", esc(p.subject || "")],
-        ["Recipient", esc(p.recipient_email || "")],
+        ["Sender", p.sender || ""],
+        ["Subject", p.subject || ""],
+        ["Recipient", p.recipient_email || ""],
       ]);
     if (msg)
       out += `<div class="block-label">Message</div><pre class="code">${esc(msg)}</pre>`;
@@ -282,10 +299,15 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
           <button class="btn sm" data-action="copy">${icon("copy", "sm")} Copy</button>
         </div>
         ${kv([
-          ["Type", esc(ev.type)],
-          ["Source", esc(ev.source || "")],
-          ["Summary", esc(ev.summary || "")],
-          ["Trace", ev.trace_id ? `<span class="mono">${esc(shortId(ev.trace_id, 16))}</span>` : ""],
+          ["Type", ev.type],
+          ["Source", ev.source || ""],
+          ["Summary", ev.summary || ""],
+          [
+            "Trace",
+            ev.trace_id
+              ? raw(`<span class="mono">${esc(shortId(ev.trace_id, 16))}</span>`)
+              : "",
+          ],
         ])}
         <div style="margin-top:12px">${body}</div>
       </div>`;

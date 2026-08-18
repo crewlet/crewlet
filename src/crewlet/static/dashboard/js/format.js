@@ -10,6 +10,14 @@ export function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// Quote-escape a value that is ALREADY html-escaped, for use inside an
+// attribute. `esc` deliberately leaves quotes alone (they are harmless
+// in text and escaping them makes prose noisy), which is exactly what
+// makes them dangerous once the text lands in an attribute instead.
+function quoteAttr(escaped) {
+  return String(escaped).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 export function trunc(s, n) {
   s = s == null ? "" : String(s);
   return s.length > n ? s.slice(0, n) + "…" : s;
@@ -46,16 +54,23 @@ function mdInline(s) {
   let h = esc(s);
   h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
   h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // The URL goes into an attribute, so it needs the quote escaping `esc`
+  // deliberately leaves out. Without it a link whose URL contains a
+  // double quote closes `href` early and everything after it becomes
+  // attributes — `[x](https://a" onmouseover="…)` is an injection, not a
+  // link.
   h = h.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>',
+    (_m, label, url) =>
+      `<a href="${quoteAttr(url)}" target="_blank" rel="noopener">${label}</a>`,
   );
   // Autolink bare URLs (findings reports cite PRs/links bare). The leading
   // `(^|[\s(])` group keeps it from matching a URL already inside an
   // ``href="…"`` produced just above (that one is preceded by a quote).
   h = h.replace(
     /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
-    '$1<a href="$2" target="_blank" rel="noopener">$2</a>',
+    (_m, lead, url) =>
+      `${lead}<a href="${quoteAttr(url)}" target="_blank" rel="noopener">${url}</a>`,
   );
   return h;
 }

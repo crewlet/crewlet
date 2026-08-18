@@ -899,7 +899,26 @@ class TurnEngine:
                         logger.exception("scheduled_timeout_publish_failed")
             else:
                 final_text, decision = await self._drive_phases(turn, typing)
-            if not timed_out:
+            if timed_out:
+                pass  # the timeout path published its own TaskFailed
+            elif decision == "failed":
+                # A stall abort or an exhausted iteration cap ends the
+                # loop by RETURNING "failed" rather than raising, so this
+                # is not the exception path — but it is still a failure,
+                # and publishing TaskCompleted for it recorded an
+                # aborted turn in the task ledger as a success.
+                breach = turn.guard_breach or {}
+                await self._publish(
+                    TaskFailed(
+                        source=agent.role_name,
+                        role=agent.role_name,
+                        task_id=turn.task_id,
+                        agent_id=agent.id_str,
+                        error=str(breach.get("detail", "") or "turn aborted"),
+                    ),
+                    turn=turn,
+                )
+            else:
                 await self._publish(
                     TaskCompleted(
                         source=agent.role_name,
@@ -1895,6 +1914,12 @@ class TurnEngine:
         structlog; this wraps each one in a structured event so the
         TimescaleDB events table records them alongside task events.
         """
+        # The turn-completed record reads this back: a stall abort or an
+        # exhausted iteration cap ends the turn by RETURNING "failed",
+        # not by raising, so without it the turn row said "failed" with
+        # no cause while the reason sat on a separate event the LLM
+        # history view does not read.
+        turn.guard_breach = {"kind": kind, "detail": detail}
         try:
             await self._publish(
                 TurnGuardBreach(
@@ -1919,13 +1944,23 @@ class TurnEngine:
         turn_succeeded: bool = True,
         failure: BaseException | None = None,
     ) -> None:
+        # A turn fails two ways: an exception (the guard re-raises it), or
+        # a guard that ends the loop by returning ``decision="failed"``.
+        # Both have to reach the record, or the dashboard shows a turn
+        # that stopped for no stated reason.
+        failed = not turn_succeeded or decision == "failed"
         error, error_kind = ("", "")
         if failure is not None:
             error, error_kind = describe_failure(failure)
+        elif failed:
+            breach = getattr(turn, "guard_breach", None) or {}
+            error = str(breach.get("detail", ""))
+            error_kind = str(breach.get("kind", ""))
         try:
             event = AgentTurnCompleted(
                 source=turn.agent.role_name,
                 agent_id=turn.agent.id_str,
+                role=turn.agent.role_name,
                 trigger=describe_trigger(turn.trigger_event),
                 model=turn.model_keys.get("plan", "")
                 or turn.model_keys.get("execute", "")
@@ -1946,7 +1981,7 @@ class TurnEngine:
                 subagent_tokens=turn.subagent_tokens,
                 iterations=turn.iteration,
                 decision=decision,
-                failed=not turn_succeeded,
+                failed=failed,
                 error=error,
                 error_kind=error_kind,
             )

@@ -298,9 +298,12 @@ function boot() {
   store.subscribe(["health"], renderChrome);
   store.subscribe(["events"], renderNav);
 
+  // The socket starts first so a query issued by the first view's mount
+  // goes out as soon as the connection is up (it would queue either way,
+  // but there is no reason to make the first paint wait a tick longer).
+  socket.start();
   onRouteChange(mountRoute);
   mountRoute();
-  socket.start();
 }
 
 boot();

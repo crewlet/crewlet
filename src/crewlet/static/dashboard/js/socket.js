@@ -23,10 +23,12 @@ const MAX_BACKOFF_MS = 30_000;
 const PING_MS = 25_000;
 // Degraded-mode poll — only ever runs while the socket is down.
 const FALLBACK_MS = 5_000;
-// How long a query waits before giving up. The slowest query is an
-// agent's LLM history, a bounded scan over a 7-day window; ten seconds
-// is far beyond its normal latency and still short enough that a view
-// shows an error rather than an eternal skeleton.
+// How long a query waits for its answer ONCE SENT. The slowest query is
+// an agent's LLM history, a bounded scan over a 7-day window; ten
+// seconds is far beyond its normal latency and still short enough that a
+// view shows an error rather than an eternal skeleton. The clock starts
+// when the frame goes out, not when the query is made, so time spent
+// waiting for a socket is not counted against the server.
 const QUERY_TIMEOUT_MS = 10_000;
 
 export class LiveSocket {
@@ -69,30 +71,46 @@ export class LiveSocket {
 
   /**
    * Ask the server for something and resolve with its reply.
+   *
+   * A query made before the socket is open, or while it is reconnecting,
+   * WAITS for the connection rather than failing. That matters more than
+   * it sounds: a view issues its first query from `mount`, which happens
+   * as the page boots, so rejecting when not-yet-connected meant every
+   * deep link and every reload of an agent or event page rendered "could
+   * not load" and stayed there. Queries are pure reads, so one that was
+   * in flight when the socket dropped is simply re-sent on reconnect.
+   *
    * Rejects with an Error carrying the server's machine-readable code
-   * (`not_found`, `unauthorized`, `no_event_store`, …).
+   * (`not_found`, `unauthorized`, `no_event_store`, …), `timeout` if a
+   * sent query goes unanswered, or `closed` if the client shuts down.
    */
   query(what, params = {}) {
-    if (!this.connected) {
-      return Promise.reject(new Error("offline"));
-    }
     const id = this.nextQueryId++;
-    const frame = { kind: "query", id, what, params };
-    if (this.token) frame.token = this.token;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.inflight.delete(id);
-        reject(new Error("timeout"));
-      }, QUERY_TIMEOUT_MS);
-      this.inflight.set(id, { resolve, reject, timer });
-      try {
-        this.sock.send(JSON.stringify(frame));
-      } catch {
-        clearTimeout(timer);
-        this.inflight.delete(id);
-        reject(new Error("offline"));
-      }
+      const entry = { id, what, params, resolve, reject, timer: 0 };
+      this.inflight.set(id, entry);
+      this._sendQuery(entry);
     });
+  }
+
+  _sendQuery(entry) {
+    if (!this.connected) return; // `onopen` flushes it
+    const frame = { kind: "query", id: entry.id, what: entry.what, params: entry.params };
+    if (this.token) frame.token = this.token;
+    try {
+      this.sock.send(JSON.stringify(frame));
+    } catch {
+      return; // the close handler will re-send it
+    }
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
+      this.inflight.delete(entry.id);
+      entry.reject(new Error("timeout"));
+    }, QUERY_TIMEOUT_MS);
+  }
+
+  _flushQueries() {
+    for (const entry of this.inflight.values()) this._sendQuery(entry);
   }
 
   // ---- connection ----
@@ -122,13 +140,22 @@ export class LiveSocket {
       this._stopFallback();
       this._startPing();
       // The handshake snapshot re-hydrates everything, so a reconnect
-      // needs no catch-up fetch of its own.
+      // needs no catch-up fetch of its own — but any query that was
+      // waiting for this socket, or lost with the last one, does need
+      // sending now.
+      this._flushQueries();
     };
     sock.onmessage = (e) => this._onMessage(e.data);
     sock.onclose = () => {
       this._stopPing();
       this.sock = null;
-      this._failInflight("offline");
+      // Queries are NOT failed here: they are reads, and the reconnect
+      // re-sends them. Their answer-timeout is stopped so the wait for a
+      // new socket is not counted against the server.
+      for (const entry of this.inflight.values()) {
+        clearTimeout(entry.timer);
+        entry.timer = 0;
+      }
       this.store.setConnected(false);
       this._scheduleReconnect();
       this._startFallback();
@@ -199,7 +226,7 @@ export class LiveSocket {
   }
 
   _failInflight(reason) {
-    for (const [, entry] of this.inflight) {
+    for (const entry of this.inflight.values()) {
       clearTimeout(entry.timer);
       entry.reject(new Error(reason));
     }
@@ -247,6 +274,11 @@ export class LiveSocket {
 
   async _fallbackFetch() {
     const snap = await api.snapshot();
+    // A fetch started while the socket was down can land after it came
+    // back, by which time the handshake snapshot and any pushes since
+    // are fresher than this one. Degraded mode must not overwrite live
+    // state with a reading it took before the connection recovered.
+    if (this.connected) return;
     if (snap && !snap._error) this.store.applySnapshot(snap);
   }
 }

@@ -65,25 +65,25 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
   let loadError = "";
   const phaseWindow = 7;
 
-  // Expansion state — keyed by stable identifiers so a re-render (or a
-  // streaming round) keeps whatever the reader expanded.
-  const openTurns = new Set(); // turn_id (completed turns opened)
-  const userCollapsed = new Set(); // turn_id (live turns collapsed)
-  const openRows = new Set(); // rowKey (completed phase rows opened)
-  const collapsedLive = new Set(); // rowKey (live rows collapsed)
-  const collapsedThinks = new Set(); // think key (reasoning collapsed)
-  const openTools = new Set(); // tool key (tool details opened)
-  const openPrompts = new Set(); // prompt key (long messages opened)
-  const collapsedPrompts = new Set(); // prompt key (short messages collapsed)
-  const openMemory = new Set(); // memory block key
-  const expandedText = new Set(); // clamped text the reader unfolded
+  // Expansion state.
+  //
+  // One override map, not a pair of "opened" / "collapsed" sets. Things
+  // here have different DEFAULTS — a live row opens itself, a completed
+  // one does not, a long prompt collapses and a short one does not — and
+  // tracking that with two sets means every toggle has to reason about
+  // which set the default put it in. That is how the first click on a
+  // collapsed turn ended up doing nothing and every second click after
+  // it got eaten. An override is simply "the reader disagreed with the
+  // default", so a toggle is always `set(key, !isOpen(key))`.
+  const overrides = new Map(); // key → boolean
+  const isOpen = (key, byDefault) =>
+    overrides.has(key) ? overrides.get(key) : byDefault;
+  const toggle = (key, byDefault) => overrides.set(key, !isOpen(key, byDefault));
 
-  const isThinkOpen = (k) => !collapsedThinks.has(k);
-  const isToolOpen = (k) => openTools.has(k);
-  // Long prompt messages collapse by default, short ones stay open; an
-  // explicit toggle (either direction) wins and survives re-renders.
-  const isPromptOpen = (k, long) =>
-    openPrompts.has(k) ? true : collapsedPrompts.has(k) ? false : !long;
+  const isThinkOpen = (k) => isOpen(`think:${k}`, true);
+  const isToolOpen = (k) => isOpen(`tool:${k}`, false);
+  // Long prompt messages collapse by default, short ones stay open.
+  const isPromptOpen = (k, long) => isOpen(`prompt:${k}`, !long);
 
   function liveAgent() {
     return store.agentById(id) || data || {};
@@ -257,13 +257,14 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
 
   // ---- LLM rows ----
 
-  // A live row is open by default (so you watch it stream) unless the
-  // reader collapsed it; a completed row is closed unless opened. A
-  // FAILED row opens itself: the reason is the thing worth reading.
+  // A live row is open by default so you watch it stream, and a FAILED
+  // row opens itself because the reason is the thing worth reading.
+  // Everything else starts closed. The reader's own toggle always wins.
+  function rowDefaultOpen(r) {
+    return !!(r._live || r.failed || r._failed);
+  }
   function rowIsOpen(key, r) {
-    if (r._live) return !collapsedLive.has(key);
-    if ((r.failed || r._failed) && !openRows.has(key)) return !collapsedLive.has(key);
-    return openRows.has(key);
+    return isOpen(`row:${key}`, rowDefaultOpen(r));
   }
 
   function rowPreview(r) {
@@ -346,6 +347,16 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
       </div>`;
   }
 
+  // A live turn opens itself, and so does the NEWEST failed one — that
+  // is the turn an operator came to read. Older failures stay collapsed;
+  // auto-opening every one buries the page in transcripts of the same
+  // outage. `newestFailed` is passed in rather than looked up, so the
+  // rule costs one pass over the groups instead of one per group.
+  function turnDefaultOpen(group, newestFailed) {
+    if (!group) return false;
+    return !!(group.isLive || group === newestFailed);
+  }
+
   function renderTurns() {
     const groups = groupTurns();
     if (!groups.length) {
@@ -353,15 +364,13 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         ? '<div class="skel skel-row"></div>'
         : empty("cpu", "No LLM invocations yet");
     }
-    // The newest failed turn opens itself — that is the one an operator
-    // came to read. Older failures stay collapsed: auto-opening every
-    // one of them buries the page in transcripts of the same outage.
     const newestFailed = groups.find((g) => g.failed);
     return groups
       .map((g) => {
-        const autoOpen =
-          ((g.isLive || g === newestFailed) && !userCollapsed.has(g.turn_id)) ||
-          openTurns.has(g.turn_id);
+        const autoOpen = isOpen(
+          `turn:${g.turn_id}`,
+          turnDefaultOpen(g, newestFailed),
+        );
         const phaseCount = {};
         let total = 0;
         for (const r of g.items) {
@@ -412,7 +421,7 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
   // ---- memory ----
   function memText(raw, key, threshold = 280) {
     const long = (raw || "").length > threshold;
-    const expanded = expandedText.has(key);
+    const expanded = isOpen(`text:${key}`, false);
     return `<div class="mem-text ${long && !expanded ? "clamped" : ""} ${expanded ? "expanded" : ""}">${mdLite(raw)}</div>${
       long
         ? `<span class="mem-more" data-action="toggle-clamp" data-ckey="${escAttr(key)}">${expanded ? "Show less" : "Show more"}</span>`
@@ -433,7 +442,7 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
       (m.synthesized_skills || []).length;
 
     const block = (key, color, iconId, title, count, body) => `
-      <div class="mem-card ${openMemory.has(key) ? "open" : ""}" data-k="mem:${key}" data-mem="${key}">
+      <div class="mem-card ${isOpen(`mem:${key}`, false) ? "open" : ""}" data-k="mem:${key}" data-mem="${key}">
         <div class="mem-head" data-action="toggle-mem" data-mem="${key}" style="color:${color}">
           <span class="mem-icon">${icon(iconId, "sm")}</span>
           <div style="flex:1;color:var(--text)"><div class="mem-title">${esc(title)}</div></div>
@@ -665,52 +674,33 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
 
     onAction(action, target) {
       if (action === "toggle-turn") {
-        const turn = target.dataset.turn;
-        if (openTurns.has(turn) || !userCollapsed.has(turn)) {
-          openTurns.delete(turn);
-          userCollapsed.add(turn);
-        } else {
-          openTurns.add(turn);
-          userCollapsed.delete(turn);
-        }
+        // Read the rendered state rather than re-deriving the default:
+        // it is what the reader is looking at, and it cannot disagree.
+        const turnId = target.dataset.turn;
+        const card = target.closest(".turn");
+        overrides.set(`turn:${turnId}`, !(card && card.classList.contains("open")));
       } else if (action === "toggle-row") {
+        // The row's default depends on what kind of row it is, so read
+        // it back off the rendered element rather than re-deriving it.
         const key = target.dataset.key;
-        const live = key.startsWith("live|");
-        if (live || collapsedLive.has(key)) {
-          if (collapsedLive.has(key)) collapsedLive.delete(key);
-          else collapsedLive.add(key);
-        } else if (openRows.has(key)) {
-          openRows.delete(key);
-          collapsedLive.add(key);
-        } else {
-          openRows.add(key);
-          collapsedLive.delete(key);
-        }
+        const row = target.closest(".llm-row");
+        const wasOpen = !!row && row.classList.contains("open");
+        overrides.set(`row:${key}`, !wasOpen);
       } else if (action === "toggle-think") {
-        const k = target.dataset.tkey;
-        if (collapsedThinks.has(k)) collapsedThinks.delete(k);
-        else collapsedThinks.add(k);
+        toggle(`think:${target.dataset.tkey}`, true);
       } else if (action === "toggle-tool") {
-        const k = target.dataset.tkey;
-        if (openTools.has(k)) openTools.delete(k);
-        else openTools.add(k);
+        toggle(`tool:${target.dataset.tkey}`, false);
       } else if (action === "toggle-prompt") {
         const key = target.dataset.pkey;
-        if (openPrompts.has(key)) {
-          openPrompts.delete(key);
-          collapsedPrompts.add(key);
-        } else {
-          openPrompts.add(key);
-          collapsedPrompts.delete(key);
-        }
+        const block = target.closest(".msg-block");
+        overrides.set(
+          `prompt:${key}`,
+          !(block && block.classList.contains("open")),
+        );
       } else if (action === "toggle-mem") {
-        const key = target.dataset.mem;
-        if (openMemory.has(key)) openMemory.delete(key);
-        else openMemory.add(key);
+        toggle(`mem:${target.dataset.mem}`, false);
       } else if (action === "toggle-clamp") {
-        const key = target.dataset.ckey;
-        if (expandedText.has(key)) expandedText.delete(key);
-        else expandedText.add(key);
+        toggle(`text:${target.dataset.ckey}`, false);
       } else if (action === "open-event") {
         const eid = target.dataset.eventId;
         if (eid) navigate("/events/" + encodeURIComponent(eid));

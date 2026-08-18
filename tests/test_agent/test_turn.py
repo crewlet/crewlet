@@ -1281,12 +1281,22 @@ async def test_turn_engine_stall_aborts_as_failed():
     assert "(escalated)" not in result
     completed = [e for _, e in queue.published if isinstance(e, AgentTurnCompleted)]
     assert completed[0].decision == "failed"
+    # The turn record has to say so itself. This path ends the loop by
+    # RETURNING "failed" rather than raising, so a `failed` flag derived
+    # only from the exception handlers left the dashboard rendering an
+    # aborted turn as a clean success.
+    assert completed[0].failed is True
+    assert completed[0].error_kind == "stall"
+    assert completed[0].error
     breaches = [
         e
         for _, e in queue.published
         if isinstance(e, TurnGuardBreach) and e.kind == "stall"
     ]
     assert breaches, "stall guard should publish a turn.guard_breach"
+    # And the task ledger records the abort as a failure, not a success.
+    assert not [e for _, e in queue.published if isinstance(e, TaskCompleted)]
+    assert [e for _, e in queue.published if isinstance(e, TaskFailed)]
 
 
 async def test_turn_engine_respects_delegation_depth_cap():
@@ -1349,12 +1359,17 @@ async def test_turn_engine_max_iter_publishes_guard_breach_and_fails():
     await engine.run_turn(agent, task_description="x", org=agent.definition.org)
     completed = [e for _, e in queue.published if isinstance(e, AgentTurnCompleted)]
     assert completed and completed[-1].decision == "failed"
+    assert completed[-1].failed is True
+    assert completed[-1].error_kind == "max_iter"
+    assert completed[-1].error
     breaches = [
         e
         for _, e in queue.published
         if isinstance(e, TurnGuardBreach) and e.kind == "max_iter"
     ]
     assert breaches, "max-iter path should publish a turn.guard_breach"
+    assert not [e for _, e in queue.published if isinstance(e, TaskCompleted)]
+    assert [e for _, e in queue.published if isinstance(e, TaskFailed)]
 
 
 async def test_turn_engine_publishes_llm_unavailable_on_chain_exhaustion():

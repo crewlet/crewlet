@@ -707,6 +707,14 @@ class AgentTurnCompleted(Event):
 
     type: str = "agent_turn_completed"
     agent_id: str = ""
+    role: str = ""
+    """The agent's role name — the seat this turn's tokens belong to.
+
+    Same load-bearing field as on the task events: the event store tags
+    ``agent_role`` from it and the live projection keys on it. Without
+    one, a turn's token totals were attributed to nobody — every agent
+    card read zero tokens no matter how much the seat had spent, live and
+    after a reload alike."""
     model: str = ""
     # Compact descriptor of the event that triggered this turn (task
     # assignment, notification, A2A request, schedule tick). Built by
