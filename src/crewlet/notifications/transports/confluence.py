@@ -527,11 +527,27 @@ class ConfluenceTransport:
         self._dedupe = store
 
     def _resolve_account_id(self, account_id: str) -> str | None:
-        """Try to resolve an Atlassian account ID to an agent handle."""
+        """Try to resolve an Atlassian account ID to an agent seat's handle.
+
+        Party-level, not pool-level: this is the transport's recipient
+        routing (watchers, mentions), and a watcher whose seat runs on
+        another node is still the right recipient — the notification is
+        addressed by handle and consumed by whichever node owns it.
+        Resolving through the pool dropped those watchers silently and
+        fell through to the space lead, which is a *wrong* recipient
+        rather than a missing one.
+
+        Human seats still resolve to nothing here: they are notified
+        natively by Confluence, and counting one as a delivered
+        recipient would suppress the space-lead fallback in favour of a
+        notification the engine then skips.
+        """
         if not account_id or self._handle_registry is None:
             return None
-        agent = self._handle_registry.resolve_external_id("confluence", account_id)
-        return agent.handle if agent is not None else None
+        party = self._handle_registry.resolve_party_external("confluence", account_id)
+        if party is None or party.is_human:
+            return None
+        return party.handle
 
     async def handle_webhook(
         self,

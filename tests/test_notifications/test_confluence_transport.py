@@ -343,6 +343,21 @@ async def test_fetch_watchers_api_error() -> None:
 # --- handle_webhook ---
 
 
+def _party(handle: str, *, human: bool = False) -> MagicMock:
+    """A ``ResolvedParty``-shaped stub.
+
+    The transport routes on the handle and the KIND — an agent seat is
+    a recipient wherever it runs, a human seat is never one — and reads
+    nothing else off the party, so those two fields are the whole
+    contract.  ``is_human`` must be set explicitly: a bare ``MagicMock``
+    attribute is truthy, which would make every seat look human.
+    """
+    party = MagicMock()
+    party.handle = handle
+    party.is_human = human
+    return party
+
+
 def _make_confluence_body(
     *,
     event: str = "page_updated",
@@ -413,11 +428,9 @@ async def test_handle_webhook_trigger_user_excluded() -> None:
     t.fetch_watchers = AsyncMock(return_value=["our-agent-id", "other-watcher-id"])
 
     registry = MagicMock()
-    our_agent = MagicMock()
-    our_agent.handle = "agent-architect"
-    other_agent = MagicMock()
-    other_agent.handle = "agent-ceo"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: {
+    our_agent = _party("agent-architect")
+    other_agent = _party("agent-ceo")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: {
         "our-agent-id": our_agent,
         "other-watcher-id": other_agent,
     }.get(ext_id)
@@ -432,17 +445,58 @@ async def test_handle_webhook_trigger_user_excluded() -> None:
     assert "agent-ceo" in handles
 
 
+async def test_handle_webhook_routes_to_a_watcher_running_elsewhere() -> None:
+    """A watcher whose seat is owned by another node is still the right
+    recipient — the notification is addressed by handle and consumed by
+    whichever node owns it.  Resolving through the local pool dropped
+    those watchers silently and fell through to the space lead, which is
+    a *wrong* recipient rather than a missing one."""
+    t = ConfluenceTransport(_CFG)
+    t.fetch_watchers = AsyncMock(return_value=["remote-watcher"])
+
+    registry = MagicMock()
+    # A party with no live instance: agent seat, not local.
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
+        _party("agent-swe") if ext_id == "remote-watcher" else None
+    )
+    t.set_handle_registry(registry)
+
+    results = await t.handle_webhook(_make_confluence_body())
+    assert [n.recipient_handle for n in results] == ["agent-swe"]
+    assert results[0].metadata["routed_via"] == "watcher"
+
+
+async def test_handle_webhook_human_watcher_is_not_a_recipient() -> None:
+    """A human watcher must not count as a delivered recipient.
+
+    Confluence already notified them natively, and counting one would
+    suppress the space-lead fallback in favour of a notification the
+    engine then skips — the page activity would reach nobody.
+    """
+    t = ConfluenceTransport(_CFG)
+    t.fetch_watchers = AsyncMock(return_value=["sarah-account"])
+    t.set_space_key_leads({"ENG": ["agent-cto"]})
+
+    registry = MagicMock()
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
+        _party("sarah-chen", human=True) if ext_id == "sarah-account" else None
+    )
+    t.set_handle_registry(registry)
+
+    results = await t.handle_webhook(_make_confluence_body())
+    assert [n.recipient_handle for n in results] == ["agent-cto"]
+    assert results[0].metadata["routed_via"] == "space_lead"
+
+
 async def test_handle_webhook_watcher_routing() -> None:
     """Watchers each get their own notification."""
     t = ConfluenceTransport(_CFG)
     t.fetch_watchers = AsyncMock(return_value=["watcher-1", "watcher-2"])
 
     registry = MagicMock()
-    agent_1 = MagicMock()
-    agent_1.handle = "agent-cto"
-    agent_2 = MagicMock()
-    agent_2.handle = "agent-swe"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: {
+    agent_1 = _party("agent-cto")
+    agent_2 = _party("agent-swe")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: {
         "watcher-1": agent_1,
         "watcher-2": agent_2,
     }.get(ext_id)
@@ -464,9 +518,8 @@ async def test_handle_webhook_mention_routing() -> None:
     t.add_watcher = AsyncMock(return_value=True)
 
     registry = MagicMock()
-    agent_mock = MagicMock()
-    agent_mock.handle = "agent-cto"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: (
+    agent_mock = _party("agent-cto")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
         agent_mock if ext_id == "cto-id" else None
     )
     t.set_handle_registry(registry)
@@ -505,11 +558,9 @@ async def test_handle_webhook_mention_auto_follow_multiple() -> None:
     t.add_watcher = AsyncMock(return_value=True)
 
     registry = MagicMock()
-    cto = MagicMock()
-    cto.handle = "agent-cto"
-    swe = MagicMock()
-    swe.handle = "agent-swe"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: {
+    cto = _party("agent-cto")
+    swe = _party("agent-swe")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: {
         "cto-id": cto,
         "swe-id": swe,
     }.get(ext_id)
@@ -547,9 +598,8 @@ async def test_handle_webhook_watcher_skips_space_leads() -> None:
     t.fetch_watchers = AsyncMock(return_value=["watcher-1"])
 
     registry = MagicMock()
-    agent_mock = MagicMock()
-    agent_mock.handle = "agent-swe"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: (
+    agent_mock = _party("agent-swe")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
         agent_mock if ext_id == "watcher-1" else None
     )
     t.set_handle_registry(registry)
@@ -603,9 +653,8 @@ async def test_handle_webhook_trigger_only_watcher_no_fallback() -> None:
     t.set_space_key_leads({"ENG": ["agent-ceo"]})
 
     registry = MagicMock()
-    trigger_agent = MagicMock()
-    trigger_agent.handle = "agent-swe"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: (
+    trigger_agent = _party("agent-swe")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
         trigger_agent if ext_id == "trigger-id" else None
     )
     t.set_handle_registry(registry)
@@ -625,7 +674,7 @@ async def test_handle_webhook_unresolvable_watchers_fall_to_leads() -> None:
     t.set_space_key_leads({"ENG": ["agent-ceo"]})
 
     registry = MagicMock()
-    registry.resolve_external_id.return_value = None  # can't resolve
+    registry.resolve_party_external.return_value = None  # can't resolve
     t.set_handle_registry(registry)
 
     body = _make_confluence_body(space_key="ENG", trigger_account_id="someone-else")
@@ -687,9 +736,8 @@ async def test_handle_webhook_space_lead_excludes_trigger() -> None:
     t.set_space_key_leads({"LEAD": ["agent-ceo", "agent-cto"]})
 
     registry = MagicMock()
-    ceo = MagicMock()
-    ceo.handle = "agent-ceo"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: (
+    ceo = _party("agent-ceo")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
         ceo if ext_id == "ceo-id" else None
     )
     t.set_handle_registry(registry)
@@ -715,9 +763,8 @@ async def test_handle_webhook_space_lead_sole_trigger_dropped() -> None:
     t.set_space_key_leads({"LEAD": ["agent-ceo"]})
 
     registry = MagicMock()
-    ceo = MagicMock()
-    ceo.handle = "agent-ceo"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: (
+    ceo = _party("agent-ceo")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
         ceo if ext_id == "ceo-id" else None
     )
     t.set_handle_registry(registry)
@@ -751,7 +798,7 @@ async def test_handle_webhook_space_lead_non_trigger_still_routes() -> None:
     t.set_space_key_leads({"LEAD": ["agent-ceo"]})
 
     registry = MagicMock()
-    registry.resolve_external_id.return_value = None  # human trigger, unknown
+    registry.resolve_party_external.return_value = None  # human trigger, unknown
     t.set_handle_registry(registry)
 
     body = _make_confluence_body(space_key="LEAD", trigger_account_id="human-user")
@@ -842,9 +889,8 @@ async def test_handle_webhook_forge_fetches_comment_body_for_mentions() -> None:
 
     # Set up registry to resolve the mention
     registry = MagicMock()
-    pm_agent = MagicMock()
-    pm_agent.handle = "agent-pm"
-    registry.resolve_external_id.side_effect = lambda transport, ext_id: (
+    pm_agent = _party("agent-pm")
+    registry.resolve_party_external.side_effect = lambda transport, ext_id: (
         pm_agent if ext_id == "pm-id" else None
     )
     t.set_handle_registry(registry)
