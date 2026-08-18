@@ -15,6 +15,8 @@ No SDK dependency.  See ``docs/integrations/mattermost.md``.
 
 from __future__ import annotations
 
+from datetime import UTC
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -53,6 +55,65 @@ DIRECT_CHANNEL_TYPES = frozenset({CHANNEL_DIRECT, CHANNEL_GROUP})
 DEFAULT_TYPING_THROTTLE_MS = 5000
 
 
+#: The websocket endpoint every Mattermost server exposes, appended to
+#: the instance URL with the scheme swapped for its ws(s) counterpart.
+WEBSOCKET_PATH = "/api/v4/websocket"
+
+
+def normalize_base_url(url: str) -> str:
+    """The instance URL in the one shape every consumer compares against.
+
+    Trailing slashes are stripped so ``https://chat.example/`` and
+    ``https://chat.example`` are the same address — which matters because
+    this value is both string-compared against the server's own
+    ``SiteURL`` and concatenated with API paths.
+    """
+    return str(url or "").strip().rstrip("/")
+
+
+def websocket_url(base_url: str) -> str:
+    """The ``/api/v4/websocket`` endpoint for *base_url*.
+
+    ONE derivation, shared by the config model, the transport that builds
+    the fleet and ``crewlet mattermost doctor``.  It was written out three
+    times before, and a divergence here is invisible until an
+    ``https://`` instance silently gets a plaintext ``ws://`` socket.
+    """
+    base = normalize_base_url(base_url)
+    if base.startswith("https://"):
+        base = "wss://" + base[len("https://") :]
+    elif base.startswith("http://"):
+        base = "ws://" + base[len("http://") :]
+    return f"{base}{WEBSOCKET_PATH}"
+
+
+def typing_throttle_from(client_config: dict[str, Any]) -> int:
+    """``TimeBetweenUserTypingUpdatesMilliseconds`` out of a client config.
+
+    Split from the read so a caller that already holds the client config
+    — the transport, which reads it once at start for both this and the
+    Site URL check — does not fetch it twice.
+    """
+    try:
+        value = int(client_config.get("TimeBetweenUserTypingUpdatesMilliseconds"))
+    except (TypeError, ValueError):
+        return DEFAULT_TYPING_THROTTLE_MS
+    return value if value > 0 else DEFAULT_TYPING_THROTTLE_MS
+
+
+def site_urls_match(configured: str, reported: str) -> bool:
+    """Whether the server's own ``SiteURL`` names the configured address.
+
+    Mattermost hands ``SiteURL`` to every browser and every plugin, which
+    build absolute URLs from it; a value that does not match the address
+    people actually reach the server on produces requests to a host the
+    reader's machine cannot resolve.  Compared after normalisation
+    because the server trims its own trailing slash and an operator's
+    config may not.
+    """
+    return normalize_base_url(configured) == normalize_base_url(reported)
+
+
 class MattermostError(Exception):
     """A Mattermost API call failed.
 
@@ -82,8 +143,12 @@ class MattermostClient:
     the ``/api/v4`` base).  Auth is a bearer token — a bot's personal
     access token for the transport and fleet, an admin's for the
     provisioner; the API does not distinguish them, so one client serves
-    both.  The underlying ``httpx.AsyncClient`` is created lazily on
-    first request and released via :meth:`close`.
+    both.  An **empty** token sends no ``Authorization`` header at all,
+    rather than an empty bearer a server would reject: the endpoints a
+    health check reads (``/system/ping``, ``/config/client``) need no
+    credential, and offering a bad one turns a working read into a 401.
+    The underlying ``httpx.AsyncClient`` is created lazily on first
+    request and released via :meth:`close`.
     """
 
     def __init__(
@@ -93,7 +158,7 @@ class MattermostClient:
         *,
         timeout: float = 15.0,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
+        self._base_url = normalize_base_url(base_url)
         self._token = token
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
@@ -105,12 +170,12 @@ class MattermostClient:
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
+            headers = {"Content-Type": "application/json"}
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
             self._client = httpx.AsyncClient(
                 base_url=f"{self._base_url}/api/v4",
-                headers={
-                    "Authorization": f"Bearer {self._token}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 timeout=self._timeout,
             )
         return self._client
@@ -156,6 +221,17 @@ class MattermostClient:
         except ValueError:
             return None
 
+    # ----- liveness ----------------------------------------------------
+
+    async def ping(self) -> dict[str, Any]:
+        """``/system/ping`` — reachability, and the server's version.
+
+        Needs no credential, which is what makes it the right first check
+        in a health command: a bad operator token must not be able to
+        report a healthy server as unreachable.
+        """
+        return await self._request("GET", "/system/ping") or {}
+
     # ----- identity ----------------------------------------------------
 
     async def me(self) -> dict[str, Any]:
@@ -182,6 +258,65 @@ class MattermostClient:
 
     # ----- server settings ---------------------------------------------
 
+    async def server_time_ms(self) -> int:
+        """The **server's** clock, in the epoch milliseconds posts carry.
+
+        Every reconnect decision — how far back to replay, whether a gap
+        is inside the backfill window — compares a post timestamp the
+        SERVER stamped against "now".  Taking that "now" from the engine
+        host's clock silently makes the window a function of the skew
+        between two machines: an engine running a few minutes fast skips
+        a backfill it should have replayed, and one running slow replays
+        more than the window allows.
+
+        Read from the ``Date`` response header, which every HTTP response
+        carries and which is defined to be the server's own clock.  Its
+        one-second resolution is immaterial against a 15-minute window.
+        Returns ``0`` when unreadable, so callers can fall back to the
+        local clock rather than fail.
+        """
+        try:
+            resp = await self._http().get("/system/ping")
+            date = resp.headers.get("Date", "")
+        except httpx.HTTPError as exc:
+            logger.debug("server_time_read_failed", error=str(exc))
+            return 0
+        if not date:
+            return 0
+        try:
+            stamp = parsedate_to_datetime(date)
+        except (TypeError, ValueError):
+            return 0
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=UTC)
+        return int(stamp.timestamp() * 1000)
+
+    async def client_config(self) -> dict[str, Any]:
+        """The server's **client** configuration, as a browser sees it.
+
+        ``/config/client?format=old`` needs no authentication and returns
+        exactly the settings the web app is handed — including
+        ``SiteURL``, which is what every browser and plugin builds its
+        absolute URLs from.  Reading the same document the browser reads
+        is the point: an admin-side config read can report a value the
+        clients never see.
+
+        Returns an empty dict when the server refuses the read, so a
+        caller can degrade rather than fail.
+        """
+        try:
+            cfg = await self._request("GET", "/config/client", params={"format": "old"})
+        except MattermostError as exc:
+            logger.debug("client_config_read_failed", error=str(exc))
+            return {}
+        return dict(cfg or {})
+
+    async def site_url(self) -> str:
+        """The server's own ``ServiceSettings.SiteURL``; ``""`` if unread."""
+        return normalize_base_url(
+            str((await self.client_config()).get("SiteURL") or "")
+        )
+
     async def typing_throttle_ms(self) -> int:
         """The server's ``TimeBetweenUserTypingUpdatesMilliseconds``.
 
@@ -196,17 +331,7 @@ class MattermostClient:
         endpoint is unreadable — it is a cosmetic side-channel and must
         never fail a transport start.
         """
-        try:
-            cfg = await self._request("GET", "/config/client", params={"format": "old"})
-        except MattermostError as exc:
-            logger.debug("typing_throttle_read_failed", error=str(exc))
-            return DEFAULT_TYPING_THROTTLE_MS
-        raw = (cfg or {}).get("TimeBetweenUserTypingUpdatesMilliseconds")
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            return DEFAULT_TYPING_THROTTLE_MS
-        return value if value > 0 else DEFAULT_TYPING_THROTTLE_MS
+        return typing_throttle_from(await self.client_config())
 
     # ----- channels ----------------------------------------------------
 
@@ -434,4 +559,9 @@ __all__ = [
     "DIRECT_CHANNEL_TYPES",
     "MattermostClient",
     "MattermostError",
+    "WEBSOCKET_PATH",
+    "normalize_base_url",
+    "site_urls_match",
+    "typing_throttle_from",
+    "websocket_url",
 ]

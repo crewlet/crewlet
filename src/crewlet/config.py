@@ -1808,13 +1808,15 @@ class MattermostConfig(BaseModel):
 
     @property
     def websocket_url(self) -> str:
-        """The ``/api/v4/websocket`` endpoint, with the ws(s) scheme."""
-        base = self.url.rstrip("/")
-        if base.startswith("https://"):
-            base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            base = "ws://" + base[len("http://") :]
-        return f"{base}/api/v4/websocket"
+        """The ``/api/v4/websocket`` endpoint, with the ws(s) scheme.
+
+        Delegates to :func:`crewlet.mattermost.client.websocket_url` so
+        the config model, the transport that builds the fleet and
+        ``crewlet mattermost doctor`` all derive it the same way.
+        """
+        from crewlet.mattermost.client import websocket_url
+
+        return websocket_url(self.url)
 
 
 class GitHubConfig(BaseModel):
