@@ -453,9 +453,17 @@
   border-top-color: color-mix(in srgb, var(--phase-color, var(--border)) 22%, var(--border));
   background: color-mix(in srgb, var(--phase-color, transparent) 4%, transparent);
 }
-/* The standalone per-phase detail card mirrors the row's phase accent. */
+/* The standalone per-phase detail card mirrors the row's phase accent.
+   It also carries its own padding: the shared panel recipe grants a
+   surface, never spacing, so every card states its own — and this one
+   never did, which left the stat grid, the source chip and the prompt
+   blocks all sitting flush against the border. More generous than the
+   inline `.llm-row-body` (12px) because this is a full-page reading
+   surface rather than a section expanded inside a list; it matches its
+   sibling `.event-detail` so the two detail pages agree. */
 .card.llm-detail {
   border-left: 3px solid var(--phase-color, var(--border-strong));
+  padding: 18px 20px 20px;
 }
 .block-label {
   font-size: 10px;

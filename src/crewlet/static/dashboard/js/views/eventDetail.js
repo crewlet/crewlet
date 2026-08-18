@@ -65,7 +65,12 @@ function adfText(node) {
 }
 
 export function createEventDetailView({ query, navigate, refresh, params }) {
-  let raw = null;
+  // NOT named `raw`: that is the module-level marker `kv` reads to skip
+  // escaping, and a closure variable of the same name shadows it for
+  // every function nested here — which turned the one `raw(...)` call in
+  // `render` into a call on the fetched event object, and crashed the
+  // whole screen with "raw is not a function".
+  let loadedEvent = null;
   let loading = true;
   let loadError = "";
   const openPrompts = new Set();
@@ -269,7 +274,6 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
   }
 
   function render(ev) {
-    raw = ev;
     const p = ev.payload || {};
     let title = ev.type;
     let body;
@@ -315,7 +319,7 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
 
   async function load(id) {
     try {
-      raw = await query("event", { id });
+      loadedEvent = await query("event", { id });
     } catch (err) {
       loadError = err.message;
     }
@@ -333,7 +337,7 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
     render() {
       const back = `<div class="back-link" data-action="back">${icon("chevron", "sm")} Back</div>`;
       if (loading) return back + '<div class="skel skel-row" style="margin:24px 0"></div>';
-      if (loadError || !raw) {
+      if (loadError || !loadedEvent) {
         return (
           back +
           empty(
@@ -345,7 +349,7 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
           )
         );
       }
-      return render(raw);
+      return render(loadedEvent);
     },
 
     onAction(action, target) {
@@ -354,7 +358,7 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
         return;
       }
       if (action === "copy") {
-        copyToClipboard(JSON.stringify(raw || {}, null, 2)).then(() => toast("Copied"));
+        copyToClipboard(JSON.stringify(loadedEvent || {}, null, 2)).then(() => toast("Copied"));
         return;
       }
       if (action === "toggle-prompt") {
