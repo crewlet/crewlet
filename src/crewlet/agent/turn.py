@@ -37,6 +37,7 @@ from crewlet.agent.guards import (
 )
 from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.agent.iteration_log import IterationRecord
+from crewlet.agent.llm_loop import describe_failure, phase_failure_guard
 from crewlet.agent.phase_model import resolve_phase_chain, resolve_phase_provider
 from crewlet.agent.plan import (
     PLAN_META_TOOL_NAMES,
@@ -789,7 +790,13 @@ class TurnEngine:
                 ),
                 turn=turn,
             )
-            await self._publish_agent_turn_completed(turn, f"(failed: {exc})", "failed")
+            await self._publish_agent_turn_completed(
+                turn,
+                f"(failed: {exc})",
+                "failed",
+                turn_succeeded=False,
+                failure=exc,
+            )
             return f"(failed: {exc})"
 
         if self._shutdown_event.is_set():
@@ -826,6 +833,11 @@ class TurnEngine:
         decision: str = "done"
         turn_succeeded = True
         timed_out = False
+        # The exception that ended the turn, if any — read by the
+        # ``finally`` block's ``AgentTurnCompleted`` publish so the turn
+        # row a dashboard renders names its own cause instead of showing
+        # an empty response.
+        failure: BaseException | None = None
         try:
             await self._publish(
                 TaskStarted(
@@ -852,6 +864,7 @@ class TurnEngine:
                     timed_out = True
                     turn_succeeded = False
                     decision = "failed"
+                    failure = exc
                     final_text = final_text or "(scheduled task timed out)"
                     set_span_error(exc)
                     logger.warning(
@@ -901,6 +914,7 @@ class TurnEngine:
             turn_succeeded = False
             decision = "failed"
             final_text = "(no output)"
+            failure = exc
             set_span_error(exc)
             logger.error(
                 "llm_unavailable",
@@ -937,6 +951,7 @@ class TurnEngine:
         except Exception as exc:
             turn_succeeded = False
             decision = "failed"
+            failure = exc
             set_span_error(exc)
             logger.exception("turn_failed", turn_id=turn.turn_id)
             try:
@@ -959,7 +974,11 @@ class TurnEngine:
             raise
         finally:
             await self._publish_agent_turn_completed(
-                turn, final_text, decision, turn_succeeded=turn_succeeded
+                turn,
+                final_text,
+                decision,
+                turn_succeeded=turn_succeeded,
+                failure=failure,
             )
             if self._concurrency is not None:
                 self._concurrency.release(agent.role_name)
@@ -1636,8 +1655,33 @@ class TurnEngine:
         fn: Any,
         **kwargs: Any,
     ) -> Any:
-        with tracer.start_as_current_span(span_name):
-            return await fn(**kwargs)
+        """Dispatch one phase runner inside its span and its failure guard.
+
+        Every phase the operator sees — onboarding, plan, execute, review —
+        goes through here, which makes it the one place a *failed* phase can
+        be recorded.  A runner that raises never reaches its own
+        ``publish_phase_completed``, so without the guard the turn's last
+        durable trace is the ``agent_phase_started`` that opened it and the
+        dashboard shows an in-flight call that never answers.  The guard
+        publishes that missing event with the failure attached and re-raises
+        the original exception, so the turn-level handling below is unchanged.
+        """
+        turn: TurnContext | None = kwargs.get("turn")
+        phase = span_name.rsplit(".", 1)[-1]
+        if turn is None:
+            with tracer.start_as_current_span(span_name):
+                return await fn(**kwargs)
+        async with phase_failure_guard(
+            event_queue=self._event_queue,
+            agent=turn.agent,
+            turn_id=turn.turn_id,
+            iteration=turn.iteration,
+            phase=phase,
+            provider_key=kwargs.get("provider_key", "") or "",
+            trigger=describe_trigger(turn.trigger_event),
+        ):
+            with tracer.start_as_current_span(span_name):
+                return await fn(**kwargs)
 
     async def _run_onboarding(
         self,
@@ -1867,7 +1911,11 @@ class TurnEngine:
         decision: str,
         *,
         turn_succeeded: bool = True,
+        failure: BaseException | None = None,
     ) -> None:
+        error, error_kind = ("", "")
+        if failure is not None:
+            error, error_kind = describe_failure(failure)
         try:
             event = AgentTurnCompleted(
                 source=turn.agent.role_name,
@@ -1892,6 +1940,9 @@ class TurnEngine:
                 subagent_tokens=turn.subagent_tokens,
                 iterations=turn.iteration,
                 decision=decision,
+                failed=not turn_succeeded,
+                error=error,
+                error_kind=error_kind,
             )
             # ``_publish(turn=turn)`` populates ``delegation_depth``,
             # ``parent_turn_id``, and ``delegation_chain`` on the event

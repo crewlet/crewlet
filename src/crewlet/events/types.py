@@ -697,6 +697,18 @@ class AgentTurnCompleted(Event):
     subagent_tokens: int = 0
     iterations: int = 0
     decision: str = ""
+    failed: bool = False
+    """True when the turn ended on a failure path rather than finishing.
+
+    ``decision`` is already ``"failed"`` in that case, but the *reason*
+    lived only on the separate ``LLMUnavailable`` / ``turn.guard_breach``
+    events, which the agent's LLM-history view does not read — so the
+    turn that a dashboard shows had no way to say why it stopped."""
+    error: str = ""
+    """The failure's message (truncated).  Empty unless ``failed``."""
+    error_kind: str = ""
+    """Machine-readable failure class — the classified provider error
+    (``rate_limit`` / ``auth`` / ...) or the guard-breach kind."""
 
     @property
     def summary(self) -> str:
@@ -704,6 +716,9 @@ class AgentTurnCompleted(Event):
         if self.a2a_context:
             ch = self.a2a_context.get("channel_id", "")
             a2a_tag = f" [A2A:{ch}]" if ch else " [A2A]"
+        if self.failed:
+            reason = self.error_kind or "error"
+            return f"{self.actor} turn failed ({reason}){a2a_tag}"
         if self.model:
             return (
                 f"{self.actor} completed LLM turn"
@@ -1408,13 +1423,32 @@ class AgentPhaseCompleted(Event):
     sandbox_id: str = ""
     cost_usd: float = 0.0
     delivered_refs: list[str] = Field(default_factory=list)
+    failed: bool = False
+    """True when the phase died instead of finishing.
+
+    A phase that raises -- the provider chain exhausted, a tool blew up,
+    the wall-clock cap fired -- used to publish *nothing*: the only
+    durable record was the ``agent_phase_started`` that opened it, so the
+    dashboard was left showing an in-flight call with no response and no
+    reason.  The phase runners now emit this event on the failure path
+    too, carrying whatever the loop managed before it died plus the
+    fields below.  ``response`` / ``tool_executions`` / token counts are
+    therefore *partial* on a failed event, not absent."""
+    error: str = ""
+    """The failure's message (truncated).  Empty unless ``failed``."""
+    error_kind: str = ""
+    """Machine-readable failure class.  For an exhausted provider chain
+    this is the classified LLM error (``rate_limit`` / ``auth`` /
+    ``timeout`` / ...); otherwise the exception's type name."""
 
     @property
     def summary(self) -> str:
         parts = [f"{self.actor} {self.phase}"]
         if self.backend == "sandbox":
             parts.append(f"[sandbox:{self.coding_agent or '?'}]")
-        if self.decision:
+        if self.failed:
+            parts.append(f"✗ failed ({self.error_kind or 'error'})")
+        elif self.decision:
             parts.append(f"→ {self.decision}")
         if self.model:
             parts.append(f"({self.model}, {self.total_tokens} tokens)")
