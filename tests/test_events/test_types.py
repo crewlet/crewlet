@@ -158,6 +158,30 @@ def test_base_event_actor_fallback():
     assert event2.actor == "system"
 
 
+def test_external_notification_actor_is_the_sender():
+    """An inbound message's actor is the person who sent it.
+
+    The event carries no ``role``, so the base property falls through to
+    ``source`` and reports the actor of a Slack message as
+    ``notification_service.slack`` -- a machine name in a column of human
+    ones, beside a badge already built from the same string.  ``summary``
+    already leads with the sender for exactly this reason.
+    """
+    event = ExternalNotification(
+        source="notification_service.slack",
+        notification_source="slack",
+        sender="Dana",
+        subject="ingest failures",
+    )
+    assert event.actor == "Dana"
+
+
+def test_external_notification_actor_falls_back_to_the_source():
+    """An integration that gave us no sender loses nothing."""
+    event = ExternalNotification(source="notification_service.slack")
+    assert event.actor == "notification_service.slack"
+
+
 def test_org_started_summary():
     event = OrgStarted(org_name="Acme")
     assert event.summary == "Organization 'Acme' started"

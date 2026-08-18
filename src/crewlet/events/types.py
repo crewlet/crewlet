@@ -606,6 +606,18 @@ class ExternalNotification(Event):
             head = "Notification"
         return f"{head}: {self.subject}" if self.subject else head
 
+    @property
+    def actor(self) -> str:
+        # The person who sent it, for the same reason ``summary`` leads
+        # with them: this event carries no ``role``, so the base
+        # property falls through to ``source`` and reports the actor of
+        # an inbound Slack message as ``notification_service.slack`` --
+        # a machine name, sitting in a column of human ones, directly
+        # beside the branded badge already built from the same string.
+        # Falls back to the base chain when the integration gave us no
+        # sender, so nothing loses a value it had before.
+        return self.sender or super().actor
+
 
 class NotificationsCoalesced(Event):
     """Emitted when several same-conversation inbox events are merged

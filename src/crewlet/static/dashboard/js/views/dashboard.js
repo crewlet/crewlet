@@ -308,10 +308,7 @@ export function createDashboardView({ store }) {
     const events = (state.events || []).slice(0, FEED_ROWS);
     if (!events.length) return empty("activity", "No engine activity yet");
     return `<div class="list feed">${events
-      .map(
-        (ev) =>
-          `<div data-k="e:${escAttr(ev.id)}">${activityRow(ev, { agents: state.agents })}</div>`,
-      )
+      .map((ev) => activityRow(ev, { agents: state.agents }))
       .join("")}</div>`;
   }
 

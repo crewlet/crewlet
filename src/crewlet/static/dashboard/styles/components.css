@@ -244,7 +244,14 @@
  * happened.  A fixed leading time column keeps the actors aligned so the feed
  * scans vertically.
  */
-.act-list .act-row {
+/* An activity row is a `.row` that happens to be built from columns
+   rather than from a body block, so it takes the same inset and the same
+   separator. These declarations were scoped to `.act-list`, a class no
+   view has ever emitted — the feed renders `.list.feed` — so the rows
+   have been sitting flush against the panel border with no separators at
+   all. Scoped to the row itself now, which is the only thing the rule
+   was ever about. */
+.act-row {
   display: flex;
   align-items: baseline;
   gap: 12px;
@@ -252,7 +259,7 @@
   border-bottom: 1px solid var(--border);
   transition: background var(--dur);
 }
-.act-list .act-row:last-child {
+.act-row:last-child {
   border-bottom: none;
 }
 .act-row.clickable {
@@ -296,7 +303,7 @@
   white-space: nowrap;
 }
 @media (max-width: 720px) {
-  .act-list .act-row {
+  .act-row {
     flex-wrap: wrap;
     gap: 6px 10px;
   }

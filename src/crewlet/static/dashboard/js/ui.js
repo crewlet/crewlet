@@ -93,9 +93,14 @@ export function activityRow(ev, { agents } = {}) {
   // exactly like one that succeeded — same grey row, same prose — and
   // scanning a feed for the thing that broke meant reading every line.
   const cls = "act-row" + (ev.failed ? " is-failed" : "") + (agent ? " clickable" : "");
+  // The row keys itself. It used to be wrapped in a keyed <div> by its one
+  // caller, which put a node between the row and its list — so `:last-child`
+  // matched every row (each was the only child of its own wrapper) and the
+  // separator between rows never rendered.
+  const rowKey = `data-k="e:${escAttr(ev.id)}"`;
   const nav = agent
-    ? `class="${cls}" data-action="agent" data-id="${escAttr(agent.id)}"`
-    : `class="${cls}"`;
+    ? `class="${cls}" ${rowKey} data-action="agent" data-id="${escAttr(agent.id)}"`
+    : `class="${cls}" ${rowKey}`;
   // `source` is the only integration signal here: the projection's event
   // buffer keeps a payload-free copy (live_state._record_event), so a
   // payload lookup would never fire on this surface.
