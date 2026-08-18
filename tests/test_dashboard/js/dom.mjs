@@ -261,5 +261,10 @@ export function installDom() {
     activeElement: null,
   };
   globalThis.document = document;
+  // `api.js` reads `location.origin` at module scope, so importing it
+  // needs one to exist. Kept here rather than in each suite: a global
+  // the browser always provides belongs with the rest of the fake
+  // browser, not sprinkled across the tests that trip over it.
+  if (!globalThis.location) globalThis.location = { origin: "http://localhost" };
   return { document, root };
 }

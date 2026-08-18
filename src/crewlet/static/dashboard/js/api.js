@@ -14,13 +14,27 @@
 const BASE = location.origin;
 
 export const api = {
+  /**
+   * The degraded-mode snapshot, or `null` if it could not be read.
+   *
+   * `null` and not an `{_error}` object. This used to answer
+   * `{_error: response.status}` on a bad status and `{_error: 0}` on a
+   * thrown fetch, and the caller guarded with `!snap._error` — which is
+   * TRUE for zero. So the one case where the network is completely gone
+   * (the case this whole fallback exists for) applied the error object
+   * as if it were a snapshot: agents, events, sandboxes, org and tools
+   * all replaced with empties. The page went blank at the exact moment
+   * the last state it received was the only thing it had.
+   */
   async snapshot() {
     try {
       const response = await fetch(BASE + "/stream/snapshot");
-      if (!response.ok) return { _error: response.status };
+      if (!response.ok) return null;
       return await response.json();
     } catch {
-      return { _error: 0 };
+      // A refused connection, a DNS failure, or a proxy answering 200
+      // with an HTML error page (which fails to parse as JSON).
+      return null;
     }
   },
 };

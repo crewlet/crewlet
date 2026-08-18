@@ -57,6 +57,17 @@ export class LiveSocket {
     this._connect();
   }
 
+  /** Drop this socket and re-dial immediately.
+   *
+   * A dropped envelope is gone: `_fan_out` discards the OLDEST queued
+   * frame, so a lost `agents` overlay is never re-sent and the only
+   * true repair is a fresh handshake snapshot.
+   */
+  reconnect() {
+    if (this.sock) this.sock.close();
+    else this._connect();
+  }
+
   stop() {
     this.closed = true;
     clearTimeout(this.reconnectTimer);
@@ -137,6 +148,7 @@ export class LiveSocket {
     sock.onopen = () => {
       this.opened = true;
       this.attempt = 0;
+      this.store.setConnected(true);
       clearTimeout(this.reconnectTimer);
       this._stopFallback();
       this._startPing();
@@ -283,6 +295,6 @@ export class LiveSocket {
     // are fresher than this one. Degraded mode must not overwrite live
     // state with a reading it took before the connection recovered.
     if (this.connected) return;
-    if (snap && !snap._error) this.store.applySnapshot(snap);
+    if (snap) this.store.applySnapshot(snap);
   }
 }
