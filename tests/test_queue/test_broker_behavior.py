@@ -47,11 +47,11 @@ redeliveryCount after an ack timeout             **1** — costs budget
 ===============================================  ===================
 
 The last two are what decide the deferral design. A handoff that closes
-its consumer costs nothing against ``_INBOX_MAX_REDELIVER``, so a plain
+its consumer costs nothing against ``_MAX_REDELIVER``, so a plain
 close is a safe way to hand work back — no republish, no reordering. A
-node that *dies* holding messages does spend it, which is why a budget of
-3 sized for poison messages is also, in a fleet, a budget of three node
-deaths per message.
+node that *dies* holding messages does spend it, which is why a budget
+sized for poison messages is also, in a fleet, a budget of that many node
+deaths per message — the reason ``_MAX_REDELIVER`` is 10 rather than 3.
 
 Two behaviours the first real run corrected in this file, both of which
 had silently voided its numbers: the client refuses an unacked-message
@@ -75,7 +75,7 @@ import pulsar  # noqa: E402
 from crewlet.events.types import Event  # noqa: E402
 from crewlet.queue.pulsar import (  # noqa: E402
     _INBOX_ACK_TIMEOUT_MS,
-    _INBOX_MAX_REDELIVER,
+    _MAX_REDELIVER,
     _RECEIVER_QUEUE_SIZE,
     PulsarEventQueue,
 )
@@ -449,7 +449,7 @@ async def test_engine_consumers_set_the_prefetch_explicitly(queue) -> None:
 async def test_measure_redelivery_count_across_a_handoff(queue, client) -> None:
     """Does handing a seat over spend the poison-message budget?
 
-    ``_INBOX_MAX_REDELIVER`` is 3, and Pulsar dead-letters a message that
+    ``_MAX_REDELIVER`` is 10, and Pulsar dead-letters a message that
     exceeds it. If a change of owner incremented the counter, three
     handoffs during a rolling deploy would discard a perfectly healthy
     event that had never been handled — which is what the original design
@@ -478,7 +478,7 @@ async def test_measure_redelivery_count_across_a_handoff(queue, client) -> None:
     _report(
         "redelivery_count_after_handoff",
         counts=counts,
-        max_redeliver_budget=_INBOX_MAX_REDELIVER,
+        max_redeliver_budget=_MAX_REDELIVER,
     )
     assert counts and max(counts) == 0, (
         "a close-driven handoff incremented redeliveryCount — three seat "
@@ -492,12 +492,12 @@ async def test_measure_redelivery_count_after_an_ack_timeout(queue, client) -> N
 
     A wedged or killed node never closes, so its messages come back via
     the unacked-message timeout — and that path increments. In a fleet
-    where node death is routine, a budget of 3 is three node deaths per
-    message, not three handler failures.
+    where node death is routine, a budget of N is N node deaths per
+    message, not N handler failures.
 
-    The two causes separate by rate, not by count: a genuine poison
-    message is NAK'd and redelivered a second later, so it still burns
-    any sane budget in seconds, while a handoff-driven redelivery is
+    The two causes mostly separate by rate, not by count: a genuine
+    poison message is NAK'd and redelivered a second later, so it still
+    burns any sane budget in seconds, while a handoff-driven redelivery is
     minutes apart. That is the argument for raising the cap.
     """
     topic = f"crewlet.test.acktimeout.{uuid4().hex[:8]}"

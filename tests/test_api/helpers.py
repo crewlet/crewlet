@@ -36,12 +36,17 @@ class FakeNodeRuntime:
         tools: list[dict[str, Any]] | None = None,
         posture: str = "serve",
         applied_epoch: int = 0,
+        seats: dict[str, Any] | None = None,
     ) -> None:
         self._in_flight = in_flight
         self._shutting_down = shutting_down
         self._tools = tools or []
         self._posture = posture
         self._applied_epoch = applied_epoch
+        self._seats = seats or {}
+
+    def seats(self) -> dict[str, Any]:
+        return dict(self._seats)
 
     @property
     def in_flight(self) -> int:

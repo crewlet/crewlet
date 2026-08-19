@@ -90,11 +90,34 @@ _DEFAULT_URL = "pulsar://localhost:6650"
 # the engine requeues + acks those (AWAITING_SANDBOX parking).
 _INBOX_ACK_TIMEOUT_MS = 1_800_000
 
-# Cap redelivery attempts so a handler that genuinely keeps failing (or a
-# poison message) cannot loop forever; after this many redeliveries the
-# message is routed to the subscription's dead-letter topic.  ``3`` is
-# the same compromise the rest of the engine uses for retry caps.
-_INBOX_MAX_REDELIVER = 3
+# Cap redeliveries so a handler that genuinely keeps failing (or a poison
+# message) cannot loop forever; past this many the message goes to the
+# subscription's dead-letter topic.  Applies to EVERY durable
+# subscription this process creates, not only agent inboxes — the old
+# name said otherwise and the value was chosen as if it did.
+#
+# Ten, not three, because in a fleet the counter has two causes and only
+# one of them is a bad message. A redelivery means "the handler failed"
+# — poison — but it ALSO means "a node died holding this": measured, an
+# ack-timeout redelivery increments the counter (see
+# tests/test_queue/test_broker_behavior.py). Three was sized for a
+# single-node world, where the second cause does not exist; in a fleet it
+# silently became a budget of three node deaths per message, after which
+# a perfectly healthy event is dead-lettered having never been handled.
+#
+# The two causes mostly separate by RATE, not by count: a poison message
+# is NAK'd on failure and redelivered after
+# ``_NEG_ACK_REDELIVERY_DELAY_MS`` (1 s), so it still burns ten in about
+# ten seconds — poison detection goes from 3 s to 10 s, which nothing
+# depends on. Handoff-driven redeliveries are minutes to half an hour
+# apart (the ack timeout is 30 minutes), so ten covers a 3-node rolling
+# deploy plus several genuine crashes over a message's life.
+#
+# The separation is not perfect and the honest version is worth stating:
+# a node that dies FAST — repeatedly, in a crashloop — produces NAKs a
+# second apart, which is indistinguishable from poison at any cap. The
+# raise buys the common case; it does not solve that one.
+_MAX_REDELIVER = 10
 
 # Delay before a negatively-acknowledged message is redelivered.  Pulsar
 # defaults this to 60s; we drop it to 1s so a failed handler retries
@@ -871,7 +894,7 @@ class PulsarEventQueue:
             negative_ack_redelivery_delay_ms=_NEG_ACK_REDELIVERY_DELAY_MS,
             receiver_queue_size=queue_size,
             dead_letter_policy=pulsar.ConsumerDeadLetterPolicy(
-                max_redeliver_count=_INBOX_MAX_REDELIVER,
+                max_redeliver_count=_MAX_REDELIVER,
                 dead_letter_topic=dlq_topic,
             ),
         )

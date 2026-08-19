@@ -108,12 +108,39 @@ services:
       # (no disk/retention setting fixes a memory problem).  Hold it to
       # ~1.5 GB; ~800 MB idle in practice.
       PULSAR_MEM: "-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m"
-      # Reap subscriptions left behind by an unclean shutdown (e.g. the
-      # dashboard's per-tab broadcast consumers) after 30 min of inactivity
-      # so a crash can't leak durable subscriptions that pin events on disk
-      # indefinitely.  Non-lossy for live work: the engine's own
-      # subscriptions have a connected consumer the whole time it runs.
-      PULSAR_PREFIX_subscriptionExpirationTimeMinutes: "30"
+      # SUBSCRIPTION EXPIRY IS OFF, and it has to be.
+      #
+      # This used to be 30 minutes, on the premise that "the engine's own
+      # subscriptions have a connected consumer the whole time it runs".
+      # Seat ownership breaks that premise by design: a seat's inbox is
+      # attached only by the node that HOLDS the seat, so between owners
+      # — a lease gap, a claim ramp, a rolling deploy, a seat nobody has
+      # got to yet — it has no connected consumer at all. The
+      # subscription retaining its backlog through that window is the
+      # whole reason an unowned seat's mail survives.
+      #
+      # With expiry on, a company quiet for the threshold loses the
+      # subscription and, with it, every message held for that seat. The
+      # engine cannot detect this: publishing into a topic with no
+      # subscription succeeds, and the message is simply gone — no dead
+      # letter, no producer error.
+      #
+      # ``0`` disables the reaper. The leak it was guarding against —
+      # the dashboard's per-tab broadcast consumers after an unclean
+      # shutdown — is real but bounded and cheap; losing a seat's mail
+      # is neither. If you must re-enable it, set it far above any
+      # credible unowned window (hours, not minutes).
+      PULSAR_PREFIX_subscriptionExpirationTimeMinutes: "0"
+      # Inactive-topic deletion is OFF for the same reason. The default
+      # sweep removes an idle topic outright — observed doing exactly
+      # that to a test topic ("Topic deleted successfully due to
+      # inactivity") — which takes its subscriptions with it. A seat
+      # nobody has messaged yet is idle by definition.
+      #
+      # If a deployment needs the reaper, the only safe mode is
+      # ``delete_when_subscriptions_caught_up``: it will not delete a
+      # topic whose subscriptions still hold a backlog.
+      PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled: "false"
       # Token auth (off by default for local dev). Uncomment to require
       # JWTs and confine the engine to its own namespace via grants --
       # full recipe (key/token generation, grants, engine + Dekaf config,

@@ -167,3 +167,52 @@ def test_ready_is_200_once_configured_and_not_draining() -> None:
     body, status = build_readiness_envelope(app)
     assert status == 200
     assert body["ready"] is True
+
+
+def test_health_reports_which_seats_this_node_serves() -> None:
+    """The first question about any fleet.
+
+    Until this shipped the only way to answer "who is running the CEO
+    right now?" was to read three processes' logs at DEBUG.
+    """
+    app = create_app(
+        _Queue(),
+        runtime=FakeNodeRuntime(
+            seats={
+                "held": ["ceo", "eng"],
+                "unproven": [],
+                "capacity": 2,
+                "live_nodes": 3,
+                "last_claimed": ["eng"],
+                "last_lost": [],
+                "blocked_by_protocol": None,
+                "draining": False,
+            }
+        ),
+    )
+    body = build_health_envelope(app)
+    assert body["seats"]["held"] == ["ceo", "eng"]
+    assert body["seats"]["live_nodes"] == 3
+    assert body["seats"]["last_claimed"] == ["eng"]
+
+
+def test_health_surfaces_a_stalled_rolling_upgrade() -> None:
+    """A node refusing to claim under the mixed-version gate looks
+    identical to one whose peers hold every seat — unless it says so."""
+    app = create_app(
+        _Queue(),
+        runtime=FakeNodeRuntime(seats={"held": [], "blocked_by_protocol": 1}),
+    )
+    assert build_health_envelope(app)["seats"]["blocked_by_protocol"] == 1
+
+
+def test_health_surfaces_seats_whose_teardown_was_never_proven() -> None:
+    """The one to alert on: each entry is a seat this node may still be
+    consuming while holding a lease no peer can take."""
+    app = create_app(_Queue(), runtime=FakeNodeRuntime(seats={"unproven": ["ceo"]}))
+    assert build_health_envelope(app)["seats"]["unproven"] == ["ceo"]
+
+
+def test_health_omits_seats_on_a_node_that_does_no_placement() -> None:
+    app = create_app(_Queue(), runtime=FakeNodeRuntime())
+    assert "seats" not in build_health_envelope(app)

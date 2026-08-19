@@ -120,7 +120,15 @@ def dlq_topic(topic: str, group: str) -> str:
 class MemoryEventQueue:
     """In-memory EventQueue for tests. See the module docstring."""
 
-    def __init__(self, *, max_redeliveries: int = 3, max_history: int = 10000) -> None:
+    def __init__(
+        self,
+        *,
+        # In lockstep with the Pulsar backend's ``_MAX_REDELIVER`` — see
+        # its comment for why ten. The twin must not disagree about a
+        # budget that decides whether a healthy event lives or dies.
+        max_redeliveries: int = 10,
+        max_history: int = 10000,
+    ) -> None:
         # (topic, group) -> the durable subscription.
         self._subs: dict[tuple[str, str], _Subscription] = {}
         self._stream_subscriptions: list[_StreamSubscription] = []

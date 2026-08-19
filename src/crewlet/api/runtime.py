@@ -71,6 +71,28 @@ class NodeRuntime(Protocol):
         """
         ...
 
+    def seats(self) -> dict[str, Any]:
+        """Which seats this node owns, and how it arrived at that.
+
+        The first question about any fleet, and until this existed the
+        only way to answer it was to read three processes' logs at DEBUG.
+        Shape::
+
+            {"held": ["ceo", "eng"], "capacity": 3, "live_nodes": 2,
+             "last_claimed": [...], "last_lost": [...],
+             "unproven": [...], "blocked_by_protocol": 1 | None}
+
+        ``unproven`` is the one to alert on: each entry is a seat whose
+        teardown could not be proven, so this node holds a lease no peer
+        can take while possibly still consuming the seat.
+        ``blocked_by_protocol`` names the fleet's protocol floor when a
+        rolling upgrade has stalled — without it, a node refusing to
+        claim looks identical to one whose peers hold every seat.
+
+        ``{}`` when this node does no placement at all.
+        """
+        ...
+
 
 class EngineNodeRuntime:
     """:class:`NodeRuntime` over a live :class:`~crewlet.engine.Engine`.
@@ -129,3 +151,24 @@ class EngineNodeRuntime:
             # The spawn cascade runs after the first config refresh, so
             # an early call is expected rather than exceptional.
             return []
+
+    def seats(self) -> dict[str, Any]:
+        try:
+            host = self._engine._seat_host
+            if host is None:
+                return {}
+            last = host.last_sweep
+            return {
+                "held": list(host.held_handles),
+                "unproven": list(host.unproven_handles),
+                "capacity": int(last.capacity) if last is not None else 0,
+                "live_nodes": int(last.live_nodes) if last is not None else 0,
+                "last_claimed": list(last.claimed) if last is not None else [],
+                "last_lost": list(last.lost) if last is not None else [],
+                "blocked_by_protocol": (
+                    last.blocked_by_protocol if last is not None else None
+                ),
+                "draining": bool(host._draining),
+            }
+        except Exception:
+            return {}

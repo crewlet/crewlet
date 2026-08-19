@@ -222,6 +222,12 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
         # and "cannot apply epoch 41" call for opposite responses.
         body["posture"] = runtime.posture
         body["applied_epoch"] = runtime.applied_epoch
+        # Which seats this node is actually serving. The first question
+        # about any fleet, and previously answerable only by reading
+        # three processes' logs at DEBUG.
+        seats = runtime.seats() if hasattr(runtime, "seats") else {}
+        if seats:
+            body["seats"] = seats
         if shutting_down:
             body["status"] = "shutting_down"
         elif body["posture"] not in ("serve", "wait"):
