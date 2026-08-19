@@ -588,6 +588,17 @@ are written the moment they exist, before any check that can abort —
 Mattermost returns a token's value exactly once. Every step is idempotent,
 so re-run it freely.
 
+That same write-once rule is why a re-run *stops* rather than minting a
+second token when it finds its `crewlet-dev-bootstrap` token on the server
+but no working `MATTERMOST_ADMIN_TOKEN` in `.env` — because the value in
+the file is missing, was revoked, or belongs to another server. A duplicate
+minted there would be a live system-admin credential nobody can read. Revoke
+the old token under **Profile → Security → Personal Access Tokens**, delete
+the stale line from `.env`, and re-run; the script mints a fresh one. It
+stops for the same reason when it cannot *read* the token list at all —
+usually because personal access tokens are turned off under **System Console
+→ Integrations → Integration Management**.
+
 Provision the agent bots in the same run by pointing it at a company config:
 
 ```bash
