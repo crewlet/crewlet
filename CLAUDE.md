@@ -252,10 +252,34 @@ src/crewlet/          # Main package
                       #     guard.py — required-skill load-before-use guard;
                       #     publish CLIs live in confluence/ + plane/)
   queue/              # EventQueue protocol (Pulsar + memory; subscribe_batch +
-                      #   BatchOptions — batched key-partitioned inbox delivery;
-                      #   unsubscribe(topic, group) tears down a durable group
-                      #   consumer + its broker subscription — used by live
-                      #   role decommission; topics.py — THE subject
+                      #   BatchOptions — batched key-partitioned inbox delivery.
+                      #   ATTACHMENT LIFECYCLE is four verbs, not one:
+                      #   quiesce (stop taking new work, stay attached) /
+                      #   unquiesce (its inverse — a store blip keeps the
+                      #   seat, so a quiesce that is never followed by a
+                      #   detach must be reversible or the node is owned,
+                      #   attached and deaf forever; on Pulsar it restarts
+                      #   the consume loop AND asks the prefetch back, else
+                      #   the fetched-unacked messages wait out the 30-min
+                      #   ack timeout) / detach (non-destructive, keeps the
+                      #   subscription + its mail) / delete_subscription
+                      #   (destructive, needs NO local consumer — role
+                      #   decommission must not depend on which node ran
+                      #   the seat). `unsubscribe` is gone: its name never
+                      #   said which one it was. DeferDelivery is the third
+                      #   handler outcome beside ack-on-return and
+                      #   NAK-on-raise: leave it unacked, stop consuming;
+                      #   admin.py (BrokerAdmin + PulsarBrokerAdmin —
+                      #   subscription lifecycle over the admin v2 REST API,
+                      #   because creating one by SUBSCRIBING joins a Shared
+                      #   subscription a peer owns and steals its traffic,
+                      #   measured);
+                      #   memory.py is a BROKER + N CLIENTS, not one object:
+                      #   _Broker holds subs/mail/DLQ, each MemoryEventQueue
+                      #   is a node (client() mints a peer). Conflating them
+                      #   meant one node's detach dropped its peer's consumer
+                      #   and one node's pause gated the whole subscription;
+                      #   topics.py — THE subject
                       #   grammar: agent_inbox_topic(handle) is the one
                       #   definition of crewlet.agent.{handle}.inbox,
                       #   which nine call sites used to f-string by hand.
@@ -263,7 +287,7 @@ src/crewlet/          # Main package
                       #   topic name never raise — the publish lands in a
                       #   topic nobody reads. Imports nothing from crewlet;
                       #   tests/test_queue/test_topics fails the build on a
-                      #   new hand-built f-string)
+                      #   new hand-built f-string, in src/ AND in tests/)
   a2a/                # Agent-to-agent bus (protocol, memory, service)
   db/                 # Database layer (asyncpg, migrations, token_usage,
                       #   deterministic agent-id derivation in agents.py;
@@ -336,18 +360,36 @@ src/crewlet/          # Main package
                       #   docs/concepts/secret-store.md
   task/               # Task engine (models, tracker, escalation)
   seat/               # SEAT OWNERSHIP — which node runs which agent.
-                      #   host.py (SeatHost: greedy claim to
-                      #   ceil(seats/live nodes), `node:{id}` presence
+                      #   See docs/concepts/seat-ownership.md.
+                      #   host.py (SeatHost: converge on
+                      #   ceil(seats/live nodes) in BOTH directions —
+                      #   claiming alone only converges for a fleet that
+                      #   SHRINKS, so a node that booted alone would hold
+                      #   every seat and scaling out would do nothing until
+                      #   something died; the share is a ceiling, which is
+                      #   what makes the give-back settle instead of
+                      #   oscillating. `node:{id}` presence
                       #   leases as THE membership read — inferring the
                       #   count from seat ownership reads an unclaimed
                       #   fleet as zero nodes and every node then takes
-                      #   every seat; claim-rate limit because a takeover
-                      #   costs an MCP spawn, not a lease (attach is 5 ms,
-                      #   measured); `preferred` ORDERS the attempt and
+                      #   every seat; claim/release rate limits because a
+                      #   move costs an MCP spawn, not a lease (attach is
+                      #   5 ms, measured); `preferred` ORDERS the claim and
                       #   never gates it — the hint outlives the node that
                       #   set it, so gating strands a dead node's seats
-                      #   forever; renew()==False drops the seat NOW,
-                      #   LeaseError keeps it — conflating them tears a
+                      #   forever, and it cannot rank a node's OWN seats
+                      #   (it names the last claimer) so the shed order is
+                      #   plain sorted; may_start() is FRESHNESS not
+                      #   membership — a renew at t proves exclusivity
+                      #   through t+ttl, and a membership snapshot can be a
+                      #   full TTL stale, i.e. exactly the window the check
+                      #   exists to close; on_release carries a REASON
+                      #   (voluntary quiesce-then-detach vs fenced
+                      #   detach-first-abandon) and an unproven teardown
+                      #   KEEPS the lease; on_admission fires on the renew
+                      #   EDGE so the owner's consumer stops and restarts
+                      #   with the store blip; renew()==False drops the seat
+                      #   NOW, LeaseError keeps it — conflating them tears a
                       #   healthy company down over a DB blip);
                       #   watchdog.py (EventLoopWatchdog — a stalled loop
                       #   can't be signalled, so the thread's only real
@@ -857,20 +899,32 @@ src/crewlet/          # Main package
                       #   deriving "what it is doing" from live state only.
                       #   See docs/reference/dashboard-design.md
   extensions/         # Extension system
-tests/                # Mirror structure of src/crewlet/.
-                      #   test_dashboard/ is the exception: the dashboard
-                      #   is JavaScript, so its suites are ES modules under
-                      #   test_dashboard/js/ (a three-function harness +
-                      #   a vendored DOM, no npm and no build step) run
-                      #   under whatever `node` is on PATH by a pytest
-                      #   wrapper that SKIPS when there is none.
-                      #   test_scripts/ is the other: scripts/ is shell,
-                      #   so its suites EXTRACT the pure helper functions
-                      #   and source them into a real bash, and assert the
-                      #   rest (what may never reach argv, what mode a
-                      #   file is created with) against the source — the
-                      #   same static shape tests/test_examples/
-                      #   test_local_stack.py uses for the Plane bootstrap
+tests/                # Mirror structure of src/crewlet/, plus three that
+                      #   are exceptions. test_dashboard/ mirrors the
+                      #   dashboard, which is JavaScript, so its suites
+                      #   are ES modules under test_dashboard/js/ (a
+                      #   three-function harness + a vendored DOM, no npm
+                      #   and no build step) run under whatever `node` is
+                      #   on PATH by a pytest wrapper that SKIPS when
+                      #   there is none. test_scripts/ mirrors scripts/,
+                      #   which is shell, so its suites EXTRACT the pure
+                      #   helper functions and source them into a real
+                      #   bash, and assert the rest (what may never reach
+                      #   argv, what mode a file is created with) against
+                      #   the source — the same static shape
+                      #   tests/test_examples/test_local_stack.py uses
+                      #   for the Plane bootstrap. tests/test_fleet/
+                      #   mirrors nothing: it runs TWO Engines against
+                      #   one broker and one lease table and gates the
+                      #   seat-ownership exit criteria (handoff preserves
+                      #   order; a node that lost its lease starts no
+                      #   turn while still attached; a completion reaches
+                      #   only the owner; an unclaimed seat's mail
+                      #   survives). Parametrized over the memory twin
+                      #   AND a real Pulsar — "the same suite passes on
+                      #   the twin" is itself a criterion, so a twin that
+                      #   models the broker wrongly fails there instead
+                      #   of certifying the bug in CI
 examples/             # Working examples (the Nimbus example org:
                       #   nimbus.config.yaml + nimbus.company.yaml +
                       #   nimbus-docs/ + tool-skills/). The MINIMAL

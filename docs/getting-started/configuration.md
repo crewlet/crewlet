@@ -260,8 +260,14 @@ providers:
   queue:
     type: pulsar
     url: "pulsar://localhost:6650"
-    # tenant: public                  # optional — must already exist; the engine never
-    # namespace: default              #   calls the admin API (see Deployment guide)
+    # admin_url: ""                   # optional — admin HTTP endpoint; empty derives it from
+    #                                 #   `url` (pulsar://host:6650 -> http://host:8080).
+    #                                 #   Used to create and delete each seat's durable
+    #                                 #   subscription, which needs no consumer. Set it when
+    #                                 #   the admin endpoint is not on the broker's host at
+    #                                 #   the default port
+    # tenant: public                  # optional — must already exist; tenants and namespaces
+    # namespace: default              #   are never auto-created (see Deployment guide)
     # auth_token: "${CREWLET_PULSAR_TOKEN}"   # optional — JWT for token auth; the token's role
     #                                 #   should be granted only this engine's namespace
     # tls_trust_certs_path: ""        # optional — CA bundle for pulsar+ssl:// URLs

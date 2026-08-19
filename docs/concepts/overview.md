@@ -74,7 +74,7 @@ flowchart TD
 
 **One process, or two**: by default `crewlet run` serves the API and dashboard inside the engine process — that is the whole stack. The API can also run as its own process (`crewlet run api`) when you want to restart the engine without dropping webhooks, or put the two on different hosts. Split, the halves communicate through Pulsar; embedded, the API additionally holds direct references to the live engine (`/health` reads its in-flight count that way), so the two topologies are not quite equivalent — see [Replica count](../guides/deployment.md#replica-count).
 
-**Run exactly one of each.** The engine is a **single instance**: agents are stateful seats, not interchangeable workers, and a seat's turn exclusion, token budget, and config state all live in one process's memory. A second replica does not share the work — it duplicates it. [Replica count](../guides/deployment.md#replica-count) states what breaks; [`SCALING.md`](https://github.com/crewlet/crewlet/blob/main/SCALING.md) covers why, and what lifting the constraint would take.
+**Run one engine, for now.** Agents are stateful seats, not interchangeable workers, and which node runs which seat is decided by a lease — see [Seat ownership](seat-ownership.md), which is what makes a second engine safe on the paths that used to duplicate every turn. What is not finished is the per-process workers behind it, so a second replica still double-spends on skill synthesis and can fire a schedule for a seat it does not own. [Replica count](../guides/deployment.md#replica-count) states exactly what is fixed and what is not; [`SCALING.md`](https://github.com/crewlet/crewlet/blob/main/SCALING.md) covers the rest of the path.
 
 ---
 

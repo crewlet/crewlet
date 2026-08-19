@@ -194,37 +194,58 @@ Both communicate through Pulsar. Both accept `--debug` for verbose logging.
 
 ### Replica count
 
-**Run exactly one `crewlet run` and one `crewlet run api` per company.** Neither
-process is horizontally scalable today, and nothing in the code enforces this —
-a second replica starts cleanly and then misbehaves silently.
+**Running more than one node is not finished yet.** Seat ownership is —
+see [Seat ownership](../concepts/seat-ownership.md) — so the failure that
+made a second replica unusable is gone: each seat's inbox is consumed by
+exactly one node, the one holding that seat's lease, and every seat-scoped
+write carries that lease's epoch. What remains are per-process workers that
+have not yet been moved behind singleton leases.
 
-Scale **up** (a bigger host, a higher `max_concurrent`), not **out**. A single
-engine handles many concurrent turns: agent handlers are `asyncio` tasks, so the
-practical ceiling is LLM provider rate limits and host memory, not process count.
+Until they are, **run exactly one `crewlet run`** unless you are deliberately
+exercising the fleet path, and scale **up** (a bigger host, a higher
+`max_concurrent`) rather than out. A single engine handles many concurrent
+turns: agent handlers are `asyncio` tasks, so the practical ceiling is LLM
+provider rate limits and host memory, not process count.
 
-What a second engine replica does:
+A second **API** replica has been safe since the control plane landed: each
+polls the same activation pointer, so cached webhook HMAC secrets and the
+dashboard's org view converge within a poll interval. What still differs per
+replica is the in-memory live-state projection, so the *activity* view
+reflects only the events that replica saw.
+
+What a second engine replica still does:
 
 | Symptom | Cause |
 |---|---|
-| Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook | Each seat's inbox is a Pulsar **Shared** subscription, so two events for one agent land on two replicas and run concurrent turns. Turn exclusion is in-process state, so neither replica sees the other. |
 | `max_concurrent` exceeded by N× | The concurrency gate is per-process, so an org's ceiling becomes N × the configured value. |
-| Live coding sandboxes torn down mid-run | `SandboxCoordinator.recover()` treats every in-flight run as abandoned at boot — valid with one engine, destructive with peers. |
-| Duplicate auto-drafted skill pages, N× LLM spend on synthesis | The clustering and curator workers are unclaimed interval loops. |
+| Duplicate auto-drafted skill pages, N× LLM spend on synthesis | The skill-clustering and curator workers are unclaimed interval loops — they have not yet been put behind `worker:{duty}` leases the way the sandbox waiter and the seat-subscription walk have. |
+| A scheduled run fires on a node that does not own the seat | The scheduler's at-most-once claim is taken before the publish, so a non-owner marks the fire done. |
 
-**Already fixed, and no longer on that list:** config activation and token
-budgets. Activation is delivered by the [control plane](../concepts/control-plane.md)
-— an append-only epoch log every node polls — rather than the competing-consumer
-subscription that used to let exactly one replica apply a revision while the rest
-ran the previous company (deleted roles still answering Slack, rotated
-credentials still in use, inbound deliveries silently eaten by nodes whose cached
-signing secret no longer verified). Token budgets consume a shared PostgreSQL
-counter, so an org cap of 500 k is 500 k across the fleet.
+**Already fixed, and no longer on that list:**
 
-A second **API** replica is no longer a divergence risk either: each polls the
-same activation pointer, so cached webhook HMAC secrets and the dashboard's org
-view converge within a poll interval. What still differs per replica is the
-in-memory live-state projection, so the *activity* view reflects only the events
-that replica saw.
+- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn loop re-checks the fence before every round and every write-capable tool.
+- *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
+- *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — an append-only epoch log every node polls — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
+- *Token budgets.* A shared PostgreSQL counter, so an org cap of 500 k is 500 k across the fleet.
+
+> **A fleet needs both a database and the right broker settings.**
+>
+> Seat leases live in PostgreSQL. With no `providers.database.dsn` they fall
+> back to an in-process store, and every node then believes it owns the whole
+> company — the engine logs `seat_placement_is_process_local` at boot.
+>
+> Pulsar's two reapers must also be turned off, because an unowned seat's
+> subscription has no connected consumer and both reapers delete exactly that:
+> set `subscriptionExpirationTimeMinutes` to `0` and
+> `brokerDeleteInactiveTopicsEnabled` to `false` (or
+> `brokerDeleteInactiveTopicsMode` to `delete_when_subscriptions_caught_up`).
+> The repo's `docker-compose.yml` ships these values. Nothing in the engine can
+> detect a broker that is quietly deleting a quiet seat's mail.
+
+Give each node a distinct id — `node.id` in the Tier A file, or the
+`CREWLET_NODE_ID` environment variable, which is how a container orchestrator
+injects a pod name without templating the config. Two nodes sharing an id
+miscount the fleet and each compute too small a share.
 
 Bring the schema up **before** starting either process, with
 [`crewlet migrate`](../reference/cli.md#crewlet-migrate).

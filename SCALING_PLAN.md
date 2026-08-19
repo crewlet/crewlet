@@ -876,7 +876,7 @@ execution question.
   *wrong* recipient rather than a missing one, and one that reads as
   normal fallback in the logs.
 
-### 5.2 — Seat ownership: inbox, takeover, and sandbox control (REVISED, one phase)
+### 5.2 — Seat ownership: inbox, takeover, and sandbox control — DONE
 
 Replaces the original 5.2, 5.3 and 5.6. They were three phases on paper
 and one change in fact: a node that owns a seat's mail but not its
@@ -1263,13 +1263,121 @@ large phase — but every attempt to draw the line elsewhere has produced a
 state the reviews call fatal, and the reason is always the same: a seat
 is not a thing you can half-own.
 
-#### Exit criteria
+#### Exit criteria — GATED
 
-The chaos suite, plus: a seat handed off mid-conversation preserves
-order; a node that loses its lease starts no new turn even while its
-consumer is still attached; a completion for a seat reaches its owner and
-only its owner; an unclaimed seat's messages survive until someone claims
-it; and the same suite passes on the memory twin.
+The review's objection was that these were ungated: they led with "the
+chaos suite", which does not exist and which no work item built. They are
+now `tests/test_fleet/`, one test per criterion, over **two real
+`Engine` objects** sharing one broker and one lease table — parametrized
+over the memory twin and a live Pulsar, so "the same suite passes on the
+twin" is itself gated rather than asserted.
+
+| Criterion | Test |
+|---|---|
+| a seat handed off mid-conversation preserves order | `test_a_seat_handed_off_mid_conversation_preserves_order` |
+| …including a handoff *during* a turn | `test_work_in_flight_when_the_seat_moves_is_not_lost_and_not_doubled` |
+| a node that lost its lease starts no new turn while still attached | `test_a_node_whose_teardown_failed_starts_no_turn_while_attached` |
+| …and the same while it merely cannot *prove* ownership | `test_a_store_blip_stops_new_turns_and_the_recovery_resumes_them` |
+| a completion reaches its owner and only its owner | `test_a_completion_reaches_the_seats_owner_and_only_its_owner` |
+| …and one published between owners waits | `test_a_completion_published_between_owners_waits_for_the_next_one` |
+| an unclaimed seat's messages survive until someone claims it | `test_an_unclaimed_seats_mail_waits_until_someone_claims_it` |
+| …including a full fleet restart | `test_a_full_fleet_restart_does_not_lose_a_seats_mail` |
+| no trigger is ever worked by both nodes | `test_no_trigger_is_ever_worked_by_both_nodes` |
+
+Only two things are stubbed, and neither is the subject: `run_turn` is a
+recorder (which node ran which trigger, in what order, is the question —
+what the turn *does* is not, and tests never call a real LLM), and the
+sandbox provider is `type: fake` (the routing property is decided by who
+is attached to the control topic; no box is required).
+
+The **chaos suite** — `kill -9` mid-turn, node death during a detached
+sandbox run, a 3-node rolling deploy under continuous webhook load —
+remains where the plan already put it, as 5.9's exit criteria. It needs
+process-level fault injection this phase does not build.
+
+#### What shipped, and where it deviated
+
+All twelve work items landed, plus the absorbed 5.5 (epoch-fenced writes)
+and 5.7 (in-turn fencing). Three deviations are worth recording, because
+each one overturned something the review or the plan asserted.
+
+**Decision (a)'s "fatal" correction dissolved rather than being worked
+around.** The review was right that pre-creating a subscription by
+*subscribing* joins a Shared subscription a peer owns and steals its
+traffic — measured, 10-12 of 20 messages. Its prescription was to do the
+creation behind the `worker:{duty}` singleton. Measuring the broker
+showed the admin v2 REST API creates a subscription **with no consumer at
+all**, auto-creating the topic, and deletes one the same way. So
+`queue/admin.py` does subscription lifecycle over the admin API, the
+singleton is kept (there is still no reason for every node to walk every
+seat at every boot), and `delete_subscription` needs no local consumer —
+which is what decoupled role decommission from placement.
+
+**Placement was only half a policy, and the missing half was the one
+horizontal scaling needs.** `sweep()` claimed up to `ceil(seats/nodes)`
+and never gave anything back, so a node that booted alone held every seat
+and a peer joining later computed a share it could not reach: **scaling
+out did nothing until something died.** Decision (c) already named
+"capacity rebalance" as a voluntary release reason and nothing triggered
+it. `_shed_to_capacity` is the other half, rate-limited by
+`SEAT_RELEASE_LIMIT_PER_SWEEP = 2` (a release is an MCP teardown here and
+a spawn on whoever takes it, and unlike a takeover nothing is dark while
+it waits). It converges rather than oscillating because the share is a
+*ceiling*: shares sum to at least the seat count, so a node at its share
+has no room to re-claim what it just shed.
+
+**Quiesce needed an inverse, and not having one was a silent
+attached-and-deaf bug.** The design treats quiesce as the first step of a
+release, so nothing ever un-quiesced. But the `LeaseError` grace *keeps*
+the seat — the row is untouched by a blip — and a delivery arriving in
+that window quiesces the attachment through `DeferDelivery`. The node
+then recovers, still owns the seat, is still attached, and never reads
+from it again. `unquiesce` is the inverse, driven by a new
+`SeatHost.on_admission` edge signal. On Pulsar it does two things, and
+the second only showed up against a real broker: the consume loop *exits*
+on the flag, so it must be restarted, and whatever the consumer had
+already fetched was dropped unacked for a successor that never comes on
+this path — so it calls `redeliver_unacknowledged_messages`, or a
+two-second blip silently costs half an hour of a seat's mail (the ack
+timeout). The memory twin passed this before the fix and Pulsar did not,
+which is exactly the split the two-backend rule exists to expose.
+
+#### Found and fixed on the way
+
+- **The memory twin was a broker and a client in one object.** Fine for
+  one process, and it inverted the property for two: a node's `detach`
+  dropped its peer's consumer, a node's pause gated the whole
+  subscription, and `attachments()` could only answer fleet-wide. Split
+  into `_Broker` (subscriptions, mail, dead letters) plus N
+  `MemoryEventQueue` clients via `client()`. Without it the fleet suite
+  could not express "attached to exactly the seats I own", which is the
+  assertion that catches the double-consumer split-brain.
+- **`resolve_node_incarnation` caches process-globally**, so two engines
+  in one process shared a lease identity — each could renew the other's
+  lease and both hold a seat at the same epoch, the exact hole the
+  incarnation exists to close. Its own docstring names the hazard for two
+  engines against one database; the cache reintroduced it.
+  `new_node_incarnation` mints per holder, and `Engine` takes a
+  `lease_store=` injection so several engines can share one fleet.
+- **`ReleaseHook`'s documented signature disagreed with its call site** —
+  the comment said `on_release(handle, lease, *, reason)`, the code calls
+  it positionally. A keyword-only implementation raises `TypeError`
+  *inside* the release, which is swallowed as "teardown could not be
+  proven" and strands the seat forever.
+- **`_shed_order`'s `preferred`-hint branch was dead on arrival.** The
+  hint records the last node to *claim* a seat, so for every seat a node
+  holds it names that node; ordering a shed by it looks like stickiness
+  and does nothing. Collapsed to a plain sorted order, with the reason
+  written down.
+- **`migrations/024`** — the seat host's `preferred_resources` docstring
+  claimed "one indexed scan per sweep" and no index existed.
+- **The topic-grammar guard scanned only `src/`**, so eighteen
+  hand-built `crewlet.agent.{handle}.inbox` f-strings lived in tests. It
+  now scans both trees.
+- **Observability hooks registered before `start()` raised on Pulsar.**
+  `Engine.on_task_state_change` / `on_agent_spawn` subscribe immediately,
+  and a subscription needs a live broker connection. Buffered in
+  `_pending_hooks` and attached when the queue starts.
 
 ---
 
