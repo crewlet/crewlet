@@ -31,7 +31,6 @@ posts, which come over REST without a mention list.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -189,6 +188,9 @@ class MattermostTransport:
         self._team = team
         self._bots: dict[str, MattermostBotConfig] = {}
         self._clients: dict[str, MattermostClient] = {}
+        # Strong references to the background closes ``_retire_client``
+        # schedules — see there for why they cannot be fire-and-forget.
+        self._pending_closes: set[asyncio.Task[None]] = set()
         self._user_ids: dict[str, str] = {}
         self._handle_registry = handle_registry
         self._thread_routing = thread_routing
@@ -275,10 +277,30 @@ class MattermostTransport:
             if displaced is not None:
                 self._retire_client(displaced, handle)
             logger.info("mattermost_bot_registered", handle=handle)
-        if config.username and self._handle_registry is not None:
-            self._handle_registry.register_external_id(
-                "mattermost", config.username, handle
+        self._rebind_username(handle, config.username)
+
+    def _rebind_username(self, handle: str, username: str) -> None:
+        """Point the ``mattermost`` namespace at *username* for this seat.
+
+        A seat's username is not fixed for the life of the process: a
+        config apply can change it, and :meth:`start` overwrites the
+        configured guess with the name the SERVER reports.
+        ``register_external_id`` only overwrites the handle → name
+        direction, so registering the new name on its own leaves the OLD
+        name still resolving to this handle.  That stale alias outlives
+        :meth:`unregister_bot`, which removes only the current name, and
+        it silently loses a later seat legitimately provisioned under the
+        freed name — ``register_external_id`` would rebind it, but the
+        decommission of THIS seat would then rip it back out.
+        """
+        if self._handle_registry is None or not username:
+            return
+        previous = self._handle_registry.get_external_id("mattermost", handle)
+        if previous and previous != username:
+            self._handle_registry.unregister_external_id(
+                "mattermost", previous, expected=handle
             )
+        self._handle_registry.register_external_id("mattermost", username, handle)
 
     def _retire_client(self, client: MattermostClient, handle: str) -> None:
         """Close a displaced client without blocking the caller.
@@ -286,6 +308,12 @@ class MattermostTransport:
         ``register_bot`` is synchronous (it is called from config-apply
         code paths that are not), so the close is scheduled rather than
         awaited; the client is already unreachable by then.
+
+        The task is kept in ``_pending_closes`` for its lifetime.  The
+        event loop holds only a WEAK reference to a running task, so a
+        fire-and-forget ``create_task`` can be collected mid-flight — and
+        the pool this exists to release leaks anyway, which is the exact
+        failure it was written to prevent.
         """
 
         async def _close() -> None:
@@ -296,8 +324,19 @@ class MattermostTransport:
                     "mattermost_client_close_failed", handle=handle, error=str(exc)
                 )
 
-        with contextlib.suppress(RuntimeError):  # no loop: sync/CLI context
-            asyncio.get_running_loop().create_task(_close())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop: a sync path (a CLI, a config build) swapped a
+            # token on a transport that has never run.  There is nothing
+            # to schedule on, and closing an httpx client from a loop it
+            # was never used on is not a close — so report the leak
+            # instead of suppressing the exception that reveals it.
+            logger.warning("mattermost_client_close_unscheduled", handle=handle)
+            return
+        task = loop.create_task(_close())
+        self._pending_closes.add(task)
+        task.add_done_callback(self._pending_closes.discard)
 
     async def unregister_bot(self, handle: str) -> None:
         """Release a departed seat's bot — socket, client and identities.
@@ -374,14 +413,13 @@ class MattermostTransport:
             if self._handle_registry is not None:
                 # Two namespaces, same seat: payloads identify a poster by
                 # user id, while humans and the MCP tools address a bot by
-                # username.
+                # username.  The username goes through ``_rebind_username``
+                # so a correction retires the configured name it replaces
+                # instead of leaving it resolving to this handle.
                 self._handle_registry.register_external_id(
                     "mattermost_bot", user_id, handle
                 )
-                if username:
-                    self._handle_registry.register_external_id(
-                        "mattermost", username, handle
-                    )
+                self._rebind_username(handle, username)
             logger.info(
                 "mattermost_bot_identity_resolved",
                 handle=handle,
@@ -450,6 +488,11 @@ class MattermostTransport:
                 await client.close()
             except Exception as exc:
                 logger.warning("mattermost_client_close_failed", error=str(exc))
+        # Displaced clients retired by a token swap close in the
+        # background; drain them here so ``stop()`` returning means every
+        # connection pool this transport ever opened is actually shut.
+        if self._pending_closes:
+            await asyncio.gather(*self._pending_closes, return_exceptions=True)
         logger.info("transport_stopped")
 
     def _warn_on_site_url_mismatch(self, config: dict[str, Any]) -> None:

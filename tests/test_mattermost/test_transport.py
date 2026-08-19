@@ -766,3 +766,146 @@ class TestUnregisterBot:
         assert fleet.dropped == ["engineer"]
         assert "engineer" not in transport.bots
         assert transport.user_id_for("engineer") == ""
+
+
+# --- identity churn -------------------------------------------------------
+
+
+def _real_registry() -> Any:
+    """A real HandleRegistry — the stub above cannot show a stale alias."""
+    from crewlet.agent.pool import AgentPool
+    from crewlet.notifications.handle import HandleRegistry
+    from crewlet.queue.memory import MemoryEventQueue
+
+    return HandleRegistry(AgentPool(MemoryEventQueue()))
+
+
+class TestUsernameRebinding:
+    """A seat's username is not fixed: a config apply can change it, and
+    ``start()`` replaces the configured guess with the name the server
+    reports. ``register_external_id`` overwrites only the handle → name
+    direction, so a plain re-register leaves the OLD name resolving to
+    this handle — an alias that survives decommission."""
+
+    @pytest.mark.asyncio
+    async def test_a_server_correction_retires_the_configured_name(self):
+        registry = _real_registry()
+        transport = MattermostTransport(
+            base_url="https://chat.example", team="n", handle_registry=registry
+        )
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="swe")
+        )
+        assert registry.known_external_ids("mattermost") == {"swe"}
+
+        class _Client(_FakeClient):
+            async def me(self) -> dict[str, Any]:
+                return {"id": BOT_ID, "username": "agent-swe"}
+
+            async def client_config(self) -> dict[str, Any]:
+                return {"SiteURL": "https://chat.example"}
+
+        transport._clients["engineer"] = _Client()  # type: ignore[assignment]
+        await transport.start()
+
+        assert registry.known_external_ids("mattermost") == {"agent-swe"}
+        assert registry.get_external_id("mattermost", "engineer") == "agent-swe"
+
+    def test_a_config_apply_rename_retires_the_previous_name(self):
+        registry = _real_registry()
+        transport = MattermostTransport(
+            base_url="https://chat.example", team="n", handle_registry=registry
+        )
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="swe")
+        )
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="eng")
+        )
+
+        assert registry.known_external_ids("mattermost") == {"eng"}
+
+    @pytest.mark.asyncio
+    async def test_decommission_leaves_no_alias_behind(self):
+        """The whole point: after unregister_bot nothing in the
+        ``mattermost`` namespace still resolves to the departed seat."""
+        registry = _real_registry()
+        transport = MattermostTransport(
+            base_url="https://chat.example", team="n", handle_registry=registry
+        )
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="swe")
+        )
+
+        class _Client(_FakeClient):
+            async def me(self) -> dict[str, Any]:
+                return {"id": BOT_ID, "username": "agent-swe"}
+
+            async def client_config(self) -> dict[str, Any]:
+                return {"SiteURL": "https://chat.example"}
+
+        transport._clients["engineer"] = _Client()  # type: ignore[assignment]
+        await transport.start()
+        await transport.unregister_bot("engineer")
+
+        assert registry.known_external_ids("mattermost") == set()
+        assert registry.known_external_ids("mattermost_bot") == set()
+
+    def test_a_freed_name_can_be_claimed_by_another_seat(self):
+        registry = _real_registry()
+        transport = MattermostTransport(
+            base_url="https://chat.example", team="n", handle_registry=registry
+        )
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="swe")
+        )
+        transport.register_bot(
+            "engineer", MattermostBotConfig(bot_token="t", username="eng")
+        )
+        transport.register_bot(
+            "designer", MattermostBotConfig(bot_token="d", username="swe")
+        )
+
+        assert registry.known_external_ids("mattermost") == {"eng", "swe"}
+        assert registry.get_external_id("mattermost", "designer") == "swe"
+        assert registry.get_external_id("mattermost", "engineer") == "eng"
+
+
+class TestRetiredClientsAreActuallyClosed:
+    """A token swap displaces a client. Closing it in a fire-and-forget
+    ``create_task`` is not a close: the loop keeps only a weak reference
+    to a running task, so it can be collected mid-flight and the
+    connection pool leaks — the exact failure the close exists to
+    prevent."""
+
+    @pytest.mark.asyncio
+    async def test_a_token_swap_closes_the_displaced_client(self):
+        transport = _make_transport()
+        closed: list[str] = []
+
+        class _Closable:
+            async def close(self) -> None:
+                closed.append("displaced")
+
+        transport._clients["engineer"] = _Closable()  # type: ignore[assignment]
+        transport.register_bot("engineer", MattermostBotConfig(bot_token="new-token"))
+
+        assert transport._pending_closes  # held, not dropped on the floor
+        await transport.stop()
+        assert closed == ["displaced"]
+        assert transport._pending_closes == set()
+
+    def test_a_swap_without_a_loop_says_so_instead_of_suppressing(self, caplog):
+        transport = _make_transport()
+
+        class _Closable:
+            async def close(self) -> None:  # pragma: no cover - never awaited
+                raise AssertionError("must not run without a loop")
+
+        transport._clients["engineer"] = _Closable()  # type: ignore[assignment]
+        with caplog.at_level("WARNING"):
+            transport.register_bot(
+                "engineer", MattermostBotConfig(bot_token="new-token")
+            )
+
+        assert "mattermost_client_close_unscheduled" in caplog.text
