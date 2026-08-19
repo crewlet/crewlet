@@ -153,6 +153,27 @@ _MAX_SEAT_RESTARTS = 5
 #: consumer ends instead of waiting forever on a dead connection.
 _SOCKET_CLOSED = object()
 
+#: How many unhandled frames the pump may buffer for one seat.
+#:
+#: The buffer exists so the socket keeps being drained while the backfill
+#: walks a seat's channels serially (see :meth:`_connect_once`), and it
+#: was unbounded on the theory that the server's 256-deep per-connection
+#: send queue capped it anyway.  It does not: that queue bounds what the
+#: server holds while nobody is reading, and the pump reads continuously.
+#: What actually fills this buffer is CONSUMER lag — ``_handle_frame``
+#: publishes onto the event queue, so a stalled or back-pressured broker
+#: makes one seat's buffer grow for as long as the connection lives.
+#:
+#: 1024 is four times what the server itself is willing to queue for one
+#: connection (``sendQueueSize``), which is the point past which holding
+#: more buys nothing: had this client simply stopped reading, the server
+#: would have given up on it long before. Reaching the ceiling blocks the
+#: pump, which is not a lost message — the socket stops being drained,
+#: the server's own queue absorbs the next 256, and if the stall outlives
+#: that the connection drops and the reconnect's backfill replays the gap.
+#: That is the ordinary recovery path; unbounded growth has none.
+_MAX_BUFFERED_FRAMES = 1024
+
 #: Mattermost websocket event names this fleet forwards.  Everything else
 #: (typing, presence changes, channel-viewed bookkeeping, preference
 #: updates) is chatter that would wake an agent with nothing to act on.
@@ -599,9 +620,10 @@ class MattermostEventFleet:
             # time can outlast the deadline and get the connection closed
             # underneath it. That reconnects, which backfills again: on a
             # busy team the seat never reaches live traffic at all.
-            inbox: asyncio.Queue[Any] = asyncio.Queue()
+            inbox: asyncio.Queue[Any] = asyncio.Queue(_MAX_BUFFERED_FRAMES)
             pump = asyncio.create_task(
-                self._pump_frames(socket, inbox), name=f"mattermost-pump-{seat.handle}"
+                self._pump_frames(socket, inbox, seat.handle),
+                name=f"mattermost-pump-{seat.handle}",
             )
             try:
                 # Cover whatever was missed while the socket was down
@@ -627,19 +649,53 @@ class MattermostEventFleet:
                     await pump
 
     @staticmethod
-    async def _pump_frames(socket: Any, inbox: asyncio.Queue[Any]) -> None:
+    async def _pump_frames(
+        socket: Any, inbox: asyncio.Queue[Any], handle: str = ""
+    ) -> None:
         """Read frames into *inbox* until the socket closes.
 
-        Unbounded on purpose: the server's own send queue is 256 events
-        deep, so the buffer cannot grow past what one connection is
-        willing to hold, and a bound here would re-create the very stall
-        this exists to prevent.
+        Bounded at :data:`_MAX_BUFFERED_FRAMES`; see there for why the
+        server's send queue does not bound it for us, and why blocking at
+        the ceiling is the recoverable outcome.  Hitting it is logged
+        once per stall rather than per frame, because a buffer that is
+        full is a *consumer* problem — a stalled broker, a slow handler —
+        and one line naming the seat is what points at it.  A stall is
+        over once the buffer has drained back below half, not merely
+        below the brim: without that hysteresis a consumer keeping pace
+        right at the ceiling logs on every second frame.
+
+        The closing sentinel is queued with ``await``, never
+        ``put_nowait``: a full queue would swallow it, and the consumer
+        would then wait forever on a socket that has already gone.
+
+        Under CANCELLATION it is not queued at all.  The only canceller
+        is the consumer's own teardown in :meth:`_connect_once`, so by
+        then nothing is draining — and a blocking put on a full buffer
+        would never return, turning that method's ``pump.cancel(); await
+        pump`` into a permanent hang for the whole seat.  The sentinel
+        exists for a consumer that is still listening; there is none.
         """
+        stalled = False
+        cancelled = False
         try:
             async for raw in socket:
+                if stalled:
+                    if inbox.qsize() * 2 <= inbox.maxsize:
+                        stalled = False
+                elif inbox.full():
+                    stalled = True
+                    logger.warning(
+                        "mattermost_frame_buffer_full",
+                        handle=handle,
+                        capacity=inbox.maxsize,
+                    )
                 await inbox.put(raw)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await inbox.put(_SOCKET_CLOSED)
+            if not cancelled:
+                await inbox.put(_SOCKET_CLOSED)
 
     async def _await_authentication(self, seat: _SeatState, socket: Any) -> list[Any]:
         """Block until the server acknowledges the authentication challenge."""

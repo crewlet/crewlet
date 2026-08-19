@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.mattermost.client import (
@@ -52,6 +53,30 @@ logger = get_logger("mattermost.doctor")
 #: run against an unreachable host fails in seconds rather than minutes.
 PROBE_TIMEOUT_SECONDS = 15.0
 
+#: What to say when the optional ``websockets`` dependency is absent.
+WEBSOCKETS_MISSING = (
+    "the `websockets` package is not installed, so neither websocket could "
+    "be checked — and the engine's ONLY inbound path is a websocket per "
+    "seat, so no agent would hear anything. Install crewlet[mattermost]"
+)
+
+
+def _websockets_module() -> Any:
+    """The optional ``websockets`` dependency, or ``None`` when absent.
+
+    A base install genuinely cannot run the Mattermost integration —
+    :meth:`MattermostEventFleet.start` refuses to start for exactly this
+    reason.  But for *this* command a missing dependency is a finding,
+    not a crash: an operator runs the doctor to be told what is wrong,
+    and a bare ``ModuleNotFoundError`` would abandon every other check —
+    Site URL, tokens, channel membership — that still has an answer.
+    """
+    try:
+        import websockets
+    except ImportError:  # pragma: no cover - install-time state
+        return None
+    return websockets
+
 
 @dataclass
 class SeatCheck:
@@ -64,6 +89,9 @@ class SeatCheck:
     is_bot: bool = False
     disabled: bool = False
     websocket_ok: bool = False
+    #: ``False`` when the probe could not run at all, so the table can
+    #: say "unknown" rather than accusing a healthy seat of failing.
+    websocket_checked: bool = True
     channels: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
 
@@ -83,6 +111,7 @@ class DoctorReport:
     site_url: str = ""
     site_url_ok: bool = False
     browser_websocket_ok: bool = False
+    browser_websocket_checked: bool = True
     browser_websocket_detail: str = ""
     team_ok: bool = False
     seats: list[SeatCheck] = field(default_factory=list)
@@ -106,7 +135,9 @@ async def _probe_browser_websocket(base_url: str) -> tuple[bool, str]:
     exact string, so a path-bearing Origin would fail a check every real
     browser passes.
     """
-    import websockets
+    websockets = _websockets_module()
+    if websockets is None:
+        return False, WEBSOCKETS_MISSING
 
     url = websocket_url(base_url)
     origin = browser_origin(base_url)
@@ -128,7 +159,9 @@ async def _probe_seat_websocket(base_url: str, token: str, handle: str) -> str:
     Site URL problem into every seat's result and hide whichever of the
     two is actually broken.
     """
-    import websockets
+    websockets = _websockets_module()
+    if websockets is None:
+        return WEBSOCKETS_MISSING
 
     from crewlet.mattermost.events import (
         MattermostAuthError,
@@ -159,6 +192,8 @@ async def _check_seat(
     team_id: str,
     handle: str,
     token: str,
+    *,
+    probe_websocket: bool = True,
 ) -> SeatCheck:
     """Token → identity → membership → a real authenticated websocket."""
     seat = SeatCheck(handle=handle)
@@ -207,10 +242,15 @@ async def _check_seat(
                         "it would never be woken by anything but a DM"
                     )
 
-        failure = await _probe_seat_websocket(base_url, token, handle)
-        seat.websocket_ok = not failure
-        if failure:
-            seat.problems.append(f"websocket authentication failed: {failure}")
+        # Skipped only when the dependency that opens it is absent —
+        # already reported once, at the top of the report, rather than
+        # repeated as a per-seat failure it is not.
+        seat.websocket_checked = probe_websocket
+        if probe_websocket:
+            failure = await _probe_seat_websocket(base_url, token, handle)
+            seat.websocket_ok = not failure
+            if failure:
+                seat.problems.append(f"websocket authentication failed: {failure}")
     finally:
         await client.close()
     return seat
@@ -225,6 +265,9 @@ async def run_doctor(
     """Check one Mattermost install and every seat configured against it."""
     base_url = normalize_base_url(url)
     report = DoctorReport(url=base_url, team=team)
+    can_probe_websockets = _websockets_module() is not None
+    if not can_probe_websockets:
+        report.problems.append(WEBSOCKETS_MISSING)
 
     # Unauthenticated on purpose: /system/ping and /config/client are the
     # two reads a browser makes before anyone signs in, so a bad operator
@@ -266,15 +309,17 @@ async def run_doctor(
                 "System Console or the API"
             )
 
-        ok, detail = await _probe_browser_websocket(base_url)
-        report.browser_websocket_ok = ok
-        report.browser_websocket_detail = detail
-        if not ok:
-            report.problems.append(
-                f"a browser-shaped websocket to {base_url} did not open "
-                f"({detail}) — the web app's live feed is dead for everyone "
-                "until this works"
-            )
+        report.browser_websocket_checked = can_probe_websockets
+        if can_probe_websockets:
+            ok, detail = await _probe_browser_websocket(base_url)
+            report.browser_websocket_ok = ok
+            report.browser_websocket_detail = detail
+            if not ok:
+                report.problems.append(
+                    f"a browser-shaped websocket to {base_url} did not open "
+                    f"({detail}) — the web app's live feed is dead for everyone "
+                    "until this works"
+                )
     finally:
         await anon.close()
 
@@ -304,7 +349,13 @@ async def run_doctor(
 
     for handle in sorted(seat_tokens):
         report.seats.append(
-            await _check_seat(base_url, team_id, handle, seat_tokens[handle])
+            await _check_seat(
+                base_url,
+                team_id,
+                handle,
+                seat_tokens[handle],
+                probe_websocket=can_probe_websockets,
+            )
         )
     if not seat_tokens:
         report.problems.append(
@@ -314,15 +365,24 @@ async def run_doctor(
     return report
 
 
+def _ws_cell(ok: bool, checked: bool) -> str:
+    """One websocket column. ``?`` is not ``FAILED``: an unrun probe must
+    not read as a seat that could not connect."""
+    if not checked:
+        return "?"
+    return "ok" if ok else "FAILED"
+
+
 def format_report(report: DoctorReport) -> str:
     """Render a :class:`DoctorReport` for the terminal."""
+    browser_ws = _ws_cell(report.browser_websocket_ok, report.browser_websocket_checked)
     lines = [
         f"url           : {report.url}",
         f"reachable     : {'yes' if report.reachable else 'NO'}"
         + (f" (Mattermost {report.server_version})" if report.server_version else ""),
         f"site url      : {report.site_url or '(unreported)'}"
         + ("" if report.site_url_ok else "   << does not match url"),
-        f"browser ws    : {'ok' if report.browser_websocket_ok else 'FAILED'}"
+        f"browser ws    : {browser_ws}"
         + (
             f" — {report.browser_websocket_detail}"
             if report.browser_websocket_detail
@@ -337,7 +397,7 @@ def format_report(report: DoctorReport) -> str:
             lines.append(
                 f"{seat.handle:<18} {seat.username or '-':<22} "
                 f"{'ok' if seat.token_ok else 'FAILED':<7} "
-                f"{'ok' if seat.websocket_ok else 'FAILED':<7} "
+                f"{_ws_cell(seat.websocket_ok, seat.websocket_checked):<7} "
                 f"{','.join(seat.channels) or '-'}"
             )
             for problem in seat.problems:
@@ -354,6 +414,7 @@ def format_report(report: DoctorReport) -> str:
 
 __all__ = [
     "PROBE_TIMEOUT_SECONDS",
+    "WEBSOCKETS_MISSING",
     "DoctorReport",
     "SeatCheck",
     "format_report",

@@ -360,6 +360,13 @@ already in the config do the work, resolved the same way the engine resolves
 them (secret store, then environment). The exit code is non-zero when any
 check fails, so it drops into a deploy script.
 
+Both websocket rows read `?` on an install without the `websockets` package
+(`pip install 'crewlet[mattermost]'`). That is reported once, as its own
+problem, rather than as two failures: the socket was never *tried*, and a
+`FAILED` there would send you hunting for a server fault when the engine
+could not have opened an inbound connection at all. Every other check still
+runs and still answers.
+
 ```
 url           : http://203.0.113.7:8065
 reachable     : yes (Mattermost 10.5.1)
