@@ -158,9 +158,22 @@ def add_mattermost_parser(sub: argparse._SubParsersAction) -> None:
     prov.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the plan without creating or modifying anything",
+        help=(
+            "Print the plan without creating or modifying anything. "
+            "Applies to --decommission too."
+        ),
     )
     add_sink_arguments(prov, default_env_file=".env")
+
+    doc = group_sub.add_parser(
+        "doctor",
+        help=(
+            "Check a Mattermost install end to end: reachability, the "
+            "Site URL every browser inherits, a browser-shaped websocket "
+            "upgrade, and one real authenticated socket per agent seat"
+        ),
+    )
+    doc.add_argument("config", type=Path, help="Path to the Tier B company YAML")
 
 
 def _render(report: ProvisionReport) -> None:
@@ -212,22 +225,36 @@ async def _run(args: Any, target: _ProvisionTarget, org: Any, raw: Any) -> int:
     try:
         if args.decommission:
             handles = [h.strip() for h in args.decommission.split(",") if h.strip()]
-            prefix = _username_prefix(raw)
-            outcomes = await decommission(client, handles, username_prefix=prefix)
+            # --dry-run is checked HERE, not in the branch below: this
+            # path used to run to completion before the dry-run branch was
+            # ever reached, so rehearsing a decommission with the flag
+            # documented as "create and modify nothing" revoked every
+            # token irreversibly and disabled every named bot.
+            outcomes = await decommission(
+                client,
+                handles,
+                org=org,
+                username_prefix=_username_prefix(raw),
+                dry_run=bool(args.dry_run),
+            )
             for handle, outcome in outcomes:
                 print(f"{handle:<18} {outcome}")
-            print(
-                "\nDecommissioned seats keep their history and can be "
-                "re-enabled by a later provision run, which mints a fresh "
-                "token (the old one is revoked)."
-            )
-            return 0
+            if not args.dry_run:
+                print(
+                    "\nDecommissioned seats keep their history and can be "
+                    "re-enabled by a later provision run, which mints a fresh "
+                    "token (the old one is revoked)."
+                )
+            failed = [h for h, outcome in outcomes if outcome.startswith("error")]
+            if failed:
+                print(f"\n{len(failed)} handle(s) failed — re-run to resume.")
+            return 1 if failed else 0
 
         sink, db = await open_token_sink(args, source="mattermost-provision")
 
         if args.dry_run:
             print(f"Would provision against {target.url} (team {target.team}).")
-            from crewlet.mattermost.provision import seat_token_vars
+            from crewlet.mattermost.provision import seat_token_vars, seat_username
 
             for role in org.all_roles():
                 identity = dict(getattr(role, "mattermost", None) or {})
@@ -239,10 +266,7 @@ async def _run(args: Any, target: _ProvisionTarget, org: Any, raw: Any) -> int:
                     if token_vars and all(sink.existing(v) for v in token_vars)
                     else "would mint"
                 )
-                username = (
-                    identity.get("username")
-                    or f"{_username_prefix(raw)}{role.get_handle()}"
-                )
+                username = seat_username(role, _username_prefix(raw))
                 print(f"  {role.get_handle():<18} {username:<22} {state}: {token_vars}")
             return 0
 
@@ -275,29 +299,90 @@ def _username_prefix(raw: Any) -> str:
     return getattr(provisioning, "username_prefix", "") or ""
 
 
-def cmd_mattermost_provision(args: Any) -> int:
-    """Run the Mattermost provisioning reconcile."""
-    config_path: Path = args.config
-    load_env_file(config_path)
-    if not config_path.exists():
-        logger.error("mattermost_provision_config_missing", path=str(config_path))
-        print(f"Company config file not found: {config_path}")
+def _seat_tokens(org: Any) -> dict[str, str]:
+    """Every Mattermost-enabled agent seat's resolved bot token.
+
+    Resolved through the engine's own ``${VAR}`` path (secret store, then
+    environment) so the doctor reads exactly the credential the engine
+    would boot with — a token present only in the secret store must not
+    read as missing here.
+    """
+    from crewlet.config import resolve_env_scalar
+
+    tokens: dict[str, str] = {}
+    for role in org.all_roles():
+        identity = dict(getattr(role, "mattermost", None) or {})
+        if not identity or getattr(role, "is_human", False):
+            continue
+        tokens[role.get_handle()] = resolve_env_scalar(
+            str(identity.get("bot_token") or "")
+        ).strip()
+    return tokens
+
+
+def cmd_mattermost_doctor(args: Any) -> int:
+    """Check one Mattermost install and every seat configured against it."""
+    from crewlet.config import config_to_organization
+    from crewlet.mattermost.doctor import format_report, run_doctor
+
+    loaded = _load_company(args.config)
+    if loaded is None:
+        return 1
+    cfg, raw = loaded
+    try:
+        target = _resolve_target(raw)
+    except MattermostConfigError as exc:
+        logger.error("mattermost_doctor_config_unresolved", error=str(exc))
+        print(str(exc))
         return 1
 
-    from crewlet.config import config_to_organization, load_company_config
+    org = config_to_organization(cfg)
+    report = asyncio.run(
+        run_doctor(
+            url=target.url,
+            team=target.team,
+            seat_tokens=_seat_tokens(org),
+        )
+    )
+    print(format_report(report))
+    return 0 if report.ok else 1
 
+
+def _load_company(config_path: Path) -> tuple[Any, Any] | None:
+    """Load the company YAML and its enabled ``integrations.mattermost``.
+
+    Shared by ``provision`` and ``doctor`` so the two commands cannot
+    disagree about what "this config has Mattermost" means.
+    """
+    from crewlet.config import load_company_config
+
+    load_env_file(config_path)
+    if not config_path.exists():
+        logger.error("mattermost_config_missing", path=str(config_path))
+        print(f"Company config file not found: {config_path}")
+        return None
     try:
         cfg = load_company_config(config_path)
     except ValueError as exc:  # incl. pydantic ValidationError
-        logger.error("mattermost_provision_config_invalid", error=str(exc))
+        logger.error("mattermost_config_invalid", error=str(exc))
         print(f"Company config is invalid: {exc}")
-        return 1
-
+        return None
     raw = getattr(cfg.integrations, "mattermost", None)
     if raw is None or not getattr(raw, "enabled", False):
-        logger.error("mattermost_provision_not_enabled")
+        logger.error("mattermost_not_enabled")
         print("integrations.mattermost is not enabled in this config.")
+        return None
+    return cfg, raw
+
+
+def cmd_mattermost_provision(args: Any) -> int:
+    """Run the Mattermost provisioning reconcile."""
+    from crewlet.config import config_to_organization
+
+    loaded = _load_company(args.config)
+    if loaded is None:
         return 1
+    cfg, raw = loaded
 
     try:
         target = _resolve_target(raw)
@@ -328,5 +413,6 @@ __all__ = [
     "ADMIN_TOKEN_ENV",
     "MattermostConfigError",
     "add_mattermost_parser",
+    "cmd_mattermost_doctor",
     "cmd_mattermost_provision",
 ]

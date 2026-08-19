@@ -55,11 +55,21 @@ class _FakePoster:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
+        self.clears = 0
 
     async def set_status(
         self, handle: str, channel: str, thread_id: str, status: str
     ) -> bool:
         self.calls.append((handle, channel, thread_id, status))
+        return True
+
+    async def clear_status(self, handle: str, channel: str, thread_id: str) -> bool:
+        # Recorded as an empty status so the ordering assertions below
+        # still read naturally, and counted separately so a test can tell
+        # a real clear from a set_status that happened to carry no text —
+        # the distinction the driver exists to make.
+        self.calls.append((handle, channel, thread_id, ""))
+        self.clears += 1
         return True
 
     @property
@@ -148,6 +158,7 @@ async def test_slack_turn_raises_then_clears_the_indicator() -> None:
     statuses = transport.poster.statuses
     assert statuses[0] in PHASE_PHRASES["plan"]
     assert statuses[-1] == ""  # "gave up" (skip) still clears
+    assert transport.poster.clears == 1  # via clear_status, the real path
     assert transport.typing_status.active_conversations == []
     assert agent.state == AgentState.IDLE
     # It was set on the thread the agent would reply under.

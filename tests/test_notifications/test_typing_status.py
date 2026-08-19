@@ -29,6 +29,7 @@ class FakePoster:
     def __init__(self, ok: bool = True) -> None:
         self.ok = ok
         self.calls: list[tuple[str, str, str, str]] = []
+        self.clears = 0
         self.raises = False
 
     async def set_status(
@@ -38,6 +39,15 @@ class FakePoster:
             raise RuntimeError("slack exploded")
         self.calls.append((handle, channel, thread_ts, status))
         return self.ok
+
+    async def clear_status(self, handle: str, channel: str, thread_id: str) -> bool:
+        # Recorded as an empty status so the ordering assertions below
+        # still read naturally, and counted separately so a test can tell
+        # a real clear from a set_status that happened to carry no text —
+        # the distinction the driver exists to make.
+        self.calls.append((handle, channel, thread_id, ""))
+        self.clears += 1
+        return True
 
     @property
     def statuses(self) -> list[str]:
@@ -244,6 +254,9 @@ async def test_begin_sets_status_and_end_clears_it():
 
     await session.end()
     assert poster.calls[-1] == ("swe", "D123", "1700000000.000100", "")
+    # Through clear_status, not a set_status that happens to be empty:
+    # on a backend that ignores the text, those are opposite operations.
+    assert poster.clears == 1
     assert driver.active_conversations == []
 
 

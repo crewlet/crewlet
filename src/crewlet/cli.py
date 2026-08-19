@@ -1705,13 +1705,17 @@ def main(argv: list[str] | None = None) -> int:
         return plane_commands[subcmd](args)
 
     if args.command == "mattermost":
-        from crewlet.mattermost.provision_cli import cmd_mattermost_provision
+        from crewlet.mattermost.provision_cli import (
+            cmd_mattermost_doctor,
+            cmd_mattermost_provision,
+        )
 
         subcmd = getattr(args, "mattermost_command", None)
         if subcmd is None:
             parser.print_help()
             return 0
         mattermost_commands = {
+            "doctor": cmd_mattermost_doctor,
             "provision": cmd_mattermost_provision,
         }
         return mattermost_commands[subcmd](args)

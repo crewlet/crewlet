@@ -493,7 +493,21 @@ src/crewlet/          # Main package
                       #   integrations.slack.status_phrases)
   mattermost/         # Mattermost integration (self-hosted OSS chat) —
                       #   client.py (async REST: bots, tokens, teams,
-                      #   channels, posts, typing, the since= backfill read),
+                      #   channels, posts, typing, the since= backfill read,
+                      #     server_time_ms (the Date header — reconnect
+                      #     windows compare SERVER-stamped post timestamps,
+                      #     so "now" cannot come from the engine's clock)
+                      #     + THE url helpers: normalize_base_url /
+                      #     websocket_url / site_urls_match, one derivation
+                      #     shared by config.py, the transport and doctor),
+                      #   doctor.py (`crewlet mattermost doctor` — checks
+                      #     what fails SILENTLY: ServiceSettings.SiteURL vs
+                      #     the configured url (Mattermost accepts a
+                      #     websocket only from a browser whose Origin
+                      #     matches SiteURL exactly, and the engine sends no
+                      #     Origin — so a mismatch blinds every human while
+                      #     agents keep working), a browser-shaped upgrade,
+                      #     and a REAL authenticated socket per seat),
                       #   events.py (MattermostEventFleet — ONE WEBSOCKET PER
                       #     AGENT SEAT, because Mattermost has no usable
                       #     inbound webhook: outgoing webhooks fire only in
@@ -507,7 +521,8 @@ src/crewlet/          # Main package
                       #   provision.py + provision_cli.py (`crewlet mattermost
                       #     provision` — Plane/GitLab shape, NOT Slack's: no
                       #     manifest, no ledger, no OAuth click, because an
-                      #     admin token mints a bot's PAT directly).
+                      #     admin token mints a bot's PAT directly; the CLI
+                      #     also hosts `doctor`).
                       #   Engine-side (MattermostConfig, MattermostTransport,
                       #   its prompt, identity registration) lives in
                       #   config/notifications like GitLab; the transport OWNS

@@ -175,20 +175,39 @@ class EnvFileSink:
 
 
 class PrintSink:
-    """Print ``export VAR=token`` for each minted token; env-only reads."""
+    """Print ``export VAR=token`` for each minted token; env-only reads.
 
-    def __init__(self) -> None:
-        self._recorded: list[tuple[str, str]] = []
+    Write-through like every other sink in this module, and for the same
+    reason: a minted token is live on its account the moment it is
+    returned and its value is never retrievable again, so anything that
+    holds it back until a later flush loses it outright if the run dies
+    in between.  Buffering also made this the one sink that broke the
+    module's own stated invariant — "every sink here persists inside
+    ``record``".  For this sink "persist" is the operator reading it, so
+    the line is printed and flushed as it is minted; the report is
+    written to stdout too, so it interleaves, which is the honest
+    ordering rather than a tidy one that can be lost.
+
+    It keeps nothing afterwards. The written line IS the record, so a
+    list of everything this sink has ever minted would be a second copy
+    of every token, held for the life of the process, that nothing reads
+    back.
+    """
 
     def existing(self, var: str) -> str:
         return os.environ.get(var, "")
 
     async def record(self, var: str, token: str) -> None:
-        self._recorded.append((var, token))
+        # ``flush=True`` is what makes the write-through above true.
+        # Python line-buffers stdout only when it is a terminal; piped to
+        # a file or captured by CI it is block-buffered, so an operator
+        # running ``--print > secrets.env`` loses every line still in the
+        # buffer if the process is killed — exactly the window this sink
+        # prints eagerly to close.
+        print(f"export {var}={token}", flush=True)
 
     async def flush(self) -> None:
-        for var, token in self._recorded:
-            print(f"export {var}={token}")
+        return None
 
 
 class SecretStoreSink:

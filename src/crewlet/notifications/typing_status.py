@@ -368,6 +368,26 @@ class StatusPoster(Protocol):
         self, handle: str, channel: str, thread_id: str, status: str
     ) -> bool: ...
 
+    async def clear_status(self, handle: str, channel: str, thread_id: str) -> bool:
+        """Take the indicator down.
+
+        Separate from ``set_status("")`` because the two are only the
+        same operation on a backend that renders text.  Slack clears by
+        setting an empty status; a fixed-vocabulary typing indicator has
+        no text to empty and no clear operation at all — it lapses on its
+        own — so overloading the payload made "raise the indicator" and
+        "clear the indicator" indistinguishable, and such a backend had
+        to refuse both.
+
+        **Required**, and deliberately without a generic fallback: the
+        only candidate — ``set_status(..., "")`` — *raises* the indicator
+        on a poster that ignores its ``status`` argument, which is the
+        entire class of backend this method exists for. A fallback here
+        would do the opposite of what it was asked, silently, on exactly
+        the backends that need it.
+        """
+        ...
+
 
 _Key = tuple[str, str, str]
 
@@ -656,7 +676,7 @@ class WorkingStatusDriver:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        await self._post(session, "")
+        await self._clear(session)
 
     async def _refresh_loop(self, key: _Key, session: _Session) -> None:
         """Re-assert the status until the session ends.
@@ -712,6 +732,27 @@ class WorkingStatusDriver:
             if self._sessions.get(key) is session:
                 del self._sessions[key]
         await self._finish(session, cancel=False)
+
+    async def _clear(self, session: _Session) -> None:
+        """Take a session's indicator down, however this backend does it.
+
+        Never raises: clearing is a cosmetic side-channel, and a turn
+        must not fail because an indicator would not come down.
+        """
+        try:
+            await self._poster.clear_status(
+                session.handle,
+                session.conversation.channel,
+                session.conversation.thread_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "working_status_clear_failed",
+                backend=self.backend,
+                handle=session.handle,
+                channel=session.conversation.channel,
+                error=str(exc),
+            )
 
     async def _post(self, session: _Session, status: str) -> None:
         try:

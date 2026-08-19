@@ -4082,6 +4082,29 @@ class Engine:
 
         self.notification_service.transports = new_dict
 
+        # Re-seed routing state BEFORE starting anything: it is an INPUT
+        # to ``start()``, not something a started transport acquires
+        # later.  A fresh transport instance begins with empty routing
+        # state (per-agent Slack apps, project/space key→lead maps,
+        # handle registry), and for Mattermost that state is what
+        # ``start()`` consumes — it resolves each bot's identity and
+        # opens the websocket fleet, and the fleet refuses to start
+        # without the event queue.  Started first, Mattermost would log
+        # one ``mattermost_fleet_not_started_no_queue`` and go
+        # permanently deaf: nothing starts a transport twice.  The
+        # webhook-driven transports need the same ordering for a less
+        # dramatic reason — Slack would answer ``no_app_for_handle`` and
+        # Jira/Confluence/Plane fall-through routing would misroute
+        # until the engine restarted.
+        if "slack" in new_dict and old_dict.get("slack") is not new_dict["slack"]:
+            self._refresh_slack_apps()
+        if (
+            "mattermost" in new_dict
+            and old_dict.get("mattermost") is not new_dict["mattermost"]
+        ):
+            self._refresh_mattermost_bots()
+        self._reseed_notification_routing()
+
         # Start the newly-installed transports (replacements + brand
         # new ones).  ``NotificationService`` already subscribed at
         # service.start(); new transports just need their own start().
@@ -4095,21 +4118,6 @@ class Engine:
                     "transport_start_failed_live", transport=name, error=str(exc)
                 )
 
-        # A fresh transport instance starts with empty routing state
-        # (per-agent Slack apps, project/space key→lead maps, handle
-        # registry).  Re-seed the installed transports from the current
-        # org so inbound webhooks keep routing — otherwise Slack fails
-        # with ``no_app_for_handle`` and Jira/Confluence/Plane
-        # fall-through routing (project/space → unit-lead) misroutes or
-        # drops until the engine is restarted.
-        if "slack" in new_dict and old_dict.get("slack") is not new_dict["slack"]:
-            self._refresh_slack_apps()
-        if (
-            "mattermost" in new_dict
-            and old_dict.get("mattermost") is not new_dict["mattermost"]
-        ):
-            self._refresh_mattermost_bots()
-        self._reseed_notification_routing()
         # The per-transport refreshers above only run for transports
         # PRESENT in the new dict — when the knowledge backend was
         # REMOVED outright, this is the only hook that can null the
@@ -4699,8 +4707,10 @@ class Engine:
         A fresh transport starts with an empty bot map AND no websocket
         fleet, so without this a live integrations PUT leaves Mattermost
         entirely deaf until a restart.  The queue has to be re-supplied
-        too: the fleet is started from ``transport.start()``, which the
-        notification service calls right after this.
+        too: the fleet is built by ``transport.start()``, and refuses to
+        start without one — which is why every caller must run this
+        BEFORE starting the transport, not after.  Nothing starts a
+        transport a second time.
         """
         transport = self._get_running_mattermost_transport()
         if transport is None:
@@ -5300,6 +5310,15 @@ class Engine:
             await self.agent_pool.terminate(agent)
             logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)
 
+        # Release the seat's Mattermost bot: its websocket, its HTTP
+        # client and its handle-registry entries.  Unlike every other
+        # transport, Mattermost holds a LIVE outbound connection per
+        # seat — leaving it open keeps a departed handle authenticated
+        # with a personal access token, publishing inbound events the
+        # notification service can no longer route, and reconnecting
+        # forever.
+        await self._unregister_role_mattermost_bot(role_name, old_org)
+
         # Stop the role's per-role MCP subprocesses (atlassian / slack
         # / github) and drop its cached tool list.  Terminating the
         # agent alone leaks the running MCP clients and leaves a stale
@@ -5311,6 +5330,23 @@ class Engine:
             if old_role is not None:
                 await self._stop_role_mcp(old_role)
         self._role_mcp_tools.pop(role_name, None)
+
+    async def _unregister_role_mattermost_bot(
+        self, role_name: str, old_org: Any
+    ) -> None:
+        """Drop a departing role's Mattermost bot from the transport."""
+        transport = self._get_running_mattermost_transport()
+        if transport is None:
+            return
+        old_role = old_org.get_role(role_name) if old_org is not None else None
+        if old_role is None or not getattr(old_role, "mattermost", None):
+            return
+        try:
+            await transport.unregister_bot(old_role.get_handle())
+        except Exception as exc:
+            logger.error(
+                "mattermost_bot_unregister_failed", role=role_name, error=str(exc)
+            )
 
     def _purge_cli_llm_workspaces(self, handle: str) -> None:
         """Delete a departing seat's CLI-agent homes.

@@ -1790,10 +1790,36 @@ class MattermostConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_url_and_team(self) -> MattermostConfig:
+        # Normalise once, here, rather than letting each consumer strip a
+        # trailing slash its own way — the value is string-compared
+        # against the server's own SiteURL as well as concatenated with
+        # paths, and two consumers disagreeing about the canonical form
+        # is a mismatch report about two identical addresses.
+        from crewlet.mattermost.client import normalize_base_url
+
+        normalised = normalize_base_url(self.url)
+        if normalised != self.url:
+            object.__setattr__(self, "url", normalised)
         if self.enabled:
             if not self.url:
                 raise ValueError(
                     "mattermost.url is required when mattermost is enabled"
+                )
+            # A schemeless URL is the mistake that produces no useful
+            # error anywhere: ``httpx`` rejects the base at the first
+            # request and ``websockets`` rejects a URI with no ws scheme,
+            # both long after ``crewlet validate`` has passed.  An
+            # unresolved ``${VAR}`` is let through — the reference is
+            # resolved later, and rejecting it here would forbid
+            # configuring the URL from the environment.
+            if (
+                not self.url.startswith(("http://", "https://"))
+                and "${" not in self.url
+            ):
+                raise ValueError(
+                    f"mattermost.url must start with http:// or https:// "
+                    f"(got {self.url!r}). It is the instance URL browsers "
+                    f"use, e.g. https://chat.example.com"
                 )
             if not self.team:
                 raise ValueError(
@@ -1804,17 +1830,19 @@ class MattermostConfig(BaseModel):
     @property
     def api_base(self) -> str:
         """The ``/api/v4`` REST base derived from ``url``."""
-        return f"{self.url.rstrip('/')}/api/v4"
+        return f"{self.url}/api/v4"
 
     @property
     def websocket_url(self) -> str:
-        """The ``/api/v4/websocket`` endpoint, with the ws(s) scheme."""
-        base = self.url.rstrip("/")
-        if base.startswith("https://"):
-            base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            base = "ws://" + base[len("http://") :]
-        return f"{base}/api/v4/websocket"
+        """The ``/api/v4/websocket`` endpoint, with the ws(s) scheme.
+
+        Delegates to :func:`crewlet.mattermost.client.websocket_url` so
+        the config model, the transport that builds the fleet and
+        ``crewlet mattermost doctor`` all derive it the same way.
+        """
+        from crewlet.mattermost.client import websocket_url
+
+        return websocket_url(self.url)
 
 
 class GitHubConfig(BaseModel):

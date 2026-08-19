@@ -9,6 +9,8 @@ behavior.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 from crewlet.provisioning import (
     EnvFileSink,
@@ -236,17 +238,58 @@ async def test_print_sink_existing_reads_environ_only(monkeypatch):
     assert "PRINT_UNSET" not in os.environ
 
 
-async def test_print_sink_flush_prints_export_lines_in_order(capsys):
+async def test_print_sink_prints_each_export_line_as_it_is_recorded(capsys):
     sink = PrintSink()
     await sink.record("VAR_ONE", "tok-1")
+    # Written by record(), not held for flush() — the module's stated
+    # invariant is that a value has survived the process by the time
+    # record() returns.
+    assert capsys.readouterr().out == "export VAR_ONE=tok-1\n"
     await sink.record("VAR_TWO", "tok-2")
     await sink.flush()
-    assert capsys.readouterr().out == "export VAR_ONE=tok-1\nexport VAR_TWO=tok-2\n"
+    assert capsys.readouterr().out == "export VAR_TWO=tok-2\n"
 
 
 async def test_print_sink_flush_without_records_prints_nothing(capsys):
     await PrintSink().flush()
     assert capsys.readouterr().out == ""
+
+
+def test_print_sink_survives_a_process_death_before_flush():
+    """The guarantee, proved rather than asserted.
+
+    ``--print`` is documented for redirection (``> tokens.env``, ``eval
+    "$(...)"``, a CI log), and Python only line-buffers stdout when it is
+    a terminal — piped, it is 8 KiB block-buffered, which comfortably
+    holds a whole fleet's export lines. So a death that skips interpreter
+    finalization (SIGKILL, SIGTERM's default handler, ``os._exit``) takes
+    every unflushed token with it, and the token is unretrievable from
+    the API by then. Only ``flush=True`` inside ``record`` closes that.
+    """
+    # PYTHONUNBUFFERED must be cleared for the child, or the property
+    # under test does not exist: it forces write_through and this passes
+    # whether or not record() flushes. It is set in plenty of container
+    # images — including the one this suite runs in — so inheriting it
+    # would make the guard silently vacuous.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio, os\n"
+            "from crewlet.provisioning import PrintSink\n"
+            "asyncio.run(PrintSink().record('VAR_ONE', 'tok-1'))\n"
+            "os._exit(0)\n",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert child.stdout == "export VAR_ONE=tok-1\n", (
+        "the minted token did not survive a process death — PrintSink.record "
+        "must flush, or --print silently loses credentials under a redirect"
+    )
 
 
 # ── SecretStoreSink ──

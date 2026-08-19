@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -44,12 +45,13 @@ from crewlet._logging import get_logger
 from crewlet.events.types import Event
 from crewlet.mattermost.client import MattermostClient, MattermostError
 
-logger = get_logger("mattermost.events")
+# The topic every inbound integration publishes onto — imported from the
+# notification service rather than restated, because a publisher and a
+# consumer disagreeing about this string is a fleet that connects, reads,
+# publishes, and wakes nobody.
+from crewlet.notifications.service import INBOUND_TOPIC
 
-#: The topic every inbound integration publishes onto.  Imported lazily
-#: in :meth:`_publish` to keep this module importable without the queue
-#: package configured.
-INBOUND_TOPIC = "crewlet.notifications.inbound"
+logger = get_logger("mattermost.events")
 
 #: Backoff schedule between reconnect attempts, in seconds.  Capped
 #: rather than unbounded-exponential: a seat that cannot connect is a
@@ -74,10 +76,39 @@ MAX_BACKFILL_WINDOW_SECONDS = 900.0
 #: single backfill window yields while staying trivially small in memory.
 _DEDUPE_RING = 512
 
-#: Websocket ping interval.  Mattermost closes an idle connection after
-#: roughly 30 s of silence, so the client pings well inside that.
-_PING_INTERVAL = 10.0
-_PING_TIMEOUT = 20.0
+#: Proportional jitter added to each reconnect delay.  Every seat drops
+#: at the same instant when the server restarts or the network blips, so
+#: an unjittered schedule reconnects the whole fleet in lockstep — and
+#: each reconnect is not one request but a backfill walking every channel
+#: that seat is in.  A quarter of the delay is enough to smear the herd
+#: without making the schedule unrecognisable in logs.
+_BACKOFF_JITTER = 0.25
+
+#: How long a connection must survive before the reconnect backoff is
+#: allowed to drop back to the bottom of the schedule.  A socket the
+#: server accepts and then closes immediately looks, to the loop, exactly
+#: like a healthy connection that ended — so resetting on any clean
+#: return turns a server that hangs up on sight into a one-per-second
+#: reconnect storm that never escalates.  A minute is well past every
+#: handshake this integration performs (connect, auth ack, identity read,
+#: backfill) and well inside the 5-minute ceiling the schedule tops out
+#: at, so a genuinely healthy socket is never mistaken for a flapping one.
+_STABLE_CONNECTION_SECONDS = 60.0
+
+#: Websocket keepalive.  Sized to the server's ACTUAL deadlines, which
+#: are far longer than this once claimed: ``web_conn.go`` sets
+#: ``pongWaitTime = 100s`` (the read deadline) and pings the client every
+#: ``pingInterval = 60s``; Mattermost's own web client pings at 30 s.
+#:
+#: The point of pinging at all is to notice a half-open TCP connection —
+#: the server's pings already keep its deadline fresh. A 10 s/20 s pair
+#: meant any 20-second stall in this process (a backfill walking a
+#: seat's channels, a GC pause, a burst of publishes) tore down a
+#: perfectly healthy socket and re-ran the whole reconnect, backfill
+#: included. 30 s/60 s detects a dead peer inside the server's own
+#: 100 s window while tolerating a stall an order of magnitude longer.
+_PING_INTERVAL = 30.0
+_PING_TIMEOUT = 60.0
 
 #: How long to wait for the server to acknowledge the authentication
 #: challenge.  It is a single round trip on a socket that has already
@@ -90,10 +121,51 @@ _AUTH_TIMEOUT = 20.0
 #: echoes it back as ``seq_reply``, which is how the ack is identified.
 _AUTH_SEQ = 1
 
+#: Largest websocket frame this fleet will accept, mirroring the server's
+#: own ``model.SocketMaxMessageSizeKb`` (256 KB) with room to spare.  It
+#: was ``None`` — no limit at all — which makes the process's memory a
+#: function of whatever the far end sends: a corrupted length prefix or a
+#: hostile server is an OOM rather than a dropped connection.  Mattermost
+#: never sends a bigger frame, so a seat that trips this has a problem
+#: worth failing on.
+_MAX_FRAME_BYTES = 1024 * 1024
+
+#: Overall deadline for the authentication handshake, distinct from the
+#: per-frame read timeout: a server that keeps sending frames without
+#: ever acknowledging the challenge would otherwise hold a seat in the
+#: handshake indefinitely, buffering every frame it sent.
+_AUTH_DEADLINE = 60.0
+
+#: How many pre-acknowledgement frames to keep.  They are replayed after
+#: the backfill so a post arriving in the same batch as the ack is not
+#: lost; an unbounded list would let a chatty server grow it without
+#: limit while the ack never comes.
+_MAX_EARLY_FRAMES = 512
+
+#: How many times a seat loop may be restarted after escaping its own
+#: error handling.  The loop catches every exception it expects, so an
+#: escape is a defect rather than a transient — a few restarts cover a
+#: genuinely one-off failure, and stopping after that turns an infinite
+#: spin into one loud, findable log line.
+_MAX_SEAT_RESTARTS = 5
+
+#: Sentinel queued by the frame pump when the socket closes, so the
+#: consumer ends instead of waiting forever on a dead connection.
+_SOCKET_CLOSED = object()
+
 #: Mattermost websocket event names this fleet forwards.  Everything else
 #: (typing, presence changes, channel-viewed bookkeeping, preference
 #: updates) is chatter that would wake an agent with nothing to act on.
-_FORWARDED_EVENTS = frozenset({"posted", "post_edited"})
+#:
+#: ``post_edited`` is deliberately NOT here, matching the Slack transport,
+#: which classes edits as bookkeeping for the same reason: an edit of a
+#: message the agent has already triaged is not a new request, and waking
+#: it again costs a full turn to re-answer what it answered.  Forwarding
+#: edits was also incoherent in practice — the seat's de-duplication ring
+#: dropped the edit of any post still in it and forwarded the edit of any
+#: post that had aged out, so the behaviour was decided by how much
+#: traffic had passed since the original.
+_FORWARDED_EVENTS = frozenset({"posted"})
 
 
 class MattermostAuthError(MattermostError):
@@ -121,9 +193,26 @@ class _SeatState:
     seen_posts: list[str] = field(default_factory=list)
     seen_lookup: set[str] = field(default_factory=set)
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: How many times this seat's loop has been restarted after escaping
+    #: its own error handling.  Bounded: the loop catches everything, so
+    #: an escape is a bug, and restarting a bug forever is a spin.
+    restarts: int = 0
+    #: ``time.monotonic()`` at the moment this connection started reading
+    #: LIVE traffic — set once the handshake, identity read and backfill
+    #: are behind it.  ``None`` until then, and reset on every attempt.
+    live_since: float | None = field(default=None, repr=False)
+
+    def already_seen(self, post_id: str) -> bool:
+        """Whether this post has already been forwarded."""
+        return post_id in self.seen_lookup
 
     def remember(self, post_id: str) -> bool:
-        """Record *post_id*; ``False`` when it was already seen."""
+        """Record *post_id*; ``False`` when it was already seen.
+
+        Called only AFTER a successful publish: a post recorded here is
+        one the fleet has committed to having delivered, and the
+        reconnect backfill will never offer it again.
+        """
         if post_id in self.seen_lookup:
             return False
         self.seen_lookup.add(post_id)
@@ -132,6 +221,86 @@ class _SeatState:
             evicted = self.seen_posts.pop(0)
             self.seen_lookup.discard(evicted)
         return True
+
+
+async def send_authentication_challenge(socket: Any, token: str) -> None:
+    """Send the frame that authenticates a Mattermost websocket.
+
+    Mattermost's websocket carries no credential in its handshake: the
+    connection opens unauthenticated and the client proves itself in the
+    first frame.  Shared with ``crewlet mattermost doctor``, which opens
+    exactly this handshake to prove a seat's token really works — the
+    check that separates "the token is syntactically fine" from "this
+    seat will actually hear anything".
+    """
+    await socket.send(
+        json.dumps(
+            {
+                "seq": _AUTH_SEQ,
+                "action": "authentication_challenge",
+                "data": {"token": token},
+            }
+        )
+    )
+
+
+async def await_authentication(
+    socket: Any,
+    *,
+    handle: str = "",
+    timeout: float = _AUTH_TIMEOUT,
+) -> list[Any]:
+    """Block until the server acknowledges the authentication challenge.
+
+    Mattermost answers ``authentication_challenge`` with a status frame
+    carrying ``seq_reply``, and sends an unsolicited ``hello`` event once
+    the connection is authenticated.  A **rejected** token gets
+    ``status: FAIL`` and then a close.
+
+    Without waiting for that, both outcomes look identical to a caller:
+    ``connect()`` succeeds, the send succeeds, and the read loop ends
+    immediately when the server hangs up.  That returns cleanly, which
+    the fleet's seat loop would treat as a normal server-side close — so
+    a revoked or mistyped token would reconnect forever, logging
+    ``mattermost_ws_connected`` on every pass.  Raising
+    :class:`MattermostAuthError` instead puts a bad token on the backoff
+    schedule and names it in the log.
+
+    Returns any non-auth frames read while waiting, so a post that
+    arrives in the same batch as the ack is not dropped.
+    """
+    early: list[Any] = []
+    deadline = asyncio.get_running_loop().time() + _AUTH_DEADLINE
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise MattermostAuthError(
+                f"no authentication reply for {handle or 'seat'} within "
+                f"{_AUTH_DEADLINE:.0f}s"
+            )
+        raw = await asyncio.wait_for(socket.recv(), timeout=min(timeout, remaining))
+        try:
+            frame = json.loads(raw)
+        except (TypeError, ValueError):
+            logger.debug("mattermost_ws_undecodable_frame", handle=handle)
+            continue
+        if not isinstance(frame, dict):
+            continue
+        if frame.get("seq_reply") == _AUTH_SEQ:
+            status = str(frame.get("status") or "").upper()
+            if status == "OK":
+                return early
+            error = frame.get("error")
+            raise MattermostAuthError(
+                f"websocket authentication rejected for {handle or 'seat'}: "
+                f"{error or status or 'unknown error'}"
+            )
+        if frame.get("event") == "hello":
+            # Success is also signalled unsolicited, and can land before
+            # the status reply.
+            return early
+        if len(early) < _MAX_EARLY_FRAMES:
+            early.append(raw)
 
 
 class MattermostEventFleet:
@@ -163,6 +332,8 @@ class MattermostEventFleet:
         self._clients: dict[str, MattermostClient] = {}
         self._team_id = ""
         self._running = False
+        #: user id → username, for backfilled posts (see _username_for).
+        self._usernames: dict[str, str] = {}
 
     # ----- registration -------------------------------------------------
 
@@ -186,8 +357,10 @@ class MattermostEventFleet:
         if existing is not None:
             # A rotated token means the live socket is authenticated with
             # a credential that may already be revoked — drop it so the
-            # reconnect picks the new one up.
-            self._stop_seat(handle)
+            # reconnect picks the new one up.  Awaited, not just
+            # cancelled: the displaced loop may be mid-request on the
+            # client that is about to be closed underneath it.
+            await self._cancel_seat(handle)
             await self._close_client(handle)
         self._seats[handle] = _SeatState(handle=handle, token=token)
         self._clients[handle] = MattermostClient(self._base_url, token)
@@ -196,7 +369,7 @@ class MattermostEventFleet:
 
     async def unregister_seat(self, handle: str) -> None:
         """Drop a seat (role removed by a live config apply)."""
-        self._stop_seat(handle)
+        await self._cancel_seat(handle)
         self._seats.pop(handle, None)
         await self._close_client(handle)
 
@@ -221,7 +394,25 @@ class MattermostEventFleet:
 
     async def start(self) -> None:
         """Resolve the team, then open every registered seat's socket."""
+        # Fail here, not per seat: without the extra installed, every
+        # connection attempt raises ImportError inside the retry loop, so
+        # the fleet looks like a server that will not answer rather than a
+        # missing dependency.
+        try:
+            import websockets  # noqa: F401
+        except ImportError as exc:  # pragma: no cover - install-time state
+            raise RuntimeError(
+                "the Mattermost integration needs the `websockets` package "
+                "(install crewlet[mattermost])"
+            ) from exc
+
         self._running = True
+        # stop() releases every HTTP client; a fleet started again would
+        # otherwise have none, and each seat would silently skip identity
+        # resolution and backfill for the life of the process.
+        for handle, seat in self._seats.items():
+            if handle not in self._clients:
+                self._clients[handle] = MattermostClient(self._base_url, seat.token)
         for handle in list(self._seats):
             self._start_seat(handle)
         logger.info(
@@ -231,11 +422,21 @@ class MattermostEventFleet:
         )
 
     async def stop(self) -> None:
-        """Cancel every connection and release the HTTP clients."""
+        """Cancel every connection and release the HTTP clients.
+
+        Every seat task is *awaited* after cancellation, not merely
+        cancelled: a websocket whose task is still unwinding holds an
+        open socket and, worse, may be mid-request on the HTTP client
+        this method is about to close — which surfaces as
+        ``RuntimeError: client has been closed`` from a task nobody is
+        waiting on, long after ``stop()`` returned.
+        """
         self._running = False
-        for handle in list(self._seats):
-            self._stop_seat(handle)
-        tasks = [s.task for s in self._seats.values() if s.task is not None]
+        tasks = [
+            task
+            for task in (self._cancel_task(handle) for handle in list(self._seats))
+            if task is not None
+        ]
         for task in tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
@@ -247,18 +448,66 @@ class MattermostEventFleet:
 
     def _start_seat(self, handle: str) -> None:
         seat = self._seats.get(handle)
-        if seat is None or seat.task is not None:
+        # A *finished* task is not a running connection.  The loop only
+        # returns when the fleet is stopping, so a done task here means
+        # something escaped it — treating that as "already started" would
+        # leave the seat permanently deaf.
+        if seat is None or (seat.task is not None and not seat.task.done()):
             return
-        seat.task = asyncio.create_task(
+        task = asyncio.create_task(
             self._seat_loop(seat), name=f"mattermost-ws-{handle}"
         )
+        seat.task = task
+        task.add_done_callback(lambda t: self._seat_task_finished(handle, t))
 
-    def _stop_seat(self, handle: str) -> None:
+    def _seat_task_finished(self, handle: str, task: asyncio.Task[None]) -> None:
+        """Restart a seat loop that ended for any reason but shutdown.
+
+        The loop is not supposed to end while the fleet runs, so reaching
+        here means something escaped it.  Logging and walking away leaves
+        that seat deaf until the process restarts — with the fleet still
+        reporting it as registered — so it is logged AND restarted.
+        """
+        if task.cancelled() or not self._running:
+            return
+        exc = task.exception()
+        seat = self._seats.get(handle)
+        if seat is None:
+            return
+        seat.restarts += 1
+        logger.error(
+            "mattermost_seat_loop_exited",
+            handle=handle,
+            error=str(exc) if exc else "returned",
+            restarts=seat.restarts,
+        )
+        if seat.restarts > _MAX_SEAT_RESTARTS:
+            logger.error(
+                "mattermost_seat_abandoned",
+                handle=handle,
+                restarts=seat.restarts,
+                impact="this seat receives nothing until the engine restarts",
+            )
+            return
+        self._start_seat(handle)
+
+    def _cancel_task(self, handle: str) -> asyncio.Task[None] | None:
+        """Cancel a seat's task and hand it back for awaiting."""
         seat = self._seats.get(handle)
         if seat is None or seat.task is None:
-            return
-        seat.task.cancel()
+            return None
+        task = seat.task
+        task.cancel()
         seat.task = None
+        return task
+
+    async def _cancel_seat(self, handle: str) -> None:
+        """Cancel a seat's task and wait for it to unwind."""
+        task = self._cancel_task(handle)
+        if task is None:
+            return
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
     # ----- the per-seat connection loop ----------------------------------
 
@@ -266,22 +515,21 @@ class MattermostEventFleet:
         """Connect, authenticate, read — forever, with backoff."""
         attempt = 0
         while self._running:
+            seat.live_since = None
             try:
                 await self._connect_once(seat)
-                # A clean return means the server closed the socket; that
-                # is a normal reconnect, not an error, so the backoff
-                # resets.
-                attempt = 0
             except asyncio.CancelledError:
                 raise
             except MattermostAuthError as exc:
+                # Never reaches the live-read phase, so it is never
+                # "stable": a revoked token climbs the schedule instead of
+                # reconnecting once a second forever.
                 logger.error(
                     "mattermost_ws_auth_rejected",
                     handle=seat.handle,
                     attempt=attempt + 1,
                     error=str(exc),
                 )
-                attempt += 1
             except Exception as exc:
                 logger.warning(
                     "mattermost_ws_connection_failed",
@@ -289,13 +537,41 @@ class MattermostEventFleet:
                     attempt=attempt + 1,
                     error=str(exc),
                 )
+            # Stability is judged on EVERY exit, not just a clean return.
+            # Mattermost closes without a close frame, so an ordinary
+            # disconnect after hours of healthy traffic surfaces here as
+            # ``ConnectionClosedError`` — an exception. Resetting only on
+            # the clean path would ratchet a perfectly healthy seat up to
+            # the 5-minute ceiling and leave it there for the life of the
+            # process.
+            #
+            # And it is timed from the LIVE READ, not from the start of
+            # the attempt: the handshake, the identity read and a backfill
+            # that issues one REST call per channel can themselves take a
+            # minute, which would make a socket that died on its first
+            # frame look like a connection that lasted.
+            lived = (
+                time.monotonic() - seat.live_since
+                if seat.live_since is not None
+                else 0.0
+            )
+            if lived >= _STABLE_CONNECTION_SECONDS:
+                attempt = 0
+            else:
                 attempt += 1
+                if seat.live_since is not None:
+                    logger.warning(
+                        "mattermost_ws_closed_early",
+                        handle=seat.handle,
+                        attempt=attempt,
+                        seconds=round(lived, 2),
+                    )
             if not self._running:
                 return
             delay = RECONNECT_BACKOFF_SECONDS[
                 min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)
             ]
-            await asyncio.sleep(delay)
+            await asyncio.sleep(delay * (1.0 + random.uniform(0.0, _BACKOFF_JITTER)))
 
     async def _connect_once(self, seat: _SeatState) -> None:
         """One connection's lifetime: auth, backfill the gap, then read."""
@@ -305,17 +581,9 @@ class MattermostEventFleet:
             self._websocket_url,
             ping_interval=_PING_INTERVAL,
             ping_timeout=_PING_TIMEOUT,
-            max_size=None,
+            max_size=_MAX_FRAME_BYTES,
         ) as socket:
-            await socket.send(
-                json.dumps(
-                    {
-                        "seq": _AUTH_SEQ,
-                        "action": "authentication_challenge",
-                        "data": {"token": seat.token},
-                    }
-                )
-            )
+            await send_authentication_challenge(socket, seat.token)
             early = await self._await_authentication(seat, socket)
             await self._resolve_identity(seat)
             logger.info(
@@ -323,62 +591,59 @@ class MattermostEventFleet:
                 handle=seat.handle,
                 user_id=seat.user_id,
             )
-            # Cover whatever was missed while the socket was down BEFORE
-            # reading live traffic, so the agent sees the conversation in
-            # order.  Duplicates across the boundary are caught by the
-            # seat's dedupe ring.
-            await self._backfill(seat)
-            for raw in early:
-                await self._handle_frame(seat, raw)
+            # Start draining the socket IMMEDIATELY, into a buffer.
+            # Mattermost gives each write a 30 s deadline
+            # (``writeWaitTime``), and a socket nobody reads stops
+            # accepting writes as soon as the kernel buffer fills — so a
+            # backfill that walks a seat's channels one REST call at a
+            # time can outlast the deadline and get the connection closed
+            # underneath it. That reconnects, which backfills again: on a
+            # busy team the seat never reaches live traffic at all.
+            inbox: asyncio.Queue[Any] = asyncio.Queue()
+            pump = asyncio.create_task(
+                self._pump_frames(socket, inbox), name=f"mattermost-pump-{seat.handle}"
+            )
+            try:
+                # Cover whatever was missed while the socket was down
+                # BEFORE handling live traffic, so the agent sees the
+                # conversation in order. Duplicates across the boundary
+                # are caught by the seat's dedupe ring.
+                await self._backfill(seat)
+                await self._anchor_cursor(seat)
+                for raw in early:
+                    await self._handle_frame(seat, raw)
+                # From here on the connection is doing its job; how long
+                # it lasts from this point is what tells the reconnect
+                # loop whether this seat is healthy or flapping.
+                seat.live_since = time.monotonic()
+                while True:
+                    raw = await inbox.get()
+                    if raw is _SOCKET_CLOSED:
+                        return
+                    await self._handle_frame(seat, raw)
+            finally:
+                pump.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await pump
+
+    @staticmethod
+    async def _pump_frames(socket: Any, inbox: asyncio.Queue[Any]) -> None:
+        """Read frames into *inbox* until the socket closes.
+
+        Unbounded on purpose: the server's own send queue is 256 events
+        deep, so the buffer cannot grow past what one connection is
+        willing to hold, and a bound here would re-create the very stall
+        this exists to prevent.
+        """
+        try:
             async for raw in socket:
-                await self._handle_frame(seat, raw)
+                await inbox.put(raw)
+        finally:
+            await inbox.put(_SOCKET_CLOSED)
 
     async def _await_authentication(self, seat: _SeatState, socket: Any) -> list[Any]:
-        """Block until the server acknowledges the authentication challenge.
-
-        Mattermost answers ``authentication_challenge`` with a status
-        frame carrying ``seq_reply``, and sends an unsolicited ``hello``
-        event once the connection is authenticated.  A **rejected** token
-        gets ``status: FAIL`` and then a close.
-
-        Without waiting for that, both outcomes look identical from here:
-        ``connect()`` succeeds, the send succeeds, and the read loop ends
-        immediately when the server hangs up.  That returns cleanly, which
-        :meth:`_run_seat` treats as a normal server-side close and resets
-        the backoff — so a revoked or mistyped token reconnects once a
-        second, forever, logging ``mattermost_ws_connected`` on every
-        pass.  Raising here instead puts a bad token on the backoff
-        schedule and names it in the log.
-
-        Returns any non-auth frames read while waiting, so a post that
-        arrives in the same batch as the ack is not dropped.  They are
-        replayed by the caller *after* backfill, keeping the ordering
-        guarantee that backfilled history precedes live traffic.
-        """
-        early: list[Any] = []
-        while True:
-            raw = await asyncio.wait_for(socket.recv(), timeout=_AUTH_TIMEOUT)
-            try:
-                frame = json.loads(raw)
-            except (TypeError, ValueError):
-                logger.debug("mattermost_ws_undecodable_frame", handle=seat.handle)
-                continue
-            if not isinstance(frame, dict):
-                continue
-            if frame.get("seq_reply") == _AUTH_SEQ:
-                status = str(frame.get("status") or "").upper()
-                if status == "OK":
-                    return early
-                error = frame.get("error")
-                raise MattermostAuthError(
-                    f"websocket authentication rejected for {seat.handle}: "
-                    f"{error or status or 'unknown error'}"
-                )
-            if frame.get("event") == "hello":
-                # Success is also signalled unsolicited, and can land
-                # before the status reply.
-                return early
-            early.append(raw)
+        """Block until the server acknowledges the authentication challenge."""
+        return await await_authentication(socket, handle=seat.handle)
 
     async def _resolve_identity(self, seat: _SeatState) -> None:
         """Learn the bot's own user id (own-message suppression needs it)."""
@@ -421,7 +686,7 @@ class MattermostEventFleet:
                 logger.warning("mattermost_team_unresolved", team=self._team)
                 return
 
-        now_ms = int(time.time() * 1000)
+        now_ms = await self._now_ms(seat)
         floor_ms = now_ms - int(self._backfill_window * 1000)
         since_ms = seat.last_event_ms
         if since_ms < floor_ms:
@@ -466,6 +731,9 @@ class MattermostEventFleet:
                     channel_name=str(channel.get("name") or ""),
                     mentions=[],
                     replayed=True,
+                    sender_name=await self._username_for(
+                        seat, str(post.get("user_id") or "")
+                    ),
                 ):
                     replayed += 1
         if replayed:
@@ -475,6 +743,62 @@ class MattermostEventFleet:
                 posts=replayed,
                 since_ms=since_ms,
             )
+
+    async def _anchor_cursor(self, seat: _SeatState) -> None:
+        """Give a seat a reconnect floor even before its first post.
+
+        Called after :meth:`_backfill` on every connect, so the first one
+        still replays nothing.  Without it a connection that drops before
+        the seat has seen a single message leaves the cursor at zero, and
+        the next connect reads that as a first boot with no gap to cover —
+        so everything said during the outage is dropped silently.  A
+        seat that joins a quiet channel and reconnects an hour later is
+        exactly that case.
+        """
+        if not seat.last_event_ms:
+            seat.last_event_ms = await self._now_ms(seat)
+
+    async def _username_for(self, seat: _SeatState, user_id: str) -> str:
+        """The poster's username, for a post read back over REST.
+
+        A live event carries ``sender_name``; a backfilled one does not,
+        so without this the agent is handed a 26-character id as the
+        sender — in its prompt, in its thread-follow grammar, and in the
+        dashboard. Cached per fleet: a gap replay is mostly a handful of
+        people, and the same ids recur across channels.
+        """
+        if not user_id:
+            return ""
+        cached = self._usernames.get(user_id)
+        if cached is not None:
+            return cached
+        client = self._clients.get(seat.handle)
+        if client is None:
+            return ""
+        try:
+            user = await client.get_user(user_id)
+        except MattermostError as exc:
+            logger.debug("mattermost_username_unresolved", user=user_id, error=str(exc))
+            return ""
+        username = str((user or {}).get("username") or "")
+        self._usernames[user_id] = username
+        return username
+
+    async def _now_ms(self, seat: _SeatState) -> int:
+        """ "Now", on the clock the post timestamps are stamped by.
+
+        The backfill window is a comparison between a server-stamped post
+        timestamp and the present, so both sides have to come from the
+        same clock; skew between the engine host and the Mattermost host
+        would otherwise widen or silently truncate the window.  Falls
+        back to the local clock when the server does not say.
+        """
+        client = self._clients.get(seat.handle)
+        if client is not None:
+            server_ms = await client.server_time_ms()
+            if server_ms:
+                return server_ms
+        return int(time.time() * 1000)
 
     async def _handle_frame(self, seat: _SeatState, raw: str | bytes) -> None:
         """Decode one websocket frame and forward it if it is a post."""
@@ -526,12 +850,8 @@ class MattermostEventFleet:
         ring had already seen it.
         """
         post_id = str(post.get("id") or "")
-        if not post_id or not seat.remember(post_id):
+        if not post_id or seat.already_seen(post_id):
             return False
-
-        create_at = int(post.get("update_at") or post.get("create_at") or 0)
-        if create_at > seat.last_event_ms:
-            seat.last_event_ms = create_at
 
         payload = {
             "body": {
@@ -547,12 +867,27 @@ class MattermostEventFleet:
             "handle": seat.handle,
             "headers": {},
         }
-        await self._publish(payload)
+        if not await self._publish(payload):
+            # Nothing is recorded for a post that did not land: leaving
+            # the cursor and the dedupe ring untouched is what lets the
+            # next reconnect's backfill redeliver it. Advancing them
+            # first meant a queue hiccup dropped the message permanently,
+            # with the gap already marked as covered.
+            return False
+
+        seat.remember(post_id)
+        # The cursor advances on CREATION time, matching what the
+        # backfill selects on.  Taking it from ``update_at`` would let an
+        # edit push the cursor past posts that had not arrived yet.
+        create_at = int(post.get("create_at") or post.get("update_at") or 0)
+        if create_at > seat.last_event_ms:
+            seat.last_event_ms = create_at
         return True
 
-    async def _publish(self, payload: dict[str, Any]) -> None:
+    async def _publish(self, payload: dict[str, Any]) -> bool:
+        """Publish one envelope; ``False`` when it did not land."""
         if self._queue is None:
-            return
+            return False
         try:
             await self._queue.publish(
                 INBOUND_TOPIC,
@@ -560,8 +895,11 @@ class MattermostEventFleet:
             )
         except Exception as exc:
             # A publish failure must not tear down the socket — the next
-            # message still deserves a chance to land.
+            # message still deserves a chance to land — but it must not
+            # be recorded as delivered either.
             logger.warning("mattermost_publish_failed", error=str(exc))
+            return False
+        return True
 
 
 def _decode_embedded(value: Any) -> Any:
@@ -585,5 +923,8 @@ def _decode_embedded(value: Any) -> Any:
 __all__ = [
     "MAX_BACKFILL_WINDOW_SECONDS",
     "RECONNECT_BACKOFF_SECONDS",
+    "MattermostAuthError",
     "MattermostEventFleet",
+    "await_authentication",
+    "send_authentication_challenge",
 ]

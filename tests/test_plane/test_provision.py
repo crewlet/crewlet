@@ -1923,9 +1923,11 @@ async def test_flush_failure_on_abort_does_not_mask_original_error():
 
 async def test_successful_run_flushes_exactly_once(capsys):
     # The except-BaseException wrapper must not double-flush the success
-    # path: PrintSink.flush() re-prints every recorded value, so a second
-    # flush would show the operator two apparently-different tokens per
-    # var.
+    # path. PrintSink prints inside record() now, so a second flush is
+    # merely redundant rather than a duplicate export line — but a sink
+    # that persists on flush (the encrypted store, an env file) still
+    # pays for every extra one, and a wrapper that flushes twice here is
+    # a wrapper that has lost track of its own control flow.
     class CountingSink(PrintSink):
         flushes = 0
 

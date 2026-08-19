@@ -23,11 +23,13 @@ from starlette.responses import HTMLResponse, JSONResponse
 
 from crewlet._logging import get_logger
 from crewlet.events.types import Event
+
+# Imported, not restated: three independent copies of this string is
+# three chances for a publisher to write onto a topic nothing consumes.
+from crewlet.notifications.service import INBOUND_TOPIC
 from crewlet.telemetry import tracer
 
 logger = get_logger("api.routes")
-
-INBOUND_TOPIC = "crewlet.notifications.inbound"
 
 _SENSITIVE_HEADERS = frozenset({"authorization", "cookie"})
 

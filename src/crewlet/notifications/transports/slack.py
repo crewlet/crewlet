@@ -389,6 +389,16 @@ class SlackTransport:
             logger.error("slack_send_failed", error=str(exc))
             return False
 
+    async def clear_status(self, handle: str, channel: str, thread_id: str) -> bool:
+        """Take the working status down.
+
+        Slack's own clear IS an empty status, so this is
+        :meth:`set_status` with no text — spelled out because the
+        protocol no longer overloads the payload for backends whose
+        indicator has no text to empty.
+        """
+        return await self.set_status(handle, channel, thread_id, "")
+
     async def set_status(
         self,
         handle: str,

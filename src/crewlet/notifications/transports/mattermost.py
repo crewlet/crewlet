@@ -30,6 +30,8 @@ posts, which come over REST without a mention list.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,6 +42,10 @@ from crewlet.mattermost.client import (
     DIRECT_CHANNEL_TYPES,
     MattermostClient,
     MattermostError,
+    normalize_base_url,
+    site_url_origin_matches,
+    site_url_path_matches,
+    typing_throttle_from,
 )
 from crewlet.notifications.handle import HandleRegistry
 from crewlet.notifications.protocol import (
@@ -61,13 +67,32 @@ from crewlet.notifications.typing_status import (
 
 logger = get_logger("notifications.mattermost")
 
-#: Margin added to the server's typing throttle to derive the heartbeat.
-#: Re-asserting *faster* than ``TimeBetweenUserTypingUpdatesMilliseconds``
-#: is silently dropped by the server, so the heartbeat must sit just
-#: outside it — close enough that the indicator never visibly gaps, far
-#: enough that clock skew between engine and server does not push a
-#: refresh back inside the throttle window.
-_TYPING_REFRESH_MARGIN_SECONDS = 1.0
+#: Fraction of ``TimeBetweenUserTypingUpdatesMilliseconds`` the heartbeat
+#: re-asserts at.
+#:
+#: That setting is NOT a server-side throttle — the server accepts every
+#: ``POST /users/me/typing`` it is given (``publishUserTyping`` has no
+#: rate limit) — it is the interval Mattermost's own web client waits
+#: between emitting typing events while a human types, and therefore the
+#: rhythm every client is built around.  So the heartbeat belongs
+#: *inside* the window, not just outside it: at 0.6 the indicator is
+#: re-asserted every 3 s at the 5 s default, which means a single lost
+#: call still lands before the previous assertion could lapse.  Slack's
+#: driver makes the same trade (45 s inside a 120 s expiry).
+_TYPING_REFRESH_FRACTION = 0.6
+
+#: Floor for the derived heartbeat.  An operator who sets the throttle
+#: absurdly low would otherwise turn a cosmetic indicator into a request
+#: storm for the whole length of a turn.
+_TYPING_REFRESH_FLOOR_SECONDS = 1.0
+
+
+def _typing_refresh_interval(throttle_ms: float) -> float:
+    """Heartbeat for a backend whose window is *throttle_ms* long."""
+    return max(
+        _TYPING_REFRESH_FLOOR_SECONDS,
+        throttle_ms / 1000.0 * _TYPING_REFRESH_FRACTION,
+    )
 
 
 def mattermost_post_skip_reason(post: dict[str, Any]) -> str:
@@ -105,6 +130,18 @@ def mattermost_post_text(post: dict[str, Any]) -> str:
         noun = "file" if count == 1 else "files"
         return f"(shared {count} {noun})"
     return ""
+
+
+def _is_channel_id(value: str) -> bool:
+    """Whether *value* is a Mattermost id rather than a name.
+
+    Mattermost ids are exactly 26 characters of ``[a-z0-9]``
+    (``model.IsValidId``), which no channel name or username can be:
+    names are capped at 64 characters but are the operator's own words,
+    and a 26-character all-lowercase-alphanumeric name is vanishingly
+    unlikely to collide by accident.
+    """
+    return len(value) == 26 and all(c.islower() or c.isdigit() for c in value)
 
 
 @dataclass
@@ -163,8 +200,8 @@ class MattermostTransport:
         # Derived from the server's own throttle at ``start()``; the
         # module default only covers a server that refuses the config
         # read.  See ``MattermostClient.typing_throttle_ms``.
-        self.status_refresh_interval: float = (
-            DEFAULT_TYPING_THROTTLE_MS / 1000.0 + _TYPING_REFRESH_MARGIN_SECONDS
+        self.status_refresh_interval: float = _typing_refresh_interval(
+            DEFAULT_TYPING_THROTTLE_MS
         )
         self._typing_status = WorkingStatusDriver(
             self, typing_status_mode, phrases=typing_status_phrases
@@ -179,6 +216,12 @@ class MattermostTransport:
         self._event_queue: Any = None
         self._started = False
         self.last_skip_reason: str = ""
+        # Resolution caches. Channel names and DM channels are stable
+        # for the life of a transport, and the alternative is a lookup
+        # per outbound message.
+        self._team_id: str = ""
+        self._channel_ids: dict[str, str] = {}
+        self._dm_channels: dict[tuple[str, str], str] = {}
 
     @property
     def bots(self) -> dict[str, MattermostBotConfig]:
@@ -214,14 +257,87 @@ class MattermostTransport:
         return self._fleet
 
     def register_bot(self, handle: str, config: MattermostBotConfig) -> None:
-        """Register a per-agent Mattermost bot."""
-        self._bots[handle] = config
-        self._clients[handle] = MattermostClient(self._base_url, config.bot_token)
-        logger.info("mattermost_bot_registered", handle=handle)
+        """Register a per-agent Mattermost bot.
+
+        Re-registering a handle whose token is unchanged is a no-op, so a
+        routine re-seed costs nothing; a CHANGED token replaces the
+        client and schedules the displaced one for closing, because
+        dropping an httpx client on the floor leaks its connection pool
+        for the life of the process.
+        """
+        existing = self._bots.get(handle)
+        if existing is not None and existing.bot_token == config.bot_token:
+            self._bots[handle] = config
+        else:
+            displaced = self._clients.get(handle)
+            self._bots[handle] = config
+            self._clients[handle] = MattermostClient(self._base_url, config.bot_token)
+            if displaced is not None:
+                self._retire_client(displaced, handle)
+            logger.info("mattermost_bot_registered", handle=handle)
         if config.username and self._handle_registry is not None:
             self._handle_registry.register_external_id(
                 "mattermost", config.username, handle
             )
+
+    def _retire_client(self, client: MattermostClient, handle: str) -> None:
+        """Close a displaced client without blocking the caller.
+
+        ``register_bot`` is synchronous (it is called from config-apply
+        code paths that are not), so the close is scheduled rather than
+        awaited; the client is already unreachable by then.
+        """
+
+        async def _close() -> None:
+            try:
+                await client.close()
+            except Exception as exc:
+                logger.warning(
+                    "mattermost_client_close_failed", handle=handle, error=str(exc)
+                )
+
+        with contextlib.suppress(RuntimeError):  # no loop: sync/CLI context
+            asyncio.get_running_loop().create_task(_close())
+
+    async def unregister_bot(self, handle: str) -> None:
+        """Release a departed seat's bot — socket, client and identities.
+
+        The mirror image of :meth:`register_bot` plus the fleet's seat
+        registration.  Mattermost is the one transport holding a LIVE
+        outbound connection per seat, so a decommissioned role that is
+        merely forgotten keeps a websocket authenticated with its
+        personal access token, publishing events onto the inbound topic
+        under a handle that no longer resolves to an agent.
+        """
+        bot = self._bots.pop(handle, None)
+        user_id = self._user_ids.pop(handle, "")
+        client = self._clients.pop(handle, None)
+        if self._fleet is not None:
+            try:
+                await self._fleet.unregister_seat(handle)
+            except Exception as exc:
+                logger.warning(
+                    "mattermost_seat_unregister_failed", handle=handle, error=str(exc)
+                )
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:
+                logger.warning(
+                    "mattermost_client_close_failed", handle=handle, error=str(exc)
+                )
+        if self._handle_registry is not None:
+            # Both namespaces: payloads identify a poster by user id,
+            # humans and the MCP tools address a bot by username.
+            if user_id:
+                self._handle_registry.unregister_external_id(
+                    "mattermost_bot", user_id, expected=handle
+                )
+            if bot is not None and bot.username:
+                self._handle_registry.unregister_external_id(
+                    "mattermost", bot.username, expected=handle
+                )
+        logger.info("mattermost_bot_unregistered", handle=handle)
 
     def user_id_for(self, handle: str) -> str:
         """The bot's own Mattermost user id, once resolved."""
@@ -240,6 +356,21 @@ class MattermostTransport:
             if not user_id:
                 continue
             self._user_ids[handle] = user_id
+            # The SERVER is authoritative about the bot's name. The
+            # config value is a guess — the provisioner may have applied
+            # `provisioning.username_prefix`, or the account may have
+            # been renamed or created by hand — and that name is what the
+            # agent is told to answer to, what it writes when it mentions
+            # itself, and what the backfill's text grammar matches. A
+            # wrong one silently breaks all three.
+            if username and username != self._bots[handle].username:
+                logger.info(
+                    "mattermost_username_corrected",
+                    handle=handle,
+                    configured=self._bots[handle].username,
+                    actual=username,
+                )
+                self._bots[handle].username = username
             if self._handle_registry is not None:
                 # Two namespaces, same seat: payloads identify a poster by
                 # user id, while humans and the MCP tools address a bot by
@@ -258,13 +389,14 @@ class MattermostTransport:
                 username=username,
             )
 
-        # One read, from any bot's client — the throttle is a server-wide
-        # setting, not a per-user one.
+        # One read, from any bot's client — both settings below are
+        # server-wide, not per-user.
         for client in self._clients.values():
-            throttle_ms = await client.typing_throttle_ms()
-            self.status_refresh_interval = (
-                throttle_ms / 1000.0 + _TYPING_REFRESH_MARGIN_SECONDS
+            config = await client.client_config()
+            self.status_refresh_interval = _typing_refresh_interval(
+                typing_throttle_from(config)
             )
+            self._warn_on_site_url_mismatch(config)
             break
         self._started = True
 
@@ -287,19 +419,12 @@ class MattermostTransport:
                 bots=len(self._bots),
             )
             return
+        from crewlet.mattermost.client import websocket_url
         from crewlet.mattermost.events import MattermostEventFleet
 
-        base = self._base_url
-        if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://") :]
-        else:
-            ws_base = base
-
         self._fleet = MattermostEventFleet(
-            base_url=base,
-            websocket_url=f"{ws_base}/api/v4/websocket",
+            base_url=self._base_url,
+            websocket_url=websocket_url(self._base_url),
             team=self._team,
             event_queue=self._event_queue,
         )
@@ -327,15 +452,66 @@ class MattermostTransport:
                 logger.warning("mattermost_client_close_failed", error=str(exc))
         logger.info("transport_stopped")
 
+    def _warn_on_site_url_mismatch(self, config: dict[str, Any]) -> None:
+        """Warn when the server does not know the address it is reached on.
+
+        ``ServiceSettings.SiteURL`` is the address Mattermost hands to
+        every browser and every plugin, which build their absolute URLs
+        from it.  When it disagrees with the address this engine — and,
+        almost always, the humans — reach the server on, the server keeps
+        answering REST calls perfectly while the web app's live feed and
+        its plugin requests point at a host the reader's machine cannot
+        resolve.  Nothing errors; readers simply refresh to see replies.
+
+        That is the one Mattermost misconfiguration with no symptom the
+        engine would otherwise surface, so it is named here rather than
+        left for someone to find in a browser console.
+        """
+        reported = str(config.get("SiteURL") or "")
+        if not reported:
+            return
+        fix = (
+            "set ServiceSettings.SiteURL (MM_SERVICESETTINGS_SITEURL) to the "
+            "address people reach Mattermost on, then re-run "
+            "`crewlet mattermost doctor`"
+        )
+        if not site_url_origin_matches(self._base_url, reported):
+            logger.warning(
+                "mattermost_site_url_mismatch",
+                configured=self._base_url,
+                site_url=normalize_base_url(reported),
+                impact=(
+                    "Mattermost accepts a websocket upgrade only from a "
+                    "browser whose Origin matches SiteURL, so everyone "
+                    "browsing at this address loses live updates and has to "
+                    "refresh to see new messages"
+                ),
+                fix=fix,
+            )
+        elif not site_url_path_matches(self._base_url, reported):
+            # Same origin, different subpath: the websocket is fine (the
+            # origin check ignores the path); what breaks is every
+            # absolute link and plugin URL the server builds.
+            logger.warning(
+                "mattermost_site_url_subpath_mismatch",
+                configured=self._base_url,
+                site_url=normalize_base_url(reported),
+                impact=(
+                    "links and plugin URLs the server builds carry the "
+                    "SiteURL path, not this one"
+                ),
+                fix=fix,
+            )
+
     # ----- outbound ------------------------------------------------------
 
     async def send(self, message: OutboundMessage) -> bool:
         """Post a message as the sending agent's own bot.
 
-        Resolves the target channel by trying, in order:
-        ``reply_to_metadata["channel"]``, ``metadata["channel"]``, the
-        recipient as a raw channel id, a HandleRegistry lookup of the
-        recipient, then the agent's configured default channel.
+        Everything the API takes here is a channel **id**, and most of
+        what a caller has is not one — a recipient handle, a channel
+        name from config, a person's username — so each form is resolved
+        rather than passed through and hoped for.
         """
         bot = self._bots.get(message.sender_handle)
         client = self._clients.get(message.sender_handle)
@@ -343,17 +519,7 @@ class MattermostTransport:
             logger.warning("no_bot_for_handle", handle=message.sender_handle)
             return False
 
-        channel = message.reply_to_metadata.get("channel", "") or message.metadata.get(
-            "channel", ""
-        )
-        if not channel:
-            recipient = message.recipient
-            if recipient and self._handle_registry is not None:
-                channel = self._handle_registry.get_external_id("mattermost", recipient)
-            if not channel and recipient:
-                channel = recipient
-        if not channel:
-            channel = bot.channel
+        channel = await self._resolve_channel(message, bot, client)
         if not channel:
             logger.warning(
                 "no_channel_resolved",
@@ -362,7 +528,16 @@ class MattermostTransport:
             )
             return False
 
-        root_id = message.reply_to_metadata.get("thread_ts", "")
+        # ``thread_anchor`` is the root for a reply and the message's own
+        # id for a top-level trigger, which is exactly what a reply must
+        # be posted under: the agent is told to answer in a thread, and
+        # answering at top level instead both contradicts that and skips
+        # the participation record that subscribes it to the human's
+        # response.  ``thread_ts`` remains the fallback for metadata
+        # produced before the anchor existed.
+        root_id = message.reply_to_metadata.get(
+            "thread_anchor", ""
+        ) or message.reply_to_metadata.get("thread_ts", "")
 
         try:
             await client.create_post(channel, message.body, root_id=root_id)
@@ -376,6 +551,130 @@ class MattermostTransport:
             )
         return True
 
+    async def _resolve_channel(
+        self,
+        message: OutboundMessage,
+        bot: MattermostBotConfig,
+        client: MattermostClient,
+    ) -> str:
+        """The channel **id** to post *message* into, or ``""``.
+
+        In order: the id carried by the trigger, the recipient when it
+        already is an id, a DM with the recipient (resolved handle →
+        username → user id → direct channel), then the agent's
+        configured default channel, which is a NAME and has to be looked
+        up in the team.
+        """
+        carried = message.reply_to_metadata.get("channel", "") or message.metadata.get(
+            "channel", ""
+        )
+        if carried:
+            return carried
+
+        recipient = message.recipient
+        if recipient:
+            if _is_channel_id(recipient):
+                return recipient
+            username = ""
+            if self._handle_registry is not None:
+                username = self._handle_registry.get_external_id(
+                    "mattermost", recipient
+                )
+            dm = await self._direct_channel(
+                message.sender_handle, client, username or recipient
+            )
+            if dm:
+                return dm
+
+        if bot.channel:
+            return await self._channel_id_for_name(client, bot.channel)
+        return ""
+
+    async def _direct_channel(
+        self, sender_handle: str, client: MattermostClient, username: str
+    ) -> str:
+        """Open (or fetch) the DM channel between this bot and *username*.
+
+        A username is not a channel id — posting one as though it were is
+        rejected by the server, which is how every fallback DM to a
+        colleague or to a human seat used to fail.
+        """
+        own_id = self._user_ids.get(sender_handle, "")
+        if not own_id or not username:
+            return ""
+        cache_key = (sender_handle, username)
+        cached = self._dm_channels.get(cache_key)
+        if cached:
+            return cached
+        try:
+            other = await client.get_user_by_username(username.lstrip("@"))
+            other_id = str((other or {}).get("id") or "")
+            if not other_id:
+                logger.warning("mattermost_recipient_unknown", username=username)
+                return ""
+            channel = await client.create_direct_channel(own_id, other_id)
+        except MattermostError as exc:
+            logger.warning(
+                "mattermost_dm_channel_failed", username=username, error=str(exc)
+            )
+            return ""
+        channel_id = str((channel or {}).get("id") or "")
+        if channel_id:
+            self._dm_channels[cache_key] = channel_id
+        return channel_id
+
+    async def _channel_id_for_name(self, client: MattermostClient, name: str) -> str:
+        """Resolve a configured channel NAME to its id, once per name."""
+        if _is_channel_id(name):
+            return name
+        cached = self._channel_ids.get(name)
+        if cached:
+            return cached
+        team_id = await self._resolve_team_id(client)
+        if not team_id:
+            return ""
+        try:
+            channel = await client.get_channel_by_name(team_id, name)
+        except MattermostError as exc:
+            logger.warning(
+                "mattermost_channel_lookup_failed", channel=name, error=str(exc)
+            )
+            return ""
+        channel_id = str((channel or {}).get("id") or "")
+        if channel_id:
+            self._channel_ids[name] = channel_id
+        else:
+            logger.warning("mattermost_channel_unknown", channel=name, team=self._team)
+        return channel_id
+
+    async def _resolve_team_id(self, client: MattermostClient) -> str:
+        """The configured team's id, resolved once."""
+        if self._team_id:
+            return self._team_id
+        try:
+            team = await client.get_team_by_name(self._team)
+        except MattermostError as exc:
+            logger.warning(
+                "mattermost_team_lookup_failed", team=self._team, error=str(exc)
+            )
+            return ""
+        self._team_id = str((team or {}).get("id") or "")
+        if not self._team_id:
+            logger.warning("mattermost_team_unknown", team=self._team)
+        return self._team_id
+
+    async def clear_status(self, handle: str, channel: str, thread_id: str) -> bool:
+        """No-op: Mattermost's typing indicator has no clear operation.
+
+        It expires on its own once the heartbeat stops, which is why this
+        backend needs the protocol's explicit clear rather than the
+        empty-status convention — under that convention "raise" and
+        "clear" arrived as the same call on a backend that renders no
+        text, and the only safe reading was to refuse both.  Which is
+        what happened: the indicator could never be raised at all.
+        """
+        return False
+
     async def set_status(
         self,
         handle: str,
@@ -383,19 +682,17 @@ class MattermostTransport:
         thread_id: str,
         status: str,
     ) -> bool:
-        """Raise (or let lapse) the composer typing indicator.
+        """Raise the composer typing indicator.
 
         ``status`` is ignored — Mattermost's indicator wording is the
         client's, which is why this transport declares
-        ``supports_status_text = False``.  An empty ``status`` means
-        "clear", and there is no clear operation: the indicator simply
-        expires once the heartbeat stops, so this returns without a call
-        rather than emitting a meaningless one.
+        ``supports_status_text = False``.  Raising it is the whole
+        vocabulary; :meth:`clear_status` is the other half.
 
         Never raises: a failed call returns ``False`` and the indicator
         lapses on its own.
         """
-        if not channel or not status:
+        if not channel:
             return False
         client = self._clients.get(handle)
         if client is None or not self._started:
@@ -405,7 +702,16 @@ class MattermostTransport:
             # trigger was a reply; for a top-level message it is the
             # message's own id, which is also the thread the agent will
             # reply under.
-            await client.publish_typing(channel, parent_id=thread_id)
+            #
+            # The deadline is this driver's own heartbeat: a call still in
+            # flight when the next beat is due is raising an indicator
+            # that beat is about to raise anyway, so waiting on it only
+            # holds a pool connection the agent's real calls need.
+            await client.publish_typing(
+                channel,
+                parent_id=thread_id,
+                timeout=self.status_refresh_interval,
+            )
         except MattermostError as exc:
             logger.warning("mattermost_typing_failed", handle=handle, error=str(exc))
             return False
@@ -446,7 +752,7 @@ class MattermostTransport:
         post_id = str(post.get("id") or "")
         root_id = str(post.get("root_id") or "")
         sender_id = str(post.get("user_id") or "")
-        own_user_id = self._user_ids.get(handle, "")
+        own_user_id = self._own_user_id(handle, body)
         channel_type = str(body.get("channel_type") or "")
         text = mattermost_post_text(post)
 
@@ -479,7 +785,7 @@ class MattermostTransport:
                 )
                 if not is_following_thread:
                     follow_reason = self._detect_follow(
-                        body, text, handle, channel_type
+                        body, text, handle, channel_type, own_user_id
                     )
                     if follow_reason is not None:
                         await tracker.start_following(
@@ -492,7 +798,9 @@ class MattermostTransport:
                     )
                     return None
             else:
-                follow_reason = self._detect_follow(body, text, handle, channel_type)
+                follow_reason = self._detect_follow(
+                    body, text, handle, channel_type, own_user_id
+                )
                 if follow_reason is not None:
                     await tracker.start_following(
                         handle, channel, post_id, follow_reason
@@ -550,42 +858,94 @@ class MattermostTransport:
             },
         )
 
+    def _own_user_id(self, handle: str, body: dict[str, Any]) -> str:
+        """This seat's own Mattermost user id, however it can be learned.
+
+        ``start()`` resolves every bot's id up front, but that read can
+        fail (a server blip, a token rotated between provisioning and
+        boot) and a bot registered by a live config apply is never in
+        that map at all.  An empty id here is not cosmetic: it disables
+        own-message suppression, and an agent that cannot recognise its
+        own posts answers itself — one inbound message per reply, forever,
+        at one LLM turn each.
+
+        So fall back to the id the websocket fleet stamps on every event
+        it publishes.  The fleet resolved it from ``/users/me`` with this
+        seat's own token, which is exactly what ``start()`` does, and
+        caching it here repairs the map for every later event.
+        """
+        known = self._user_ids.get(handle, "")
+        if known:
+            return known
+        stamped = str(body.get("bot_user_id") or "")
+        if stamped:
+            self._user_ids[handle] = stamped
+            logger.info(
+                "mattermost_identity_recovered_from_event",
+                handle=handle,
+                user_id=stamped,
+            )
+        return stamped
+
     def _detect_follow(
         self,
         body: dict[str, Any],
         text: str,
         handle: str,
         channel_type: str,
+        own_user_id: str,
     ) -> ThreadFollowReason | None:
         """Why this post should make the agent follow its thread.
 
-        A DM is always addressed to the bot — there is nobody else in the
-        room — so it follows unconditionally.  Otherwise the
-        **server-computed** ``mentions`` list decides: it is exact, and it
-        resolves ``@all`` / ``@channel`` / ``@here`` against real channel
-        membership, which the regex fallback cannot.  That fallback
-        exists only for reconnect-backfilled posts, which come over REST
-        with no mention list attached.
+        The two signals answer different questions, and using either for
+        the other's job gets it wrong.
+
+        **Whether** this bot is a target is the server's answer.  Its
+        ``mentions`` list is rewritten per connection
+        (``addMentionsBroadcastHook``): the field is present only when
+        this connection's user was mentioned, and its value is then
+        always exactly ``[own_user_id]``.  So it is exact — it resolves
+        ``@all`` / ``@channel`` / ``@here`` against real membership, and
+        catches group and keyword mentions no regex could — but it can
+        never say a bot was *not* the target while naming someone else.
+        The old "mentions list without me ⇒ collective" branch was
+        therefore unreachable except when this seat's own id was unknown,
+        in which case it fired on every mention of anybody.
+
+        **Why** is the message text's answer, and only the text's.  A
+        bare ``@channel`` expands into every member's id, so by the list
+        alone a broadcast is indistinguishable from being named — and
+        treating a broadcast as a personal address is exactly what the
+        working-status modes say must not happen.
+
+        A DM short-circuits both: there is nobody else the message could
+        be for.
         """
         if channel_type in DIRECT_CHANNEL_TYPES:
             return ThreadFollowReason.MENTION
 
         tracker = self._thread_tracker
-        own_user_id = self._user_ids.get(handle, "")
+        username = self._bots[handle].username
+        by_text = (
+            tracker.detect_follow_trigger(text, username)
+            if tracker is not None
+            else None
+        )
         mentions = body.get("mentions")
 
-        if isinstance(mentions, list) and mentions:
-            if own_user_id and own_user_id in {str(m) for m in mentions}:
-                return ThreadFollowReason.MENTION
-            # The server resolved a collective address into the member
-            # list this bot is part of — being included by @channel is
-            # weaker than being named, and is recorded as such.
-            return ThreadFollowReason.COLLECTIVE
+        if isinstance(mentions, list) and mentions and own_user_id:
+            if own_user_id not in {str(m) for m in mentions}:
+                # Only reachable when this seat's id is stale; the server
+                # says someone else was the target.
+                return None
+            # Named in the text outranks being swept up by a broadcast;
+            # a group or keyword mention the text cannot show still
+            # counts as being addressed.
+            return by_text or ThreadFollowReason.MENTION
 
-        if tracker is None:
-            return None
-        username = self._bots[handle].username
-        return tracker.detect_follow_trigger(text, username)
+        # No usable list: a reconnect-backfilled post (read over REST,
+        # which carries none) or an unresolved identity.
+        return by_text
 
 
 __all__ = [
