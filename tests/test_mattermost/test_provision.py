@@ -659,6 +659,31 @@ class TestTokenMintIsAllOrNothing:
         assert any("revoked 1 superseded" in n for n in report.seats[0].notes)
 
     @pytest.mark.asyncio
+    async def test_a_superseded_token_that_cannot_be_revoked_is_named(self):
+        """It is live, unreferenced, and carries the same description as
+        the good one — so the report is the only thing that can point at
+        it. The mint itself succeeded, so the seat is not failed."""
+
+        class _StuckRevoke(FakeClient):
+            async def revoke_user_access_token(self, token_id: str) -> None:
+                raise MattermostError("gateway timeout", status=504)
+
+        sink = FakeSink({"MM_IDENTITY": "older-token"})  # MM_MCP empty -> mint
+        client = _StuckRevoke(bots=[_EXISTING_BOT])
+        client.probe_user_id = "existing-id"
+        client.existing_tokens["existing-id"] = [
+            {"id": "tok-old", "description": "crewlet-engine", "is_active": True}
+        ]
+
+        report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
+
+        assert report.seats[0].token_action == "minted"
+        assert any(
+            "could not revoke the superseded token tok-old" in n
+            for n in report.seats[0].notes
+        )
+
+    @pytest.mark.asyncio
     async def test_a_foreign_token_is_never_revoked(self):
         """Only tokens carrying this tool's description are ours."""
         sink = FakeSink({"MM_IDENTITY": "older-token"})
