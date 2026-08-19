@@ -112,6 +112,19 @@ _READ_TIMEOUT_SECONDS = 15.0
 _WRITE_TIMEOUT_SECONDS = 10.0
 _POOL_TIMEOUT_SECONDS = 5.0
 
+#: The default assembled once, as httpx does with its own
+#: ``DEFAULT_TIMEOUT_CONFIG``, so it can be the parameter's *default
+#: value* rather than a falsy-fallback.  ``timeout or <default>`` would
+#: swallow every falsy setting a caller can mean on purpose —
+#: ``timeout=None`` is httpx for "no timeout at all" and ``timeout=0``
+#: for "do not wait" — and hand back these numbers instead.
+DEFAULT_TIMEOUT = httpx.Timeout(
+    connect=_CONNECT_TIMEOUT_SECONDS,
+    read=_READ_TIMEOUT_SECONDS,
+    write=_WRITE_TIMEOUT_SECONDS,
+    pool=_POOL_TIMEOUT_SECONDS,
+)
+
 #: Deadline for the typing indicator's POST.  It is re-asserted every
 #: ``TimeBetweenUserTypingUpdatesMilliseconds`` (5 s by default), so a
 #: call that outlives the next heartbeat is raising an indicator that is
@@ -263,7 +276,9 @@ class MattermostClient:
     health check reads (``/system/ping``, ``/config/client``) need no
     credential, and offering a bad one turns a working read into a 401.
     The underlying ``httpx.AsyncClient`` is created lazily on first
-    request and released via :meth:`close`.
+    request and released via :meth:`close`.  ``timeout`` defaults to
+    :data:`DEFAULT_TIMEOUT` and is passed through to httpx untouched, so
+    ``None`` means *no* timeout there as it does everywhere else.
     """
 
     def __init__(
@@ -271,17 +286,17 @@ class MattermostClient:
         base_url: str,
         token: str,
         *,
-        timeout: httpx.Timeout | float | None = None,
+        timeout: httpx.Timeout | float | None = DEFAULT_TIMEOUT,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = normalize_base_url(base_url)
         self._token = token
-        self._timeout = timeout or httpx.Timeout(
-            connect=_CONNECT_TIMEOUT_SECONDS,
-            read=_READ_TIMEOUT_SECONDS,
-            write=_WRITE_TIMEOUT_SECONDS,
-            pool=_POOL_TIMEOUT_SECONDS,
-        )
+        # Assigned, not defaulted-if-falsy: ``timeout`` is a
+        # CONFIGURATION value and carries httpx's meanings, so ``None``
+        # ("no timeout") and ``0`` ("do not wait") reach httpx as
+        # written.  ``_request``'s same-named argument is an OVERRIDE for
+        # one call, where ``None`` correctly means "leave this alone".
+        self._timeout = timeout
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._closed = False
@@ -938,6 +953,7 @@ __all__ = [
     "CHANNEL_GROUP",
     "CHANNEL_OPEN",
     "CHANNEL_PRIVATE",
+    "DEFAULT_TIMEOUT",
     "DEFAULT_TYPING_THROTTLE_MS",
     "TYPING_TIMEOUT_SECONDS",
     "DIRECT_CHANNEL_TYPES",

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from crewlet.mattermost.client import (
+    DEFAULT_TIMEOUT,
     DEFAULT_TYPING_THROTTLE_MS,
     MattermostClient,
     MattermostError,
@@ -715,3 +716,28 @@ class TestCreatePost:
             await client.close()
         assert len(bodies) == 2
         assert bodies[0]["pending_post_id"] == bodies[1]["pending_post_id"]
+
+
+class TestTimeoutIsNotDefaultedAway:
+    """``timeout`` is configuration, and it carries httpx's meanings.
+    ``self._timeout = timeout or <default>`` silently replaced every
+    falsy value a caller can mean on purpose."""
+
+    def test_the_default_is_the_module_default(self):
+        client = MattermostClient("https://chat.example", "t")
+        assert client._timeout is DEFAULT_TIMEOUT
+        assert DEFAULT_TIMEOUT.connect == 5.0
+        assert DEFAULT_TIMEOUT.read == 15.0
+
+    def test_none_means_no_timeout_not_the_default(self):
+        client = MattermostClient("https://chat.example", "t", timeout=None)
+        assert client._timeout is None
+
+    def test_zero_means_zero(self):
+        client = MattermostClient("https://chat.example", "t", timeout=0)
+        assert client._timeout == 0
+
+    def test_an_explicit_timeout_survives(self):
+        given = httpx.Timeout(connect=1.0, read=2.0, write=3.0, pool=4.0)
+        client = MattermostClient("https://chat.example", "t", timeout=given)
+        assert client._timeout is given

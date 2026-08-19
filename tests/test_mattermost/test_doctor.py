@@ -239,3 +239,66 @@ class TestFormatting:
         assert "https://chat.example" in rendered
         assert "engineer" in rendered
         assert "nope" in rendered
+
+
+class TestWithoutTheWebsocketsExtra:
+    """A base install cannot run the integration at all — the engine's
+    only inbound path is a websocket per seat. That is a *finding* for
+    this command, not a crash: the doctor exists to name what is wrong,
+    and a bare ModuleNotFoundError would abandon every other check that
+    still has an answer."""
+
+    @pytest.fixture
+    def without_websockets(self, monkeypatch, fake_mattermost):
+        monkeypatch.setattr(doctor_mod, "_websockets_module", lambda: None)
+        return fake_mattermost
+
+    @pytest.mark.asyncio
+    async def test_the_run_completes_and_names_the_missing_extra(
+        self, without_websockets
+    ):
+        report = await _run()
+
+        assert not report.ok
+        assert any("crewlet[mattermost]" in p for p in report.problems)
+        # Everything that does not need a socket was still checked.
+        assert report.reachable
+        assert report.site_url_ok
+        assert report.team_ok
+        assert report.seats[0].token_ok
+        assert report.seats[0].channels == ["engineering"]
+
+    @pytest.mark.asyncio
+    async def test_an_unrun_probe_is_not_reported_as_a_failure(
+        self, without_websockets
+    ):
+        report = await _run()
+
+        assert not report.browser_websocket_checked
+        assert not report.seats[0].websocket_checked
+        # The seat itself is fine; only the install is not.
+        assert report.seats[0].problems == []
+        rendered = format_report(report)
+        assert "browser ws    : ?" in rendered
+        assert "FAILED" not in rendered
+
+    @pytest.mark.asyncio
+    async def test_the_missing_extra_is_reported_once_not_per_seat(
+        self, without_websockets
+    ):
+        report = await _run(seat_tokens={"engineer": "tok", "designer": "tok"})
+
+        assert sum("crewlet[mattermost]" in p for p in report.problems) == 1
+        assert all(seat.problems == [] for seat in report.seats)
+
+    @pytest.mark.asyncio
+    async def test_the_probes_themselves_degrade_rather_than_raise(self, monkeypatch):
+        """Called directly — nothing above stops someone reusing them."""
+        monkeypatch.setattr(doctor_mod, "_websockets_module", lambda: None)
+
+        ok, detail = await doctor_mod._probe_browser_websocket("https://chat.example")
+        assert ok is False
+        assert "crewlet[mattermost]" in detail
+        assert "crewlet[mattermost]" in await doctor_mod._probe_seat_websocket(
+            "https://chat.example", "tok", "engineer"
+        )

@@ -934,6 +934,103 @@ class TestConcurrentDrain:
         assert inbox.get_nowait() is events_module._SOCKET_CLOSED
 
 
+class TestFrameBufferIsBounded:
+    """The buffer is filled by CONSUMER lag, not by the server's
+    per-connection send queue — so nothing bounded it, and one stalled
+    broker made a seat's memory a function of how long its connection
+    lived."""
+
+    class _Socket:
+        """Yields *count* frames, recording how far the pump got."""
+
+        def __init__(self, count: int) -> None:
+            self._count = count
+            self.yielded = 0
+
+        def __aiter__(self):
+            return self._iterate()
+
+        async def _iterate(self):
+            for i in range(self._count):
+                self.yielded = i + 1
+                yield _frame(f"p{i}")
+
+    @pytest.mark.asyncio
+    async def test_the_pump_stops_at_the_ceiling_instead_of_growing(self, monkeypatch):
+        monkeypatch.setattr(events_module, "_MAX_BUFFERED_FRAMES", 4)
+        fleet = _fleet()
+        socket = self._Socket(100)
+        inbox: asyncio.Queue[Any] = asyncio.Queue(events_module._MAX_BUFFERED_FRAMES)
+
+        pump = asyncio.create_task(fleet._pump_frames(socket, inbox, "engineer"))
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+        assert inbox.qsize() == 4
+        # One frame is parked in the blocked ``put``; nothing beyond that.
+        assert socket.yielded == 5
+        pump.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump
+
+    @pytest.mark.asyncio
+    async def test_a_full_buffer_is_logged_once_per_stall(self, monkeypatch, caplog):
+        monkeypatch.setattr(events_module, "_MAX_BUFFERED_FRAMES", 2)
+        fleet = _fleet()
+        socket = self._Socket(10)
+        inbox: asyncio.Queue[Any] = asyncio.Queue(2)
+
+        with caplog.at_level("WARNING"):
+            pump = asyncio.create_task(fleet._pump_frames(socket, inbox, "engineer"))
+            for _ in range(20):
+                await asyncio.sleep(0)
+            # Drain fully: the stall is over, so a later fill logs again.
+            while not inbox.empty():
+                inbox.get_nowait()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pump
+
+        assert caplog.text.count("mattermost_frame_buffer_full") == 2
+
+    @pytest.mark.asyncio
+    async def test_the_sentinel_waits_for_room_rather_than_being_dropped(self):
+        """``put_nowait`` would drop it on a full buffer and the consumer
+        would wait forever on a socket that has already closed."""
+        fleet = _fleet()
+        inbox: asyncio.Queue[Any] = asyncio.Queue(1)
+
+        pump = asyncio.create_task(fleet._pump_frames(self._Socket(1), inbox, "eng"))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert inbox.qsize() == 1  # the frame; the sentinel cannot fit yet
+        assert not pump.done()
+
+        inbox.get_nowait()
+        await asyncio.wait_for(pump, timeout=1)
+        assert inbox.get_nowait() is events_module._SOCKET_CLOSED
+
+    @pytest.mark.asyncio
+    async def test_cancelling_a_pump_blocked_on_a_full_buffer_returns(self):
+        """``_connect_once`` cancels the pump from its own teardown, when
+        nothing is draining any more. A sentinel put in that finally would
+        block forever on a full buffer and hang the seat for good."""
+        fleet = _fleet()
+        inbox: asyncio.Queue[Any] = asyncio.Queue(1)
+
+        pump = asyncio.create_task(fleet._pump_frames(self._Socket(50), inbox, "eng"))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert inbox.full()
+
+        pump.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(pump, timeout=1)
+        assert pump.done()
+
+
 class TestSeatRestart:
     @pytest.mark.asyncio
     async def test_a_loop_that_escapes_is_restarted(self):

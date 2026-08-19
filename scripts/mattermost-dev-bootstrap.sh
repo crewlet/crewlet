@@ -136,21 +136,56 @@ print(found)
 }
 
 json_get() {
-  # json_get <json> <dotted.path> — empty string when absent.
+  # json_get <dotted.path> — the value at <path> of the JSON document on
+  # STDIN, empty string when absent.
+  #
+  # The document arrives on stdin, never as an argument: one of these
+  # bodies is the response that carries a freshly minted personal access
+  # token, and every process on the host can read any other process's
+  # arguments out of /proc/<pid>/cmdline. Stdin is private to the pipe.
   python3 -c '
 import json, sys
 try:
-    value = json.loads(sys.argv[1])
+    value = json.loads(sys.stdin.read())
 except ValueError:
     sys.exit(0)
-for key in sys.argv[2].split("."):
+for key in sys.argv[1].split("."):
     if not isinstance(value, dict):
         sys.exit(0)
     value = value.get(key)
     if value is None:
         sys.exit(0)
 print(value if isinstance(value, str) else json.dumps(value))
-' "$1" "$2"
+' "$1"
+}
+
+has_token() {
+  # has_token <description> — reads a personal-access-token list on
+  # STDIN. Exit 0 = one carries this description, 1 = none does,
+  # 2 = the payload is not a token list, so the answer is UNKNOWN.
+  #
+  # Parsed, not grepped, and three-valued on purpose. A grep for the raw
+  # JSON depends on Mattermost keeping its current field order and
+  # emitting no spaces, and it matches the description anywhere in the
+  # payload — including inside an unrelated field that happens to quote
+  # it. And "unknown" must not collapse into "none": the caller mints an
+  # unrecoverable credential on "none".
+  python3 -c '
+import json, sys
+try:
+    tokens = json.loads(sys.stdin.read())
+except ValueError:
+    sys.exit(2)
+if not isinstance(tokens, list):
+    sys.exit(2)
+sys.exit(
+    0
+    if any(
+        isinstance(t, dict) and t.get("description") == sys.argv[1] for t in tokens
+    )
+    else 1
+)
+' "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -195,7 +230,7 @@ if [ -z "$SESSION" ]; then
   echo "previous run, set MATTERMOST_ADMIN_PASSWORD to the current one." >&2
   exit 1
 fi
-USER_ID=$(json_get "$user_json" id)
+USER_ID=$(printf '%s' "$user_json" | json_get id)
 echo "    logged in as ${ADMIN_USER} (${USER_ID})"
 
 auth=(-H "Authorization: Bearer ${SESSION}")
@@ -209,23 +244,56 @@ auth=(-H "Authorization: Bearer ${SESSION}")
 # re-mint would strand the old one.
 say "Minting the provisioning token ..."
 TOKEN_DESC="crewlet-dev-bootstrap"
-existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens" 2>/dev/null || echo '[]')
-if printf '%s' "$existing" | grep -q "\"description\":\"${TOKEN_DESC}\""; then
+# Fail CLOSED when the list cannot be read. Defaulting it to `[]` would
+# turn "I could not tell you whether a token exists" into "there is
+# none", and the branch below would mint a second admin PAT — whose
+# value Mattermost reveals exactly once — leaving a live, unrecoverable
+# credential behind every transient error.
+if ! existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens"); then
+  echo "Could not list ${ADMIN_USER}'s personal access tokens." >&2
+  echo "Refusing to mint one blind: Mattermost shows a token's value only" >&2
+  echo "at creation, so a duplicate minted here would be a live admin" >&2
+  echo "credential nobody can read." >&2
+  echo "If personal access tokens are turned off, enable them under System" >&2
+  echo "Console > Integrations > Integration Management." >&2
+  exit 1
+fi
+token_exists=0
+printf '%s' "$existing" | has_token "$TOKEN_DESC" || token_exists=$?
+if [ "$token_exists" -gt 1 ]; then
+  echo "Mattermost did not answer with a token list for ${ADMIN_USER}." >&2
+  echo "Refusing to mint one blind, for the same reason as above." >&2
+  exit 1
+fi
+if [ "$token_exists" -eq 0 ]; then
   echo "    a '${TOKEN_DESC}' token already exists."
   ADMIN_TOKEN=$(env_get "$ENV_FILE" MATTERMOST_ADMIN_TOKEN)
-  if [ -n "$ADMIN_TOKEN" ]; then
-    echo "    reusing the value in ${ENV_FILE}"
-  else
+  if [ -z "$ADMIN_TOKEN" ]; then
     echo "    ...but ${ENV_FILE} has no MATTERMOST_ADMIN_TOKEN, and the value" >&2
     echo "    is unrecoverable (Mattermost returns it once). Revoke the old" >&2
     echo "    token in Profile > Security > Personal Access Tokens and re-run." >&2
     exit 1
   fi
+  # Prove the stored value IS a working credential before the rest of the
+  # run is built on it. The env file can easily hold a token that was
+  # revoked in the System Console, or one minted against a different
+  # server — and every step below would then fail with a bare 401 far
+  # from the cause.
+  if ! curl -fsS -o /dev/null -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+      "${API}/users/me"; then
+    echo "    ...but the MATTERMOST_ADMIN_TOKEN in ${ENV_FILE} does not" >&2
+    echo "    authenticate — it was revoked, or belongs to another server." >&2
+    echo "    Revoke the '${TOKEN_DESC}' token in Profile > Security >" >&2
+    echo "    Personal Access Tokens, drop the stale line from ${ENV_FILE}," >&2
+    echo "    and re-run to mint a fresh one." >&2
+    exit 1
+  fi
+  echo "    reusing the value in ${ENV_FILE}"
 else
   token_json=$(curl -fsS -X POST "${API}/users/${USER_ID}/tokens" "${auth[@]}" \
     -H 'Content-Type: application/json' \
     -d "{\"description\":\"${TOKEN_DESC}\"}")
-  ADMIN_TOKEN=$(json_get "$token_json" token)
+  ADMIN_TOKEN=$(printf '%s' "$token_json" | json_get token)
   echo "    minted"
 fi
 if [ -z "${ADMIN_TOKEN:-}" ]; then
@@ -295,7 +363,7 @@ site_url() {
   local body
   body=$(curl -fsS "${API}/config/client?format=old" 2>/dev/null || echo '')
   [ -n "$body" ] || return 0
-  json_get "$body" SiteURL
+  printf '%s' "$body" | json_get SiteURL
 }
 
 say "Reconciling the Site URL with the address browsers use"
@@ -354,9 +422,10 @@ if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
   # PATCH verb here, and `PUT /config` would demand — and clobber — the
   # whole config document.
   if [ -z "$fixed" ] && [ "$repairable" = "1" ]; then
-    env_managed=$(curl -fsS "${API}/config/environment" \
+    env_report=$(curl -fsS "${API}/config/environment" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || echo '{}')
-    if [ "$(json_get "$env_managed" ServiceSettings.SiteURL)" = "true" ]; then
+    env_managed=$(printf '%s' "$env_report" | json_get ServiceSettings.SiteURL)
+    if [ "$env_managed" = "true" ]; then
       warn "SiteURL is set from the environment (MM_SERVICESETTINGS_SITEURL);"
       warn "the API cannot change it — the container has to be recreated."
     else
@@ -419,7 +488,7 @@ if [ -z "$team_json" ]; then
 else
   echo "    already exists"
 fi
-TEAM_ID=$(json_get "$team_json" id)
+TEAM_ID=$(printf '%s' "$team_json" | json_get id)
 
 # The admin has to be IN the team to administer its channels.
 curl -fsS -o /dev/null -X POST "${API}/teams/${TEAM_ID}/members" "${auth[@]}" \

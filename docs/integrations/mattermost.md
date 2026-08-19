@@ -280,6 +280,45 @@ A `${VAR}` still holding a token that has since been revoked — by
 `--decommission`, by an admin, by a restore from an older `.env` — is
 re-minted, so the documented recovery below actually recovers.
 
+A mint is **all or nothing for the seat**. When a seat names its token in
+two different `${VAR}`s, a fresh token is written to *both*, and the token
+it supersedes is revoked: a seat split across two credentials is a seat
+where one consumer works and the other does not, with nothing in the report
+to say which, and an unreferenced token left live on a bot account is one
+nothing can ever name again. If a value cannot be persisted everywhere, the
+new token is revoked *and* every `${VAR}` already written is cleared —
+because a var holding a revoked token is indistinguishable, to the engine,
+from a working one, and the seat's socket simply never opens. If it can be
+persisted neither everywhere nor revoked, the report names the token id and
+tells you to revoke it by hand.
+
+That same promise is why a seat is **refused** rather than minted when its
+bot's token list cannot be read at all — a 403 on the admin credential,
+personal access tokens switched off, a proxy rewriting the path. A mint that
+cannot enumerate what is already there cannot revoke what it supersedes, so
+it would leave a live, non-expiring token referenced by no `${VAR}`, carrying
+the same `crewlet-engine` description as the good one, invisible to
+[`doctor`](#checking-an-install-crewlet-mattermost-doctor) and never revisited
+— the next run finds every var populated and returns early. The seat fails
+with the underlying cause, the rest of the fleet still provisions, and the
+seat resumes on a re-run once the read works.
+
+Two deliberate exceptions to that refusal:
+
+- **A bot this run created.** Its token list is empty by construction, so
+  nothing can be stranded, and refusing would abort a first-ever provision
+  over a hazard that cannot exist. The mint proceeds with a note.
+- **A seat whose `${VAR}`s all already have values.** Nothing is minted, so
+  nothing can be stranded; the recorded token is left in place with a note
+  saying it could not be verified.
+
+When the list *is* readable and shows more than one live `crewlet-engine`
+token on a fully provisioned seat, the report says so. Nothing revokes them
+automatically — only one is referenced by the config and the provisioner
+cannot tell which of the others some other operator is relying on — but they
+carry the same description as the live one, so this listing is the only thing
+that distinguishes them.
+
 ### The admin token
 
 The reconcile authenticates as a **system admin** — creating bot accounts and
@@ -301,7 +340,7 @@ config: pass `--admin-token` or export `MATTERMOST_ADMIN_TOKEN`.
 | `--dry-run` | Print the plan; create and modify nothing. Applies to `--decommission` too. |
 | `--env-file PATH` | Env file minted tokens are written to (default `.env`). |
 | `--secret-store` | Write minted tokens into the encrypted `secret_values` table instead. |
-| `--print` | Print `export VAR=token` lines to stdout. |
+| `--print` | Print `export VAR=token` lines to stdout (and `unset VAR` when a mint is rolled back, so the stream stays sourceable). |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials
 and opens each seat's websocket.
@@ -359,6 +398,13 @@ Nothing is written and no admin credential is needed — the seat tokens
 already in the config do the work, resolved the same way the engine resolves
 them (secret store, then environment). The exit code is non-zero when any
 check fails, so it drops into a deploy script.
+
+Both websocket rows read `?` on an install without the `websockets` package
+(`pip install 'crewlet[mattermost]'`). That is reported once, as its own
+problem, rather than as two failures: the socket was never *tried*, and a
+`FAILED` there would send you hunting for a server fault when the engine
+could not have opened an inbound connection at all. Every other check still
+runs and still answers.
 
 ```
 url           : http://203.0.113.7:8065
@@ -587,6 +633,17 @@ team and its channels, and proves a websocket upgrade succeeds. Credentials
 are written the moment they exist, before any check that can abort —
 Mattermost returns a token's value exactly once. Every step is idempotent,
 so re-run it freely.
+
+That same write-once rule is why a re-run *stops* rather than minting a
+second token when it finds its `crewlet-dev-bootstrap` token on the server
+but no working `MATTERMOST_ADMIN_TOKEN` in `.env` — because the value in
+the file is missing, was revoked, or belongs to another server. A duplicate
+minted there would be a live system-admin credential nobody can read. Revoke
+the old token under **Profile → Security → Personal Access Tokens**, delete
+the stale line from `.env`, and re-run; the script mints a fresh one. It
+stops for the same reason when it cannot *read* the token list at all —
+usually because personal access tokens are turned off under **System Console
+→ Integrations → Integration Management**.
 
 Provision the agent bots in the same run by pointing it at a company config:
 
