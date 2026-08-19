@@ -350,8 +350,17 @@ watching the dashboard is watching that loop. Two events carry it:
 
 | Event | When | Persisted |
 |---|---|---|
-| `AgentTurnProgress` | Twice per tool-call round | No — stream only |
+| `AgentTurnProgress` | Once before the first call, then twice per tool-call round | No — stream only |
 | `AgentPhaseCompleted` | Once, when the phase ends | Yes |
+
+**Before the first call**, because the phase's prompt exists before its
+answer does. `AgentPhaseStarted` cannot carry it — every phase runner
+publishes that event and only then builds its prompt — so the projection
+seeds a placeholder call with no messages, and a live row showed "No
+prompt recorded" for the whole of the phase's first and largest LLM call.
+The opening update carries `prompt_messages` and nothing else, tagged
+`round_num = -1` (consumers read `round_num + 1` as "rounds so far", so
+the sentinel keeps it at zero rather than claiming a round).
 
 **Twice per round**, because a round has two moments worth showing. The
 first fires the instant the model has answered, before any of that
@@ -378,6 +387,14 @@ with the tool badges. The three builders of that field used to be three
 hand-written assemblies, and the live one omitted reasoning entirely: a
 thinking model's live row streamed tool calls against an empty response
 and only grew its reasoning once the phase was over.
+
+**Never load-bearing.** Every progress publish is a live view of the
+phase, not part of it: failures are logged (`turn_progress_publish_failed`)
+and swallowed, so a broker hiccup cannot kill an otherwise healthy turn,
+and cannot stand in for the real error when the phase is already dying.
+This matters most for the opening update, which fires before the provider
+is called at all — an unguarded raise there would end a phase that had
+not yet run.
 
 On a **resumed** Execute phase — one that suspended on `run_sandbox` and
 picked up when the detached run landed — both events are scoped to the

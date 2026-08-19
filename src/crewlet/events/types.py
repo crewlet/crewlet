@@ -1773,6 +1773,12 @@ class AgentTurnProgress(Event):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    # Zero-based index of the round this update reports, or ``-1`` for
+    # the opening update a phase publishes before its first provider
+    # call -- the one that carries ``prompt_messages`` so the live view
+    # can show what the agent was asked while it is still answering.
+    # Consumers read ``round_num + 1`` as "rounds so far", which is why
+    # the sentinel is -1 rather than 0.
     round_num: int = 0
     tool_executions: list[dict] = Field(default_factory=list)
     a2a_context: dict[str, Any] | None = None

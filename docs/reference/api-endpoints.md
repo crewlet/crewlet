@@ -167,7 +167,10 @@ phase record's, so the live row and the turn you expand afterwards are
 the same text rather than two assemblies of it — see [Turn Engine §
 What streams during a
 turn](../concepts/turn-engine.md#what-streams-during-a-turn).
-`agent_turn_progress` is *stream-only*
+Each phase publishes an opening
+`agent_turn_progress` (`round_num = -1`) before its first provider call
+carrying the prompt, so the live row shows what the agent was asked while
+it is still answering.  `agent_turn_progress` is *stream-only*
 (never written to the event store); carrying `live_call` in the
 snapshot means a tab that refreshes or reconnects mid-call re-renders
 the live row immediately instead of waiting for the next progress

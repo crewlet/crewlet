@@ -553,13 +553,23 @@ async def run_tool_loop(
     async def publish_progress(round_index: int) -> None:
         """Push the round's state to live consumers (the dashboard).
 
-        Called twice per round: once the moment the model has spoken —
-        so its reasoning and prose reach the live view before the
-        round's tools run, not after the slowest one returns — and again
-        once that round's tool results are in.  The projection folds
-        both into the same in-flight call (same ``turn_id`` / ``phase``
-        / ``iteration`` / ``round_num``), so the row fills in rather
-        than flickering.
+        Called once before the first provider call (``round_index=-1``,
+        carrying the prompt), then twice per round: once the moment the
+        model has spoken — so its reasoning and prose reach the live view
+        before the round's tools run, not after the slowest one returns —
+        and again once that round's tool results are in.  The projection
+        folds each into the same in-flight call (same ``turn_id`` /
+        ``phase`` / ``iteration`` / ``round_num``), so the row fills in
+        rather than flickering.
+
+        Failures are logged and swallowed.  This is a live view of the
+        phase, never part of it: a broker hiccup on a progress publish
+        must not kill a turn that is otherwise fine, and must never
+        stand in for the real error when the phase is already dying.
+        Every other telemetry publish in this module has always been
+        guarded this way; this one reached further than the rest once it
+        started firing before the first provider call, where an
+        unguarded raise would end a phase that had not yet run.
         """
         progress = AgentTurnProgress(
             source=agent.role_name,
@@ -580,12 +590,22 @@ async def run_tool_loop(
             tool_executions=list(executions),
             a2a_context=a2a_context,
         )
-        if on_progress is not None:
-            await on_progress(progress)
-        else:
-            await event_queue.publish(
-                f"crewlet.events.{progress.type}",
-                progress,
+        try:
+            if on_progress is not None:
+                await on_progress(progress)
+            else:
+                await event_queue.publish(
+                    f"crewlet.events.{progress.type}",
+                    progress,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "turn_progress_publish_failed",
+                agent_id=agent.id_str,
+                phase=phase_name,
+                round=round_index,
             )
 
     # Point the caller's failure view at the live conversation before the
@@ -614,6 +634,22 @@ async def run_tool_loop(
         await event_queue.publish(f"crewlet.events.{event.type}", event)
     except Exception:
         logger.exception("prompt_size_publish_failed")
+
+    # Put the phase's prompt on the live view BEFORE the first provider
+    # call.  ``AgentPhaseStarted`` cannot carry it — every phase runner
+    # publishes that event and only then builds its prompt — so the
+    # projection seeds its placeholder call with no messages at all, and
+    # the dashboard rendered "No prompt recorded" for the whole of the
+    # first (and largest, and usually slowest) call of the phase.  The
+    # onboarding pass showed it worst: one 60k-token prompt against a
+    # reasoning model, and the operator could not see what the agent had
+    # been asked until the round came back.
+    #
+    # ``round_num=-1`` is the "no round has answered yet" sentinel the
+    # projection's own placeholder already uses, so this update reads as
+    # zero rounds rather than claiming one.
+    if prompt_messages:
+        await publish_progress(-1)
 
     rounds_used = 0
     exhausted = False
