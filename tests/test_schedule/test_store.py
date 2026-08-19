@@ -81,3 +81,33 @@ async def test_db_store_claim_conflict_returns_false():
     db = _FakeDB(return_value=None)  # ON CONFLICT DO NOTHING → no row returned
     store = ScheduledRunStore(db)  # type: ignore[arg-type]
     assert await store.claim(**_kw()) is False
+
+
+# --- retention -------------------------------------------------------------
+
+
+async def test_purge_drops_old_rows_and_frees_their_claim():
+    """The ledger is a claim table first and a dashboard feed second.
+
+    A purge that dropped the record but kept the claim key would keep
+    refusing a fire the store has no evidence of — worse than not
+    sweeping at all, because the refusal is silent.
+    """
+    store = MemoryScheduledRunStore()
+    assert await store.claim(**_kw()) is True
+    assert await store.claim(**_kw()) is False
+
+    # Everything is older than "-1 seconds ago".
+    assert await store.purge(older_than_seconds=-1) == 1
+    assert store.records == []
+    assert await store.claim(**_kw()) is True
+
+
+async def test_purge_keeps_rows_inside_the_window():
+    """A row a tick could still evaluate must survive: deleting one
+    inside the catchup window would let that fire run twice."""
+    store = MemoryScheduledRunStore()
+    await store.claim(**_kw())
+    assert await store.purge(older_than_seconds=3600) == 0
+    assert len(store.records) == 1
+    assert await store.claim(**_kw()) is False

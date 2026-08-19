@@ -19,7 +19,7 @@ concerns separate avoids coupling the scheduler to turn internals.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from crewlet._logging import get_logger
@@ -60,6 +60,16 @@ class ScheduledRunStoreProtocol(Protocol):
         dedup identity is ``(scope_type, scope_id, schedule_name,
         fire_label, target_handle)``; ``fire_label`` is the schedule's
         local wall-clock stamp so the dedup is DST-correct.
+        """
+        ...
+
+    async def purge(self, older_than_seconds: float) -> int:
+        """Drop ledger rows older than ``older_than_seconds``.
+
+        On the protocol so both backends are held to it: the ledger is
+        written on every fire and read only by the dashboard's recent
+        list, so without a sweep it is the one table in the scheduler
+        that grows without bound.
         """
         ...
 
@@ -113,6 +123,26 @@ class ScheduledRunStore:
                 outcome=outcome,
             )
         return claimed
+
+    async def purge(self, older_than_seconds: float) -> int:
+        """Delete ledger rows older than ``older_than_seconds``.
+
+        The ledger is an at-most-once claim table first and a dashboard
+        feed second, so retention is bounded by how far back a fire could
+        still be re-evaluated — the catchup window — not by how much
+        history is nice to look at. Anything older can no longer be
+        claimed by any tick, so keeping it only grows the index the claim
+        writes through on every fire.
+        """
+        rows = await self._db.execute(
+            """
+            DELETE FROM scheduled_runs
+            WHERE fired_at < now() - make_interval(secs => $1)
+            RETURNING scope_type
+            """,
+            float(older_than_seconds),
+        )
+        return len(rows)
 
     async def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return the most recent dispatch-ledger rows, newest first.
@@ -184,9 +214,39 @@ class MemoryScheduledRunStore:
                 "scheduled_at": scheduled_at,
                 "outcome": outcome,
                 "trace_id": trace_id,
+                "fired_at": datetime.now(UTC),
             }
         )
         return True
+
+    async def purge(self, older_than_seconds: float) -> int:
+        """Drop ledger rows older than ``older_than_seconds``.
+
+        The twin of the Postgres range delete, and it must drop the
+        CLAIM KEY too, not just the record — the key is what makes a
+        fire at-most-once, so a purge that left it behind would keep
+        refusing a fire the store no longer has any evidence of.
+        """
+        cutoff = datetime.now(UTC) - timedelta(seconds=max(older_than_seconds, 0.0))
+        kept: list[dict[str, object]] = []
+        dropped = 0
+        for record in self.records:
+            fired_at = record.get("fired_at")
+            if isinstance(fired_at, datetime) and fired_at < cutoff:
+                self._keys.discard(
+                    (
+                        str(record["scope_type"]),
+                        str(record["scope_id"]),
+                        str(record["schedule_name"]),
+                        str(record["fire_label"]),
+                        str(record["target_handle"]),
+                    )
+                )
+                dropped += 1
+                continue
+            kept.append(record)
+        self.records = kept
+        return dropped
 
 
 __all__ = [

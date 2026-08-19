@@ -215,3 +215,48 @@ async def test_start_and_stop_cleanly_cancel_task() -> None:
     await scheduler.stop()
     assert scheduler._running is False
     assert scheduler._task is None
+
+
+# --- clustering is a fleet-wide singleton ---------------------------------
+
+
+def _gated(claim_duty: Any) -> SkillClusteringScheduler:
+    return SkillClusteringScheduler(
+        synthesizer=None,  # type: ignore[arg-type]
+        episode_store=None,  # type: ignore[arg-type]
+        agent_pool=_AgentPoolStub([]),
+        organization=_mk_org(),
+        claim_duty=claim_duty,
+    )
+
+
+async def test_a_node_without_the_duty_does_not_cluster() -> None:
+    """Synthesis reads every agent's episodes and WRITES synthesized
+    skills, so running it on every node means N nodes clustering the
+    same episodes into N sets of near-identical auto-drafted pages —
+    duplicated output and N times the LLM spend for one pass's value."""
+    assert await _gated(_never)._may_tick() is False
+
+
+async def test_the_duty_holder_clusters() -> None:
+    assert await _gated(_always)._may_tick() is True
+
+
+async def test_no_placement_host_clusters_as_before() -> None:
+    """Single node: there is no fleet to be a singleton within."""
+    assert await _gated(None)._may_tick() is True
+
+
+async def test_a_duty_claim_that_raises_skips_the_pass() -> None:
+    async def _boom() -> bool:
+        raise RuntimeError("lease store unreachable")
+
+    assert await _gated(_boom)._may_tick() is False
+
+
+async def _always() -> bool:
+    return True
+
+
+async def _never() -> bool:
+    return False

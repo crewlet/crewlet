@@ -106,6 +106,7 @@ class Scheduler:
         catchup_min_seconds: int = 120,
         catchup_max_seconds: int = 7200,
         admits: Callable[[], bool] | None = None,
+        claim_duty: Any = None,
     ) -> None:
         self._event_queue = event_queue
         self._org_provider = org_provider
@@ -118,6 +119,7 @@ class Scheduler:
         # back on, which is why the tick skips whole rather than firing
         # something and letting a peer sort it out.
         self._admits = admits
+        self._claim_duty = claim_duty
         self._store = store
         self._default_tz = default_timezone or "UTC"
         self._tick_seconds = max(1, int(tick_seconds))
@@ -177,6 +179,21 @@ class Scheduler:
 
     # ----- tick -------------------------------------------------------
 
+    async def _holds_duty(self) -> bool:
+        """Whether this node holds the scheduler duty for this tick.
+
+        Re-claimed every tick rather than held, so a node that dies
+        between ticks releases it by lapsing. ``None`` means "no fleet" —
+        the single-node case.
+        """
+        if self._claim_duty is None:
+            return True
+        try:
+            return bool(await self._claim_duty())
+        except Exception:
+            logger.exception("scheduler_duty_claim_failed")
+            return False
+
     async def tick_once(self, now: datetime | None = None) -> int:
         """Evaluate every schedule once and dispatch due fires.
 
@@ -190,6 +207,21 @@ class Scheduler:
             # fired is absorbed by the ``scheduled_runs`` at-most-once
             # claim, and anything nobody fired still runs.
             logger.info("scheduler_tick_shed")
+            return 0
+
+        if not await self._holds_duty():
+            # Same rule, same reason: leave ``_last_tick_utc`` alone. A
+            # node that never wins the duty therefore stays on its FIRST
+            # tick, so if it ever does win one it evaluates the catchup
+            # window rather than a window stretching back to boot — and
+            # the at-most-once claim absorbs whatever the previous
+            # duty-holder already fired.
+            #
+            # The tick is a singleton because it is pure duplicated work,
+            # not because a peer's tick would be wrong: every node
+            # enumerates every schedule, and all but one of them lose the
+            # claim race on every due fire.
+            logger.debug("scheduler_tick_not_this_node")
             return 0
 
         if now is None:

@@ -83,22 +83,46 @@ class MemoryRateLimitStore:
     """In-memory :class:`RateLimitStore` twin — the per-process behaviour."""
 
     def __init__(self) -> None:
-        self._windows: dict[tuple[str, int], int] = {}
+        # Keyed by (bucket, window START in monotonic seconds), NOT by a
+        # window index. An index is only comparable to other indices of
+        # the same width, and both the eviction below and :meth:`purge`
+        # need to compare a key against a WALL of elapsed time — with an
+        # index those comparisons are dimensionally wrong the moment a
+        # caller uses a window wider than one second, and a purge would
+        # judge every live window stale.
+        self._windows: dict[tuple[str, float], int] = {}
+
+    @staticmethod
+    def _window_start(window_seconds: float) -> tuple[float, float]:
+        width = max(window_seconds, 0.001)
+        return (time.monotonic() // width) * width, width
 
     async def allow(self, bucket: str, *, limit: int, window_seconds: float) -> bool:
         if limit <= 0:
             return True
-        window = int(time.monotonic() / max(window_seconds, 0.001))
-        key = (bucket, window)
+        start, width = self._window_start(window_seconds)
+        key = (bucket, start)
         count = self._windows.get(key, 0) + 1
         self._windows[key] = count
         if len(self._windows) > 4096:
-            self._windows = {
-                k: v for k, v in self._windows.items() if k[1] >= window - 1
-            }
+            # Keep the current window and the one before it; everything
+            # older can no longer affect an answer.
+            cutoff = start - width
+            self._windows = {k: v for k, v in self._windows.items() if k[1] >= cutoff}
         return count <= limit
 
     async def purge(self, older_than_seconds: float) -> int:
-        before = len(self._windows)
-        self._windows.clear()
-        return before
+        """Drop windows that started more than ``older_than_seconds`` ago.
+
+        Honours the cutoff rather than clearing, which is what the
+        Postgres store does and therefore what the twin must do: a purge
+        that wiped every window would reset the LIVE one too, and the
+        valve would pass a full limit's worth of notifications again the
+        instant the sweep ran — turning housekeeping into a periodic
+        hole in the rate limit.
+        """
+        cutoff = time.monotonic() - max(older_than_seconds, 0.0)
+        stale = [key for key in self._windows if key[1] < cutoff]
+        for key in stale:
+            del self._windows[key]
+        return len(stale)

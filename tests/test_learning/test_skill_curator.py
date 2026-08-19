@@ -338,3 +338,41 @@ async def test_use_skill_surfaces_stale_marker_on_load() -> None:
     result = await _use_skill({"skill_name": "aging"}, ctx)
     assert result.success
     assert "stale" in result.output.lower()
+
+
+# --- the curator is a fleet-wide singleton -------------------------------
+
+
+async def test_a_node_without_the_duty_does_not_curate() -> None:
+    """The curator TRANSITIONS rows and publishes a lifecycle event per
+    transition, so N nodes produce N event streams for one set of
+    changes and race each other's optimistic-concurrency guards."""
+    worker = SkillCuratorWorker(store=_StoreStub([]), claim_duty=_never)
+    assert await worker._may_tick() is False
+
+
+async def test_the_duty_holder_curates() -> None:
+    worker = SkillCuratorWorker(store=_StoreStub([]), claim_duty=_always)
+    assert await worker._may_tick() is True
+
+
+async def test_no_placement_host_curates_as_before() -> None:
+    """Single node: there is no fleet to be a singleton within."""
+    worker = SkillCuratorWorker(store=_StoreStub([]))
+    assert await worker._may_tick() is True
+
+
+async def test_a_duty_claim_that_raises_skips_the_pass() -> None:
+    async def _boom() -> bool:
+        raise RuntimeError("lease store unreachable")
+
+    worker = SkillCuratorWorker(store=_StoreStub([]), claim_duty=_boom)
+    assert await worker._may_tick() is False
+
+
+async def _always() -> bool:
+    return True
+
+
+async def _never() -> bool:
+    return False

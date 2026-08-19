@@ -138,9 +138,22 @@ The live `AgentInstance` is an *execution* detail. It must never be a *routing* 
 
 ## Singleton duties
 
-Some work belongs to the company rather than to a seat: creating the seat subscriptions, polling live sandbox boxes, sweeping dedupe TTLs. Running it on every node is not merely wasteful, it races — N reapers deciding independently to expire the same paused box.
+Some work belongs to the company rather than to a seat. Running it on every node is not merely wasteful, it races — N reapers deciding independently to expire the same paused sandbox, N clustering passes writing N sets of near-identical auto-drafted skills.
 
-These sit behind `worker:{duty}` leases, claimed per tick rather than held, so a node that dies mid-duty releases it by lapsing and a peer picks it up on its next tick with no handoff protocol. Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within.
+Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so a node that dies mid-duty releases it by lapsing and a peer picks it up on its next tick with no handoff protocol. There are six:
+
+| Duty | What it does | Why once |
+|---|---|---|
+| `seat-subscriptions` | Creates every seat's inbox and control subscription at boot | Only needs doing once per company; no reason for every node to walk every seat at every boot |
+| `sandbox-waiter` | Polls live sandbox boxes, keeps them alive, reaps expired pauses | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
+| `scheduler` | Evaluates every schedule and fires what is due | The `scheduled_runs` claim already makes a fire at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
+| `skill-clustering` | Synthesises skills from episodes | Reads every agent's episodes and **writes** skills: N nodes produce N sets of near-identical pages and N× the LLM spend |
+| `skill-curator` | Transitions skills active → stale → archived | Publishes a lifecycle event per transition, and races its own optimistic-concurrency guard |
+| `maintenance` | Retention sweeps for `webhook_deliveries`, `rate_limits`, `scheduled_runs` | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+
+Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
+
+**Not everything periodic is a duty.** The tool-skill boot walk looks like one and is not: it populates a *process-local* registry, so every node has to run it or its agents have no tool skills at all. The test is whether the work produces shared state (a duty) or warms a local cache (not one). The episode-lifecycle worker is a third shape — it consumes a fleet-wide subscription, so the broker already delivers each request to exactly one node and a lease would add nothing.
 
 ## Mixed-version fleets
 

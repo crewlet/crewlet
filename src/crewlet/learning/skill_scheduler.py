@@ -62,6 +62,14 @@ class SkillClusteringScheduler:
         promotion_jaccard_threshold: float = 0.6,
         # Lifecycle events for the dashboard's trace-grouped view.
         event_queue: Any = None,
+        # Fleet-wide singleton gate. Synthesis reads every agent's
+        # episodes and WRITES synthesized skills, so running it on every
+        # node means N nodes clustering the same episodes and N sets of
+        # near-identical auto-drafted skill pages — duplicated output
+        # and N times the LLM spend, for one pass's worth of value.
+        # Supplied by the engine as a callable that claims
+        # ``worker:skill-clustering``; ``None`` means "no fleet".
+        claim_duty: Any = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._episode_store = episode_store
@@ -86,6 +94,7 @@ class SkillClusteringScheduler:
         )
         self._promotion_min_sibling_count = max(2, int(promotion_min_sibling_count))
         self._promotion_jaccard_threshold = float(promotion_jaccard_threshold)
+        self._claim_duty = claim_duty
         self._running = False
         self._task: asyncio.Task[None] | None = None
 
@@ -125,6 +134,8 @@ class SkillClusteringScheduler:
                 if not self._running:
                     return
                 try:
+                    if not await self._may_tick():
+                        continue
                     await self.tick_once()
                 except asyncio.CancelledError:
                     return
@@ -132,6 +143,23 @@ class SkillClusteringScheduler:
                     logger.exception("skill_scheduler_tick_failed")
         finally:
             self._running = False
+
+    async def _may_tick(self) -> bool:
+        """Whether this node holds this duty for this tick.
+
+        Re-claimed every tick rather than held: the duty lease is short,
+        so a node that dies mid-pass releases it by lapsing and a peer
+        takes over on its next tick, with no handoff protocol. ``None``
+        means "no fleet" — the single-node case, where there is nothing
+        to be a singleton within.
+        """
+        if self._claim_duty is None:
+            return True
+        try:
+            return bool(await self._claim_duty())
+        except Exception:
+            logger.exception("skill_scheduler_duty_claim_failed")
+            return False
 
     async def tick_once(self) -> int:
         """Run one pass over every agent, then one per unit.

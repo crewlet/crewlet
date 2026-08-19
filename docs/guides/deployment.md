@@ -194,18 +194,20 @@ Both communicate through Pulsar. Both accept `--debug` for verbose logging.
 
 ### Replica count
 
-**Running more than one node is not finished yet.** Seat ownership is —
-see [Seat ownership](../concepts/seat-ownership.md) — so the failure that
-made a second replica unusable is gone: each seat's inbox is consumed by
-exactly one node, the one holding that seat's lease, and every seat-scoped
-write carries that lease's epoch. What remains are per-process workers that
-have not yet been moved behind singleton leases.
+**Multi-node is opt-in, and not yet certified.** The pieces are in place —
+[seat ownership](../concepts/seat-ownership.md) gives each seat exactly one
+consuming node and fences every seat-scoped write on that node's lease epoch,
+and the company-wide workers are behind
+[singleton duties](../concepts/seat-ownership.md#singleton-duties). What is
+not finished is the chaos suite that certifies the whole thing under node
+death, so a second node is something to run deliberately, not by default.
 
-Until they are, **run exactly one `crewlet run`** unless you are deliberately
-exercising the fleet path, and scale **up** (a bigger host, a higher
-`max_concurrent`) rather than out. A single engine handles many concurrent
-turns: agent handlers are `asyncio` tasks, so the practical ceiling is LLM
-provider rate limits and host memory, not process count.
+For an ordinary deployment, **run one `crewlet run`** and scale **up** (a
+bigger host, a higher `max_concurrent`) rather than out. A single engine
+handles many concurrent turns: agent handlers are `asyncio` tasks, so the
+practical ceiling is LLM provider rate limits and host memory, not process
+count. One node is the design's degenerate case, not a lesser path — it holds
+every lease, and everything above works exactly the same way.
 
 A second **API** replica has been safe since the control plane landed: each
 polls the same activation pointer, so cached webhook HMAC secrets and the
@@ -217,9 +219,7 @@ What a second engine replica still does:
 
 | Symptom | Cause |
 |---|---|
-| `max_concurrent` exceeded by N× | The concurrency gate is per-process, so an org's ceiling becomes N × the configured value. |
-| Duplicate auto-drafted skill pages, N× LLM spend on synthesis | The skill-clustering and curator workers are unclaimed interval loops — they have not yet been put behind `worker:{duty}` leases the way the sandbox waiter and the seat-subscription walk have. |
-| A scheduled run fires on a node that does not own the seat | The scheduler's at-most-once claim is taken before the publish, so a non-owner marks the fire done. |
+| `max_concurrent` exceeded by N× | The concurrency gate is per-process, so an org's ceiling becomes N × the configured value. Size it per node, not per company. |
 
 **Already fixed, and no longer on that list:**
 
@@ -227,6 +227,8 @@ What a second engine replica still does:
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — an append-only epoch log every node polls — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* A shared PostgreSQL counter, so an org cap of 500 k is 500 k across the fleet.
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering and curation are [singleton duties](../concepts/seat-ownership.md#singleton-duties) now, along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps — six `worker:{duty}` leases, each claimed per tick so a node that dies mid-duty hands it back by lapsing.
+- *Unbounded table growth.* `webhook_deliveries`, `rate_limits` and `scheduled_runs` all answer a short-horizon question and are written on every event that asks it. Both migrations always said they were swept on a TTL; the sweep now exists, behind the `maintenance` duty.
 
 > **A fleet needs both a database and the right broker settings.**
 >

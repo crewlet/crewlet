@@ -360,6 +360,7 @@ class Engine:
         self._reflect_engine: Any = None
         self._episode_lifecycle_worker: Any = None
         self._skill_curator_worker: Any = None
+        self._maintenance_worker: Any = None
         # In-flight Tool Skills registry walk (boot populate or
         # live-refresh re-seed).  Tracked so a re-kick supersedes a
         # still-retrying older walk instead of racing it.
@@ -2316,6 +2317,9 @@ class Engine:
                                     if skill_promo_cfg is not None
                                     else 0.6
                                 ),
+                                claim_duty=lambda: self.claim_worker_duty(
+                                    "skill-clustering"
+                                ),
                             )
                     logger.info(
                         "learning_enabled",
@@ -2493,6 +2497,7 @@ class Engine:
                         interval_hours=int(curator_cfg.interval_hours),
                         stale_after_days=int(curator_cfg.stale_after_days),
                         archive_after_days=int(curator_cfg.archive_after_days),
+                        claim_duty=lambda: self.claim_worker_duty("skill-curator"),
                     )
                     logger.info("learning_enabled", subsystem="skill_curator")
             else:
@@ -2531,6 +2536,7 @@ class Engine:
                     catchup_min_seconds=sched_cfg.catchup_min_seconds,
                     catchup_max_seconds=sched_cfg.catchup_max_seconds,
                     admits=self.admits_triggers,
+                    claim_duty=lambda: self.claim_worker_duty("scheduler"),
                 )
                 logger.info("scheduler_enabled", schedules=count_schedules(self.org))
             else:
@@ -2613,6 +2619,18 @@ class Engine:
                 await self._budget_reporter.start()
             except Exception as exc:
                 logger.error("budget_reporter_start_failed", error=str(exc))
+
+        # Retention sweeps for the short-horizon tables. Built here
+        # rather than in the Tier-B cascade because it depends only on
+        # the storage backend, and skipped entirely without one: the
+        # memory twins prune themselves inline, since a process-local
+        # dict dies with the process.
+        self._start_maintenance_worker()
+        if self._maintenance_worker is not None:
+            try:
+                await self._maintenance_worker.start()
+            except Exception as exc:
+                logger.error("maintenance_worker_start_failed", error=str(exc))
 
         # Sandbox coordinator — subscribes the
         # started/completed control topics and re-attaches to in-flight
@@ -3767,6 +3785,11 @@ class Engine:
                 "skill_curator_worker",
                 self._skill_curator_worker.stop(),
             )
+
+        # 5.65. Stop the retention sweeps
+        if self._maintenance_worker is not None:
+            logger.debug("stopping_maintenance_worker")
+            await _timed("maintenance_worker", self._maintenance_worker.stop())
 
         # 5.7. Stop the episode lifecycle worker
         if self._episode_lifecycle_worker is not None:
@@ -5007,6 +5030,36 @@ class Engine:
             from crewlet.db.rate_limits import PostgresRateLimitStore
 
             service.set_rate_limit_store(PostgresRateLimitStore(self.storage))
+
+    def _start_maintenance_worker(self) -> None:
+        """Build the retention sweep, if there is anything to sweep.
+
+        Skipped without a database, and correctly so: the memory twins
+        of these stores prune themselves inline, because a process-local
+        dict dies with the process. Only the Postgres tables accumulate,
+        and only they need a sweeper.
+
+        Behind ``worker:maintenance`` rather than per node: the deletes
+        are idempotent range deletes, so N nodes running them would not
+        corrupt anything — it would simply be N times the write
+        amplification and vacuum churn for one table's worth of benefit.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.deliveries import PostgresDeliveryDedupeStore
+        from crewlet.db.maintenance import MaintenanceWorker
+        from crewlet.db.rate_limits import PostgresRateLimitStore
+        from crewlet.schedule import ScheduledRunStore
+
+        if self._maintenance_worker is not None:
+            return
+        if not isinstance(self.storage, Database):
+            return
+        self._maintenance_worker = MaintenanceWorker(
+            deliveries=PostgresDeliveryDedupeStore(self.storage),
+            rate_limits=PostgresRateLimitStore(self.storage),
+            scheduled_runs=ScheduledRunStore(self.storage),
+            claim_duty=lambda: self.claim_worker_duty("maintenance"),
+        )
 
     def _refresh_jira_routing(self, jira_transport: Any) -> None:
         """Re-seed a freshly-rebuilt JiraTransport's routing state.

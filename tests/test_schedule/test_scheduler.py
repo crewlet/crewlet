@@ -381,3 +381,87 @@ async def test_jitter_delays_firing_deterministically():
         s2, q2, _s, _ = _build(_role_org(), jitter_seconds=45)
         s2._last_tick_utc = fire - timedelta(seconds=60)
         assert await s2.tick_once(now=fire) == 0
+
+
+# --- the tick is a fleet-wide singleton -------------------------------------
+
+
+async def test_a_node_without_the_duty_fires_nothing():
+    """Every node enumerating every schedule is pure duplicated work.
+
+    Not incorrect — the ``scheduled_runs`` claim means all but one lose
+    the race on every due fire — but it is N walks of the org and N
+    claim round-trips per tick to produce one fire.
+    """
+    org = _role_org()
+    scheduler, queue, store, _ = _build(org)
+    scheduler._claim_duty = _never
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 0
+    assert queue.inbox_tasks() == []
+    assert store.records == []
+
+
+async def test_a_node_without_the_duty_leaves_its_window_open():
+    """The same rule the config-shed gate follows, for the same reason.
+
+    Advancing ``_last_tick_utc`` on a tick that did nothing would close a
+    window nobody evaluated. Leaving it alone keeps this node on its
+    FIRST tick, so if it ever wins the duty it evaluates the catchup
+    window rather than a window stretching back to boot.
+    """
+    org = _role_org()
+    scheduler, _queue, _store, _ = _build(org)
+    scheduler._claim_duty = _never
+
+    assert scheduler._last_tick_utc is None
+    await scheduler.tick_once(now=_at(9, 0))
+    assert scheduler._last_tick_utc is None
+
+
+async def test_the_duty_holder_fires_normally():
+    org = _role_org()
+    scheduler, queue, _store, _ = _build(org)
+    scheduler._claim_duty = _always
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 1
+    assert len(queue.inbox_tasks()) == 1
+
+
+async def test_a_duty_claim_that_raises_fires_nothing():
+    """Fail closed: an unreadable lease store says nothing about who
+    holds the duty, and firing on that basis puts every node back to
+    racing the claim."""
+
+    async def _boom() -> bool:
+        raise RuntimeError("lease store unreachable")
+
+    org = _role_org()
+    scheduler, queue, _store, _ = _build(org)
+    scheduler._claim_duty = _boom
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 0
+    assert queue.inbox_tasks() == []
+
+
+async def test_no_placement_host_ticks_as_before():
+    """Single node: there is no fleet to be a singleton within, so the
+    default must be unchanged."""
+    org = _role_org()
+    scheduler, queue, _store, _ = _build(org)
+    assert scheduler._claim_duty is None
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 1
+    assert len(queue.inbox_tasks()) == 1
+
+
+async def _always() -> bool:
+    return True
+
+
+async def _never() -> bool:
+    return False

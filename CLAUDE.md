@@ -304,6 +304,20 @@ src/crewlet/          # Main package
                       #   fleet-wide credential cooldowns, and the
                       #   notification valve. Each ships a Postgres store
                       #   + a memory twin under one contract suite;
+                      #   maintenance.py — MaintenanceWorker, the
+                      #   retention sweep for the three tables that
+                      #   answer "recently" and are written on every
+                      #   event that asks (webhook_deliveries,
+                      #   rate_limits, scheduled_runs). Both migrations
+                      #   always SAID rows were swept on a TTL and both
+                      #   ship the index for it; `purge` existed on the
+                      #   stores and on their protocols and NOTHING
+                      #   called it, so all three grew for the life of
+                      #   the deployment. One retention per table, tied
+                      #   to what that table is for — the ledger's floor
+                      #   is catchup_max_seconds, because deleting a row
+                      #   a tick could still evaluate lets that fire run
+                      #   twice;
                       #   leases.py — LeaseStore/MemoryLeaseStore, the
                       #   cross-process ownership primitive: TTL lease +
                       #   monotonic `epoch` fencing token, owner = a process

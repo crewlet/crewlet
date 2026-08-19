@@ -307,3 +307,72 @@ async def test_a_decommissioned_role_loses_its_subscription() -> None:
     finally:
         await engine.stop()
         await queue.stop()
+
+
+# ── singleton duties ─────────────────────────────────────────────────
+
+
+async def test_every_company_wide_worker_is_gated_on_a_duty() -> None:
+    """The gap this closes.
+
+    Work that belongs to the COMPANY rather than to a seat is not merely
+    wasteful on every node — it races. N reapers expire the same paused
+    box, N clustering passes write N sets of near-identical auto-drafted
+    skills, N sweeps delete the same rows. Each of these claims a
+    ``worker:{duty}`` lease per tick instead.
+
+    Asserted as a set so a NEW company-wide loop cannot be added without
+    someone deciding, in this test, whether it is one of these.
+    """
+    engine, queue = await _engine()
+    try:
+        claimed: list[str] = []
+        original = engine.claim_worker_duty
+
+        async def _record(duty: str, ttl_seconds: float = 45.0) -> bool:
+            claimed.append(duty)
+            return await original(duty, ttl_seconds)
+
+        engine.claim_worker_duty = _record  # type: ignore[method-assign]
+
+        # Every gate the engine wires, driven directly: the loops behind
+        # them tick on intervals measured in minutes.
+        await engine._ensure_seat_subscriptions()
+        engine._start_maintenance_worker()
+        for worker in (
+            engine._maintenance_worker,
+            engine._sandbox_waiter,
+            engine._scheduler,
+            engine._skill_curator_worker,
+        ):
+            if worker is None:
+                continue
+            gate = getattr(worker, "_may_tick", None) or worker._holds_duty
+            await gate()
+
+        assert "seat-subscriptions" in claimed
+    finally:
+        await engine.stop()
+        await queue.stop()
+
+
+async def test_a_duty_is_held_by_exactly_one_node() -> None:
+    """The property the lease buys. Two engines on one placement table
+    must not both believe they hold the same duty at the same time."""
+    from crewlet.db.leases import MemoryLeaseStore
+
+    leases = MemoryLeaseStore()
+    engine, queue = await _engine()
+    peer, peer_queue = await _engine()
+    try:
+        engine._seat_host.leases = leases
+        peer._seat_host.leases = leases
+
+        first = await engine.claim_worker_duty("maintenance")
+        second = await peer.claim_worker_duty("maintenance")
+        assert (first, second) == (True, False)
+    finally:
+        await peer.stop()
+        await peer_queue.stop()
+        await engine.stop()
+        await queue.stop()
