@@ -87,6 +87,23 @@ class TokenSink(Protocol):
         """
         ...
 
+    async def discard(self, var: str) -> None:
+        """Undo a :meth:`record` — leave ``var`` carrying no value here.
+
+        The other half of write-through, and it exists for one shape: a
+        credential referenced from several ``${VAR}``s, persisted one at
+        a time, where a failure partway leaves some already written.  The
+        only safe response to a value that cannot be finished is to
+        revoke it upstream — and a revoke on its own leaves every var
+        already written holding a token that no longer authenticates,
+        which nothing downstream can tell from a good one.
+
+        Write-through as well: when this returns, the value is gone from
+        wherever this sink keeps it.  Discarding a var this sink has no
+        value for is a no-op, not an error.
+        """
+        ...
+
     async def flush(self) -> None:
         """Closing safety net; persisting already happened in `record`."""
         ...
@@ -150,6 +167,25 @@ class EnvFileSink:
         # upstream API, so it must not live only in this list.
         self._write()
 
+    async def discard(self, var: str) -> None:
+        """Drop ``var``'s line entirely, rather than blanking it.
+
+        A blank ``VAR=`` still claims the name, and :meth:`existing`
+        would fall through to ``os.environ`` — which, for the operator
+        who sourced the last run's file, still holds the dead value.
+        Removing the line is what makes the next run re-mint.
+        """
+        index = self._index.pop(var, None)
+        if index is None:
+            return
+        del self._lines[index]
+        self._index = {
+            key: (i - 1 if i > index else i) for key, i in self._index.items()
+        }
+        self._exported.discard(var)
+        self._dirty = True
+        self._write()
+
     async def flush(self) -> None:
         # A run that recorded nothing must not conjure a file into
         # existence (the flush-on-abort wrapper reaches here on every
@@ -206,6 +242,17 @@ class PrintSink:
         # prints eagerly to close.
         print(f"export {var}={token}", flush=True)
 
+    async def discard(self, var: str) -> None:
+        """Print the shell counterpart of the line that was printed.
+
+        ``unset`` is what makes the emitted stream correct rather than
+        merely appended-to: an operator who piped ``--print`` to a file
+        and sources it gets a var with no value, which is the state that
+        makes the next run re-mint — not the dead token the earlier
+        ``export`` line put there.
+        """
+        print(f"unset {var}", flush=True)
+
     async def flush(self) -> None:
         return None
 
@@ -246,6 +293,11 @@ class SecretStoreSink:
         )
         self._known[var] = token
         logger.info("secret_store_sink_recorded", var=var, source=self._source)
+
+    async def discard(self, var: str) -> None:
+        await self._store.delete(var)
+        self._known.pop(var, None)
+        logger.info("secret_store_sink_discarded", var=var, source=self._source)
 
     async def flush(self) -> None:
         """No-op — :meth:`record` already committed each value."""

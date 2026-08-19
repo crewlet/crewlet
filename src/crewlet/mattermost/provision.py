@@ -438,16 +438,30 @@ async def _ensure_token(
     Mattermost returns a token's value exactly once, which is why a
     seat that HAS both is never re-minted: that would strand the live
     credential rather than replace it.
+
+    When a mint does happen, it lands in **every** ``${VAR}`` the seat
+    references, not only the empty ones.  A fresh token supersedes
+    whatever any of them held, and writing a subset leaves the seat split
+    across two credentials — one consumer working, the other not, with
+    nothing in the report to say which.  The superseded token is then
+    revoked, so a seat is never the reason an unreferenced credential
+    stays live on a bot account.
     """
-    unset = [var for var in token_vars if not sink.existing(var)]
-    if not unset and await _has_live_token(client, user_id):
+    missing = [var for var in token_vars if not sink.existing(var)]
+    stale = await _our_token_ids(client, user_id)
+    if not missing and stale is None:
+        # The list could not be read, and unknowable is not the same as
+        # absent: minting here would strand the credential the config
+        # already carries.
         result.token_action = "exists"
         return
-    if not unset:
+    if not missing and stale:
+        result.token_action = "exists"
+        return
+    if not missing:
         result.notes.append(
             "the recorded token is no longer active on the server — minting a fresh one"
         )
-        unset = list(token_vars)
 
     created = await client.create_user_access_token(user_id, TOKEN_DESCRIPTION)
     token = str((created or {}).get("token") or "")
@@ -458,37 +472,100 @@ async def _ensure_token(
     # Write-through before anything else can fail: the value is
     # unretrievable from here on, so the window between "minted" and
     # "persisted" is a window in which a crash orphans a live credential.
-    # If the persist fails anyway, revoke what was just minted rather
-    # than leave a live, unknown, non-expiring credential on the account
-    # — the next run would mint another, indistinguishable from it.
+    recorded: list[str] = []
     try:
-        for var in unset:
+        for var in token_vars:
             await sink.record(var, token)
+            recorded.append(var)
     except BaseException:
-        if token_id:
-            try:
-                await client.revoke_user_access_token(token_id)
-                logger.warning("mattermost_unpersisted_token_revoked", user=user_id)
-            except Exception:
-                logger.exception("mattermost_token_revoke_failed", user=user_id)
+        await _roll_back_mint(
+            client, sink, user_id=user_id, token_id=token_id, recorded=recorded
+        )
         raise
     result.token_action = "minted"
 
+    # Every ${VAR} now names the token just minted, so anything of ours
+    # that was live before is referenced by nothing: an unknown,
+    # non-expiring credential on a bot account, which is precisely what
+    # the rest of this function refuses to leave behind.
+    superseded = 0
+    for old_id in stale or []:
+        if old_id == token_id:
+            continue
+        try:
+            await client.revoke_user_access_token(old_id)
+        except MattermostError as exc:
+            result.notes.append(
+                f"could not revoke the superseded token {old_id}: {exc} — "
+                "revoke it in Profile > Security > Personal Access Tokens"
+            )
+            logger.warning(
+                "mattermost_superseded_token_revoke_failed",
+                user=user_id,
+                token_id=old_id,
+                error=str(exc),
+            )
+        else:
+            superseded += 1
+    if superseded:
+        result.notes.append(f"revoked {superseded} superseded token(s)")
 
-async def _has_live_token(client: MattermostClient, user_id: str) -> bool:
-    """Whether the bot still holds an active token this tool minted."""
+
+async def _roll_back_mint(
+    client: MattermostClient,
+    sink: TokenSink,
+    *,
+    user_id: str,
+    token_id: str,
+    recorded: list[str],
+) -> None:
+    """Undo a mint whose value could not be persisted everywhere.
+
+    Both halves are required.  Revoking alone leaves every ``${VAR}``
+    written before the failure holding a token that no longer
+    authenticates — indistinguishable, downstream, from a good one, so
+    the seat's socket simply never opens.  Discarding alone leaves a
+    live, unknown, non-expiring credential on the account that no later
+    run can name.
+
+    The revoke goes first, and each step runs whatever the last one did:
+    a crash between them should leave the recoverable state (dead values
+    in the env file, which the next run re-mints over) rather than the
+    unrecoverable one (a live orphan nothing will ever revoke).
+    """
+    if token_id:
+        try:
+            await client.revoke_user_access_token(token_id)
+            logger.warning("mattermost_unpersisted_token_revoked", user=user_id)
+        except Exception:
+            logger.exception("mattermost_token_revoke_failed", user=user_id)
+    for var in recorded:
+        try:
+            await sink.discard(var)
+        except Exception:
+            logger.exception("mattermost_token_discard_failed", user=user_id, var=var)
+
+
+async def _our_token_ids(client: MattermostClient, user_id: str) -> list[str] | None:
+    """Ids of the bot's active tokens that this tool minted.
+
+    ``None`` when the list could not be read — which is *not* the same
+    as "there are none": minting on a read failure would strand the
+    credential the config already carries, and revoking on one would tear
+    down a seat that is working.
+    """
     try:
         tokens = await client.list_user_access_tokens(user_id)
     except MattermostError as exc:
-        # Unknowable is not the same as absent: minting on a read failure
-        # would strand the credential the config already carries.
         logger.debug("mattermost_token_list_failed", user=user_id, error=str(exc))
-        return True
-    return any(
-        str(t.get("description") or "") == TOKEN_DESCRIPTION
-        and t.get("is_active", True)
+        return None
+    return [
+        str(t.get("id") or "")
         for t in tokens
-    )
+        if str(t.get("description") or "") == TOKEN_DESCRIPTION
+        and t.get("is_active", True)
+        and t.get("id")
+    ]
 
 
 async def provision(

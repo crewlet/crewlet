@@ -223,6 +223,66 @@ async def test_env_file_sink_creates_file_owner_only(tmp_path):
     assert mode == 0o600, f"expected 0600, got {mode:o}"
 
 
+# ── discard: the other half of write-through ──
+
+
+async def test_env_file_sink_discard_removes_the_line(tmp_path, monkeypatch):
+    # A blank ``VAR=`` would still claim the name and let existing() fall
+    # through to os.environ — which, for the operator who sourced the
+    # last run, still holds the dead value. Removing the line is what
+    # makes the next run re-mint.
+    path = tmp_path / ".env"
+    path.write_text("BEFORE=b\nDOOMED=dead-token\nAFTER=a\n")
+    sink = EnvFileSink(str(path))
+
+    await sink.discard("DOOMED")
+
+    assert path.read_text() == "BEFORE=b\nAFTER=a\n"
+    monkeypatch.delenv("DOOMED", raising=False)
+    assert sink.existing("DOOMED") == ""
+    # The surviving keys are still addressable — the reindex held.
+    assert sink.existing("AFTER") == "a"
+    await sink.record("AFTER", "a2")
+    assert path.read_text() == "BEFORE=b\nAFTER=a2\n"
+
+
+async def test_env_file_sink_discard_is_write_through(tmp_path):
+    path = tmp_path / ".env"
+    sink = EnvFileSink(str(path))
+    await sink.record("DOOMED", "dead-token")
+    await sink.discard("DOOMED")
+    # No flush in between: a crash here must not leave the dead value.
+    assert "DOOMED" not in path.read_text()
+
+
+async def test_env_file_sink_discard_of_an_unknown_var_is_a_no_op(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text("KEEP=k\n")
+    sink = EnvFileSink(str(path))
+    await sink.discard("NEVER_WRITTEN")
+    assert path.read_text() == "KEEP=k\n"
+
+
+async def test_print_sink_discard_prints_the_shell_counterpart(capsys):
+    # ``--print`` output is a shell fragment an operator sources; the
+    # counterpart of ``export VAR=...`` is ``unset VAR``, not silence,
+    # which would leave the dead export standing.
+    sink = PrintSink()
+    await sink.record("DOOMED", "dead-token")
+    await sink.discard("DOOMED")
+    assert capsys.readouterr().out == "export DOOMED=dead-token\nunset DOOMED\n"
+
+
+async def test_secret_store_sink_discard_deletes_the_row():
+    store = _FakeStore()
+    sink = SecretStoreSink(store, updated_by="cli", source="cli")
+    await sink.prime()
+    await sink.record("DOOMED", "dead-token")
+    await sink.discard("DOOMED")
+    assert "DOOMED" not in store.values
+    assert sink.existing("DOOMED") == ""
+
+
 # ── PrintSink ──
 
 
@@ -308,6 +368,9 @@ class _FakeStore:
     async def put(self, name, value, *, updated_by, source) -> None:
         self.values[name] = value
         self.puts.append((name, value, updated_by, source))
+
+    async def delete(self, name) -> bool:
+        return self.values.pop(name, None) is not None
 
 
 async def test_secret_store_sink_records_write_through():

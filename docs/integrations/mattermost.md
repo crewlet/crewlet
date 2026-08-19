@@ -280,6 +280,16 @@ A `${VAR}` still holding a token that has since been revoked — by
 `--decommission`, by an admin, by a restore from an older `.env` — is
 re-minted, so the documented recovery below actually recovers.
 
+A mint is **all or nothing for the seat**. When a seat names its token in
+two different `${VAR}`s, a fresh token is written to *both*, and the token
+it supersedes is revoked: a seat split across two credentials is a seat
+where one consumer works and the other does not, with nothing in the report
+to say which, and an unreferenced token left live on a bot account is one
+nothing can ever name again. If a value cannot be persisted everywhere, the
+new token is revoked *and* every `${VAR}` already written is cleared —
+because a var holding a revoked token is indistinguishable, to the engine,
+from a working one, and the seat's socket simply never opens.
+
 ### The admin token
 
 The reconcile authenticates as a **system admin** — creating bot accounts and
@@ -301,7 +311,7 @@ config: pass `--admin-token` or export `MATTERMOST_ADMIN_TOKEN`.
 | `--dry-run` | Print the plan; create and modify nothing. Applies to `--decommission` too. |
 | `--env-file PATH` | Env file minted tokens are written to (default `.env`). |
 | `--secret-store` | Write minted tokens into the encrypted `secret_values` table instead. |
-| `--print` | Print `export VAR=token` lines to stdout. |
+| `--print` | Print `export VAR=token` lines to stdout (and `unset VAR` when a mint is rolled back, so the stream stays sourceable). |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials
 and opens each seat's websocket.
