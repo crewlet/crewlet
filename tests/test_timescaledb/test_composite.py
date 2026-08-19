@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from crewlet.timescaledb.composite import CompositeEventStore, _ts_key
+from crewlet.timescaledb._time import ts_key
+from crewlet.timescaledb.composite import CompositeEventStore
 from crewlet.timescaledb.memory import MemoryEventStore
 
 
@@ -32,11 +33,36 @@ class FakePersistent:
             raise RuntimeError("persistent store down")
         self.events.append(kwargs)
 
+    def _row(self, event: dict[str, Any]) -> dict[str, Any]:
+        """One stored write, in the shape the protocol returns.
+
+        The fake used to hand back its raw ``write_event`` kwargs, which
+        carry ``event_id`` / ``event_time`` rather than the ``id`` /
+        ``timestamp`` every real store returns. Nothing noticed while the
+        composite passed rows straight through; a merge that has to order
+        and dedupe them does.
+        """
+        when = event.get("event_time")
+        return {
+            "id": event.get("event_id", ""),
+            "type": event.get("event_type", event.get("type", "")),
+            "source": event.get("source", ""),
+            "category": event.get("category", ""),
+            "summary": event.get("summary", ""),
+            "actor": event.get("actor", ""),
+            "trace_id": event.get("trace_id", ""),
+            "timestamp": when.isoformat() if hasattr(when, "isoformat") else "",
+            "failed": False,
+        }
+
     async def list_events(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return [
-            {k: v for k, v in e.items() if k != "tags"}
-            for e in self.events[-kwargs.get("limit", 50) :]
-        ]
+        rows = [self._row(e) for e in self.events]
+        if before := kwargs.get("before"):
+            before_ts, before_id = before
+            cursor = (ts_key(before_ts.isoformat()), str(before_id))
+            rows = [r for r in rows if (ts_key(r["timestamp"]), r["id"]) < cursor]
+        rows.sort(key=lambda r: (ts_key(r["timestamp"]), r["id"]), reverse=True)
+        return rows[: kwargs.get("limit", 50)]
 
     async def get_event(self, event_id: str) -> dict[str, Any] | None:
         for e in self.events:
@@ -45,7 +71,9 @@ class FakePersistent:
         return None
 
     async def list_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        return [e for e in self.events if e.get("trace_id") == trace_id]
+        rows = [self._row(e) for e in self.events if e.get("trace_id") == trace_id]
+        rows.sort(key=lambda r: (ts_key(r["timestamp"]), r["id"]))
+        return rows
 
     async def get_agent_states(
         self, agent_roles: list[str]
@@ -89,19 +117,19 @@ def composite(
 
 
 # --------------------------------------------------------------------------- #
-# _ts_key helper
+# ts_key helper
 # --------------------------------------------------------------------------- #
 
 
 def test_ts_key_normalizes_aware_and_naive_to_same_value() -> None:
     """Ensures composite dedup works across driver timezone differences."""
-    assert _ts_key("2026-04-12T12:00:00.123456+00:00") == _ts_key(
+    assert ts_key("2026-04-12T12:00:00.123456+00:00") == ts_key(
         "2026-04-12T12:00:00.123456"
     )
 
 
 def test_ts_key_falls_back_to_raw_on_parse_error() -> None:
-    assert _ts_key("not-a-date") == "not-a-date"
+    assert ts_key("not-a-date") == "not-a-date"
 
 
 # --------------------------------------------------------------------------- #
@@ -171,6 +199,104 @@ async def test_list_events_falls_back_to_memory_when_persistent_empty(
     result = await composite.list_events(limit=10)
     assert len(result) == 1
     assert result[0]["id"] == "m1"
+
+
+async def test_list_events_merges_both_legs(
+    composite: CompositeEventStore, persistent: FakePersistent, memory: MemoryEventStore
+) -> None:
+    """A row not yet flushed is still a row.
+
+    The read used to return the persistent leg whenever it was non-empty,
+    so anything written but not yet indexed was invisible for as long as
+    the persistent store had anything at all.
+    """
+    await composite.start()
+    persistent.events.append(
+        {
+            "event_id": "p1",
+            "event_type": "task_created",
+            "source": "pm",
+            "event_time": datetime(2026, 4, 1, 12, 1, tzinfo=UTC),
+        }
+    )
+    await memory.write_event(
+        event_id="m1",
+        event_type="task_created",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 2, tzinfo=UTC),
+    )
+    result = await composite.list_events(limit=10)
+    assert [e["id"] for e in result] == ["m1", "p1"], "newest first, both legs"
+
+
+async def test_list_events_dedupes_with_persistent_winning(
+    composite: CompositeEventStore, persistent: FakePersistent, memory: MemoryEventStore
+) -> None:
+    await composite.start()
+    when = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    persistent.events.append(
+        {
+            "event_id": "dup",
+            "event_type": "task_created",
+            "source": "persistent",
+            "event_time": when,
+        }
+    )
+    await memory.write_event(
+        event_id="dup", event_type="task_created", source="memory", timestamp=when
+    )
+    result = await composite.list_events(limit=10)
+    assert len(result) == 1
+    assert result[0]["source"] == "persistent"
+
+
+async def test_an_exhausted_page_does_not_jump_back_to_the_present(
+    composite: CompositeEventStore, persistent: FakePersistent, memory: MemoryEventStore
+) -> None:
+    """The bug paging would have exposed.
+
+    Under a cursor an empty persistent page means "no more history".
+    Falling through to memory hands back its NEWEST rows, teleporting a
+    reader who scrolled to the bottom straight to the present -- with no
+    error, and looking exactly like real data.
+    """
+    await composite.start()
+    await memory.write_event(
+        event_id="recent",
+        event_type="task_created",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 30, tzinfo=UTC),
+    )
+    # The persistent leg has nothing older than the cursor.
+    page = await composite.list_events(
+        limit=10, before=(datetime(2026, 4, 1, 12, 0, tzinfo=UTC), "x")
+    )
+    assert page == [], "an exhausted page returned rows newer than the cursor"
+
+
+async def test_list_trace_merges_both_legs_oldest_first(
+    composite: CompositeEventStore, persistent: FakePersistent, memory: MemoryEventStore
+) -> None:
+    """A half-flushed trace showing only its persistent spans would read
+    as a turn that skipped steps."""
+    await composite.start()
+    persistent.events.append(
+        {
+            "event_id": "p1",
+            "event_type": "task_created",
+            "source": "pm",
+            "trace_id": "tr",
+            "event_time": datetime(2026, 4, 1, 12, 1, tzinfo=UTC),
+        }
+    )
+    await memory.write_event(
+        event_id="m1",
+        event_type="task_completed",
+        source="pm",
+        timestamp=datetime(2026, 4, 1, 12, 2, tzinfo=UTC),
+        trace_id="tr",
+    )
+    assert [e["id"] for e in await composite.list_trace("tr")] == ["p1", "m1"]
 
 
 # --------------------------------------------------------------------------- #

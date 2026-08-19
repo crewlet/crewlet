@@ -50,6 +50,7 @@ async def summarize_episodes(
     llm_providers: dict[str, LLMProvider],
     max_tokens: int = 400,
     event_queue: Any = None,
+    budget_manager: Any = None,
     agent_id: str = "",
     turn_id: str = "",
 ) -> str:
@@ -97,6 +98,7 @@ async def summarize_episodes(
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=event_queue,
+                budget_manager=budget_manager,
                 agent_id=agent_id,
                 turn_id=turn_id,
                 temperature=0.1,

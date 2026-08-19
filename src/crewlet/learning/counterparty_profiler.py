@@ -91,11 +91,13 @@ class CounterpartyProfiler:
         store: CounterpartyStoreProtocol,
         budget_tokens: int = 3000,
         event_queue: Any = None,
+        budget_manager: Any = None,
     ) -> None:
         self._llm_providers = llm_providers
         self._store = store
         self._budget_tokens = budget_tokens
         self._event_queue = event_queue
+        self._budget_manager = budget_manager
 
     async def update_from_turn(
         self,
@@ -197,6 +199,7 @@ class CounterpartyProfiler:
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=self._event_queue,
+                budget_manager=self._budget_manager,
                 agent_id=observer_agent_id,
                 turn_id=turn_id,
                 temperature=0.2,

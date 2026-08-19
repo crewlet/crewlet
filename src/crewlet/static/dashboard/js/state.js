@@ -1,5 +1,6 @@
 // Agent-state, phase, and colour logic shared across views.
 
+import { parseUTC } from "./format.js";
 import { icon } from "./icons.js";
 
 // Phase ordering + colours (CSS custom-property names).
@@ -117,7 +118,11 @@ export function effectiveAgentState(agent, sandboxes) {
 }
 
 export function stateLabel(state) {
-  return state === "awaiting_sandbox" ? "awaiting sandbox" : state || "offline";
+  // "sandbox", not "awaiting sandbox": the badge shares a seat card's
+  // top row with the seat's name, and the longer phrase pushed the name
+  // into an ellipsis on every card carrying it. The status line
+  // underneath says what it is waiting for, and which coding agent.
+  return state === "awaiting_sandbox" ? "sandbox" : state || "offline";
 }
 
 // A human, slightly-wry quip explaining WHY an agent is AFK, keyed on the
@@ -160,6 +165,37 @@ export function statusLine(seat, { sandbox = null, human = false } = {}) {
   if (state === "terminated") return "terminated";
   if (state === "offline") return "not running";
   return "idle — nothing in the inbox";
+}
+
+// ---------------------------------------------------------------------
+// Staleness
+// ---------------------------------------------------------------------
+// A live row's pips animate, which sells motion — so a turn that has been
+// on round 3 for eleven minutes looked exactly like one that started two
+// seconds ago, and "is anything stuck?" was unanswerable on a page whose
+// whole job is to answer it.
+
+// A round that has not produced an update in this long is suspicious: it
+// is either a genuinely long tool call (a sandbox launch, a slow MCP
+// server) or a hang. Two minutes clears every builtin tool and the
+// engine's own LLM call latency with room to spare.
+export const STALE_MS = 120_000;
+// And this long means it is not coming back on its own — long past any
+// provider timeout, so the row says so in red and stops animating.
+export const STALLED_MS = 600_000;
+
+/**
+ * How stale a live thing is: `""`, `"stale"`, or `"stalled"`.
+ *
+ * `at` is an ISO timestamp of the last sign of life.
+ */
+export function staleness(at, now = Date.now()) {
+  const d = parseUTC(at);
+  if (!d) return "";
+  const age = now - d.getTime();
+  if (age >= STALLED_MS) return "stalled";
+  if (age >= STALE_MS) return "stale";
+  return "";
 }
 
 // Integration surfaces a seat can act on, read from the MCP servers wired to

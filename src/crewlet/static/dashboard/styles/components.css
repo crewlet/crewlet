@@ -11,13 +11,16 @@
 .panel,
 .card,
 .list,
-.widget,
 .stat,
 .tool-card,
 .turn,
 .mem-card {
   position: relative;
-  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  /* `--bg-card` is itself a warm alpha over the ground in the dark theme,
+     so it is used neat here. Diluting it a second time (this rule used to
+     mix it to 94%) left panels sitting at ~3.7% cream on pure black, which
+     is under the threshold where an edge reads at all. */
+  background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--panel-shadow);
@@ -30,11 +33,6 @@
 .turn,
 .mem-card {
   overflow: hidden;
-}
-
-.widget.clickable:hover {
-  box-shadow: var(--lift-shadow);
-  transform: translateY(-2px);
 }
 
 /* The site's decorative accent dots — used sparingly, on the overview's
@@ -102,143 +100,22 @@
   color: var(--text);
 }
 
-/* ---- Widgets (overview top row) ---- */
-.widgets {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-}
-@media (max-width: 1000px) {
-  .widgets {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media (max-width: 620px) {
-  .widgets {
-    grid-template-columns: 1fr;
-  }
-}
-.widget {
-  padding: 16px 18px;
-  overflow: hidden;
-}
-.widget.clickable {
-  cursor: pointer;
-}
-
-/* The site's numbered step marker: a soft-tinted rounded square holding the
-   icon, then a mono uppercase eyebrow. */
-.widget-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  letter-spacing: 0.14em;
-  color: var(--text-secondary);
-}
-.widget-head .ic {
-  color: var(--accent-ink);
-  width: 22px;
-  height: 22px;
-  padding: 4px;
-  border-radius: 7px;
-  background: var(--accent-soft);
-  box-sizing: content-box;
-}
-.widget.green .ic {
-  color: var(--green-ink);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
-}
-.widget.blue .ic {
-  color: var(--blue-ink);
-  background: color-mix(in srgb, var(--blue) 12%, transparent);
-}
-.widget.purple .ic {
-  color: var(--purple-ink);
-  background: color-mix(in srgb, var(--purple) 12%, transparent);
-}
-.widget.pink .ic {
-  color: var(--pink-ink);
-  background: color-mix(in srgb, var(--pink) 12%, transparent);
-}
-.widget.amber .ic {
-  color: var(--amber-ink);
-  background: color-mix(in srgb, var(--amber) 12%, transparent);
-}
-.widget-sub {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-.widget-big {
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.035em;
-  color: var(--heading);
-  margin-top: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.widget-foot {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-.mini-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 46px;
-  margin-top: 12px;
-}
-.mini-bar {
-  flex: 1;
-  min-width: 3px;
-  /* 4px rounded data-end, anchored to the baseline. */
-  border-radius: 4px 4px 0 0;
-  background: var(--text-dim);
-  transition: height var(--dur);
-}
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 10px;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-}
-.legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.legend i {
-  width: 8px;
-  height: 8px;
-  border-radius: 3px;
-  display: inline-block;
-}
-
 /* ---------------------------------------------------------------------------
  * Seat cards
  * ---------------------------------------------------------------------------
- * One card per seat — agent or human — carrying the avatar, the name in the
- * seat's identity hue, the surfaces it can act on, and a sentence of what it
- * is doing right now.  The overview scrolls them in a row; the Agents index
- * lays the same card out in a grid.
+ * One card per seat — agent or human.  The card reads top-down as a
+ * sentence: who this is and what phase it is in, what it is doing, an hour
+ * of its real activity, then the surfaces it acts on and what it spent.
+ *
+ * It used to be a centred column with a 40px avatar and a status line, which
+ * meant a five-seat company got five tall cards saying "idle — nothing in the
+ * inbox" and nothing else.  Left-aligned and stacked, the same card carries
+ * four facts in less height, and the activity strip is the same device as the
+ * overview's pulse grid so the two cannot disagree.
  */
-.seat-row {
-  display: flex;
-  gap: 12px;
-  overflow-x: auto;
-  padding-bottom: 6px;
-  scroll-snap-type: x proximity;
-}
-.seat-row > .seat-card {
-  flex: 0 0 208px;
-  scroll-snap-align: start;
-}
 .seat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(284px, 1fr));
   gap: 12px;
 }
 
@@ -246,17 +123,33 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 7px;
-  padding: 18px 14px 16px;
-  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  gap: 8px;
+  padding: 14px 15px 13px;
+  background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--panel-shadow);
   transition: transform var(--dur-slow) var(--ease-snappy),
     box-shadow var(--dur-slow) var(--ease-snappy),
     border-color var(--dur-slow) var(--ease-snappy);
+}
+/* The seat's own identity hue as a hairline down the leading edge — the
+   only place a card states its hue as a surface rather than as text, and
+   what makes a grid of cards scan as a roster rather than as a table. */
+.seat-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--seat, var(--border-strong));
+  opacity: 0.55;
+}
+.seat-card.is-failed::before {
+  background: var(--red);
+  opacity: 1;
 }
 .seat-card.clickable {
   cursor: pointer;
@@ -271,47 +164,141 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
     var(--lift-shadow);
 }
+
+.seat-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .seat-card .avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  flex-shrink: 0;
 }
 .seat-card .avatar .ic {
-  width: 20px;
-  height: 20px;
+  width: 14px;
+  height: 14px;
 }
 .seat-state {
-  position: absolute;
-  top: 12px;
-  right: 12px;
+  flex-shrink: 0;
 }
 .seat-state.human {
   background: var(--purple);
 }
 .seat-name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: var(--track-display);
   line-height: 1.3;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.seat-badges {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 4px;
+.seat-top .badge,
+.seat-top .ph-pill {
+  flex-shrink: 0;
 }
-.seat-badges:empty {
-  display: none;
-}
-/* Pushed to the bottom so status lines align across a row whose cards carry
-   different numbers of integration chips. */
 .seat-status {
-  margin-top: auto;
-  padding-top: 2px;
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--text-muted);
   text-wrap: pretty;
+  /* Two lines, always — a card whose status is one line must not sit a
+     row shorter than its neighbour and break the grid's baseline. */
+  min-height: 2.9em;
+}
+/* ---- The budget bar ----
+   The only place the dashboard divides one token figure by another, and
+   it is honest exactly because both cover the same span: the engine's
+   live meter against the cap that meter enforces. Everything else on a
+   card is a 24-hour or 7-day window and is stated, never divided. */
+.seat-budget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+.seat-budget-track {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.seat-budget-track.sm {
+  display: inline-block;
+  width: 46px;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.seat-budget-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--seat, var(--accent));
+  transition: width var(--dur-slow) var(--ease);
+}
+.seat-budget.warn .seat-budget-track > i,
+.tok-chip.budget.warn .seat-budget-track > i {
+  background: var(--amber);
+}
+.seat-budget.over .seat-budget-track > i,
+.tok-chip.budget.over .seat-budget-track > i {
+  background: var(--red);
+}
+.seat-budget.over .seat-budget-note {
+  color: var(--red-ink);
+}
+.seat-budget-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.seat-budget-note {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+/* A cap with no meter behind it: the figure is real config, so it is
+   shown — but it is not a measurement, so it gets no bar. */
+.seat-budget.is-unmetered .seat-budget-label {
+  flex: 1 1 auto;
+}
+
+/* Pinned to the bottom so the chip row and the cost line align across a
+   grid whose cards carry different numbers of chips. */
+.seat-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 2px;
+  min-height: 18px;
+}
+.seat-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.seat-meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------------------------
@@ -321,7 +308,14 @@
  * happened.  A fixed leading time column keeps the actors aligned so the feed
  * scans vertically.
  */
-.act-list .act-row {
+/* An activity row is a `.row` that happens to be built from columns
+   rather than from a body block, so it takes the same inset and the same
+   separator. These declarations were scoped to `.act-list`, a class no
+   view has ever emitted — the feed renders `.list.feed` — so the rows
+   have been sitting flush against the panel border with no separators at
+   all. Scoped to the row itself now, which is the only thing the rule
+   was ever about. */
+.act-row {
   display: flex;
   align-items: baseline;
   gap: 12px;
@@ -329,7 +323,7 @@
   border-bottom: 1px solid var(--border);
   transition: background var(--dur);
 }
-.act-list .act-row:last-child {
+.act-row:last-child {
   border-bottom: none;
 }
 .act-row.clickable {
@@ -373,7 +367,7 @@
   white-space: nowrap;
 }
 @media (max-width: 720px) {
-  .act-list .act-row {
+  .act-row {
     flex-wrap: wrap;
     gap: 6px 10px;
   }
@@ -926,4 +920,849 @@
   height: 10px;
   border-radius: 5px;
   margin: 8px 0;
+}
+
+/* =====================================================================
+   The overview's lead panel
+   =====================================================================
+   One panel answering the first question anyone opens this page with: is
+   anything happening, and did anything break.  A headline, a strip of
+   figures, and the pulse grid — an hour of every seat's real activity,
+   one cell per minute.
+
+   The device is the site's masked dot field, used literally rather than
+   decoratively: a dot is lit because a seat was working in that minute,
+   its brightness is how much it did, and a red one is a real failure.
+   ===================================================================== */
+.hero {
+  padding: 20px 22px 18px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+/* The brand mark as a hairline of light along the top edge — the one
+   place the full seven-stop gradient appears, and the same way the site
+   uses it: as illumination on an edge, never as a fill. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--brand-gradient);
+  opacity: 0.6;
+}
+.hero-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 26px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.hero-lede {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.hero-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 9px;
+  line-height: 1.05;
+  flex-wrap: wrap;
+}
+.hero-figure .num {
+  font-size: 40px;
+  font-weight: 600;
+}
+.hero-rest {
+  font-size: 15.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: var(--track-body);
+}
+.hero-sub {
+  margin-top: 7px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.hero-phases {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ---- The stat strip ----
+   Four figures on one recessed rail instead of four panels.  A panel per
+   integer is a lot of screen, and it pushed everything that actually
+   moves below the fold. */
+.strip {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.strip-cell {
+  padding: 10px 18px 11px;
+  min-width: 112px;
+  flex: 1 1 auto;
+}
+.strip-cell + .strip-cell {
+  border-left: 1px solid var(--border-subtle);
+}
+.strip-value {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+  margin-top: 5px;
+  line-height: 1.15;
+}
+.strip-foot {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* ---- The pulse grid ---- */
+.pulse {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pulse-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr) 62px;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 6px;
+  border-radius: 7px;
+  transition: background var(--dur);
+}
+.pulse-row.clickable {
+  cursor: pointer;
+}
+.pulse-row.clickable:hover {
+  background: var(--bg-hover);
+}
+.pulse-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: var(--track-body);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pulse-name .dot {
+  flex-shrink: 0;
+}
+.pulse-track {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+/* A cell is one minute.  Unlit is a faint tint of the text colour rather
+   than a border, so an empty row still reads as a track — the dot field's
+   unlit dots — instead of disappearing into the panel. */
+.pulse-track .pc {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 15px;
+  border-radius: 2.5px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+/* A minute the retained feed cannot speak for. Drawn as a hairline
+   rather than as an empty cell, because "no record" and "idle" are
+   different answers and only one of them is reassuring. */
+.pulse-track .pc.is-unknown {
+  background: none;
+  border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+  border-radius: 0;
+  align-self: center;
+  height: 1px;
+}
+.pulse-track .pc.is-lit {
+  background: var(--seat, var(--accent));
+  opacity: var(--lit, 1);
+}
+.pulse-track .pc.is-failed {
+  background: var(--red);
+  opacity: 1;
+}
+/* The current minute of a seat that is working right now. This is the
+   only cell on the grid that moves, so motion here always means live
+   work — the same rule the rest of the live marks follow. */
+.pulse-track .pc.is-now {
+  animation: cell-breathe 1.9s var(--ease) infinite;
+}
+@keyframes cell-breathe {
+  0%,
+  100% {
+    opacity: var(--lit, 1);
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+.pulse-foot {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pulse-fail {
+  color: var(--red-ink);
+}
+.pulse-count.is-zero {
+  opacity: 0.45;
+}
+.pulse-axis {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr) 62px;
+  gap: 12px;
+  margin-top: 7px;
+  padding: 0 6px;
+}
+.pulse-axis .pulse-track {
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+/* The same track shrunk onto a seat card. */
+.pulse-track.is-mini {
+  gap: 1px;
+}
+.pulse-track.is-mini .pc {
+  height: 9px;
+  border-radius: 2px;
+}
+
+@media (max-width: 720px) {
+  .pulse-row,
+  .pulse-axis {
+    grid-template-columns: 96px minmax(0, 1fr) 48px;
+    gap: 8px;
+  }
+  .hero-figure .num {
+    font-size: 32px;
+  }
+}
+
+/* =====================================================================
+   Live state — the things that are happening right now
+   =====================================================================
+   The dashboard had no visual difference between a company mid-turn and
+   one that had been idle for an hour: the same static counters, the same
+   still feed. These are the marks that only ever render on genuinely live
+   state, so motion on this page always means something is running.
+   ===================================================================== */
+
+/* The halo. Drawn in `currentColor`, so one keyframe serves every hue —
+   a live badge, a working dot, a phase pill all pulse in their own
+   colour without a variant each. */
+@keyframes live-halo {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.badge.live .dot,
+.dot.working,
+.live-dot.ok {
+  animation: live-halo 1.6s var(--ease) infinite;
+}
+
+/* Round-budget pips: one dot per tool-call round the phase has spent.
+   On a live row they light in sequence and read as progress; on a
+   finished one they are a record of how many rounds the phase needed. */
+.pips {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.pips .pip {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--phase-color, var(--accent)) 55%, transparent);
+}
+.pips.is-live .pip {
+  animation: pip-lit 1.8s var(--ease) infinite;
+  animation-delay: calc(var(--i) * 0.12s);
+}
+@keyframes pip-lit {
+  0%,
+  70%,
+  100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  20% {
+    transform: scale(1.6);
+    opacity: 1;
+  }
+}
+
+/* ---- The turn rail ----
+   The turn as an object: the phases in order, the ones already spent
+   filled in their own hue, the current one lit, the rest hollow — with a
+   packet travelling the segment feeding the live phase.  A phase name in
+   a pill says where a turn is; this says where it has been and what is
+   left, which is what someone watching it actually wants. */
+.rail {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 11px 0 3px;
+  /* Bounded: stretched across a wide panel the connectors become two
+     long hairlines with words at the ends, which reads as an empty rule
+     rather than as a path from one phase to the next. */
+  max-width: 480px;
+}
+.rail-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.rail-step i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  border: 1.5px solid color-mix(in srgb, var(--n) 55%, transparent);
+}
+.rail-step.is-done,
+.rail-step.is-live {
+  color: var(--ink);
+}
+.rail-step.is-done i,
+.rail-step.is-live i {
+  background: var(--n);
+  border-color: var(--n);
+}
+.rail-step.is-live i {
+  /* `live-halo` pulses in `currentColor`; setting it here is what makes
+     the ring the phase's own hue rather than a second keyframe per
+     phase. */
+  color: var(--n);
+  animation: live-halo 1.6s var(--ease) infinite;
+}
+.rail-link {
+  flex: 1;
+  min-width: 12px;
+  height: 1px;
+  border-radius: 1px;
+  background: var(--border);
+  position: relative;
+  overflow: hidden;
+}
+.rail-link.is-done {
+  background: var(--border-strong);
+}
+.rail-link.is-live::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  border-radius: 1px;
+  background: var(--brand-ramp);
+  animation: rail-packet 1.6s var(--ease) infinite;
+}
+@keyframes rail-packet {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+/* ---- The live board ---- */
+.live-board {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.live-row {
+  position: relative;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+}
+/* The phase's colour as a rail down the left edge, and as light across
+   the top — the site's trick of using a hue as illumination rather than
+   as a fill, so a dense row still reads as one object. */
+.live-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--phase-color, var(--accent));
+}
+.live-row::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 120px;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 90% at 50% -20%,
+    color-mix(in srgb, var(--phase-color, var(--accent)) 12%, transparent),
+    transparent 65%
+  );
+}
+.live-row.clickable:hover {
+  border-color: var(--border);
+  box-shadow: var(--lift-shadow);
+  transform: translateY(-1px);
+}
+.live-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+.live-who {
+  font-weight: 640;
+  font-size: 13px;
+}
+.live-model {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.live-tokens {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.live-text {
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  position: relative;
+  /* Reserved height: a row whose response has not streamed yet must not
+     grow the panel under the reader's cursor when it does. */
+  min-height: 20px;
+}
+.live-text.is-waiting {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.live-tools {
+  display: flex;
+  gap: 5px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  position: relative;
+}
+.live-tools .chip.err {
+  color: var(--red-ink);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+
+/* The idle counterpart: an empty live board still holds its shape, so
+   the page does not jump when the first turn starts. */
+.idle-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius);
+  min-height: 72px;
+}
+.idle-title {
+  font-weight: 620;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.dot.idle {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: breathe 2.6s ease-in-out infinite;
+}
+/* Idle breathes; working does not. Waiting is the state worth drawing
+   as waiting — a busy row has its own motion already. */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+}
+
+/* =====================================================================
+   Failure
+   =====================================================================
+   A failed call is the one thing an operator must not have to hunt for.
+   `--red` is the reserved status hue; nothing categorical uses it.
+   ===================================================================== */
+
+.failure {
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.failure-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--red-ink);
+  font-weight: 620;
+  font-size: 12.5px;
+}
+.failure-kind {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.failure-msg {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 220px;
+}
+.failure-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border-color: color-mix(in srgb, var(--red) 35%, transparent);
+  color: var(--red-ink);
+}
+.failure-card-body {
+  flex: 1;
+  min-width: 0;
+}
+.failure-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 640;
+  font-size: 13px;
+}
+.badge.failed {
+  color: var(--red-ink);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+.badge.failed .dot {
+  background: var(--red);
+  animation: none;
+}
+.llm-row.is-failed,
+.live-row.is-failed,
+.llm-detail.is-failed {
+  --phase-color: var(--red);
+}
+.turn.failed > .turn-head {
+  border-left-color: var(--red);
+}
+
+/* =====================================================================
+   Staleness + failure marks
+   =====================================================================
+   Motion on this page means work is happening.  A live row that has not
+   moved in `STALE_MS` (js/state.js) therefore has to STOP moving — pips
+   that keep pulsing on a hung turn actively claim progress that is not
+   there, which is worse than showing nothing.
+   ===================================================================== */
+.live-age {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.live-row.is-stale .live-age {
+  color: var(--amber-ink);
+}
+.live-row.is-stalled .live-age {
+  color: var(--red-ink);
+}
+.live-row.is-stale .pips .pip {
+  opacity: 0.45;
+}
+.live-row.is-stalled {
+  --phase-color: var(--red);
+}
+
+/* A failed event, wherever it is rendered: the feed row, a trace head, a
+   trace child. One rail, one ink — so scanning for the thing that broke
+   is a glance and not a read. */
+.act-row.is-failed,
+.trace-head.is-failed,
+.trace-child.is-failed {
+  box-shadow: inset 2px 0 0 var(--red);
+}
+.act-row.is-failed .act-text,
+.trace-head.is-failed .trace-summary,
+.trace-child.is-failed .trace-summary,
+.act-row .act-text .is-failed,
+.trace-summary .is-failed {
+  color: var(--red-ink);
+}
+.act-row.is-failed .act-text .ic {
+  width: 11px;
+  height: 11px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.pill.failed {
+  color: var(--red-ink);
+}
+.pill.failed.active {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  border-color: color-mix(in srgb, var(--red) 34%, transparent);
+}
+.nav-count.alert {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+  color: var(--red-ink);
+}
+
+/* The always-on health banner. The connection dot alone never read as
+   "what you are looking at may be stale" — this does.
+
+   Two tones, and the distinction is the point: `down` (red) means the
+   page cannot see the engine, `warn` (amber) means it can see it fine
+   and the engine is not doing what the reader assumes — no active
+   company configuration, so every inbound webhook is discarded. Both
+   are things you must be told without asking; only one is an outage. */
+.degraded {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 9px 30px;
+  font-size: 12.5px;
+}
+/* Both tones are declared. Neither is the bare `.degraded` default:
+   a banner with no tone would then inherit whichever colour happened to
+   be written first, and `bannerTone` returning a name nobody styled
+   would show as a correctly-worded warning in body text. */
+.degraded.down {
+  color: var(--red-ink);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 26%, transparent);
+}
+.degraded.warn {
+  color: var(--amber-ink);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
+}
+
+/* Red is reserved: it means something FAILED. */
+.warn-ink {
+  color: var(--red-ink);
+}
+/* Amber means something needs attention and nothing has broken. */
+.caution-ink {
+  color: var(--amber-ink);
+}
+
+/* ---------------------------------------------------------------------------
+ * The health popover
+ * ---------------------------------------------------------------------------
+ * The panel material, over an opaque ground: `--bg-card` is a warm alpha
+ * in the dark theme, so a floating surface has to supply its own ground
+ * underneath or the page shows straight through it. Layering the wash
+ * over `--bg` composes the same material rather than inventing a second
+ * one.
+ */
+.health-pop {
+  background: linear-gradient(var(--bg-card), var(--bg-card)) var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  padding: 12px 14px 14px;
+  font-size: 12px;
+  animation: pop-in var(--dur) var(--ease);
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.hp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.hp-status {
+  font-weight: 600;
+  color: var(--heading);
+  text-transform: capitalize;
+}
+.hp-version {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.hp-section {
+  margin: 12px 0 5px;
+}
+/* Label left, value right, note on its own line beneath — a note is a
+   sentence and wrapping it into the value column turns every row into a
+   different height. */
+.hp-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 3px 0;
+}
+.hp-label {
+  color: var(--text-muted);
+}
+.hp-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.hp-note {
+  grid-column: 1 / -1;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.hp-action {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--bg-hover);
+  color: var(--accent-ink);
+  cursor: pointer;
+  text-align: center;
+  transition: background var(--dur);
+}
+.hp-action:hover {
+  background: var(--bg-active);
+}
+
+/* =====================================================================
+   Agent page furniture
+   ===================================================================== */
+.agent-head {
+  padding: 18px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.agent-head-id {
+  flex: 1;
+  min-width: 0;
+}
+.agent-head-name {
+  font-size: 18px;
+  font-weight: 680;
+}
+.agent-head-state {
+  text-align: right;
+}
+.agent-head-state .tok-chip {
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.current-task {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.current-task .dot.working {
+  width: 10px;
+  height: 10px;
+}
+.phase-summary {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.phase-panel {
+  padding: 18px 20px;
+}
+.event-detail {
+  padding: 18px;
+}
+.llm-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* The feed's pager. A wall of several hundred identical rows is not a
+   feed, it is a scroll bar — this bounds what is on screen without
+   putting any of it out of reach. */
+.show-more {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.show-more:hover {
+  color: var(--text);
+  border-color: var(--border);
 }

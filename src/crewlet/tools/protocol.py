@@ -45,6 +45,15 @@ class AgentContext(BaseModel):
     """Unit names from the role's containing unit to outermost ancestor."""
     org: Any = None
     event_queue: Any = None
+    budget_manager: Any = None
+    """The engine's :class:`~crewlet.concurrency.BudgetManager`.
+
+    Carried so the Plan-phase prefetches -- which make real auxiliary
+    LLM calls of their own -- charge the same cascade the turn's own
+    rounds do.  Without it their spend is invisible to the meter while
+    still landing in the dashboard's spend rollup, and the two can never
+    be reconciled.
+    """
     knowledge_searcher: Any = None
     """KnowledgeSearcher for the query-time knowledge-base search
     (Confluence CQL or Plane pages).  Injected by the engine when a

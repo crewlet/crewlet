@@ -36,6 +36,11 @@ _CATEGORY_MAP: dict[str, str] = {
     "a2a_message_sent": "a2a",
     "a2a_message_delivered": "a2a",
     "a2a_channel_closed": "a2a",
+    # DACI is behavioural guidance carried on the org's own chat
+    # surfaces, not an engine subsystem — nothing in crewlet publishes
+    # these four.  They stay mapped as the seam an extension that *does*
+    # model decisions writes through, and they are why the dashboard has
+    # a ``decision`` category to filter on.
     "decision_requested": "decision",
     "decision_resolved": "decision",
     "contribution_requested": "decision",
@@ -76,7 +81,54 @@ _CATEGORY_MAP: dict[str, str] = {
     # the dashboard despite being emitted.
     "plan_prefetch_summary": "learning",
     "relevant_knowledge_refetched": "learning",
+    # Skill lifecycle.  ``skill_used`` is what makes a promoted skill's
+    # value auditable at all, and the stale / archived / revived trio is
+    # the record of the lifecycle acting on its own.
+    "skill_used": "learning",
+    "skill_staled": "learning",
+    "skill_archived": "learning",
+    "skill_revived": "learning",
+    "compaction_requested": "learning",
+    "compaction_completed": "learning",
+    # Detached sandbox runs.  These drive a dashboard panel, so they
+    # were already reaching open tabs over the live stream — but with no
+    # entry here they were never written, which meant a row you could
+    # see vanished on the next reload and 404'd if you clicked it.  They
+    # are the execution of a task, hence ``task``.
+    "sandbox_run_started": "task",
+    "sandbox_clarification_requested": "task",
+    "sandbox_run_completed": "task",
+    # A schedule firing creates work; same category as the assignment
+    # it produces.
+    "scheduled_task_fired": "task",
+    # Configuration changes are org lifecycle, and the one class of
+    # event an operator is most likely to go looking for after the fact.
+    "config_revision_activated": "lifecycle",
+    "config_revision_applied": "lifecycle",
+    # Failure-adjacent runtime telemetry.  ``provider_fallback`` is the
+    # early warning for the failures the dashboard surfaces downstream —
+    # it says a provider is degrading before the chain exhausts.
+    "provider_fallback": "system",
+    "phase.tool_skill_blocked": "system",
+    "skill_telemetry_write_failed": "system",
+    "subagent_batched": "system",
 }
+
+# ``agent_turn_progress`` is deliberately absent and must stay that way:
+# it fires once per LLM round as a live-only signal, and the matching
+# ``agent_phase_completed`` is its durable record.
+#
+# ``budget_reported`` is absent for a stronger reason: it is a snapshot
+# of LIVE, in-memory meters whose values mean nothing outside the engine
+# run that produced them (see ``BudgetReported.meter_id``).  Persisting
+# it would let a dashboard hydrate a dead process's counters and render
+# them as the current ones -- a number that is not merely stale but
+# describes a different run.
+#
+# Every OTHER event type the engine publishes belongs above — a type
+# that is missing is silently dropped here, which is how the sandbox
+# panel ended up showing rows that disappeared on reload.
+# ``tests/test_timescaledb`` asserts the two sets agree.
 
 
 class EventStoreWriter:
@@ -124,30 +176,56 @@ class EventStoreWriter:
 
     @staticmethod
     def _extract_tags(event: Event) -> dict[str, str]:
-        """Extract filterable dimensions from the event."""
-        tags: dict[str, str] = {}
-        if agent_id := getattr(event, "agent_id", ""):
-            tags["agent_id"] = agent_id
-        if role := getattr(event, "role", ""):
-            tags["agent_role"] = role
-        if task_id := getattr(event, "task_id", ""):
-            tags["task_id"] = task_id
-        if channel_id := getattr(event, "channel_id", ""):
-            tags["channel_id"] = channel_id
-        if sender := getattr(event, "sender", ""):
-            tags["sender"] = sender
-        # A2A-specific tags for richer filtering.
-        if requester := getattr(event, "requester", ""):
-            tags["requester"] = requester
-        if target := getattr(event, "target", ""):
-            tags["target"] = target
-        if recipient := getattr(event, "recipient", ""):
-            tags["recipient"] = recipient
-        if closed_by := getattr(event, "closed_by", ""):
-            tags["closed_by"] = closed_by
-        # Tag turns triggered by A2A for cross-referencing.
-        if (a2a_ctx := getattr(event, "a2a_context", None)) and (
-            a2a_ch := a2a_ctx.get("channel_id", "")
-        ):
-            tags["a2a_channel_id"] = a2a_ch
-        return tags
+        """Extract filterable dimensions from the event.
+
+        Kept as a method for its callers; the implementation is the
+        module-level :func:`extract_tags`, which the API also uses to
+        stamp the same keys onto a live push.
+        """
+        return extract_tags(event)
+
+
+def extract_tags(event: Event) -> dict[str, str]:
+    """Filterable dimensions of an event.
+
+    These are the routing keys a consumer matches on -- which agent an
+    event concerns, which task, which channel -- and the reason they are
+    computed here rather than read out of the payload downstream is that
+    "which agent does this event concern" is a rule, not a field, and one
+    copy of it is all this codebase should have.
+    """
+    tags: dict[str, str] = {}
+    if agent_id := getattr(event, "agent_id", ""):
+        tags["agent_id"] = agent_id
+    if role := getattr(event, "role", ""):
+        tags["agent_role"] = role
+    if task_id := getattr(event, "task_id", ""):
+        tags["task_id"] = task_id
+    if channel_id := getattr(event, "channel_id", ""):
+        tags["channel_id"] = channel_id
+    if sender := getattr(event, "sender", ""):
+        tags["sender"] = sender
+    # A2A-specific tags for richer filtering.
+    if requester := getattr(event, "requester", ""):
+        tags["requester"] = requester
+    if target := getattr(event, "target", ""):
+        tags["target"] = target
+    if recipient := getattr(event, "recipient", ""):
+        tags["recipient"] = recipient
+    if closed_by := getattr(event, "closed_by", ""):
+        tags["closed_by"] = closed_by
+    # Whether the work this event reports actually failed.  A tag
+    # rather than a payload read because ``list_events`` deliberately
+    # never selects the payload column, so a dashboard hydrating its
+    # feed from history has no other way to know a phase died -- and
+    # a feed that renders a failed turn identically to a successful
+    # one is the bug this dimension exists to close.  Only set when
+    # true, so the tag doubles as a ``tags->>'failed'`` filter.
+    if getattr(event, "failed", False):
+        tags["failed"] = "true"
+    # Tag turns triggered by A2A for cross-referencing.
+    if (a2a_ctx := getattr(event, "a2a_context", None)) and (
+        a2a_ch := a2a_ctx.get("channel_id", "")
+    ):
+        tags["a2a_channel_id"] = a2a_ch
+    return tags

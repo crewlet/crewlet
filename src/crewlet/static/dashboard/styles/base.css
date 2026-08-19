@@ -30,19 +30,37 @@ body {
   font-size: 14px;
   line-height: 1.55;
   /* The site sets a slight negative tracking on body copy; it is what makes
-     Instrument Sans read as the brand rather than as a default UI font. */
-  letter-spacing: -0.011em;
+     the text read as the brand rather than as a default UI font. */
+  letter-spacing: var(--track-body);
   color: var(--text);
   background: var(--bg);
   transition: background-color 0.4s, color 0.3s;
 }
 
+/* Anything that reads as a *title* — a page heading, a panel headline, a
+   figure — is set in the display face at display tracking. The site draws
+   the same distinction: Inter carries the prose, Inter Tight carries the
+   statements. Where neither font is installed both slots fall back to the
+   same system face, and the tracking difference alone still separates
+   them, which is why the tracking is a token rather than baked into the
+   font choice. */
 h1,
 h2,
 h3,
-h4 {
+h4,
+.display {
+  font-family: var(--font-display);
+  letter-spacing: var(--track-display);
   color: var(--heading);
   text-wrap: balance;
+  font-weight: 600;
+}
+
+/* A number that changes must not re-flow the text around it. Every live
+   figure on this dashboard is a changing number. */
+.num,
+.figure {
+  font-variant-numeric: tabular-nums;
 }
 
 p {
@@ -74,13 +92,12 @@ code,
  * ---------------------------------------------------------------------------
  * The site's mono, uppercase, wide-tracked micro-label ("LEARNING YOUR
  * COMPANY", "CONNECTED ACCOUNTS"). It is the dashboard's entire small-label
- * register: section headers, nav group titles, table headers, widget heads,
- * stat and block labels, source badges. Declared once, here in the first
- * stylesheet, so every use below states only its deltas. */
+ * register: section headers, nav group titles, table headers, hero and
+ * strip labels, stat and block labels, source badges. Declared once, here
+ * in the first stylesheet, so every use below states only its deltas. */
 .eyebrow,
 .sec-title,
 .nav-title,
-.widget-head,
 .stat-label,
 .block-label,
 .mem-label,
@@ -90,7 +107,7 @@ code,
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 500;
-  letter-spacing: 0.1em;
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -125,10 +142,18 @@ code,
 }
 
 /* ---- App grid ---- */
+/* The sidebar tone is painted by the GRID, not by the sidebar element.
+   The sidebar is `position: sticky; height: 100vh`, so on any page taller
+   than the viewport its own background — and its right border — simply
+   stopped one screen down, leaving a visible horizontal seam in the left
+   column on every theme where the two grounds differ. Painting the
+   column and letting `.main` cover its own half is the only version of
+   this that is correct at every scroll position. */
 #app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 100vh;
+  background: var(--bg-sidebar);
 }
 
 /* ---- Sidebar ---- */
@@ -139,8 +164,6 @@ code,
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
   overflow-y: auto;
 }
 
@@ -150,17 +173,56 @@ code,
   gap: 10px;
   padding: 16px 18px 12px;
 }
+/* Anchored to the dot in the sidebar, but a child of <body> — see the
+   comment on the element in index.html for why it cannot live inside
+   the sidebar at all. `fixed` rather than `absolute` because the anchor
+   it wants is the viewport: the sidebar is `overflow-y: auto` (and so
+   `overflow-x: auto` too), so anything positioned against it wider than
+   the 250px column is clipped and anything taller scrolls away with the
+   nav. */
+.health-pop-wrap {
+  position: fixed;
+  top: 44px;
+  left: 12px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  z-index: var(--z-pop);
+}
 .brand img {
   width: 22px;
   height: 22px;
   border-radius: 6px;
 }
 .brand h1 {
-  font-size: 13.5px;
+  font-family: var(--font-display);
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: var(--track-display);
   margin: 0;
   flex: 1;
+}
+/* The dot is the button's whole visible surface, so the hit target has
+   to come from the button: a 7px target is a 7px target no matter how
+   much meaning sits behind it. */
+.live-dot-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur);
+}
+.live-dot-btn:hover {
+  background: var(--bg-hover);
+}
+.live-dot-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .live-dot {
   width: 7px;
@@ -177,6 +239,10 @@ code,
   background: var(--red);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 16%, transparent);
 }
+/* `warn` and `drain` share the amber: an unconfigured engine and a
+   draining one are both "running, but not doing what you think". They
+   are told apart by the banner and the popover, not by a 7px dot. */
+.live-dot.warn,
 .live-dot.drain {
   background: var(--amber);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 16%, transparent);
@@ -303,6 +369,8 @@ code,
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
 }
 
 /* Frosted chrome — the site's fixed nav: page tone at 78%, blurred and
@@ -321,9 +389,10 @@ code,
   border-bottom: 1px solid var(--border);
 }
 .topbar h2 {
+  font-family: var(--font-display);
   font-size: 17px;
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: var(--track-display);
   margin: 0;
   flex: 1;
 }
@@ -360,8 +429,14 @@ code,
   padding: 26px 30px 60px;
 }
 
-/* The site reveals content with a short rise; `cascade-enter` staggers the
-   first few children of a view the way its sections stagger on scroll. */
+/* Entrance motion belongs to the thing that arrived, not to the screen.
+   `#view` used to carry a staggered cascade over its top-level children,
+   which was fine for a page load and disastrous once the view re-rendered
+   on every websocket envelope: each render inserted brand-new children,
+   restarting a 450ms fade-from-invisible on the whole screen several times
+   a second. That is what "the dashboard refreshes multiple times" looked
+   like. Renders now patch in place (js/patch.js), so the only thing that
+   animates is a row the patcher actually inserted, marked `.is-entering`. */
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -372,23 +447,27 @@ code,
     transform: none;
   }
 }
-.cascade-enter > * {
-  animation: fade-up 0.45s var(--ease) both;
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-.cascade-enter > *:nth-child(1) {
-  animation-delay: 0s;
+.view > * {
+  animation: fade-up 0.32s var(--ease) both;
 }
-.cascade-enter > *:nth-child(2) {
-  animation-delay: 45ms;
+.is-entering {
+  animation: row-in 0.26s var(--ease) both;
 }
-.cascade-enter > *:nth-child(3) {
-  animation-delay: 90ms;
-}
-.cascade-enter > *:nth-child(4) {
-  animation-delay: 0.135s;
-}
-.cascade-enter > *:nth-child(n + 5) {
-  animation-delay: 0.18s;
+/* A view's own children animate on mount only. Re-render patches them in
+   place, so they never re-trigger — but a row the patcher inserts into an
+   already-mounted list should still arrive, hence the override above. */
+.view > *.is-entering {
+  animation: row-in 0.26s var(--ease) both;
 }
 
 @keyframes pulse {
@@ -452,6 +531,13 @@ code,
   }
   #app.nav-open .sidebar {
     transform: none;
+  }
+  .sidebar {
+    background: var(--bg-sidebar);
+  }
+  /* One column: the divider has nothing to divide. */
+  .main {
+    border-left: none;
   }
   .view,
   .topbar {

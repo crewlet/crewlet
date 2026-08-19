@@ -453,9 +453,17 @@
   border-top-color: color-mix(in srgb, var(--phase-color, var(--border)) 22%, var(--border));
   background: color-mix(in srgb, var(--phase-color, transparent) 4%, transparent);
 }
-/* The standalone per-phase detail card mirrors the row's phase accent. */
+/* The standalone per-phase detail card mirrors the row's phase accent.
+   It also carries its own padding: the shared panel recipe grants a
+   surface, never spacing, so every card states its own — and this one
+   never did, which left the stat grid, the source chip and the prompt
+   blocks all sitting flush against the border. More generous than the
+   inline `.llm-row-body` (12px) because this is a full-page reading
+   surface rather than a section expanded inside a list; it matches its
+   sibling `.event-detail` so the two detail pages agree. */
 .card.llm-detail {
   border-left: 3px solid var(--phase-color, var(--border-strong));
+  padding: 18px 20px 20px;
 }
 .block-label {
   font-size: 10px;
@@ -1198,4 +1206,85 @@ pre.code.msg-pre {
   padding: 6px 0;
   min-width: 0;
   word-break: break-word;
+}
+
+
+/* =====================================================================
+   Traces and history
+   =====================================================================
+   A trace is a turn's whole story — the notification that woke the
+   agent, each phase, the tools, the task completion — and it is reached
+   from a row, never from the nav: a trace view with no trace to show
+   would be exactly the placeholder screen the design rules forbid.
+   ===================================================================== */
+.trace-link {
+  cursor: pointer;
+  color: var(--accent-ink);
+  transition: color var(--dur);
+}
+.trace-link:hover {
+  color: var(--text);
+}
+.trace-head-card {
+  padding: 16px 18px;
+  margin-bottom: 4px;
+}
+.trace-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.trace-id-full {
+  font-size: 13px;
+  color: var(--text);
+}
+.trace-head-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ok-ink {
+  color: var(--green-ink);
+}
+.trace-truncated {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--amber-ink);
+}
+/* Indent by span depth. A node whose parent is missing renders at the
+   root rather than vanishing — a trace can legitimately be truncated. */
+.trace-list .trace-child {
+  padding-left: calc(14px + var(--depth, 0) * 18px);
+}
+
+/* The agent page's own history, and the note that has to accompany it:
+   `related_agent` also matches everything sharing a trace with one of
+   the seat's events, which is how the inbound webhook that woke it
+   appears here. A reader not told that will believe the agent emitted
+   it. */
+.hist-note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin: -4px 0 10px;
+  text-wrap: pretty;
+}
+
+/* The pager has two jobs that must not look alike: revealing rows
+   already in memory is instant, reading the store is a network trip
+   that can fail or run out. */
+.show-more.is-note {
+  cursor: default;
+  color: var(--text-dim);
+}
+.show-more.is-note:hover {
+  background: none;
+  border-color: var(--border);
+}
+.show-more.is-loading {
+  cursor: progress;
+  color: var(--text-muted);
 }

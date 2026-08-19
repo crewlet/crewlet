@@ -10,15 +10,15 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check + `configured` flag |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)) |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
 | `GET` | `/tools` | Registered tools (builtins + discovered MCP tools) |
-| `GET` | `/events` | Recent engine events from the event store |
+| `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
-| `GET` | `/events/trace/{trace_id}` | All events in one trace, ordered by timestamp |
+| `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
@@ -125,10 +125,18 @@ Payloads are NOT included — fetch a specific revision via `GET /config/revisio
 
 ## Live Stream
 
-The dashboard subscribes to `/ws/stream` for a real-time view of the
-engine — agent state transitions, LLM phase completions (Plan / Execute
-/ Review with the full system prompt, response, and tool calls), task
-lifecycle events, and a periodic health pulse.
+`/ws/stream` is the dashboard's **only** data channel. State comes down
+it and requests go up it, so a running dashboard makes no HTTP request
+at all: the handshake snapshot carries every section a screen needs on
+first paint, subsequent pushes carry what changed, and anything fetched
+on demand — an agent's LLM history, one event's payload, a trace, a
+different spend window, the configuration document — is a query sent on
+the same socket and answered on it.
+
+The REST endpoints below remain a public read API, and
+`GET /stream/snapshot` is still the fallback for a browser that cannot
+upgrade to a WebSocket (corporate proxies). They are no longer part of
+the dashboard's normal operation.
 
 ### Live-state projection (`StreamService` + `LiveState`)
 
@@ -139,6 +147,16 @@ stream the WebSocket fan-out consumes, hydrated once from the event
 store at startup, and read in O(1) thereafter — so `/agents`,
 `/stream/snapshot`, and the WebSocket handshake never re-derive
 state from a multi-query event scan on a request.
+
+What the projection computes, it also **pushes**. A dashboard mirrors
+it rather than re-deriving it: before this, every tab ran its own copy
+of the state machine below, its own sandbox tracking, and its own
+re-implementation of the spend aggregation, all applied to the raw event
+stream — three copies of server logic, three ways to drift, and a
+refresh that regularly disagreed with what had been on screen a moment
+earlier. Applying an event now yields a change set, and the changed
+agents' overlays, the sandbox list, and the spend rollup go out as their
+own envelopes.
 
 Crucially, the projection holds each agent's **in-flight LLM call** —
 the latest `agent_turn_progress` (phase, round, model, accumulated
@@ -152,59 +170,184 @@ gated on the event timestamp so out-of-order delivery (the standalone
 API's Pulsar topics order only *within* a topic) can't clobber newer
 state with an older event.
 
-The agent detail page streams too: it paints once from
-`GET /agents/{id}` — seeding the in-flight row from that response's
-`live_call` — then keeps itself current from the stream.
-`agent_phase_completed` / `agent_turn_completed` envelopes append to
-the LLM Invocations list live, and `agent_phase_started` /
-`agent_turn_progress` envelopes update the in-flight "live" row inside
-its turn card, replaced by the completed record when the phase finishes.
-Progress envelopes carry `turn_id` / `phase` / `iteration` for this
-correlation; they are stream-only and never persisted to the event
-store.
+A **failed** phase is a first-class part of this. When a phase dies, the
+projection stamps its in-flight call `failed`, keeps it on screen rather
+than clearing it, and records the classified cause on the agent as
+`last_error` — so a seat that stopped can say *why*, and the call it
+stopped on is still there to read.
 
-The same baseline-plus-stream pattern keeps the dashboard's **token
-totals** live. Per-agent totals fold each `agent_turn_completed`
-envelope onto the snapshot's hydrated counters (deduped by event id so a
-re-delivery or a register-before-snapshot race can't double-count). The
-**Token Spend** rollup behind the overview widget and the **Tokens** view
-works the same way: it is seeded from a one-shot
-[`GET /tokens/breakdown`](#get-tokensbreakdown) fetch and then folds
-every live `agent_phase_completed` envelope onto that baseline — the
-client mirrors the server's `aggregate_phase_events` math and uses the
-response's `aggregated_through` watermark to skip events the baseline
-already counted. Without this fold the rollup would freeze at the value
-of the initial fetch while the per-agent rows beneath it kept climbing
-(the headline reads `0` while an agent has plainly already burned
-tokens). The baseline is re-fetched on WebSocket reconnect so the rollup
-self-heals from any events missed during an outage, exactly as the
-snapshot re-hydrates agent state.
+The agent detail page streams the same way: it paints from a `agent`
+query, then keeps itself current from the pushes.
+`agent_phase_completed` / `agent_turn_completed` envelopes append to the
+LLM Invocations list live, and the agent's own `live_call` — pushed on
+every round — is the in-flight row inside its turn card, replaced by the
+completed record when the phase finishes. Progress envelopes carry
+`turn_id` / `phase` / `iteration` for this correlation; they are
+stream-only and never persisted to the event store.
+
+The **spend rollup** is maintained by the projection too, over the same
+window per-agent totals hydrate over, using the same
+`aggregate_phase_events` the REST endpoint calls. It ships in the
+snapshot and is re-pushed (coalesced to at most one frame per second)
+whenever a phase completes, so the Tokens view and the overview widget
+stay live without a fetch and without a second implementation of the
+aggregation in the browser.
 
 ### `GET /stream/snapshot`
 
 Single-shot bundle equivalent to the WebSocket handshake's first
-envelope.  Combines health, agents, recent events, tools, and org into
-one response so the dashboard can paint without firing several parallel
-REST requests.  Assembled entirely from the in-memory projection — no
-database round-trip on the hot path.  Used as a fallback when the
-browser cannot upgrade to a WebSocket (corporate proxies, etc.).
+envelope: every section a dashboard screen needs on first paint.
+Assembled entirely from the in-memory projection — no database
+round-trip on the hot path.  Used as a fallback when the browser cannot
+upgrade to a WebSocket (corporate proxies, etc.).
 
 **Response**
 
 ```json
 {
-  "health":  { "status": "ok", "in_flight": 0, "shutting_down": false },
-  "agents":  [ { /* /agents row: live state + tokens + live_call (the
-                    in-flight LLM call, or null between turns) */ }, ... ],
-  "events":  [ { /* recent event row, newest first */ }, ... ],
-  "tools":   [ { "name": "...", "description": "...", "source": "..." } ],
-  "org":     { /* /org payload */ }
+  "health":    { /* the health envelope — see below */ },
+  "agents":    [ { /* /agents row: live state + tokens + live_call (the
+                      in-flight LLM call, or null between turns) +
+                      last_error (the phase failure that stopped this
+                      seat, or null) */ }, ... ],
+  "events":    [ { /* recent event row, newest first — payload-free, plus
+                      a `failed` boolean */ }, ... ],
+  "sandboxes": [ { /* in-flight detached coding run */ }, ... ],
+  "tools":     [ { "name": "...", "description": "...", "source": "..." } ],
+  "org":       { /* /org payload */ },
+  "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
+  "budget":    { /* the live org-wide token meter, or {} — see below */ },
+  "schedules": [ { /* configured schedule + computed next_run */ }, ... ]
 }
 ```
 
+Each `events` row is the payload-free feed shape — `id`, `type`,
+`timestamp`, `source`, `actor`, `summary`, `category`, `trace_id`,
+`span_id`, `parent_span_id`, `topic` — plus **`failed`**: `true` when the
+work the event reports did not succeed.  It is `true` for an event carrying
+its own `failed` field (a phase or turn that died) and for an event type that
+*is* a failure (`task_failed`, `llm_unavailable`, `budget_exhausted`,
+`turn.guard_breach`).  Deciding it once, here, is what lets a dashboard mark
+failures without re-deriving them from a type list of its own.
+
+The flag survives a restart: the event-store writer stamps a `failed` tag on
+those events, and the projection reads it back when it hydrates its feed from
+history.  `list_events` deliberately never selects the payload column, so
+without the tag every historical failure would read back as a success.
+
+### The health envelope
+
+One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
+the snapshot's `health` section, and the 5-second push, so those three
+surfaces cannot disagree about whether the engine is healthy — and a
+reconnect restores every field without a second round trip.
+
+```json
+{
+  "status": "ok",
+  "configured": true,
+  "engine": true,
+  "version": "0.4.0",
+  "started_at": "2026-04-01T12:00:00+00:00",
+  "queue": "pulsar",
+  "event_store": "durable",
+  "feed_hydrated": true,
+  "clients": 3,
+  "in_flight": 2,
+  "engine_started_at": "2026-04-01T11:58:03+00:00",
+  "shutting_down": false
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
+| `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
+| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `version` | The `crewlet` version this process is running. |
+| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
+| `queue` | The event queue's backend — `pulsar` or `memory`. Read off the `EventQueue` protocol, never sniffed from a class name. Display only; nothing may branch on it. |
+| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
+| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
+| `clients` | Dashboards currently connected to this API process. |
+| `in_flight` | Handler invocations mid-flight (embedded API only). |
+| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+
+Per-socket facts — how many envelopes *this* connection dropped, how deep
+its queue is — are deliberately **not** here. The tick encodes one JSON
+string and hands the same string to every client, so a per-client field
+would force one encode per client per tick; they are answered on demand
+by the `stream` query instead.
+
+`GET /health` always returns **200**, including when `status` is
+`unconfigured`: the status code is liveness, and an engine waiting for a
+configuration is alive. A readiness probe should read `configured`.
+
+### Paging the event history
+
+`GET /events` and the `events` query return rows ordered by
+`(timestamp, id)` **descending**, and accept an exclusive keyset cursor:
+
+```
+GET /events?limit=100&before=2026-04-01T12:00:00%2B00:00&before_id=<event_id>
+```
+
+Pass the oldest row you already hold to get the page beneath it. The id
+half is not optional — burst writes routinely share a timestamp at
+microsecond resolution, and a cursor over a non-unique key silently
+skips or repeats whatever collided with it.
+
+**A page shorter than `limit` is the end of the history.** That rule
+holds for every filter the store pushes into SQL. It does *not* hold for
+`related_agent`, which over-fetches and post-filters (it also pulls in
+every event sharing a trace with a direct match, so a caller must dedupe
+by id); that surface only knows it is done when a page returns zero rows.
+
+The persistent store retains 30 days. Once a cursor crosses that floor
+every page is empty — which is why a client must distinguish it from
+quiet, rather than drawing the gap as silence. A deployment with no
+event store answers **503** (and `no_event_store` on the query channel)
+rather than an empty page, for the same reason: "there is nothing older"
+and "I cannot answer" are different facts.
+
+`category` is a filter for the same reason paging exists at all —
+filtering a paged list client-side silently excludes, because a 100-row
+page holding 2 matches reads as "only 2 exist".
+
+### The live token meter
+
+`budget` carries the engine's in-memory token counters — the only figures
+that can honestly be divided into a configured cap, because both cover the
+same span: **the engine's run**. The dashboard's other two token figures
+are a 24-hour spend rollup and a 7-day per-agent total; dividing either
+into a cap produces a percentage wrong by however long the engine has been
+up.
+
+- `meter_id` identifies the reporting run. `used` is comparable only
+  within one `meter_id`; a new one means the engine restarted and every
+  prior figure is dead, so a consumer must **replace** what it holds
+  rather than merge or take a maximum.
+- `seq` is monotonic within a `meter_id`. Broker ordering holds only
+  within a topic and the standalone API reads a broadcast subscription
+  across all of them, so a report at or below the held `seq` is dropped.
+- `refused_at` — when the cap last turned a charge away. That, and not
+  `used >= max`, is what "exhausted" means: a refused charge increments
+  nothing, so the counter stops short of the cap by the size of the round
+  that would not fit.
+- `{}` means no engine is reporting one (the standalone API has no meter
+  of its own). Per-agent, `budget: null` means the same, or that the seat
+  has no per-agent cap at all — the engine seeds one only for a non-zero
+  `token_budget`.
+
+It is deliberately never persisted: replaying a live meter from history
+would show a dead process's counters as the current ones.
+
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, response, tool_executions, rounds,
-in_progress }` while an LLM call is under way.
+in_progress }` while an LLM call is under way.  A call whose phase
+failed keeps `in_progress: false` plus `failed: true` and an `error`
+object, so the dashboard renders the failure instead of an answer that
+never arrives.
 
 ### `WS /ws/stream`
 
@@ -216,8 +359,16 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `kind` | When | `data` |
 |--------|------|--------|
 | `snapshot` | First envelope after the upgrade succeeds, and again on reconnect. | Same payload as `GET /stream/snapshot` — agents carry their in-flight `live_call`, so a reconnect re-renders the live row. |
-| `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload`.  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
-| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection) with the engine's `in_flight_count` and `shutting_down` flag. `shutting_down` flips `true` (and `status` reads `"shutting_down"`) from the first moment of a graceful stop, so the dashboard shows the drain while it happens — the API server itself keeps serving until the engine has fully stopped. | `{ status, in_flight?, shutting_down? }` |
+| `event`    | Every engine event published to `crewlet.events.>`. | `{ id, type, timestamp, source, actor, summary, category, trace_id, span_id, parent_span_id, topic, payload }` — the same shape as a `/events` row, plus the full event `payload` (from which the snapshot feed's `failed` flag is derived).  `agent_phase_completed` events carry the system prompt, response, and tool calls, so LLM invocations stream live; `agent_turn_progress` events (per tool-call round, tagged with `turn_id` / `phase` / `iteration`) stream the in-flight call before its phase record exists. |
+| `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
+| `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
+| `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
+| `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
+| `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
+| `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
+| `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unauthorized`, `unknown_query`, `no_event_store`, `query_failed`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -225,6 +376,24 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
+| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows. |
+
+**Queries** (`what`), each answered by the *same* function the matching
+REST route calls, so the two surfaces cannot diverge:
+
+| `what` | `params` | Answers with |
+|--------|----------|--------------|
+| `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
+| `agent_memory` | `{id}` | `GET /agents/{id}/memory` |
+| `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
+| `events` | `{limit, type, source, category, trace_id, actor, related_agent, before, before_id}` | `GET /events` |
+| `trace` | `{trace_id}` | `GET /events/trace/{trace_id}` |
+| `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
+| `schedules` | — | `GET /schedules` |
+| `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
+| `config` | — | `GET /config` *(operator token required)* |
+| `config_audit` | `{limit}` | `GET /config/audit` *(operator token required)* |
+| `config_diff` | `{revision_id}` | `GET /config/revisions/{id}/diff` *(operator token required)* |
 
 ### Wiring
 
@@ -241,10 +410,12 @@ tabs.
 
 The dashboard itself is a zero-build, modular ES-module app served from
 `crewlet/static/dashboard/` (`index.html` shell + `styles/*.css` +
-`js/**` modules — a reactive store, a reconnecting WebSocket client with
-heartbeat and REST-snapshot fallback, a hash router so a refresh keeps
-your current view, and one view module per screen).  `/dashboard`
-serves the shell; `/static/{path}` serves its assets.  Its visual system —
+`js/**` modules — a store that mirrors the projection, a reconnecting
+WebSocket client with heartbeat, query channel and REST-snapshot
+fallback, a keyed DOM patcher, a frame-coalescing render scheduler, a
+hash router so a refresh keeps your current view, and one view module
+per screen).  `/dashboard` serves the shell; `/static/{path}` serves its
+assets.  Its visual system —
 the token layer, the shared panel recipe, and the categorical hues — is
 documented in [Dashboard Design System](dashboard-design.md).
 

@@ -202,6 +202,15 @@ class TurnContext:
     # :mod:`crewlet.agent.iteration_log`.
     iteration_history: list[IterationRecord] = field(default_factory=list)
 
+    # The engine-detected guard breach that ended this turn, as
+    # ``{"kind": ..., "detail": ...}``, or ``None``.  A stall abort and an
+    # exhausted iteration cap end a turn by RETURNING ``decision="failed"``
+    # rather than by raising, so this is the only way the turn-completed
+    # record can name the cause — otherwise it reports a turn that failed
+    # for no stated reason while the reason sits on a separate event the
+    # LLM-history view never reads.
+    guard_breach: dict[str, str] | None = None
+
     # Per-turn availability set built once by TurnEngine from the role's
     # ``mcp_env`` + registry ``check_fn`` calls.  Passed to each
     # ToolSurface factory as ``availability_filter`` so check_fns are

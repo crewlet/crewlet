@@ -179,3 +179,131 @@ def test_budget_manager_set_agent():
 async def test_budget_manager_unlimited_org():
     mgr = BudgetManager(org_budget=0)
     assert await mgr.consume("a1", 999999) is True
+
+
+# --- Exhaustion is a state, not a ratio -------------------------------
+
+
+def test_a_refused_charge_marks_the_budget_exhausted():
+    """``used >= max`` is essentially never true, so it cannot be the test.
+
+    ``consume`` refuses a charge that would exceed the cap and
+    increments nothing -- there is no partial charge.  A budget with a
+    100-token cap charged in 60s therefore stalls at 60 and can never
+    reach its own maximum, while being completely blocked.  Every
+    ratio-based check of exhaustion is false forever.
+    """
+    budget = TokenBudget(max_tokens=100)
+    assert budget.consume(60) is True
+    assert budget.consume(60) is False
+    assert budget.used_tokens == 60, "a refused charge incremented the counter"
+    assert budget.used_tokens < budget.max_tokens
+    assert budget.refused_at, "the refusal was not recorded"
+    assert budget.is_exhausted is True
+
+
+def test_an_unlimited_budget_is_never_exhausted():
+    budget = TokenBudget(max_tokens=0)
+    assert budget.consume(10**9) is True
+    assert budget.is_exhausted is False
+
+
+def test_reset_clears_the_refusal_too():
+    budget = TokenBudget(max_tokens=10)
+    budget.consume(50)
+    assert budget.is_exhausted is True
+    budget.reset()
+    assert budget.is_exhausted is False
+    assert budget.refused_at == ""
+
+
+# --- Already-spent tokens ---------------------------------------------
+
+
+def test_record_counts_spend_that_a_refusal_cannot_undo():
+    budget = TokenBudget(max_tokens=100)
+    assert budget.record(150) is True, "going over the cap was not reported"
+    assert budget.used_tokens == 150, "already-spent tokens were dropped"
+    assert budget.is_exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_record_spend_moves_both_budgets():
+    """A sandbox run's tokens are spent before the engine sees them.
+
+    ``consume`` would refuse the charge and count nothing, leaving the
+    meter reading low exactly when the cap is binding -- and, since the
+    caller cannot un-spend them, not blocking anything either.
+    """
+    mgr = BudgetManager(org_budget=1000, agent_budgets={"a1": 100})
+    assert await mgr.record_spend("a1", 400) is True
+    assert mgr.org_budget.used_tokens == 400
+    assert mgr.get_agent_budget("a1").used_tokens == 400
+    assert mgr.get_agent_budget("a1").is_exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_record_spend_for_an_uncapped_agent_still_charges_the_org():
+    mgr = BudgetManager(org_budget=1000)
+    assert await mgr.record_spend("nobody", 250) is False
+    assert mgr.org_budget.used_tokens == 250
+
+
+# --- The meter's identity and change hook ------------------------------
+
+
+def test_each_manager_has_its_own_meter_identity():
+    """A restart must be distinguishable from a drop.
+
+    The counters are zeroed only by process death, so a consumer that
+    merged or maximised across meters would pin a phantom high-water
+    mark that no later report could clear.
+    """
+    assert BudgetManager().meter_id != BudgetManager().meter_id
+
+
+@pytest.mark.asyncio
+async def test_the_change_hook_fires_on_both_the_accepted_and_refused_path():
+    """A refusal is the moment the cap bites and the most worth showing."""
+    seen: list[str] = []
+    mgr = BudgetManager(org_budget=100, on_change=seen.append)
+    await mgr.consume("a1", 60)
+    await mgr.consume("a1", 60)  # refused
+    assert seen == ["a1", "a1"]
+
+
+@pytest.mark.asyncio
+async def test_the_change_hook_fires_on_a_cap_edit():
+    """A live cap change must reach a screen without waiting for a token."""
+    seen: list[str] = []
+    mgr = BudgetManager(on_change=seen.append)
+    mgr.set_agent_budget("a1", 10)
+    mgr.update_agent_budget("a1", 20)
+    mgr.update_org_budget(30)
+    mgr.drop_agent_budget("a1")
+    assert seen == ["a1", "a1", "", "a1"]
+
+
+@pytest.mark.asyncio
+async def test_a_raising_hook_never_breaks_accounting():
+    def boom(_agent_id: str) -> None:
+        raise RuntimeError("reporting is down")
+
+    mgr = BudgetManager(org_budget=100, on_change=boom)
+    assert await mgr.consume("a1", 10) is True
+    assert mgr.org_budget.used_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_report_lists_only_metered_seats():
+    """Absence means "no cap and no meter", not "a cap of zero"."""
+    mgr = BudgetManager(org_budget=500, agent_budgets={"a1": 100})
+    await mgr.consume("a1", 30)
+    await mgr.consume("uncapped", 70)
+    report = mgr.report()
+    assert set(report["agents"]) == {"a1"}
+    assert report["agents"]["a1"]["used_tokens"] == 30
+    # The org figure is NOT the sum of the per-agent ones: it also
+    # carries every uncapped seat's spend.
+    assert report["org_used_tokens"] == 100
+    assert report["meter_id"] == mgr.meter_id

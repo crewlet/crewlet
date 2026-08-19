@@ -26,6 +26,7 @@ function slugify(name) {
  *   unitPath[]  — every ancestor unit name, outermost first
  *   lead        — the effective lead of the containing unit (inherited from
  *                 the nearest ancestor that sets one, matching the engine)
+ *   tokenBudget — the role's configured per-agent cap (0 = unlimited)
  *   integrations[] — MCP server keys, own + inherited from the unit chain
  */
 export function flattenSeats(org) {
@@ -44,6 +45,9 @@ export function flattenSeats(org) {
       manages: role.manages || [],
       contact: role.contact || {},
       availability: role.availability || "",
+      // `/org` ships the company config verbatim, so the per-role cap is
+      // already on the wire — it just was not being carried through.
+      tokenBudget: Number(role.token_budget || 0),
       unit: unitPath.length ? unitPath[unitPath.length - 1] : "",
       unitPath: [...unitPath],
       lead,

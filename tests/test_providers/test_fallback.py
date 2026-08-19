@@ -131,13 +131,19 @@ async def test_fallback_raises_chain_exhausted_when_chain_exhausted():
 
 
 @pytest.mark.asyncio
-async def test_fallback_on_fallback_callback_fires_per_hop():
-    """The optional ``on_fallback`` hook fires once per chain
-    transition with ``(from_key, label, exception)`` arguments."""
+async def test_fallback_on_fallback_callback_names_the_provider_taking_over():
+    """The hook fires once per hop with ``(from_key, to_key, exception)``.
+
+    ``to_key`` is the chain entry that actually takes over.  Both call
+    sites used to pass the literal string ``"next"``, so every
+    ``ProviderFallback`` event ever published recorded
+    ``to_provider_key="next"`` -- the one field that says which provider
+    answered, naming no provider at all.
+    """
     calls: list[tuple[str, str, str]] = []
 
-    def _hook(from_key: str, label: str, exc: Exception) -> None:
-        calls.append((from_key, label, type(exc).__name__))
+    def _hook(from_key: str, to_key: str, exc: Exception) -> None:
+        calls.append((from_key, to_key, type(exc).__name__))
 
     primary = _ScriptedProvider(
         side_effect=lambda: AllCredentialsExhausted(
@@ -147,7 +153,37 @@ async def test_fallback_on_fallback_callback_fires_per_hop():
     secondary = _ScriptedProvider(content="recovered")
     wrapper = FallbackLLMProvider([("p", primary), ("s", secondary)], on_fallback=_hook)
     await wrapper.complete([Message(role="user", content="hi")])
-    assert calls == [("p", "next", "AllCredentialsExhausted")]
+    assert calls == [("p", "s", "AllCredentialsExhausted")]
+
+
+@pytest.mark.asyncio
+async def test_fallback_hook_on_the_last_entry_names_no_destination():
+    """There is nothing to fall back to, and the event says exactly that.
+
+    Naming a destination that was never tried would be worse than the
+    empty string: the chain is exhausted here and ``LLMChainExhausted``
+    is what the caller sees.
+    """
+    calls: list[tuple[str, str]] = []
+
+    def _hook(from_key: str, to_key: str, exc: Exception) -> None:
+        calls.append((from_key, to_key))
+
+    def _boom() -> Exception:
+        return AllCredentialsExhausted(
+            provider_key="x", kind_hint=ProviderErrorKind.RATE_LIMIT
+        )
+
+    wrapper = FallbackLLMProvider(
+        [
+            ("p", _ScriptedProvider(side_effect=_boom)),
+            ("s", _ScriptedProvider(side_effect=_boom)),
+        ],
+        on_fallback=_hook,
+    )
+    with pytest.raises(LLMChainExhausted):
+        await wrapper.complete([Message(role="user", content="hi")])
+    assert calls == [("p", "s"), ("s", "")]
 
 
 @pytest.mark.asyncio

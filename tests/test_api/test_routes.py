@@ -199,14 +199,17 @@ class TestDashboard:
         assert css.status_code == 200
         body = css.text
         recipe = body.split("var(--panel-shadow)")[0]
-        surfaces = (".card", ".list", ".widget", ".stat", ".tool-card", ".turn")
+        surfaces = (".card", ".list", ".stat", ".tool-card", ".turn")
         for selector in (*surfaces, ".mem-card"):
             assert f"{selector},\n" in recipe or f"{selector} {{" in recipe, selector
-        # The recipe owns the fill. Views style internals; none of them
-        # re-declares the panel surface itself.
-        assert "color-mix(in srgb, var(--bg-card) 94%, transparent)" in recipe
+        # The recipe owns the fill, and it uses ``--bg-card`` NEAT: the
+        # token is itself a warm alpha over the ground in the dark theme,
+        # so diluting it a second time leaves a panel under the threshold
+        # where its own edge reads at all.
+        assert "background: var(--bg-card);" in recipe
+        assert "color-mix(in srgb, var(--bg-card)" not in recipe
         views = client.get("/static/dashboard/styles/views.css").text
-        assert "color-mix(in srgb, var(--bg-card) 94%" not in views
+        assert "color-mix(in srgb, var(--bg-card)" not in views
 
     def test_dashboard_hidden_attribute_is_honoured(self, client: TestClient):
         """`[hidden]` loses to any author `display`, so chrome that toggles
@@ -685,9 +688,27 @@ class TestEventEndpoints:
         assert resp.json() == []
 
     def test_list_events_without_store(self, client_no_store: TestClient):
+        """503, like its two siblings -- not an empty page.
+
+        An empty 200 is indistinguishable from "you have reached the
+        beginning of history", which was harmless when the response was
+        one unpaged page and wrong now that a caller pages until it runs
+        out: a deployment with no store would announce that it had no
+        history rather than that it cannot answer.
+        """
         resp = client_no_store.get("/events")
+        assert resp.status_code == 503
+
+    def test_list_events_paged_by_cursor(self, client: TestClient):
+        """The cursor is exclusive and keyed on ``(timestamp, id)``."""
+        resp = client.get("/events?before=2026-04-01T12:00:00%2B00:00&before_id=x")
         assert resp.status_code == 200
         assert resp.json() == []
+
+    def test_list_events_ignores_an_unparseable_cursor(self, client: TestClient):
+        """Answering the first page beats answering nothing."""
+        resp = client.get("/events?before=not-a-timestamp")
+        assert resp.status_code == 200
 
     def test_get_event_without_store(self, client_no_store: TestClient):
         resp = client_no_store.get("/events/some-id")

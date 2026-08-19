@@ -344,7 +344,17 @@ class SandboxCoordinator:
         tokens = result.input_tokens + result.output_tokens
         if self._budget_manager is not None and tokens and run.agent_id:
             try:
-                await self._budget_manager.consume(run.agent_id, tokens)
+                # Already-spent tokens: see the same note in
+                # ``agent/execute_sandbox.py``. A refusal cannot un-spend
+                # a collected run, so recording it is the only way the
+                # meter stays true when the cap is binding.
+                if await self._budget_manager.record_spend(run.agent_id, tokens):
+                    logger.warning(
+                        "sandbox_spend_over_budget",
+                        agent_id=run.agent_id,
+                        turn_id=run.turn_id,
+                        tokens=tokens,
+                    )
             except Exception:
                 logger.exception("sandbox_budget_consume_failed", turn_id=run.turn_id)
         if self._token_usage_repo is not None and tokens and run.agent_handle:

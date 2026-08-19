@@ -107,6 +107,7 @@ async def complete_with_telemetry(
     role_name: str,
     provider_key: str,
     event_queue: Any = None,
+    budget_manager: Any = None,
     agent_id: str = "",
     turn_id: str = "",
     response_formatter: Callable[[Completion], str] | None = None,
@@ -131,6 +132,11 @@ async def complete_with_telemetry(
     dashboard.  Pass ``event_queue=None`` to bypass publishing
     (test mode, or when the engine wasn't wired with one).
 
+    ``budget_manager`` charges the call's tokens to the same cascade
+    every other LLM call goes through.  Optional only because the
+    workers run in test and in-memory modes without one; when it is
+    absent the spend is simply not metered, exactly as before.
+
     ``response_formatter`` is an optional callable that maps the
     raw :class:`Completion` to the string stamped on the event's
     ``response`` field.  Defaults to
@@ -147,6 +153,34 @@ async def complete_with_telemetry(
         provider.complete(messages=messages, **complete_kwargs),
         timeout=effective_aux_timeout(provider, timeout),
     )
+    # Charge the spend before anything else can fail.
+    #
+    # These calls burn real tokens against the org's account and are
+    # attributed to an agent (``agent_id`` is threaded through by every
+    # worker), yet none of them ever reached the budget cascade -- while
+    # the ``AgentPhaseCompleted`` published below DOES reach the
+    # dashboard's 24-hour spend rollup. The meter and the rollup could
+    # therefore never be reconciled, and the difference was exactly the
+    # cost of the learning subsystem.  ``ReflectEngine`` already gates
+    # its work on the same budgets, which is the design intent: aux
+    # spend is budgeted spend.
+    #
+    # Recorded rather than consumed: the provider has already answered,
+    # so refusing the charge would discard a real cost, not prevent it.
+    # The gate that stops the NEXT one is the budget going exhausted,
+    # which recording is what makes happen.
+    spent = completion.input_tokens + completion.output_tokens
+    if budget_manager is not None and spent:
+        try:
+            if await budget_manager.record_spend(str(agent_id or ""), spent):
+                logger.warning(
+                    "aux_spend_over_budget",
+                    worker=worker,
+                    agent_id=str(agent_id or ""),
+                    tokens=spent,
+                )
+        except Exception:
+            logger.exception("aux_budget_record_failed", worker=worker)
     if event_queue is None:
         return completion
     try:

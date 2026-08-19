@@ -10,7 +10,11 @@ import pytest
 from starlette.testclient import TestClient
 
 from crewlet.api.app import create_app
-from crewlet.api.streaming import StreamService, serialize_event
+from crewlet.api.streaming import (
+    StreamService,
+    build_health_envelope,
+    serialize_event,
+)
 from crewlet.events.types import (
     AgentPhaseCompleted,
     AgentPhaseStarted,
@@ -214,6 +218,7 @@ class TestStreamSnapshot:
             is_running = True
             shutting_down = False
             in_flight_count = 3
+            started_at = "2026-04-01T12:00:00+00:00"
 
         app = create_app(
             event_queue=_MockQueue(),
@@ -225,6 +230,8 @@ class TestStreamSnapshot:
             body = client.get("/stream/snapshot").json()
             assert body["health"]["in_flight"] == 3
             assert body["health"]["shutting_down"] is False
+            assert body["health"]["engine"] is True
+            assert body["health"]["engine_started_at"] == "2026-04-01T12:00:00+00:00"
 
     def test_snapshot_carries_in_flight_live_call(
         self, app, stream: StreamService
@@ -453,3 +460,422 @@ class TestAgentStateEventsCarryRoutingKeys:
         assert env["payload"]["phase"] == "plan"
         assert env["payload"]["iteration"] == 2
         assert env["category"] == "system"
+
+
+# ---------------------------------------------------------------------------
+# Derived pushes — the dashboard mirrors the projection, it does not rebuild it
+# ---------------------------------------------------------------------------
+
+
+class TestDerivedPushes:
+    """The socket carries the *result* of applying an event.
+
+    Every tab used to re-derive agent state, the sandbox set and the
+    spend rollup from the raw event stream. Three copies of the server's
+    own logic, three ways to drift. These pin the pushes that replaced
+    them.
+    """
+
+    def _drain(self, ws, kind: str, limit: int = 8) -> dict:
+        """Read envelopes until one of ``kind`` arrives."""
+        for _ in range(limit):
+            env = json.loads(ws.receive_text())
+            if env["kind"] == kind:
+                return env
+        raise AssertionError(f"no {kind!r} envelope in {limit} frames")
+
+    def test_phase_start_pushes_the_changed_agent(self, app, stream) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()  # snapshot
+            client.portal.call(
+                stream.ingest,
+                "crewlet.events.agent_phase_started",
+                AgentPhaseStarted(
+                    agent_id="rt-1",
+                    role="Lead",
+                    turn_id="t1",
+                    iteration=1,
+                    phase="plan",
+                ),
+            )
+            env = self._drain(ws, "agents")
+            assert [row["role"] for row in env["data"]] == ["Lead"]
+            assert env["data"][0]["state"] == "working"
+            assert env["data"][0]["live_call"]["phase"] == "plan"
+
+    def test_only_the_agent_that_moved_is_pushed(self, app, stream) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            client.portal.call(
+                stream.ingest,
+                "crewlet.events.task_started",
+                TaskStarted(task_id="t-1", agent_id="rt-2", source="Dev", role="Dev"),
+            )
+            env = self._drain(ws, "agents")
+            assert [row["role"] for row in env["data"]] == ["Dev"]
+            assert env["data"][0]["current_task"] == "t-1"
+
+    def test_a_completed_phase_pushes_the_spend_rollup(self, app, stream) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            client.portal.call(
+                stream.ingest,
+                "crewlet.events.agent_phase_completed",
+                AgentPhaseCompleted(
+                    agent_id="rt-1",
+                    role="Lead",
+                    turn_id="t1",
+                    iteration=1,
+                    phase="plan",
+                    model="gpt-x",
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                ),
+            )
+            env = self._drain(ws, "tokens")
+            assert env["data"]["totals"]["total_tokens"] == 15
+            assert env["data"]["by_phase"][0]["phase"] == "plan"
+
+    def test_the_snapshot_carries_spend_and_schedules(self, app) -> None:
+        """A dashboard opens on one frame and issues no HTTP request."""
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            data = json.loads(ws.receive_text())["data"]
+            for section in (
+                "health",
+                "agents",
+                "events",
+                "sandboxes",
+                "org",
+                "tools",
+                "tokens",
+                "schedules",
+            ):
+                assert section in data, f"snapshot is missing {section!r}"
+            assert "totals" in data["tokens"]
+
+
+# ---------------------------------------------------------------------------
+# Query channel
+# ---------------------------------------------------------------------------
+
+
+class TestStreamQueries:
+    """Request/response over the same socket as the pushes."""
+
+    def _query(self, ws, what: str, params: dict | None = None, **extra) -> dict:
+        ws.send_text(
+            json.dumps(
+                {
+                    "kind": "query",
+                    "id": 7,
+                    "what": what,
+                    "params": params or {},
+                    **extra,
+                }
+            )
+        )
+        for _ in range(8):
+            env = json.loads(ws.receive_text())
+            if env["kind"] in ("result", "error"):
+                return env
+        raise AssertionError("no reply to the query")
+
+    def test_agent_query_answers_with_the_detail_payload(self, app) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "agent", {"id": "a-1"})
+            assert env["kind"] == "result"
+            assert env["id"] == 7
+            assert env["what"] == "agent"
+            assert env["data"]["role"] == "Lead"
+
+    def test_a_missing_agent_answers_not_found(self, app) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "agent", {"id": "nope"})
+            assert env["kind"] == "error"
+            assert env["error"] == "not_found"
+
+    def test_an_unknown_query_is_rejected(self, app) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "wat")
+            assert env["kind"] == "error"
+            assert env["error"] == "unknown_query"
+
+    def test_schedules_query_answers(self, app) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "schedules")
+            assert env["kind"] == "result"
+            assert "schedules" in env["data"]
+            assert "recent_runs" in env["data"]
+
+    def test_tokens_query_answers_for_another_window(self, app) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "tokens", {"since_days": 30})
+            assert env["kind"] == "result"
+            assert env["data"]["since_days"] == 30
+
+    def test_stream_query_answers_facts_about_this_socket(self, app) -> None:
+        """Per-socket facts cannot ride the shared health tick.
+
+        ``_fan_out`` encodes ONE JSON string and hands the same string to
+        every client -- that is the design -- so a per-client field there
+        would force one encode per client per tick.  They are answered on
+        request instead, which is also when an operator wants them.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "stream")
+            assert env["kind"] == "result"
+            data = env["data"]
+            assert data["dropped"] == 0
+            assert data["clients"] == 1
+            assert data["capacity"] > 0
+            # ``drops`` resets on every reconnect, so the counter ships
+            # with the window it accumulated over or it cannot be read.
+            assert data["connected_at"]
+
+    def test_config_query_requires_an_operator_token(self, app) -> None:
+        """The socket enforces exactly what the /config middleware does."""
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "config")
+            assert env["kind"] == "error"
+            assert env["error"] == "unauthorized"
+
+    def test_a_malformed_frame_does_not_drop_the_socket(self, app) -> None:
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            ws.send_text("not json at all")
+            ws.send_text(json.dumps(["not", "an", "object"]))
+            ws.send_text(json.dumps({"kind": "ping"}))
+            env = json.loads(ws.receive_text())
+            assert env["kind"] == "pong"
+
+    def test_a_query_does_not_block_the_live_feed(self, app, stream) -> None:
+        """Queries run concurrently with the push stream.
+
+        An agent's LLM history is a store scan; serialising it ahead of
+        the feed would stall every tab's live rows behind one read.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            ws.send_text(
+                json.dumps(
+                    {"kind": "query", "id": 1, "what": "agent", "params": {"id": "a-1"}}
+                )
+            )
+            client.portal.call(
+                stream.ingest,
+                "crewlet.events.task_started",
+                TaskStarted(task_id="t-9", agent_id="rt-1", source="Lead"),
+            )
+            kinds = set()
+            for _ in range(8):
+                kinds.add(json.loads(ws.receive_text())["kind"])
+                if {"result", "event"} <= kinds:
+                    break
+            assert {"result", "event"} <= kinds
+
+
+class TestTaskEventAttribution:
+    """A task event has to name the seat it belongs to.
+
+    The task lifecycle events carried the role only in ``source``, which
+    neither the live projection nor the event store's ``agent_role`` tag
+    reads. The consequence was quiet and wrong: an agent's current task
+    never reached a dashboard, and a seat stayed "working" after its turn
+    ended because the ``task_completed`` that should have cleared it was
+    dropped on the floor.
+    """
+
+    def test_task_started_sets_the_current_task(self, stream) -> None:
+        stream.live.apply_event(
+            serialize_event(
+                "crewlet.events.task_started",
+                TaskStarted(task_id="T-1", agent_id="rt-1", source="Lead", role="Lead"),
+            )
+        )
+        overlay = stream.live.agent_overlay("Lead")
+        assert overlay is not None
+        assert overlay["state"] == "working"
+        assert overlay["current_task"] == "T-1"
+
+    def test_task_completed_returns_the_seat_to_idle(self, stream) -> None:
+        for event in (
+            TaskStarted(task_id="T-1", agent_id="rt-1", source="Lead", role="Lead"),
+            TaskCompleted(task_id="T-1", agent_id="rt-1", source="Lead", role="Lead"),
+        ):
+            stream.live.apply_event(
+                serialize_event(f"crewlet.events.{event.type}", event)
+            )
+        overlay = stream.live.agent_overlay("Lead")
+        assert overlay["state"] == "idle"
+        assert overlay["current_task"] is None
+
+    def test_the_event_store_tags_the_role(self, stream) -> None:
+        """The same field feeds the store's ``agent_role`` tag."""
+        from crewlet.timescaledb.writer import EventStoreWriter
+
+        tags = EventStoreWriter._extract_tags(
+            TaskStarted(task_id="T-1", agent_id="rt-1", source="Lead", role="Lead")
+        )
+        assert tags["agent_role"] == "Lead"
+
+
+# ---------------------------------------------------------------------------
+# health envelope
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEnvelope:
+    """The one function backing ``GET /health``, the snapshot and the tick.
+
+    Every field here was a field the dashboard could not have rendered
+    before, and the omission was not neutral: an engine with no active
+    company revision -- one accepting and discarding every inbound
+    webhook -- reported ``status: "ok"`` and looked, on every screen,
+    exactly like a correctly configured engine with nothing to do.
+    """
+
+    def _app(self, store, **kwargs):
+        return create_app(
+            event_queue=_MockQueue(),
+            event_store=store,
+            agent_roles=AGENT_ROLES,
+            **kwargs,
+        )
+
+    def test_an_unconfigured_engine_says_so(self, store) -> None:
+        app = self._app(store)
+        with TestClient(app):
+            # What ``attach_config_refresh`` leaves behind when no
+            # revision is active. An app built without a Tier B config
+            # store is ``configured`` by construction, so the flag is
+            # set here rather than a whole config store stood up to
+            # arrive at the same one boolean.
+            app.state.configured = False
+            body = build_health_envelope(app)
+        assert body["configured"] is False
+        assert body["status"] == "unconfigured"
+
+    def test_a_configured_engine_is_ok(self, store) -> None:
+        app = self._app(store)
+        with TestClient(app):
+            app.state.configured = True
+            body = build_health_envelope(app)
+        assert body["status"] == "ok"
+
+    def test_a_draining_engine_outranks_unconfigured(self, store) -> None:
+        """Precedence is ``shutting_down > unconfigured > ok``.
+
+        A draining engine is draining first, whatever else is true of
+        it: the reader's next action is to wait, not to import a config.
+        """
+
+        class _Eng:
+            is_running = True
+            shutting_down = True
+            in_flight_count = 1
+            started_at = ""
+
+        app = self._app(store, engine=_Eng())
+        with TestClient(app):
+            app.state.configured = False
+            body = build_health_envelope(app)
+        assert body["configured"] is False
+        assert body["status"] == "shutting_down"
+
+    def test_no_engine_is_stated_rather_than_implied(self, store) -> None:
+        """The standalone API cannot answer ``in_flight`` at all.
+
+        Without the ``engine`` flag a client cannot tell "nothing is
+        running" from "this process cannot know", so it renders a
+        confident zero for both.
+        """
+        app = self._app(store)
+        with TestClient(app):
+            body = build_health_envelope(app)
+        assert body["engine"] is False
+        assert "in_flight" not in body
+
+    def test_a_store_with_no_database_is_memory_not_durable(self, store) -> None:
+        """ "A store is wired" is not "history survives a restart".
+
+        With no database the CLI still wraps in-memory legs in a
+        ``CompositeEventStore``, so the presence check an operator would
+        naturally make answers yes while every event is one process
+        death from gone.
+        """
+        app = self._app(store)
+        with TestClient(app):
+            assert build_health_envelope(app)["event_store"] == "memory"
+
+    def test_no_store_at_all_is_its_own_answer(self) -> None:
+        app = create_app(event_queue=_MockQueue(), agent_roles=AGENT_ROLES)
+        with TestClient(app):
+            assert build_health_envelope(app)["event_store"] == "none"
+
+    def test_the_queue_backend_is_read_off_the_protocol(self, store) -> None:
+        """Not sniffed from the class name, which lies once wrapped."""
+        from crewlet.queue.memory import MemoryEventQueue
+
+        app = create_app(
+            event_queue=MemoryEventQueue(),
+            event_store=store,
+            agent_roles=AGENT_ROLES,
+        )
+        with TestClient(app):
+            assert build_health_envelope(app)["queue"] == "memory"
+
+    def test_feed_hydrated_is_false_when_the_store_could_not_be_read(self) -> None:
+        """A projection that failed to seed must not claim it seeded.
+
+        Every hydration leg swallows its own store error -- that is what
+        best-effort means for the projection -- so watching for an
+        exception cannot tell a seeded feed from an empty one.
+        """
+
+        class _BrokenStore:
+            async def get_agent_states(self, roles):
+                raise RuntimeError("no")
+
+            async def list_token_usage_events(self, since_days):
+                raise RuntimeError("no")
+
+            async def list_phase_token_events(self, since_days):
+                raise RuntimeError("no")
+
+            async def list_events(self, **kwargs):
+                raise RuntimeError("no")
+
+        app = create_app(
+            event_queue=_MockQueue(),
+            event_store=_BrokenStore(),
+            agent_roles=AGENT_ROLES,
+        )
+        with TestClient(app):
+            assert build_health_envelope(app)["feed_hydrated"] is False
+
+    def test_feed_hydrated_is_true_after_a_clean_seed(self, store) -> None:
+        app = self._app(store)
+        with TestClient(app):
+            assert build_health_envelope(app)["feed_hydrated"] is True
+
+    def test_the_health_route_and_the_push_answer_identically(self, store) -> None:
+        """One builder, three surfaces.
+
+        The REST route, the handshake snapshot and the five-second tick
+        must never be able to disagree about whether the engine is
+        healthy -- that is exactly the class of bug a second
+        implementation introduces.
+        """
+        app = self._app(store)
+        with TestClient(app) as client:
+            route = client.get("/health").json()
+            snapshot = client.get("/stream/snapshot").json()["health"]
+        assert route == snapshot

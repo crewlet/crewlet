@@ -7,8 +7,17 @@
     <link rel="icon" type="image/svg+xml" href="/static/crewlet-icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      The three faces styles/tokens.css names: Inter for text, Inter Tight
+      for display, JetBrains Mono for anything that is a code or a number
+      that changes.  `display=swap` plus the system fallbacks in each token
+      mean an engine on a closed network that cannot reach the CDN renders
+      immediately in the fallback face rather than blocking on it — the
+      brand's negative tracking is a token, so it applies to whichever face
+      actually resolves.
+    -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=Inter+Tight:wght@500..700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/dashboard/styles/tokens.css" />
@@ -80,7 +89,24 @@
         <div class="brand">
           <img src="/static/crewlet-icon.png" alt="Crewlet" />
           <h1>Crewlet</h1>
-          <span class="live-dot" id="live-dot" title="Connection status"></span>
+          <!--
+            The dot is a BUTTON. It was the only health surface in the
+            dashboard and it could show three colours; everything behind
+            it — whether a company config is even active, whether the
+            event store is durable, how many envelopes this tab dropped —
+            was on the wire and reached no screen. Clicking it opens
+            #health-pop with the rest.
+          -->
+          <button
+            class="live-dot-btn"
+            id="live-dot-btn"
+            data-action="health"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            title="Engine health"
+          >
+            <span class="live-dot" id="live-dot"></span>
+          </button>
         </div>
         <nav id="nav"></nav>
         <div class="sidebar-footer" id="chrome-footer" hidden>
@@ -97,9 +123,23 @@
             <button class="icon-btn" id="theme-btn" title="Toggle theme"></button>
           </div>
         </header>
-        <section class="view cascade-enter" id="view"></section>
+        <div class="degraded" id="degraded" hidden>
+          <span class="ic sm"><svg><use href="#i-alert" /></svg></span>
+          <span id="degraded-text"></span>
+        </div>
+        <section class="view" id="view"></section>
       </main>
     </div>
+    <!--
+      The health popover lives at the document root, NOT beside the dot
+      that opens it. `.sidebar` is `position: sticky`, which always
+      creates a stacking context, so a popover inside it could only be
+      ordered against the sidebar's own children — `.main` comes later
+      in the document and painted its panels straight over the top,
+      whatever z-index the popover carried. `#toasts` is here for the
+      same reason.
+    -->
+    <div class="health-pop-wrap" id="health-pop" hidden></div>
     <div class="toast-wrap" id="toasts"></div>
 
     <script type="module" src="/static/dashboard/js/app.js"></script>

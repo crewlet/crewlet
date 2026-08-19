@@ -27,9 +27,12 @@ the only call site for budget/token/redaction logic.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -369,6 +372,63 @@ class LoopResult:
     suspend_payload: dict[str, Any] | None = None
 
 
+@dataclass
+class PhaseProgress:
+    """Mutable, in-flight view of a running tool loop.
+
+    :func:`run_tool_loop` refreshes this after every round.  Its whole
+    reason to exist is the failure path: when the loop raises there is no
+    :class:`LoopResult` to publish, so a phase that died used to leave
+    behind only its ``agent_phase_started`` event -- the dashboard showed
+    an in-flight call with no response and no reason (the "it just says
+    no response" report).  The caller keeps a handle on this object, so
+    its ``except`` block can still publish what the phase managed: the
+    conversation so far, the tool calls that ran, the tokens already
+    billed, and which round it was on when it died.
+
+    ``messages`` is the caller's own list -- ``run_tool_loop`` mutates it
+    in place -- so it is current even for a failure raised mid-round,
+    before the loop refreshed anything else.
+    """
+
+    messages: list[Message] = field(default_factory=list)
+    tool_executions: list[dict[str, Any]] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    rounds_used: int = 0
+    model: str = ""
+    text: str = ""
+
+    def to_result(self) -> LoopResult:
+        """Freeze the partial state into a :class:`LoopResult`.
+
+        ``exhausted_rounds`` stays False: the loop did not run out of
+        rounds, it died.  ``failed`` on the event carries that.
+        """
+        return LoopResult(
+            text=self.text,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            tool_executions=list(self.tool_executions),
+            rounds_used=self.rounds_used,
+            exhausted_rounds=False,
+            model=self.model,
+            messages=list(self.messages),
+        )
+
+
+# The failure view of the phase currently on this task's stack.
+# ``phase_failure_guard`` installs it; ``run_tool_loop`` reports into it
+# without every intermediate caller having to thread a parameter through.
+# A nested phase (a sub-agent spawned inside Execute) installs its own and
+# shadows the host's for its duration, so each phase records its own
+# failure; a rescue or extension loop is a *continuation* of its host
+# phase and deliberately keeps reporting into the host's.
+_ACTIVE_PHASE_PROGRESS: ContextVar[PhaseProgress | None] = ContextVar(
+    "crewlet_active_phase_progress", default=None
+)
+
+
 ProgressCallback = Callable[[AgentTurnProgress], Awaitable[None]]
 
 # Max corrective re-prompts when ``tool_choice="required"`` but the model
@@ -400,6 +460,7 @@ async def run_tool_loop(
     iteration: int = 0,
     trigger: dict[str, Any] | None = None,
     allow_suspend: bool = False,
+    phase_progress: PhaseProgress | None = None,
 ) -> LoopResult:
     """Drive the LLM + tool-call loop for one phase.
 
@@ -417,6 +478,12 @@ async def run_tool_loop(
     page) can place in-flight rounds inside the right turn/phase
     grouping.  The phase itself comes from ``surface.phase`` (falling
     back to ``provider_key``), matching the ``prompt.size`` event.
+
+    ``phase_progress`` is a :class:`PhaseProgress` the loop refreshes
+    after every round, so a caller can report partial work should the
+    loop raise.  It defaults to whichever
+    :func:`phase_failure_guard` is active on this task, which is how
+    every phase gets one without threading a parameter through.
 
     ``allow_suspend`` lets a tool suspend the loop: when a tool returns
     ``ToolResult(suspend=True)`` the loop leaves that call unanswered and
@@ -441,6 +508,14 @@ async def run_tool_loop(
             initial_prompt = prompt_messages[0].get("content", "")[:200]
 
     phase_name = getattr(surface, "phase", "") or provider_key
+
+    # Point the caller's failure view at the live conversation before the
+    # first provider call, so a phase that dies on round one still reports
+    # the prompt it died on rather than an empty record.
+    if phase_progress is None:
+        phase_progress = _ACTIVE_PHASE_PROGRESS.get()
+    if phase_progress is not None:
+        phase_progress.messages = messages
 
     # Emit a prompt.size trace event for the initial messages of this
     # phase so the dashboard can track slimming progress over time.
@@ -555,6 +630,14 @@ async def run_tool_loop(
             if accumulated:
                 accumulated += "\n\n"
             accumulated += completion.content
+
+        if phase_progress is not None:
+            phase_progress.input_tokens = turn_input_tokens
+            phase_progress.output_tokens = turn_output_tokens
+            phase_progress.rounds_used = rounds_used
+            phase_progress.model = model
+            phase_progress.text = accumulated
+            phase_progress.tool_executions = executions
 
         if not completion.tool_calls:
             # Keep the assistant message in the trace regardless of what we do
@@ -676,6 +759,10 @@ async def run_tool_loop(
             if tool_call.name in terminate_names and tool_result.success:
                 terminated_by_tool = True
 
+        if phase_progress is not None:
+            phase_progress.tool_executions = executions
+            phase_progress.text = accumulated
+
         progress = AgentTurnProgress(
             source=agent.role_name,
             agent_id=agent.id_str,
@@ -771,6 +858,117 @@ def _assistant_text_with_reasoning(messages: list[Message]) -> str:
     return "\n\n".join(parts)
 
 
+# Cap on the failure message carried on a phase event.  A provider
+# traceback string or an MCP server's HTML error page can run to
+# kilobytes; the dashboard renders the message inline in a failed-phase
+# card, and the structured log keeps the untruncated original.  1 KiB
+# holds every real provider / tool error message seen in practice with
+# room to spare.
+_ERROR_TEXT_LIMIT = 1024
+
+
+def describe_failure(exc: BaseException) -> tuple[str, str]:
+    """Return ``(message, kind)`` for a phase failure.
+
+    ``kind`` is the machine-readable class the dashboard groups on.  An
+    exhausted provider chain already carries the classified LLM error
+    (``rate_limit`` / ``auth`` / ``timeout`` / ...), which is far more
+    useful than the wrapper's type name, so it wins; a bare provider
+    exception is classified the same way; anything else falls back to
+    the exception's type name.
+    """
+    from crewlet.providers.errors import ProviderCallError, classify
+    from crewlet.providers.fallback import LLMChainExhausted
+
+    if isinstance(exc, LLMChainExhausted):
+        kind = exc.last_error_kind or classify(exc.last_exc).value
+        return f"{exc}", kind or type(exc).__name__
+    if isinstance(exc, ProviderCallError):
+        return str(exc), exc.kind.value
+    if isinstance(exc, TimeoutError):
+        return str(exc) or "timed out", "timeout"
+    return str(exc) or type(exc).__name__, type(exc).__name__
+
+
+@asynccontextmanager
+async def phase_failure_guard(
+    *,
+    event_queue: EventQueue,
+    agent: AgentInstance,
+    turn_id: str,
+    iteration: int,
+    phase: str,
+    provider_key: str = "",
+    trigger: dict[str, Any] | None = None,
+    host_phase: str = "",
+    host_iteration: int = 0,
+    notes: str = "",
+) -> AsyncIterator[PhaseProgress]:
+    """Publish a failed :class:`AgentPhaseCompleted` if the phase raises.
+
+    Wrap a phase body in this and pass the yielded
+    :class:`PhaseProgress` to :func:`run_tool_loop`.  On the happy path
+    it does nothing -- the runner publishes its own completed event as
+    usual.  When the body raises, it publishes the phase event the
+    runner never reached, carrying the partial conversation plus the
+    failure, and then **re-raises the original exception untouched** so
+    every upstream handler (the turn engine's ``LLMChainExhausted`` ->
+    ``LLMUnavailable`` path, its wall-clock ``TimeoutError`` classifier,
+    the generic guard-breach path) behaves exactly as before.
+
+    Without this, a phase that died published nothing at all: the last
+    durable trace of the turn was the ``agent_phase_started`` that opened
+    it, and the dashboard rendered an in-flight LLM call whose response
+    never arrived -- "No response text yet" where the error should be.
+
+    ``CancelledError`` is deliberately *not* recorded: a cancelled phase
+    is the engine shutting the turn down, not the phase failing, and
+    publishing during cancellation would fight the drain.
+    """
+    progress = PhaseProgress()
+    token = _ACTIVE_PHASE_PROGRESS.set(progress)
+    try:
+        yield progress
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        message, kind = describe_failure(exc)
+        logger.warning(
+            "phase_failed",
+            phase=phase,
+            agent_id=agent.id_str,
+            turn_id=turn_id,
+            iteration=iteration,
+            error_kind=kind,
+            error=message,
+            rounds_used=progress.rounds_used,
+        )
+        try:
+            await publish_phase_completed(
+                event_queue=event_queue,
+                agent=agent,
+                turn_id=turn_id,
+                iteration=iteration,
+                phase=phase,
+                provider_key=provider_key,
+                loop=progress.to_result(),
+                notes=notes,
+                host_phase=host_phase,
+                host_iteration=host_iteration,
+                trigger=trigger,
+                tag_span=False,
+                failed=True,
+                error=message,
+                error_kind=kind,
+            )
+        except Exception:
+            # Telemetry must never replace the real failure.
+            logger.exception("phase_failed_publish_failed", phase=phase)
+        raise
+    finally:
+        _ACTIVE_PHASE_PROGRESS.reset(token)
+
+
 async def publish_phase_started(
     *,
     event_queue: EventQueue,
@@ -827,6 +1025,9 @@ async def publish_phase_completed(
     trigger: dict[str, Any] | None = None,
     tag_span: bool = True,
     response_messages: list[Message] | None = None,
+    failed: bool = False,
+    error: str = "",
+    error_kind: str = "",
 ) -> None:
     """Emit :class:`AgentPhaseCompleted` and tag the current OTel span.
 
@@ -857,6 +1058,12 @@ async def publish_phase_completed(
     show only the exhausted main loop and the rescue's work -- the
     actual ``submit_plan`` call, its tokens -- would be invisible in
     the per-phase telemetry while still counted at the turn level.
+
+    ``failed`` / ``error`` / ``error_kind``: set by
+    :func:`phase_failure_guard` when the phase raised.  The event is then
+    a record of a *dead* phase -- ``loop`` carries whatever
+    :class:`PhaseProgress` captured before the exception, which is
+    partial by construction.
 
     Errors in either sink are logged but do not propagate -- telemetry
     must never abort a turn.
@@ -924,6 +1131,9 @@ async def publish_phase_completed(
         notes=notes,
         tools_available=list(tools_available or []),
         tool_catalogue=list(tool_catalogue or []),
+        failed=failed,
+        error=error[:_ERROR_TEXT_LIMIT],
+        error_kind=error_kind,
     )
     try:
         await event_queue.publish(f"crewlet.events.{event.type}", event)
@@ -1017,6 +1227,9 @@ __all__ = [
     "Event",  # re-exported for convenience
     "consume_budget",
     "execute_tool",
+    "PhaseProgress",
+    "describe_failure",
+    "phase_failure_guard",
     "publish_phase_completed",
     "publish_phase_started",
     "redact_secrets",

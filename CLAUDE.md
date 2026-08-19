@@ -596,15 +596,73 @@ src/crewlet/          # Main package
                       #     in-flight live_call, so state survives a browser
                       #     refresh without per-read DB scans; + active-
                       #     sandboxes set from the SandboxRun* events →
-                      #     dashboard Running-sandboxes panel),
+                      #     dashboard Running-sandboxes panel; + last_error
+                      #     and a frozen failed live_call so a stopped seat
+                      #     says WHY; + the live token rollup (records kept
+                      #     in the window, aggregated through api/tokens.py —
+                      #     one implementation, never a second one in JS);
+                      #     apply_event returns a Change naming what moved),
                       #   streaming.py (StreamService: ingest → projection +
-                      #     /ws/stream fan-out + one shared health tick);
+                      #     /ws/stream fan-out + one shared health tick +
+                      #     DERIVED PUSHES — agents/sandboxes/tokens
+                      #     envelopes carry the RESULT of applying an event,
+                      #     so a dashboard mirrors the projection instead of
+                      #     re-deriving it),
+                      #   queries.py (the /ws/stream request/response channel:
+                      #     agent / agent_memory / event / events / trace /
+                      #     tokens / schedules / config* — each a thin adapter
+                      #     over the SAME function the REST route calls, so
+                      #     the two surfaces cannot answer differently;
+                      #     config* gated by auth.resolve_operator);
                       #   serves the dashboard from the top-level static/
                       #     (see static/ below)
   static/             # Web assets served by the API. static/dashboard/ is
-                      #   the zero-build modular ES-module dashboard (reactive
-                      #   store, reconnecting WS client, hash router, per-view
-                      #   modules; llm.js renders each LLM invocation with
+                      #   the zero-build modular ES-module dashboard.
+                      #   THE WEBSOCKET IS THE ONLY DATA CHANNEL: socket.js
+                      #   (pushes + a query(what, params) Promise channel;
+                      #   the REST snapshot is degraded-mode only), store.js
+                      #   (a MIRROR of the server projection — it derives
+                      #   nothing, and wakes subscribers per SLICE so a
+                      #   health tick does not redraw the page), patch.js
+                      #   (keyed in-place DOM patching — rendering with
+                      #   innerHTML on every envelope is what made the page
+                      #   strobe; every repeated row needs a data-k),
+                      #   scheduler.js (rAF coalescing), records.js (ONE
+                      #   normalizer for an LLM record, pass-through rather
+                      #   than a field whitelist — four hand-maintained
+                      #   whitelists are how a phase failure got deleted on
+                      #   its way to the screen), pulse.js (THE COMPANY
+                      #   PULSE — the overview's lead panel: one row per
+                      #   seat, one cell per minute of the last hour, lit
+                      #   by real feed events, red where the server's
+                      #   `failed` flag says so. buildPulse is pure and
+                      #   runs ONCE per render, threaded through to the
+                      #   hero grid AND every seat card's strip so the two
+                      #   cannot disagree about a seat), health.js (THE
+                      #   ENGINE HEALTH SURFACE — a popover on the live
+                      #   dot, plus the two conditions that escalate into
+                      #   always-on chrome because they must never wait
+                      #   for a click: a dead socket, and an engine with
+                      #   NO ACTIVE COMPANY CONFIG, which discards every
+                      #   inbound webhook and used to render exactly like
+                      #   a healthy idle one. Booleans from the engine
+                      #   are read THREE-VALUED — losing the socket
+                      #   clears the health slice, so `=== false ? bad :
+                      #   good` renders "Configuration: active" on a page
+                      #   that cannot see the engine; the dot's
+                      #   status→class map is a table for the same
+                      #   reason. emptyOrPending in ui.js is where
+                      #   socket-down / nothing-configured / genuinely-
+                      #   empty are told apart once, for every list view).
+                      #   Views are pure
+                      #   render(state) -> markup + a `slices` list;
+                      #   hash router, per-view modules; turnRail() in ui.js
+                      #   draws an in-flight turn as an object (phases spent
+                      #   / live / pending, packet on the live segment);
+                      #   staleness() in state.js is why MOTION STOPS WHEN
+                      #   WORK STOPS — pips that keep pulsing on a hung turn
+                      #   claim progress that is not happening; llm.js renders each
+                      #   LLM invocation with
                       #   collapsible, height-capped prompt messages so a long
                       #   system prompt cannot bury the response, plus a
                       #   Source chip/block naming the event that triggered the
@@ -615,9 +673,17 @@ src/crewlet/          # Main package
                       #   (state.js integrationMeta/integrationBadge) — see
                       #   describe_trigger / turn-engine.md).
                       #   Visual system = the crewlet.io panel language:
+                      #   PURE BLACK ground, and every division on it is a
+                      #   different ALPHA OF ONE WARM CREAM (panel fill,
+                      #   hairline, inset) — that single material is what
+                      #   makes a dense surface read as one object. The
+                      #   brand gradient is used as LIGHT (a hairline on the
+                      #   hero's top edge, the rail packet), never as a fill.
                       #   styles/tokens.css is the ONLY place a colour is
                       #   defined (surface/border/text ramps, glass, the
-                      #   panel/card/lift shadows, and 8 categorical hue
+                      #   type stack + the three tracking tokens, the brand
+                      #   gradient/ramp, the panel/card/lift shadows, and
+                      #   8 categorical hue
                       #   families each shipping a --<hue> MARK step and a
                       #   --<hue>-ink TEXT step; --red is a reserved status
                       #   hue). One shared panel recipe in components.css
@@ -639,7 +705,13 @@ src/crewlet/          # Main package
                       #   deriving "what it is doing" from live state only.
                       #   See docs/reference/dashboard-design.md
   extensions/         # Extension system
-tests/                # Mirror structure of src/crewlet/
+tests/                # Mirror structure of src/crewlet/.
+                      #   test_dashboard/ is the exception: the dashboard
+                      #   is JavaScript, so its suites are ES modules under
+                      #   test_dashboard/js/ (a three-function harness +
+                      #   a vendored DOM, no npm and no build step) run
+                      #   under whatever `node` is on PATH by a pytest
+                      #   wrapper that SKIPS when there is none
 examples/             # Working examples (the Nimbus example org:
                       #   nimbus.config.yaml + nimbus.company.yaml +
                       #   nimbus-docs/ + tool-skills/). The MINIMAL

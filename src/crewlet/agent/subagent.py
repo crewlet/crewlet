@@ -35,7 +35,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from crewlet._logging import get_logger
-from crewlet.agent.llm_loop import publish_phase_completed, run_tool_loop
+from crewlet.agent.llm_loop import (
+    phase_failure_guard,
+    publish_phase_completed,
+    run_tool_loop,
+)
 from crewlet.agent.prompts import build_subagent_prompt
 from crewlet.agent.skills.guard import skill_guard_for_turn
 from crewlet.agent.skills.models import Phase as SkillPhase
@@ -209,6 +213,43 @@ def _build_subagent_meta_tools(
     return meta_tools, surface_holder
 
 
+async def _publish_subagent_failure(
+    *,
+    event_queue: EventQueue,
+    parent_turn: Any,
+    provider_key: str,
+    progress: Any,
+    surface: Any,
+    trigger: dict[str, Any],
+    error: str,
+    error_kind: str,
+) -> None:
+    """Emit the ``phase="subagent"`` event for a sub-agent that was cut off.
+
+    The timeout and budget-exhausted paths *return* a
+    :class:`SubagentResult` rather than raising, so
+    :func:`~crewlet.agent.llm_loop.phase_failure_guard` never sees them.
+    Without this the spawn published nothing: the parent's Execute event
+    showed a ``spawn_subagent`` tool call whose sub-agent left no phase
+    record, no partial transcript, and no reason it stopped.
+    """
+    await publish_phase_completed(
+        event_queue=event_queue,
+        agent=parent_turn.agent,
+        turn_id=parent_turn.turn_id,
+        iteration=parent_turn.iteration,
+        phase="subagent",
+        provider_key=provider_key,
+        loop=progress.to_result(),
+        tools_available=list(surface.names),
+        trigger=trigger,
+        tag_span=False,
+        failed=True,
+        error=error,
+        error_kind=error_kind,
+    )
+
+
 async def spawn_subagent(
     *,
     parent_turn: TurnContext,
@@ -338,98 +379,133 @@ async def spawn_subagent(
         observed["rounds_used"] = int(getattr(progress, "round_num", 0)) + 1
         observed["tokens_used"] = int(getattr(progress, "total_tokens", 0))
 
-    with tracer.start_as_current_span(
-        "agent.subagent",
-        attributes={
-            "agent.id": parent_turn.agent.id_str,
-            "subagent.tool_names": ",".join(surface.names),
-            "subagent.max_turns": effective_max_turns,
-            "subagent.system_prompt_hash": system_prompt_hash,
-        },
-    ) as span:
-        try:
-            loop = await asyncio.wait_for(
-                run_tool_loop(
-                    provider=provider,
-                    messages=messages,
-                    surface=surface,
-                    context=agent_context,
-                    agent=parent_turn.agent,
-                    max_rounds=effective_max_turns,
-                    event_queue=event_queue,
-                    budget_manager=effective_budget_manager,
-                    observability=observability,
-                    token_usage_repo=token_usage_repo,
-                    validators=validators,
-                    provider_key=provider_key,
-                    on_progress=_record_progress,
-                    a2a_context=None,  # sub-agents do not inherit a2a ctx
-                    # Matches the ``phase="subagent"`` AgentPhaseCompleted
-                    # this spawn publishes under the parent's turn.
-                    turn_id=parent_turn.turn_id,
-                    iteration=parent_turn.iteration,
-                    trigger=trigger,
-                ),
-                timeout=timeout_seconds,
-            )
-        except TimeoutError:
-            partial_turns = observed["rounds_used"]
-            partial_tokens = observed["tokens_used"]
-            logger.warning(
-                "subagent_timed_out",
-                timeout=timeout_seconds,
-                agent_id=parent_turn.agent.id_str,
-                turns_used=partial_turns,
-                tokens_used=partial_tokens,
-            )
-            span.set_attribute("subagent.turns_used", partial_turns)
-            span.set_attribute("subagent.tokens_used", partial_tokens)
-            span.set_attribute("subagent.timed_out", True)
-            parent_turn.subagent_count += 1
-            parent_turn.subagent_tokens += partial_tokens
-            return SubagentResult(
-                text="(sub-agent timed out)",
-                turns_used=partial_turns,
-                tokens_used=partial_tokens,
-                rejected_tools=rejected,
-                timed_out=True,
-            )
-        except SubagentBudgetExceeded as exc:
-            partial_turns = observed["rounds_used"]
-            # Prefer the fractional wrapper's precise accounting when
-            # available (it counts every token the sub-agent consumed,
-            # including those attributed in the round that tripped the
-            # cap); fall back to the on_progress snapshot otherwise.
-            partial_tokens = observed["tokens_used"]
-            if isinstance(effective_budget_manager, _FractionalBudgetManager):
-                partial_tokens = max(
-                    partial_tokens, effective_budget_manager._subagent_used
+    # A sub-agent is its own phase on the dashboard timeline, so it records
+    # its own failures rather than letting them surface only as the host
+    # Execute phase dying. The guard shadows Execute's for this block.
+    async with phase_failure_guard(
+        event_queue=event_queue,
+        agent=parent_turn.agent,
+        turn_id=parent_turn.turn_id,
+        iteration=parent_turn.iteration,
+        phase="subagent",
+        provider_key=provider_key,
+        trigger=trigger,
+    ) as sub_progress:
+        with tracer.start_as_current_span(
+            "agent.subagent",
+            attributes={
+                "agent.id": parent_turn.agent.id_str,
+                "subagent.tool_names": ",".join(surface.names),
+                "subagent.max_turns": effective_max_turns,
+                "subagent.system_prompt_hash": system_prompt_hash,
+            },
+        ) as span:
+            try:
+                loop = await asyncio.wait_for(
+                    run_tool_loop(
+                        provider=provider,
+                        messages=messages,
+                        surface=surface,
+                        context=agent_context,
+                        agent=parent_turn.agent,
+                        max_rounds=effective_max_turns,
+                        event_queue=event_queue,
+                        budget_manager=effective_budget_manager,
+                        observability=observability,
+                        token_usage_repo=token_usage_repo,
+                        validators=validators,
+                        provider_key=provider_key,
+                        on_progress=_record_progress,
+                        a2a_context=None,  # sub-agents do not inherit a2a ctx
+                        # Matches the ``phase="subagent"`` AgentPhaseCompleted
+                        # this spawn publishes under the parent's turn.
+                        turn_id=parent_turn.turn_id,
+                        iteration=parent_turn.iteration,
+                        trigger=trigger,
+                    ),
+                    timeout=timeout_seconds,
                 )
-            logger.warning(
-                "subagent_budget_exhausted_clean_exit",
-                agent_id=parent_turn.agent.id_str,
-                error=str(exc),
-                turns_used=partial_turns,
-                tokens_used=partial_tokens,
-            )
-            span.set_attribute("subagent.turns_used", partial_turns)
-            span.set_attribute("subagent.tokens_used", partial_tokens)
-            span.set_attribute("subagent.budget_exhausted", True)
-            parent_turn.subagent_count += 1
-            parent_turn.subagent_tokens += partial_tokens
-            return SubagentResult(
-                text="(sub-agent budget exhausted)",
-                turns_used=partial_turns,
-                tokens_used=partial_tokens,
-                rejected_tools=rejected,
-                timed_out=False,
-            )
+            except TimeoutError:
+                partial_turns = observed["rounds_used"]
+                partial_tokens = observed["tokens_used"]
+                logger.warning(
+                    "subagent_timed_out",
+                    timeout=timeout_seconds,
+                    agent_id=parent_turn.agent.id_str,
+                    turns_used=partial_turns,
+                    tokens_used=partial_tokens,
+                )
+                span.set_attribute("subagent.turns_used", partial_turns)
+                span.set_attribute("subagent.tokens_used", partial_tokens)
+                span.set_attribute("subagent.timed_out", True)
+                parent_turn.subagent_count += 1
+                parent_turn.subagent_tokens += partial_tokens
+                # This path returns a result instead of raising, so the guard
+                # never fires — publish the failed phase here or the sub-agent
+                # leaves no trace at all on the dashboard timeline.
+                await _publish_subagent_failure(
+                    event_queue=event_queue,
+                    parent_turn=parent_turn,
+                    provider_key=provider_key,
+                    progress=sub_progress,
+                    surface=surface,
+                    trigger=trigger,
+                    error=f"sub-agent exceeded its {timeout_seconds}s wall-clock cap",
+                    error_kind="timeout",
+                )
+                return SubagentResult(
+                    text="(sub-agent timed out)",
+                    turns_used=partial_turns,
+                    tokens_used=partial_tokens,
+                    rejected_tools=rejected,
+                    timed_out=True,
+                )
+            except SubagentBudgetExceeded as exc:
+                partial_turns = observed["rounds_used"]
+                # Prefer the fractional wrapper's precise accounting when
+                # available (it counts every token the sub-agent consumed,
+                # including those attributed in the round that tripped the
+                # cap); fall back to the on_progress snapshot otherwise.
+                partial_tokens = observed["tokens_used"]
+                if isinstance(effective_budget_manager, _FractionalBudgetManager):
+                    partial_tokens = max(
+                        partial_tokens, effective_budget_manager._subagent_used
+                    )
+                logger.warning(
+                    "subagent_budget_exhausted_clean_exit",
+                    agent_id=parent_turn.agent.id_str,
+                    error=str(exc),
+                    turns_used=partial_turns,
+                    tokens_used=partial_tokens,
+                )
+                span.set_attribute("subagent.turns_used", partial_turns)
+                span.set_attribute("subagent.tokens_used", partial_tokens)
+                span.set_attribute("subagent.budget_exhausted", True)
+                parent_turn.subagent_count += 1
+                parent_turn.subagent_tokens += partial_tokens
+                await _publish_subagent_failure(
+                    event_queue=event_queue,
+                    parent_turn=parent_turn,
+                    provider_key=provider_key,
+                    progress=sub_progress,
+                    surface=surface,
+                    trigger=trigger,
+                    error=str(exc) or "sub-agent token budget exhausted",
+                    error_kind="budget_exhausted",
+                )
+                return SubagentResult(
+                    text="(sub-agent budget exhausted)",
+                    turns_used=partial_turns,
+                    tokens_used=partial_tokens,
+                    rejected_tools=rejected,
+                    timed_out=False,
+                )
 
-        # Happy path: record the final turn-count and token-count on
-        # the span before it closes.
-        tokens_used = loop.input_tokens + loop.output_tokens
-        span.set_attribute("subagent.turns_used", loop.rounds_used)
-        span.set_attribute("subagent.tokens_used", tokens_used)
+            # Happy path: record the final turn-count and token-count on
+            # the span before it closes.
+            tokens_used = loop.input_tokens + loop.output_tokens
+            span.set_attribute("subagent.turns_used", loop.rounds_used)
+            span.set_attribute("subagent.tokens_used", tokens_used)
 
     parent_turn.subagent_count += 1
     parent_turn.subagent_tokens += tokens_used

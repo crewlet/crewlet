@@ -10,6 +10,14 @@ export function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// Quote-escape a value that is ALREADY html-escaped, for use inside an
+// attribute. `esc` deliberately leaves quotes alone (they are harmless
+// in text and escaping them makes prose noisy), which is exactly what
+// makes them dangerous once the text lands in an attribute instead.
+function quoteAttr(escaped) {
+  return String(escaped).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 export function trunc(s, n) {
   s = s == null ? "" : String(s);
   return s.length > n ? s.slice(0, n) + "…" : s;
@@ -25,6 +33,22 @@ export function prettyJson(v) {
 
 export function fmtNum(n) {
   return (Number(n) || 0).toLocaleString();
+}
+
+// A short magnitude for a figure that has to fit in a strip: 77,280 →
+// "77.3k". Only for display slots where the exact number is available
+// elsewhere (a title, the Tokens view) — never as the only rendering of
+// a value someone might need to read exactly.
+export function fmtCompact(n) {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  if (abs < 1000) return String(Math.round(v));
+  if (abs < 1_000_000) {
+    const k = v / 1000;
+    return (abs < 10_000 ? k.toFixed(1) : Math.round(k)) + "k";
+  }
+  const m = v / 1_000_000;
+  return (abs < 10_000_000 ? m.toFixed(1) : Math.round(m)) + "M";
 }
 
 // Very small, safe markdown for memory/summary text. Escapes first, then
@@ -46,16 +70,23 @@ function mdInline(s) {
   let h = esc(s);
   h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
   h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // The URL goes into an attribute, so it needs the quote escaping `esc`
+  // deliberately leaves out. Without it a link whose URL contains a
+  // double quote closes `href` early and everything after it becomes
+  // attributes — `[x](https://a" onmouseover="…)` is an injection, not a
+  // link.
   h = h.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>',
+    (_m, label, url) =>
+      `<a href="${quoteAttr(url)}" target="_blank" rel="noopener">${label}</a>`,
   );
   // Autolink bare URLs (findings reports cite PRs/links bare). The leading
   // `(^|[\s(])` group keeps it from matching a URL already inside an
   // ``href="…"`` produced just above (that one is preceded by a quote).
   h = h.replace(
     /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
-    '$1<a href="$2" target="_blank" rel="noopener">$2</a>',
+    (_m, lead, url) =>
+      `${lead}<a href="${quoteAttr(url)}" target="_blank" rel="noopener">${url}</a>`,
   );
   return h;
 }
@@ -168,6 +199,36 @@ export function parseUTC(ts) {
   if (!/[zZ]|[+-]\d\d:?\d\d$/.test(s)) s += "Z";
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
+}
+
+// The ONE ordering key for an event, mirroring `timescaledb/_time.py`.
+//
+// Timestamps arrive in two encodings — aware (`...+00:00`) and naive —
+// often for the same instant, so raw string comparison orders the same
+// moment differently depending on who wrote it. The id is the tiebreak
+// and is not optional: burst writes share a timestamp at microsecond
+// resolution, and a merge keyed on a non-unique value drops or
+// duplicates whatever collided with it.
+export function tsKey(ts) {
+  const at = parseUTC(ts);
+  return at ? at.getTime() : 0;
+}
+
+export function rowKey(row) {
+  return [tsKey(row && row.timestamp), String((row && row.id) || "")];
+}
+
+/** Descending `(instant, id)` comparator — feed order. */
+export function newestFirst(a, b) {
+  const [at, ai] = rowKey(a);
+  const [bt, bi] = rowKey(b);
+  if (at !== bt) return bt - at;
+  return ai < bi ? 1 : ai > bi ? -1 : 0;
+}
+
+/** Ascending `(instant, id)` comparator — trace order. */
+export function oldestFirst(a, b) {
+  return -newestFirst(a, b);
 }
 
 export function fmtTime(ts) {

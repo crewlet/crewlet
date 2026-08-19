@@ -81,6 +81,7 @@ class SkillRefiner:
         auto_refine_on_success: bool = True,
         auto_refine_on_failure: bool = True,
         event_queue: Any = None,
+        budget_manager: Any = None,
     ) -> None:
         self._llm_providers = llm_providers
         self._store = store
@@ -90,6 +91,7 @@ class SkillRefiner:
         self._auto_refine_on_success = auto_refine_on_success
         self._auto_refine_on_failure = auto_refine_on_failure
         self._event_queue = event_queue
+        self._budget_manager = budget_manager
 
     async def refine_from_turn(
         self,
@@ -238,6 +240,7 @@ class SkillRefiner:
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=self._event_queue,
+                budget_manager=self._budget_manager,
                 agent_id=agent_id,
                 turn_id=turn_id,
                 temperature=0.2,

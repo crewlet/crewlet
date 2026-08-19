@@ -10,7 +10,7 @@ export TOKEN="$CREWLET_API_TOKEN_FOUNDER"   # matches api.auth.tokens[].token in
 export AUTH="Authorization: Bearer $TOKEN"
 ```
 
-`/health` should report `{"status":"ok","configured":false}` before you start. After the first PUT it flips to `configured:true` and stays that way for the engine's lifetime.
+`/health` should report `{"status":"unconfigured","configured":false}` before you start (still HTTP **200** — the status code is liveness, and an engine waiting for a configuration is alive). After the first PUT it flips to `{"status":"ok","configured":true}` and stays that way for the engine's lifetime.
 
 ```bash
 curl -s $CREWLET_URL/health

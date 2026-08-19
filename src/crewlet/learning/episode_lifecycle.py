@@ -113,6 +113,7 @@ class EpisodeLifecycleWorker:
         self,
         *,
         event_queue: EventQueue,
+        budget_manager: Any = None,
         episode_store: EpisodeStoreProtocol,
         llm_providers: dict[str, LLMProvider],
         organization: Organization,
@@ -128,6 +129,7 @@ class EpisodeLifecycleWorker:
         exemplar_count: int = _DEFAULT_EXEMPLAR_COUNT,
     ) -> None:
         self._event_queue = event_queue
+        self._budget_manager = budget_manager
         self._episode_store = episode_store
         self._llm_providers = llm_providers
         self._org = organization
@@ -374,6 +376,7 @@ class EpisodeLifecycleWorker:
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=self._event_queue,
+                budget_manager=self._budget_manager,
                 agent_id="",
                 turn_id="",
                 temperature=0.2,

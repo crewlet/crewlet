@@ -21,7 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
 from crewlet.db._jsonb import decode_jsonb_dict
+from crewlet.events.types import event_failed
 from crewlet.timescaledb._match import collect_related_events
+from crewlet.timescaledb.projections import (
+    llm_history_record,
+    phase_token_record,
+)
 
 if TYPE_CHECKING:
     from crewlet.db.client import Database
@@ -29,6 +34,21 @@ if TYPE_CHECKING:
 logger = get_logger("timescaledb.repository")
 
 EVENTS_TABLE = "crewlet_events"
+
+# How far back the event table is read.  This is the hard bottom of
+# paging: once a cursor crosses it every page is empty forever, and a UI
+# that cannot name the floor draws it as "the org went quiet".  It was
+# inlined as a literal in two queries; naming it is what lets the API
+# ship the number to a dashboard footer.
+EVENT_HISTORY_DAYS = 30
+
+# Ceiling on one trace's rows.  A trace is unbounded in principle -- a
+# long-running turn with sub-agents can accumulate thousands of spans --
+# and the whole thing is returned in a single WebSocket frame, so an
+# uncapped read is a query that times out client-side and reports as a
+# generic failure.  Kept as the OLDEST rows: the root is what explains a
+# trace, and a truncated tail is legible where a truncated head is not.
+MAX_TRACE_EVENTS = 500
 
 
 class TimescaleDBEventStore:
@@ -115,11 +135,13 @@ class TimescaleDBEventStore:
         limit: int = 50,
         event_type: str | None = None,
         source: str | None = None,
+        category: str | None = None,
         trace_id: str | None = None,
         actor: str | None = None,
         related_agent: str | None = None,
+        before: tuple[Any, str] | None = None,
     ) -> list[dict[str, Any]]:
-        conditions = ["event_time >= now() - INTERVAL '30 days'"]
+        conditions = [f"event_time >= now() - INTERVAL '{EVENT_HISTORY_DAYS} days'"]
         params: list[Any] = []
         if event_type:
             params.append(event_type)
@@ -127,12 +149,32 @@ class TimescaleDBEventStore:
         if source:
             params.append(source)
             conditions.append(f"source = ${len(params)}")
+        if category:
+            params.append(category)
+            conditions.append(f"category = ${len(params)}")
         if trace_id:
             params.append(trace_id)
             conditions.append(f"trace_id = ${len(params)}")
         if actor:
             params.append(actor)
             conditions.append(f"actor = ${len(params)}")
+        if before is not None:
+            # Keyset, not OFFSET.  ``(event_time, event_id)`` is the
+            # table's primary key, so it is unique and already in index
+            # order -- no sort node, and no drift as new rows land at the
+            # head while a reader pages backwards.  The id half is not
+            # optional: burst writes share a timestamp at microsecond
+            # resolution routinely, and a cursor over a non-unique key
+            # skips or repeats whatever collided with it.
+            before_ts, before_id = before
+            params.append(before_ts)
+            if before_id:
+                params.append(before_id)
+                conditions.append(
+                    f"(event_time, event_id) < (${len(params) - 1}, ${len(params)})"
+                )
+            else:
+                conditions.append(f"event_time < ${len(params)}")
         where = " AND ".join(conditions)
 
         # related_agent is filtered post-query because it matches across
@@ -148,7 +190,7 @@ class TimescaleDBEventStore:
             "summary, actor, trace_id, span_id, parent_span_id, tags "
             f"FROM {EVENTS_TABLE} "
             f"WHERE {where} "
-            "ORDER BY event_time DESC "
+            "ORDER BY event_time DESC, event_id DESC "
             f"LIMIT {int(fetch_limit)}"
         )
         rows = await self._db.execute(sql, *params)
@@ -167,8 +209,9 @@ class TimescaleDBEventStore:
             "summary, actor, trace_id, span_id, parent_span_id, tags "
             f"FROM {EVENTS_TABLE} "
             "WHERE trace_id = $1 "
-            "AND event_time >= now() - INTERVAL '30 days' "
-            "ORDER BY event_time ASC, event_id ASC"
+            f"AND event_time >= now() - INTERVAL '{EVENT_HISTORY_DAYS} days' "
+            "ORDER BY event_time ASC, event_id ASC "
+            f"LIMIT {int(MAX_TRACE_EVENTS)}"
         )
         rows = await self._db.execute(sql, trace_id)
         return [
@@ -302,6 +345,46 @@ class TimescaleDBEventStore:
             else:
                 states[role].pop("afk_reason", None)
 
+        # Step 2b: AFK is sticky until the agent does real work again —
+        # or is respawned, which is a NEW instance of the seat and cannot
+        # inherit what stopped the last one (otherwise the hold outlives
+        # an engine restart and a healthy seat reads as broken).
+        # Every engine-detected failure publishes its AFK event and then
+        # ``TaskFailed`` microseconds later, so step 2 — which just takes
+        # the latest state-affecting event — always saw ``task_failed``
+        # and reported a healthy ``idle`` seat.  The rule that actually
+        # holds (and the one the live projection applies) is: an agent is
+        # AFK when its newest event among {failure, real work} is a
+        # failure.  ``task_completed`` / ``task_failed`` are deliberately
+        # NOT "real work" here — they are the failure's own epilogue.
+        # ``agent_spawned`` and ``agent_terminated`` are in the set for
+        # the opposite reason: neither is a failure, so either one being
+        # newest breaks the hold.  Without them a respawned seat reads as
+        # AFK forever, and a terminated one reads as AFK rather than gone.
+        sql_afk = f"""
+            SELECT DISTINCT ON (agent_role)
+                agent_role,
+                event_type AS latest_type,
+                payload
+            FROM {EVENTS_TABLE}
+            WHERE event_type IN (
+                    'llm_unavailable','turn.guard_breach','budget_exhausted',
+                    'task_started','agent_phase_started','agent_turn_progress',
+                    'agent_spawned','agent_terminated'
+                )
+              AND agent_role = ANY($1::text[])
+              AND event_time >= now() - INTERVAL '7 days'
+            ORDER BY agent_role, event_time DESC, event_id DESC
+        """
+        for row in await self._db.execute(sql_afk, list(states.keys())):
+            role = row.get("agent_role", "")
+            etype = row.get("latest_type", "")
+            if role not in states or etype not in _AFK_EVENT_TYPES:
+                continue
+            payload = _parse_payload(row)
+            states[role]["state"] = "afk"
+            states[role]["afk_reason"] = payload.get("kind", "") or etype
+
         # Step 3: latest agent_phase_started per role for the live
         # ``current_phase`` / ``current_iteration``.  Done as a separate
         # query (rather than crammed into step 2) because the latest
@@ -391,7 +474,15 @@ class TimescaleDBEventStore:
         results: list[dict[str, Any]] = []
         for row in rows:
             payload = _parse_payload(row)
-            results.append(_phase_token_record(row, payload))
+            results.append(
+                phase_token_record(
+                    event_id=row.get("event_id", ""),
+                    timestamp=_format_time(row.get("event_time")),
+                    agent_id=row.get("agent_id", ""),
+                    agent_role=row.get("agent_role", ""),
+                    payload=payload,
+                )
+            )
         return results
 
     async def get_agent_llm_history(
@@ -418,7 +509,7 @@ class TimescaleDBEventStore:
             payload = _parse_payload(row)
             event_type = row.get("event_type", "")
             timestamp = _format_time(row.get("event_time"))
-            history.append(_llm_history_record(event_type, timestamp, payload))
+            history.append(llm_history_record(event_type, timestamp, payload))
         return history
 
 
@@ -433,9 +524,10 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any]:
     """
     raw_tags = decode_jsonb_dict(row.get("tags"))
     tags: dict[str, str] = {str(k): str(v) for k, v in raw_tags.items()}
+    event_type = row.get("event_type", "")
     return {
         "id": row.get("event_id", ""),
-        "type": row.get("event_type", ""),
+        "type": event_type,
         "source": row.get("source", ""),
         "timestamp": _format_time(row.get("event_time")),
         "category": row.get("category", ""),
@@ -444,8 +536,23 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any]:
         "trace_id": row.get("trace_id", ""),
         "span_id": row.get("span_id", ""),
         "parent_span_id": row.get("parent_span_id", ""),
+        # Decided from the ``failed`` tag rather than the payload: this
+        # query never selects the payload column, so the tag is the only
+        # thing that survives into history.  Rows written before the
+        # writer began stamping it read back as not-failed -- a real
+        # discontinuity at that point in the timeline, not a bug to
+        # paper over.
+        "failed": event_failed(event_type, tag_failed=tags.get("failed") == "true"),
         "tags": tags,
     }
+
+
+# Engine-detected failure events that put an agent in ``afk``.  Shared
+# by the state map below and the sticky-AFK pass in
+# ``get_agent_states`` so the two can't disagree about what counts.
+_AFK_EVENT_TYPES = frozenset(
+    {"llm_unavailable", "turn.guard_breach", "budget_exhausted"}
+)
 
 
 def _event_to_state(event_type: str) -> str:
@@ -467,100 +574,6 @@ def _event_to_state(event_type: str) -> str:
         "turn.guard_breach": "afk",
         "budget_exhausted": "afk",
     }.get(event_type, "offline")
-
-
-def _llm_history_record(
-    event_type: str, timestamp: str, payload: dict[str, Any]
-) -> dict[str, Any]:
-    """Normalize a turn/phase event into the history record the API returns.
-
-    Phase events (``agent_phase_completed``) carry ``system_prompt`` +
-    ``user_prompt`` separately; turn-completed events carry a single
-    ``prompt`` string and a ``prompt_messages`` list.  Both are
-    flattened to the same shape so the dashboard renders them
-    uniformly.
-    """
-    if event_type == "agent_phase_completed":
-        system_prompt = payload.get("system_prompt", "")
-        user_prompt = payload.get("user_prompt", "")
-        messages: list[dict[str, str]] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        if user_prompt:
-            messages.append({"role": "user", "content": user_prompt})
-        return {
-            "timestamp": timestamp,
-            "model": payload.get("model", "") or payload.get("provider_key", ""),
-            "phase": payload.get("phase", ""),
-            "host_phase": payload.get("host_phase", ""),
-            "host_iteration": payload.get("host_iteration", 0),
-            # Set on phase=="auxiliary" rows so the dashboard can show
-            # which learning worker (persist_decider, skill_synthesizer,
-            # counterparty_profiler, …) made the call.
-            "worker": payload.get("worker", ""),
-            "turn_id": payload.get("turn_id", ""),
-            "iteration": payload.get("iteration", 0),
-            "decision": payload.get("decision", ""),
-            "notes": payload.get("notes", ""),
-            # The event that triggered this turn — the dashboard renders
-            # it as the LLM invocation's source.
-            "trigger": payload.get("trigger", {}) or {},
-            "prompt": user_prompt,
-            "prompt_messages": messages,
-            "response": payload.get("response", ""),
-            "input_tokens": payload.get("input_tokens", 0),
-            "output_tokens": payload.get("output_tokens", 0),
-            "total_tokens": payload.get("total_tokens", 0),
-            "tool_executions": payload.get("tool_executions", []),
-            "tools_available": payload.get("tools_available", []),
-            "tool_catalogue": payload.get("tool_catalogue", []),
-        }
-    return {
-        "timestamp": timestamp,
-        "model": payload.get("model", ""),
-        "phase": "turn",
-        "turn_id": payload.get("turn_id", ""),
-        "iteration": 0,
-        "decision": "",
-        "notes": "",
-        "trigger": payload.get("trigger", {}) or {},
-        "prompt": payload.get("prompt", ""),
-        "prompt_messages": payload.get("prompt_messages", []),
-        "response": payload.get("response", ""),
-        "input_tokens": payload.get("input_tokens", 0),
-        "output_tokens": payload.get("output_tokens", 0),
-        "total_tokens": payload.get("total_tokens", 0),
-        "tool_executions": payload.get("tool_executions", []),
-        "tools_available": [],
-        "tool_catalogue": [],
-    }
-
-
-def _phase_token_record(row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    """Project an ``agent_phase_completed`` row to the Tokens-view shape.
-
-    Kept minimal — only the fields the breakdown endpoint needs to
-    aggregate by phase / model / worker / agent / turn.  Heavy payload
-    fields (``system_prompt``, ``response``, etc.) stay out so the
-    aggregation endpoint doesn't transfer megabytes when the time
-    window is wide.
-    """
-    return {
-        "event_id": row.get("event_id", ""),
-        "timestamp": _format_time(row.get("event_time")),
-        "agent_id": row.get("agent_id", ""),
-        "agent_role": row.get("agent_role", ""),
-        "phase": payload.get("phase", ""),
-        "host_phase": payload.get("host_phase", ""),
-        "worker": payload.get("worker", ""),
-        "model": payload.get("model", "") or payload.get("provider_key", ""),
-        "turn_id": payload.get("turn_id", ""),
-        "iteration": int(payload.get("iteration", 0) or 0),
-        "input_tokens": int(payload.get("input_tokens", 0) or 0),
-        "output_tokens": int(payload.get("output_tokens", 0) or 0),
-        "total_tokens": int(payload.get("total_tokens", 0) or 0),
-        "tool_executions": payload.get("tool_executions", []) or [],
-    }
 
 
 def _format_time(t: Any) -> str:

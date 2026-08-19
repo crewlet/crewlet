@@ -165,8 +165,12 @@ class FallbackLLMProvider:
         """
         self._attempted_keys = []
         last_exc: Exception | None = None
-        for key, provider in self._chain:
+        for index, (key, provider) in enumerate(self._chain):
             self._attempted_keys.append(key)
+            # The key the chain moves to when this attempt fails. Empty
+            # on the last entry, where the fallback is to nothing and
+            # ``LLMChainExhausted`` is what the caller sees.
+            next_key = self._chain[index + 1][0] if index + 1 < len(self._chain) else ""
             try:
                 completion = await provider.complete(
                     messages,
@@ -195,7 +199,7 @@ class FallbackLLMProvider:
                     provider_key=key,
                     kind_hint=exc.kind_hint.value,
                 )
-                await self._fire_hook(key, "next", exc)
+                await self._fire_hook(key, next_key, exc)
                 continue
             except Exception as exc:
                 kind = classify(exc)
@@ -207,7 +211,7 @@ class FallbackLLMProvider:
                         kind=kind.value,
                         error_class=type(exc).__name__,
                     )
-                    await self._fire_hook(key, "next", exc)
+                    await self._fire_hook(key, next_key, exc)
                     continue
                 # FATAL or unrecognised -> propagate without further
                 # fallback. The caller's existing error path handles
@@ -233,15 +237,22 @@ class FallbackLLMProvider:
             last_error_kind=last_kind,
         ) from last_exc
 
-    async def _fire_hook(self, from_key: str, label: str, exc: Exception) -> None:
+    async def _fire_hook(self, from_key: str, to_key: str, exc: Exception) -> None:
         """Invoke ``on_fallback`` if set. Awaits awaitable returns so
         the caller's event-publish task is observed before we proceed
         to the next provider in the chain. Best-effort: an exception
-        in the hook is logged and swallowed."""
+        in the hook is logged and swallowed.
+
+        ``to_key`` is the chain entry the call moves to, or ``""`` when
+        this was the last one.  It used to be the literal string
+        ``"next"`` at both call sites, so every ``ProviderFallback``
+        event ever published recorded ``to_provider_key="next"`` -- the
+        one field that says which provider actually took over, and it
+        named no provider at all."""
         if self._on_fallback is None:
             return
         try:
-            result = self._on_fallback(from_key, label, exc)
+            result = self._on_fallback(from_key, to_key, exc)
             if inspect.isawaitable(result):
                 await result  # type: ignore[func-returns-value]
         except Exception:

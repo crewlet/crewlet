@@ -58,6 +58,36 @@ class Event(BaseModel):
         return getattr(self, "agent_id", "") or "system"
 
 
+# Event types that ARE a failure by their very type, independent of any
+# payload flag.  Named here, beside the events themselves, because three
+# layers need the same answer -- the live projection stamping its feed,
+# the event store reading a row back from history, and the API
+# serializing a push -- and a second copy is how the same turn ends up
+# red on one surface and not on another.
+FAILURE_EVENT_TYPES = frozenset(
+    {
+        "task_failed",
+        "llm_unavailable",
+        "budget_exhausted",
+        "turn.guard_breach",
+    }
+)
+
+
+def event_failed(
+    event_type: str, *, payload_failed: bool = False, tag_failed: bool = False
+) -> bool:
+    """Whether the work an event reports failed.
+
+    ``payload_failed`` is the event's own ``failed`` field, available
+    live; ``tag_failed`` is the ``failed`` tag the event-store writer
+    stamps, which is all that survives into history (``list_events``
+    never selects the payload column).  Either one, or a type that is
+    itself a failure, means failed.
+    """
+    return bool(payload_failed) or bool(tag_failed) or event_type in FAILURE_EVENT_TYPES
+
+
 def describe_trigger(event: Event | None) -> dict[str, Any]:
     """Compact descriptor of the event that triggered an agent turn.
 
@@ -265,6 +295,17 @@ class TaskStarted(Event):
     type: str = "task_started"
     task_id: str = ""
     agent_id: str = ""
+    role: str = ""
+    """The agent's role name — its seat, and the key every projection
+    groups an agent by.
+
+    Load-bearing, not decorative: the event store tags a row's
+    ``agent_role`` from this field and the dashboard's live projection
+    keys on it, so a task event published without one is invisible to
+    both.  That is exactly what happened — an agent's current task never
+    appeared on a dashboard, and a seat stayed "working" past the end of
+    its turn, because the task lifecycle events carried the role only in
+    ``source``, which neither consumer reads."""
 
     @property
     def summary(self) -> str:
@@ -280,6 +321,17 @@ class TaskCompleted(Event):
     task_id: str = ""
     agent_id: str = ""
     result: str = ""
+    role: str = ""
+    """The agent's role name — its seat, and the key every projection
+    groups an agent by.
+
+    Load-bearing, not decorative: the event store tags a row's
+    ``agent_role`` from this field and the dashboard's live projection
+    keys on it, so a task event published without one is invisible to
+    both.  That is exactly what happened — an agent's current task never
+    appeared on a dashboard, and a seat stayed "working" past the end of
+    its turn, because the task lifecycle events carried the role only in
+    ``source``, which neither consumer reads."""
 
     @property
     def summary(self) -> str:
@@ -295,6 +347,17 @@ class TaskFailed(Event):
     task_id: str = ""
     agent_id: str = ""
     error: str = ""
+    role: str = ""
+    """The agent's role name — its seat, and the key every projection
+    groups an agent by.
+
+    Load-bearing, not decorative: the event store tags a row's
+    ``agent_role`` from this field and the dashboard's live projection
+    keys on it, so a task event published without one is invisible to
+    both.  That is exactly what happened — an agent's current task never
+    appeared on a dashboard, and a seat stayed "working" past the end of
+    its turn, because the task lifecycle events carried the role only in
+    ``source``, which neither consumer reads."""
 
     @property
     def summary(self) -> str:
@@ -573,6 +636,18 @@ class ExternalNotification(Event):
             head = "Notification"
         return f"{head}: {self.subject}" if self.subject else head
 
+    @property
+    def actor(self) -> str:
+        # The person who sent it, for the same reason ``summary`` leads
+        # with them: this event carries no ``role``, so the base
+        # property falls through to ``source`` and reports the actor of
+        # an inbound Slack message as ``notification_service.slack`` --
+        # a machine name, sitting in a column of human ones, directly
+        # beside the branded badge already built from the same string.
+        # Falls back to the base chain when the integration gave us no
+        # sender, so nothing loses a value it had before.
+        return self.sender or super().actor
+
 
 class NotificationsCoalesced(Event):
     """Emitted when several same-conversation inbox events are merged
@@ -635,6 +710,69 @@ class BudgetExhausted(Event):
         return f"{self.actor} exhausted {self.budget_type} token budget"
 
 
+class BudgetReported(Event):
+    """A snapshot of every live token meter, for the dashboard.
+
+    Published on a fixed tick by the engine whenever a counter moved.
+    It exists because the counters live nowhere but in the engine's own
+    :class:`~crewlet.concurrency.BudgetManager`: they are not derivable
+    from any other event, and the two figures a dashboard already has --
+    the 7-day per-agent total and the 24-hour spend rollup -- cover
+    different spans and cannot substitute.
+
+    Deliberately NOT persisted (it is absent from the event store's
+    category map, like ``agent_turn_progress``).  It is a *live meter*,
+    so replaying one from history would show a dead engine's counters as
+    the current ones.  Being an ordinary event is nonetheless what makes
+    it work on both deployment shapes: the embedded API sees it through
+    the publish listener and the standalone API through its broadcast
+    subscription, with no second transport.
+    """
+
+    type: str = "budget_reported"
+    meter_id: str = ""
+    """Identity of the reporting meter's run.
+
+    ``used_tokens`` is comparable only within one ``meter_id``.  A new
+    id means the engine restarted and every prior figure is dead --
+    consumers must REPLACE what they hold, never merge or take a
+    maximum, or a restart pins a phantom high-water mark forever.
+    """
+    seq: int = 0
+    """Monotonic within ``meter_id``; the reorder guard.
+
+    Broker ordering holds only within a topic, and the standalone API
+    reads a broadcast subscription across all of them, so an older
+    report can arrive after a newer one and walk the meter backwards.
+    """
+    org_used_tokens: int = 0
+    org_max_tokens: int = 0
+    org_refused_at: str = ""
+    agents: list[dict[str, Any]] = Field(default_factory=list)
+    """One entry per METERED seat: ``agent_id``, ``role``,
+    ``used_tokens``, ``max_tokens``, ``refused_at``.
+
+    Only seats with a per-agent budget appear: the engine seeds one
+    solely for a non-zero ``Role.token_budget``, so absence means "no
+    cap and no meter" -- a different fact from a cap of zero, and one a
+    consumer must not draw as an empty bar.
+
+    ``role`` rides along because the engine already knows it and every
+    consumer is keyed by role; re-deriving it from ``agent_id`` would be
+    a second identity path, and the two diverge after a live handle
+    edit.
+
+    ``refused_at`` is when the cap last turned a charge away.  That, not
+    ``used_tokens >= max_tokens``, is what "exhausted" means: a refused
+    charge increments nothing, so the counter stops short of the cap by
+    the size of the round that would not fit.
+    """
+
+    @property
+    def summary(self) -> str:
+        return f"Token meters reported for {len(self.agents)} agents"
+
+
 class LLMUnavailable(Event):
     """Emitted when the LLM fallback chain is exhausted.
 
@@ -674,6 +812,14 @@ class AgentTurnCompleted(Event):
 
     type: str = "agent_turn_completed"
     agent_id: str = ""
+    role: str = ""
+    """The agent's role name — the seat this turn's tokens belong to.
+
+    Same load-bearing field as on the task events: the event store tags
+    ``agent_role`` from it and the live projection keys on it. Without
+    one, a turn's token totals were attributed to nobody — every agent
+    card read zero tokens no matter how much the seat had spent, live and
+    after a reload alike."""
     model: str = ""
     # Compact descriptor of the event that triggered this turn (task
     # assignment, notification, A2A request, schedule tick). Built by
@@ -697,6 +843,18 @@ class AgentTurnCompleted(Event):
     subagent_tokens: int = 0
     iterations: int = 0
     decision: str = ""
+    failed: bool = False
+    """True when the turn ended on a failure path rather than finishing.
+
+    ``decision`` is already ``"failed"`` in that case, but the *reason*
+    lived only on the separate ``LLMUnavailable`` / ``turn.guard_breach``
+    events, which the agent's LLM-history view does not read — so the
+    turn that a dashboard shows had no way to say why it stopped."""
+    error: str = ""
+    """The failure's message (truncated).  Empty unless ``failed``."""
+    error_kind: str = ""
+    """Machine-readable failure class — the classified provider error
+    (``rate_limit`` / ``auth`` / ...) or the guard-breach kind."""
 
     @property
     def summary(self) -> str:
@@ -704,6 +862,9 @@ class AgentTurnCompleted(Event):
         if self.a2a_context:
             ch = self.a2a_context.get("channel_id", "")
             a2a_tag = f" [A2A:{ch}]" if ch else " [A2A]"
+        if self.failed:
+            reason = self.error_kind or "error"
+            return f"{self.actor} turn failed ({reason}){a2a_tag}"
         if self.model:
             return (
                 f"{self.actor} completed LLM turn"
@@ -1408,13 +1569,32 @@ class AgentPhaseCompleted(Event):
     sandbox_id: str = ""
     cost_usd: float = 0.0
     delivered_refs: list[str] = Field(default_factory=list)
+    failed: bool = False
+    """True when the phase died instead of finishing.
+
+    A phase that raises -- the provider chain exhausted, a tool blew up,
+    the wall-clock cap fired -- used to publish *nothing*: the only
+    durable record was the ``agent_phase_started`` that opened it, so the
+    dashboard was left showing an in-flight call with no response and no
+    reason.  The phase runners now emit this event on the failure path
+    too, carrying whatever the loop managed before it died plus the
+    fields below.  ``response`` / ``tool_executions`` / token counts are
+    therefore *partial* on a failed event, not absent."""
+    error: str = ""
+    """The failure's message (truncated).  Empty unless ``failed``."""
+    error_kind: str = ""
+    """Machine-readable failure class.  For an exhausted provider chain
+    this is the classified LLM error (``rate_limit`` / ``auth`` /
+    ``timeout`` / ...); otherwise the exception's type name."""
 
     @property
     def summary(self) -> str:
         parts = [f"{self.actor} {self.phase}"]
         if self.backend == "sandbox":
             parts.append(f"[sandbox:{self.coding_agent or '?'}]")
-        if self.decision:
+        if self.failed:
+            parts.append(f"✗ failed ({self.error_kind or 'error'})")
+        elif self.decision:
             parts.append(f"→ {self.decision}")
         if self.model:
             parts.append(f"({self.model}, {self.total_tokens} tokens)")

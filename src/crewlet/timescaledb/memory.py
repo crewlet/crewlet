@@ -7,7 +7,20 @@ from typing import Any
 from uuid import uuid4
 
 from crewlet._logging import get_logger
+from crewlet.events.types import event_failed
 from crewlet.timescaledb._match import collect_related_events
+from crewlet.timescaledb._time import row_key, ts_key
+from crewlet.timescaledb.projections import (
+    llm_history_record,
+    phase_token_record,
+)
+from crewlet.timescaledb.repository import MAX_TRACE_EVENTS
+
+
+def _as_iso(value: Any) -> str:
+    """A cursor timestamp as an ISO string, whichever form it arrived in."""
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
 
 logger = get_logger("timescaledb.memory")
 
@@ -105,30 +118,54 @@ class MemoryEventStore:
         limit: int = 50,
         event_type: str | None = None,
         source: str | None = None,
+        category: str | None = None,
         trace_id: str | None = None,
         actor: str | None = None,
         related_agent: str | None = None,
+        before: tuple[Any, str] | None = None,
     ) -> list[dict[str, Any]]:
         results = self._events
         if event_type:
             results = [e for e in results if e["type"] == event_type]
         if source:
             results = [e for e in results if e["source"] == source]
+        if category:
+            results = [e for e in results if e.get("category") == category]
         if trace_id:
             results = [e for e in results if e.get("trace_id") == trace_id]
         if actor:
             results = [e for e in results if e.get("actor") == actor]
+        if before is not None:
+            before_ts, before_id = before
+            cursor = (ts_key(_as_iso(before_ts)), str(before_id))
+            results = [e for e in results if row_key(e) < cursor]
         if related_agent:
             results = collect_related_events(results, related_agent, limit)
-            return [
-                {k: v for k, v in e.items() if k not in ("payload", "tags")}
-                for e in results
-            ]
-        # Newest first, strip payload/tags for list view
-        return [
-            {k: v for k, v in e.items() if k not in ("payload", "tags")}
-            for e in reversed(results[-limit:])
-        ][:limit]
+            return [self._light(e) for e in results]
+        # Ordered by (instant, id) descending, NOT by insertion.  The two
+        # differ whenever a write is backfilled -- a webhook replay, the
+        # Mattermost since= gap re-read -- and under a cursor that shows
+        # up as rows appearing above rows the reader already scrolled
+        # past.  ``ts_key`` is what makes the comparison safe across the
+        # naive and aware encodings ``write_event`` accepts.
+        ordered = sorted(results, key=row_key, reverse=True)
+        return [self._light(e) for e in ordered[:limit]]
+
+    @staticmethod
+    def _light(event: dict[str, Any]) -> dict[str, Any]:
+        """One list-view row: no payload, no tags, plus ``failed``.
+
+        The persistent store derives the same flag in ``_row_to_event``;
+        both must, or the same event reads as a failure on one backend
+        and not on the other.
+        """
+        row = {k: v for k, v in event.items() if k not in ("payload", "tags")}
+        tags = event.get("tags") or {}
+        row["failed"] = event_failed(
+            str(event.get("type", "")),
+            tag_failed=str(tags.get("failed", "")) == "true",
+        )
+        return row
 
     async def get_event(self, event_id: str) -> dict[str, Any] | None:
         for e in self._events:
@@ -137,12 +174,14 @@ class MemoryEventStore:
         return None
 
     async def list_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        """Return all events in a trace, ordered by timestamp (oldest first)."""
+        """Return all events in a trace, ordered by timestamp (oldest first).
+
+        Sorted and capped exactly as the persistent store does, so a
+        trace reads the same on either backend.
+        """
         results = [e for e in self._events if e.get("trace_id") == trace_id]
-        return [
-            {k: v for k, v in e.items() if k not in ("payload", "tags")}
-            for e in results
-        ]
+        ordered = sorted(results, key=row_key)
+        return [self._light(e) for e in ordered[:MAX_TRACE_EVENTS]]
 
     async def get_agent_states(
         self, agent_roles: list[str]
@@ -171,6 +210,19 @@ class MemoryEventStore:
                 for _r, s in states.items():
                     if s.get("runtime_id") == agent_id:
                         new_state = _STATE_EVENTS[etype]
+                        # AFK is sticky until the agent does real work
+                        # again.  Every engine-detected failure publishes
+                        # its AFK event and then ``TaskFailed`` an
+                        # instant later, so taking the newest event at
+                        # face value reported a healthy ``idle`` seat
+                        # microseconds after the failure that stopped it.
+                        # Mirrors the same rule in the SQL backend and in
+                        # the live projection.
+                        if s.get("state") == "afk" and etype in (
+                            "task_completed",
+                            "task_failed",
+                        ):
+                            new_state = "afk"
                         s["state"] = new_state
                         if etype == "task_started":
                             s["current_task"] = tags.get("task_id", "")
@@ -189,10 +241,14 @@ class MemoryEventStore:
                         # ``turn.guard_breach`` carries the specific
                         # ``kind`` in its payload (stall / max_iter / ...);
                         # other AFK events use their type as the reason.
-                        if new_state == "afk":
+                        if (
+                            new_state == "afk"
+                            and etype in _STATE_EVENTS
+                            and (_STATE_EVENTS[etype] == "afk")
+                        ):
                             payload = event.get("payload", {}) or {}
                             s["afk_reason"] = payload.get("kind", "") or etype
-                        else:
+                        elif new_state != "afk":
                             # Normal lifecycle event — clear any stale
                             # AFK reason so the dashboard chip goes away.
                             s.pop("afk_reason", None)
@@ -247,23 +303,13 @@ class MemoryEventStore:
                 continue
             payload = event.get("payload", {}) or {}
             results.append(
-                {
-                    "event_id": event.get("id", ""),
-                    "timestamp": event.get("timestamp", ""),
-                    "agent_id": tags.get("agent_id", ""),
-                    "agent_role": role,
-                    "phase": payload.get("phase", ""),
-                    "host_phase": payload.get("host_phase", ""),
-                    "worker": payload.get("worker", ""),
-                    "model": payload.get("model", "")
-                    or payload.get("provider_key", ""),
-                    "turn_id": payload.get("turn_id", ""),
-                    "iteration": int(payload.get("iteration", 0) or 0),
-                    "input_tokens": int(payload.get("input_tokens", 0) or 0),
-                    "output_tokens": int(payload.get("output_tokens", 0) or 0),
-                    "total_tokens": int(payload.get("total_tokens", 0) or 0),
-                    "tool_executions": payload.get("tool_executions", []) or [],
-                }
+                phase_token_record(
+                    event_id=event.get("id", ""),
+                    timestamp=event.get("timestamp", ""),
+                    agent_id=tags.get("agent_id", ""),
+                    agent_role=role,
+                    payload=payload,
+                )
             )
         return results
 
@@ -284,74 +330,9 @@ class MemoryEventStore:
             if tags.get("agent_id") != agent_id:
                 continue
             payload = event.get("payload", {}) or {}
-            history.append(_llm_history_record(event["type"], event, payload))
+            history.append(
+                llm_history_record(event["type"], event["timestamp"], payload)
+            )
             if len(history) >= limit:
                 break
         return history
-
-
-def _llm_history_record(
-    event_type: str, event: dict[str, Any], payload: dict[str, Any]
-) -> dict[str, Any]:
-    """Normalize a turn/phase event into the history record the API returns.
-
-    Phase events (``agent_phase_completed``) carry ``system_prompt`` +
-    ``user_prompt`` separately; turn-completed events carry a single
-    ``prompt`` string and a ``prompt_messages`` list.  Both are
-    flattened to the same shape so the dashboard renders them
-    uniformly.
-    """
-    if event_type == "agent_phase_completed":
-        system_prompt = payload.get("system_prompt", "")
-        user_prompt = payload.get("user_prompt", "")
-        messages: list[dict[str, str]] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        if user_prompt:
-            messages.append({"role": "user", "content": user_prompt})
-        return {
-            "timestamp": event["timestamp"],
-            "model": payload.get("model", "") or payload.get("provider_key", ""),
-            "phase": payload.get("phase", ""),
-            "host_phase": payload.get("host_phase", ""),
-            "host_iteration": payload.get("host_iteration", 0),
-            # Set on phase=="auxiliary" rows so the dashboard can show
-            # which learning worker (persist_decider, skill_synthesizer,
-            # counterparty_profiler, …) made the call.
-            "worker": payload.get("worker", ""),
-            "turn_id": payload.get("turn_id", ""),
-            "iteration": payload.get("iteration", 0),
-            "decision": payload.get("decision", ""),
-            "notes": payload.get("notes", ""),
-            # The event that triggered this turn — the dashboard renders
-            # it as the LLM invocation's source.
-            "trigger": payload.get("trigger", {}) or {},
-            "prompt": user_prompt,
-            "prompt_messages": messages,
-            "response": payload.get("response", ""),
-            "input_tokens": payload.get("input_tokens", 0),
-            "output_tokens": payload.get("output_tokens", 0),
-            "total_tokens": payload.get("total_tokens", 0),
-            "tool_executions": payload.get("tool_executions", []),
-            "tools_available": payload.get("tools_available", []),
-            "tool_catalogue": payload.get("tool_catalogue", []),
-        }
-    return {
-        "timestamp": event["timestamp"],
-        "model": payload.get("model", ""),
-        "phase": "turn",
-        "turn_id": payload.get("turn_id", ""),
-        "iteration": 0,
-        "decision": "",
-        "notes": "",
-        "trigger": payload.get("trigger", {}) or {},
-        "prompt": payload.get("prompt", ""),
-        "prompt_messages": payload.get("prompt_messages", []),
-        "response": payload.get("response", ""),
-        "input_tokens": payload.get("input_tokens", 0),
-        "output_tokens": payload.get("output_tokens", 0),
-        "total_tokens": payload.get("total_tokens", 0),
-        "tool_executions": payload.get("tool_executions", []),
-        "tools_available": [],
-        "tool_catalogue": [],
-    }

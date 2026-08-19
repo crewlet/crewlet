@@ -86,6 +86,7 @@ class SkillSynthesizer:
         max_skills_per_agent: int = 50,
         duplicate_jaccard_threshold: float = 0.7,
         event_queue: Any = None,
+        budget_manager: Any = None,
         episode_store: Any = None,
     ) -> None:
         self._llm_providers = llm_providers
@@ -94,6 +95,7 @@ class SkillSynthesizer:
         self._max_skills_per_agent = max_skills_per_agent
         self._duplicate_jaccard_threshold = duplicate_jaccard_threshold
         self._event_queue = event_queue
+        self._budget_manager = budget_manager
         # Optional reference to the episode store -- used to stamp
         # ``consolidated_into_skill_id`` on source episodes after a
         # successful skill insert.  When absent (in-memory tests, or
@@ -313,6 +315,7 @@ class SkillSynthesizer:
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=self._event_queue,
+                budget_manager=self._budget_manager,
                 agent_id=agent_id,
                 turn_id=turn_id,
                 temperature=0.2,
@@ -579,6 +582,7 @@ class PromotionSynthesizer:
         org: Any,
         budget_tokens: int = 4000,
         event_queue: Any = None,
+        budget_manager: Any = None,
         auto_drafted_parent: str = "",
     ) -> None:
         self._llm_providers = llm_providers
@@ -586,6 +590,7 @@ class PromotionSynthesizer:
         self._org = org
         self._budget_tokens = budget_tokens
         self._event_queue = event_queue
+        self._budget_manager = budget_manager
         self._parent_title = auto_drafted_parent or self.AUTO_DRAFTED_PARENT
 
     async def synthesize_promotion(
@@ -706,6 +711,7 @@ class PromotionSynthesizer:
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=self._event_queue,
+                budget_manager=self._budget_manager,
                 temperature=0.2,
                 max_tokens=(self._budget_tokens or None),
             )

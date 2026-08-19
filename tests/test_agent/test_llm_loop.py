@@ -895,3 +895,174 @@ async def test_loop_ignores_suspend_without_allow_suspend(ctx):
     assert result.text == "final"
     tool_msgs = {m.tool_call_id: m for m in result.messages if m.role == "tool"}
     assert "s1" in tool_msgs  # answered, not deferred
+
+
+# -- Phase failure reporting ----------------------------------------------
+#
+# A phase that raises used to publish nothing at all, so the last durable
+# trace of the turn was the ``agent_phase_started`` that opened it and the
+# dashboard rendered an in-flight call that never answered. These pin the
+# record that now takes its place.
+
+
+class _ExplodingProvider:
+    """Fails on the Nth call, after answering the ones before it."""
+
+    model = "stub"
+
+    def __init__(self, completions: list[Completion], exc: Exception) -> None:
+        self._completions = completions
+        self._exc = exc
+        self.calls = 0
+
+    async def complete(
+        self, messages, tools=None, temperature=0.7, max_tokens=None, tool_choice=None
+    ):
+        idx = self.calls
+        self.calls += 1
+        if idx >= len(self._completions):
+            raise self._exc
+        return self._completions[idx]
+
+
+async def _run_guarded(provider, surface, ctx, queue, *, phase="execute"):
+    from crewlet.agent.llm_loop import phase_failure_guard
+
+    agent = _AgentStub()
+    async with phase_failure_guard(
+        event_queue=queue,
+        agent=agent,
+        turn_id="turn-1",
+        iteration=1,
+        phase=phase,
+        provider_key="primary",
+    ) as progress:
+        await run_tool_loop(
+            provider=provider,
+            messages=[
+                Message(role="system", content="you are an engineer"),
+                Message(role="user", content="do the thing"),
+            ],
+            surface=surface,
+            context=ctx,
+            agent=agent,
+            max_rounds=5,
+            event_queue=queue,
+            phase_progress=progress,
+        )
+
+
+def _phase_events(queue):
+    return [e for _, e in queue.published if e.type == "agent_phase_completed"]
+
+
+async def test_failed_phase_publishes_a_record(surface, ctx):
+    queue = _QueueStub()
+    provider = _ExplodingProvider([], RuntimeError("provider exploded"))
+    with pytest.raises(RuntimeError):
+        await _run_guarded(provider, surface, ctx, queue)
+
+    events = _phase_events(queue)
+    assert len(events) == 1, "a phase that died published no record"
+    event = events[0]
+    assert event.failed is True
+    assert event.error == "provider exploded"
+    assert event.error_kind == "RuntimeError"
+    assert event.phase == "execute"
+    assert event.turn_id == "turn-1"
+
+
+async def test_failed_phase_carries_the_prompt_it_died_on(surface, ctx):
+    queue = _QueueStub()
+    provider = _ExplodingProvider([], RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        await _run_guarded(provider, surface, ctx, queue)
+
+    event = _phase_events(queue)[0]
+    assert event.system_prompt == "you are an engineer"
+    assert event.user_prompt == "do the thing"
+
+
+async def test_failed_phase_carries_the_partial_work(surface, ctx):
+    """Whatever the phase managed before it died is most of the diagnosis."""
+    queue = _QueueStub()
+    provider = _ExplodingProvider(
+        [
+            Completion(
+                content="I will echo first",
+                tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+                input_tokens=10,
+                output_tokens=4,
+            )
+        ],
+        RuntimeError("died on round two"),
+    )
+    with pytest.raises(RuntimeError):
+        await _run_guarded(provider, surface, ctx, queue)
+
+    event = _phase_events(queue)[0]
+    assert event.failed is True
+    assert event.rounds_used == 1
+    assert event.input_tokens == 10
+    assert event.output_tokens == 4
+    assert [x["name"] for x in event.tool_executions] == ["echo"]
+    assert "I will echo first" in event.response
+
+
+async def test_an_exhausted_provider_chain_reports_its_classified_error(surface, ctx):
+    """The wrapper's type name is useless; the classified cause is not."""
+    from crewlet.providers.fallback import LLMChainExhausted
+
+    queue = _QueueStub()
+    exc = LLMChainExhausted(
+        chain=["primary", "backup"],
+        last_exc=RuntimeError("429 slow down"),
+        last_error_kind="rate_limit",
+    )
+    with pytest.raises(LLMChainExhausted):
+        await _run_guarded(_ExplodingProvider([], exc), surface, ctx, queue)
+
+    event = _phase_events(queue)[0]
+    assert event.error_kind == "rate_limit"
+    assert "429 slow down" in event.error
+
+
+async def test_a_successful_phase_publishes_nothing_from_the_guard(surface, ctx):
+    """The guard is a failure path only — the runner owns the happy one."""
+    queue = _QueueStub()
+    provider = _ProviderStub([Completion(content="all done", tool_calls=[])])
+    await _run_guarded(provider, surface, ctx, queue)
+    assert _phase_events(queue) == []
+
+
+async def test_the_original_exception_reaches_the_caller_untouched(surface, ctx):
+    """Upstream handling keys on the exception type.
+
+    The turn engine tells an exhausted provider chain from a wall-clock
+    breach from an unhandled error by catching each specifically, so the
+    guard must never substitute an exception of its own.
+    """
+    queue = _QueueStub()
+    original = TimeoutError("wall clock")
+    with pytest.raises(TimeoutError) as caught:
+        await _run_guarded(_ExplodingProvider([], original), surface, ctx, queue)
+    assert caught.value is original
+    assert _phase_events(queue)[0].error_kind == "timeout"
+
+
+async def test_a_publish_failure_does_not_mask_the_real_error(surface, ctx):
+    """Telemetry must never replace the failure it is reporting."""
+
+    class _BrokenQueue:
+        published: list = []
+
+        async def publish(self, topic, event):
+            raise RuntimeError("queue is down")
+
+    with pytest.raises(RuntimeError, match="provider exploded"):
+        await _run_guarded(
+            _ExplodingProvider([], RuntimeError("provider exploded")),
+            surface,
+            ctx,
+            _BrokenQueue(),
+        )

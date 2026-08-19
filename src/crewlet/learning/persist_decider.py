@@ -244,12 +244,14 @@ class PersistDecider:
         diary: AgentDiary,
         budget_tokens: int = 5000,
         event_queue: Any = None,
+        budget_manager: Any = None,
         on_doc_observed: Any = None,
     ) -> None:
         self._llm_providers = llm_providers
         self._diary = diary
         self._budget_tokens = budget_tokens
         self._event_queue = event_queue
+        self._budget_manager = budget_manager
         # Optional async callback ``async (DirectiveObservation) -> None``
         # invoked when the classifier picks ``DOC``.  Engine wires this
         # to publish a lifecycle event; tests can inject a recorder.
@@ -320,6 +322,7 @@ class PersistDecider:
                 role_name=role.name,
                 provider_key=provider_key,
                 event_queue=self._event_queue,
+                budget_manager=self._budget_manager,
                 agent_id=agent_id,
                 turn_id=turn_id,
                 temperature=0.2,

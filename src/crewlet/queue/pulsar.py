@@ -319,6 +319,10 @@ class PulsarEventQueue:
         """Number of handler invocations currently mid-flight."""
         return self._in_flight
 
+    @property
+    def backend(self) -> str:
+        return "pulsar"
+
     def _client_kwargs(self) -> dict[str, Any]:
         """Keyword arguments for ``pulsar.Client`` (auth/TLS optional).
 

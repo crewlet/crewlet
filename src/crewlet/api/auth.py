@@ -90,28 +90,39 @@ def load_tokens(bootstrap: Any) -> dict[str, str]:
     return seen_ids
 
 
-def check_bearer(request: Request) -> str | None:
-    """Return the ``operator_id`` for a valid bearer header, else ``None``."""
-    tokens: dict[str, str] | None = getattr(request.app.state, "auth_tokens", None)
+def resolve_operator(app: Any, candidate: str) -> str | None:
+    """Return the ``operator_id`` a bare token authenticates as, else ``None``.
+
+    The token comparison, in one place.  The HTTP middleware reaches it
+    through :func:`check_bearer` (which peels the ``Authorization``
+    header first) and the dashboard's WebSocket query channel calls it
+    directly, because an operator-only query arrives as a field on a
+    socket frame rather than as a header.  Both therefore accept exactly
+    the same tokens, honour ``api.auth.disabled`` identically, and
+    compare in constant time.
+    """
+    tokens: dict[str, str] | None = getattr(app.state, "auth_tokens", None)
     if not tokens:
-        # When auth is disabled, every request is accepted.  Mirror
-        # the "no token" case so downstream attribution lands on an
-        # explicit "anonymous" label.
-        if getattr(request.app.state, "auth_disabled", False):
+        # When auth is disabled every caller is accepted.  Mirror the
+        # "no token" case so downstream attribution lands on an explicit
+        # "anonymous" label.
+        if getattr(app.state, "auth_disabled", False):
             return "anonymous"
         return None
-
-    header = request.headers.get("authorization", "")
-    if not header.lower().startswith("bearer "):
-        return None
-    candidate = header[len("bearer ") :].strip()
     if not candidate:
         return None
-
     for operator_id, expected in tokens.items():
         if hmac.compare_digest(candidate, expected):
             return operator_id
     return None
+
+
+def check_bearer(request: Request) -> str | None:
+    """Return the ``operator_id`` for a valid bearer header, else ``None``."""
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        return resolve_operator(request.app, "")
+    return resolve_operator(request.app, header[len("bearer ") :].strip())
 
 
 class ApiAuthMiddleware(BaseHTTPMiddleware):

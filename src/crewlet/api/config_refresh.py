@@ -59,6 +59,11 @@ def _serialize_agent_roles(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "role": name,
                 "goal": role.get("goal", ""),
                 "handle": handle,
+                # The configured cap (0 = unlimited).  Carried so the
+                # agent page can name a seat's budget with no engine
+                # attached -- the live meter is engine-only, the cap is
+                # config and must render either way.
+                "token_budget": int(role.get("token_budget", 0) or 0),
             }
         )
 
@@ -128,6 +133,11 @@ def _serialize_org_data(payload: dict[str, Any]) -> dict[str, Any]:
         "mission": payload.get("mission", ""),
         "vision": payload.get("vision", ""),
         "policies": payload.get("policies", []) or [],
+        # The org-wide token cap (0 = unlimited).  Per-role caps ride
+        # through inside ``units`` / ``roles``, which are passed
+        # verbatim; the org one is a top-level field and was being
+        # dropped.
+        "token_budget": int(payload.get("token_budget", 0) or 0),
         "units": payload.get("units", []) or [],
         "roles": payload.get("roles", []) or [],
     }
@@ -285,6 +295,40 @@ def _apply_payload_to_app(app: Any, payload: dict[str, Any]) -> None:
         app.state.tools_data = _tools_data_from_payload(readable)
     _set_webhook_secrets(app, plain)
     app.state.configured = True
+    _broadcast_config_change(app)
+
+
+def _broadcast_config_change(app: Any) -> None:
+    """Tell connected dashboards the org they are showing just changed.
+
+    A revision activation rewrites the org chart, the seat list, the tool
+    surface, and the schedules under every open tab.  Nothing told them:
+    a dashboard picked the new shape up only if the operator happened to
+    reload, so a tab could sit for hours showing seats that no longer
+    exist.  These are the same envelopes the snapshot carries, so a
+    client applies them with the code it already has.
+    """
+    stream = getattr(app.state, "stream", None)
+    if stream is None:
+        return
+    from crewlet.api.routes.agents import agents_payload
+    from crewlet.api.routes.org import schedule_projection
+
+    # ``seats``, not ``agents``: an ``agents`` envelope is a set of
+    # CHANGED overlays and a client merges it per role, which can add and
+    # update but never remove. A revision that deletes a role has to be
+    # able to take its card off the screen, so the whole list goes as its
+    # own kind and replaces.
+    for kind, data in (
+        ("org", app.state.org_data),
+        ("tools", app.state.tools_data),
+        ("seats", agents_payload(app)),
+        ("schedules", {"schedules": schedule_projection(app)}),
+    ):
+        try:
+            stream.push(kind, data)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("config_change_broadcast_failed", kind=kind)
 
 
 def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:

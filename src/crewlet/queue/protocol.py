@@ -272,6 +272,18 @@ class EventQueue(Protocol):
         """
         ...
 
+    @property
+    def backend(self) -> str:
+        """Stable lowercase backend name, for operator display only.
+
+        Declared on the Protocol rather than sniffed from the class
+        name downstream: a name-sniff lies the moment a queue is wrapped
+        or a third party implements this interface, and the Protocol is
+        where this codebase states what a provider can answer.  It is
+        NOT a capability flag -- nothing may branch behaviour on it.
+        """
+        ...
+
     async def pause_delivery(self) -> None:
         """Stop dispatching new events to handlers.
 

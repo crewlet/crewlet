@@ -205,6 +205,39 @@ async def test_extract_tags_from_task_event() -> None:
     assert tags == {"agent_id": "a-1", "task_id": "T-1"}
 
 
+def test_live_meters_are_never_persisted() -> None:
+    """``budget_reported`` must stay out of the category map.
+
+    It is a snapshot of in-memory counters whose values mean nothing
+    outside the engine run that produced them, so a persisted copy
+    would let a dashboard hydrate a dead process's meters and render
+    them as the current ones -- a figure that is not merely stale but
+    describes a different run.
+    """
+    assert "budget_reported" not in _CATEGORY_MAP
+    assert "agent_turn_progress" not in _CATEGORY_MAP
+
+
+async def test_failed_events_are_tagged() -> None:
+    """A failed phase is a filterable dimension, not just a payload field.
+
+    ``list_events`` never selects the payload column, so a dashboard
+    hydrating its feed from history has no other way to know a phase
+    died -- and a feed that renders a failed turn identically to a
+    successful one is the whole point of carrying this.
+    """
+    failed = AgentPhaseCompleted(
+        source="pm", role="PM", phase="execute", failed=True, error_kind="rate_limit"
+    )
+    assert EventStoreWriter._extract_tags(failed)["failed"] == "true"
+
+
+async def test_successful_events_carry_no_failed_tag() -> None:
+    """Only set when true, so the tag doubles as a filter."""
+    ok = AgentPhaseCompleted(source="pm", role="PM", phase="execute")
+    assert "failed" not in EventStoreWriter._extract_tags(ok)
+
+
 async def test_trace_fields_written_to_store(
     writer: EventStoreWriter, store: MemoryEventStore
 ) -> None:

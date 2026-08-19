@@ -399,7 +399,18 @@ async def account_sandbox_tokens(
     turn.model_keys["execute"] = provider_key
     if budget_manager is not None and tokens:
         try:
-            await budget_manager.consume(turn.agent.id_str, tokens)
+            # ``record_spend``, not ``consume``: the sandbox has already
+            # burned these tokens. ``consume`` REFUSES a charge that
+            # would exceed the cap and increments nothing, and the
+            # result was being discarded here -- so a run that busted
+            # the budget was neither counted nor blocked, and the meter
+            # read low exactly when the cap was binding.
+            if await budget_manager.record_spend(turn.agent.id_str, tokens):
+                logger.warning(
+                    "sandbox_spend_over_budget",
+                    agent_id=turn.agent.id_str,
+                    tokens=tokens,
+                )
         except Exception:
             logger.exception("sandbox_budget_consume_failed")
     if token_usage_repo is not None and tokens and turn.agent.handle:

@@ -1,7 +1,14 @@
 // Universal event detail — fetches /events/{id} and renders A2A,
 // webhook, LLM, or generic detail based on the event type.
 
-import { esc, fmtDateTime, prettyJson, relTime, shortId } from "../format.js";
+import {
+  esc,
+  escAttr,
+  fmtDateTime,
+  prettyJson,
+  relTime,
+  shortId,
+} from "../format.js";
 import { icon } from "../icons.js";
 import { integrationFromSource, integrationMeta } from "../state.js";
 import { empty } from "../ui.js";
@@ -11,8 +18,11 @@ import {
   toolsAvailable,
   promptSections,
   responseBody,
+  failureBlock,
+  failureOf,
   tokenStats,
 } from "../llm.js";
+import { recordFromEvent, recordFromPhase } from "../records.js";
 
 const A2A = new Set([
   "a2a_channel_opened",
@@ -21,10 +31,27 @@ const A2A = new Set([
   "a2a_channel_closed",
 ]);
 
+/**
+ * Mark a value as markup that `kv` must not escape.
+ *
+ * Everything else `kv` renders is escaped. It used to interpolate every
+ * value raw and rely on each caller to remember `esc` — and most of
+ * these values are webhook payload fields (a Jira summary, a Slack
+ * channel name, a GitHub PR title), i.e. text an outsider can choose. A
+ * caller that forgot was a stored-XSS hole, and the default has to be
+ * the safe one.
+ */
+function raw(html) {
+  return { __html: html };
+}
+
 function kv(rows) {
   const body = rows
     .filter(([, v]) => v !== undefined && v !== null && v !== "")
-    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`)
+    .map(([k, v]) => {
+      const value = v && typeof v === "object" && "__html" in v ? v.__html : esc(v);
+      return `<dt>${esc(k)}</dt><dd>${value}</dd>`;
+    })
     .join("");
   return `<dl class="kv">${body}</dl>`;
 }
@@ -44,34 +71,42 @@ function adfText(node) {
   return out;
 }
 
-export function createEventDetailView({ api, navigate, params }) {
-  let root;
-  let raw = null;
+export function createEventDetailView({ query, navigate, refresh, params }) {
+  // NOT named `raw`: that is the module-level marker `kv` reads to skip
+  // escaping, and a closure variable of the same name shadows it for
+  // every function nested here — which turned the one `raw(...)` call in
+  // `render` into a call on the fetched event object, and crashed the
+  // whole screen with "raw is not a function".
+  let loadedEvent = null;
+  let loading = true;
+  let loadError = "";
+  const openPrompts = new Set();
+  const collapsedThinks = new Set();
+  const openTools = new Set();
 
   function renderLLM(p, ev) {
-    const rec = {
-      model: p.model || "",
-      phase: p.phase || "turn",
-      notes: p.notes || "",
-      prompt_messages: p.prompt_messages,
-      system_prompt: p.system_prompt,
-      user_prompt: p.user_prompt,
-      prompt: p.prompt,
-      response: p.response,
-      input_tokens: p.input_tokens,
-      output_tokens: p.output_tokens,
-      total_tokens: p.total_tokens,
-      tool_executions: p.tool_executions || [],
-      tools_available: p.tools_available || [],
-      tool_catalogue: p.tool_catalogue || [],
-    };
+    // The record comes from the shared normalizer rather than a field
+    // list written out here. This view used to keep its own copy of that
+    // list, which is how a failed phase reached this screen with its
+    // failure quietly stripped off.
+    const rec = recordFromEvent(ev) || recordFromPhase(p, ev.timestamp);
+    const failure = failureOf(rec);
     return `
+      ${failure ? failureBlock(failure) : ""}
       ${tokenStats(rec)}
       ${toolsAvailable(rec)}
-      <div class="block-label">Prompt</div>${promptSections(rec)}
+      <div class="block-label">Prompt</div>${promptSections(rec, {
+        keyPrefix: "ev",
+        isOpen: (k, long) => (openPrompts.has(k) ? true : !long),
+      })}
       <div class="block-label">Response</div>${responseBody(rec.response, rec.tool_executions, {
+        keyPrefix: "ev",
+        thinkOpen: (k) => !collapsedThinks.has(k),
+        toolOpen: (k) => openTools.has(k),
         codingAgent: isCodingAgentPhase(rec),
         model: rec.model,
+        failure,
+        inProgress: false,
       })}`;
   }
 
@@ -104,7 +139,7 @@ export function createEventDetailView({ api, navigate, params }) {
       specific = kv([
         ["Event", body.webhookEvent],
         ["Issue", issue.key],
-        ["Summary", esc(f.summary || "")],
+        ["Summary", f.summary || ""],
         ["Status", f.status?.name],
         ["Assignee", f.assignee?.displayName],
       ]);
@@ -150,8 +185,8 @@ export function createEventDetailView({ api, navigate, params }) {
         ["Action", body.action],
         ["Sender", body.sender?.login],
         ["Repo", body.repository?.full_name],
-        ["PR", pr ? `#${pr.number} ${esc(pr.title || "")}` : ""],
-        ["Issue", issue ? `#${issue.number} ${esc(issue.title || "")}` : ""],
+        ["PR", pr ? `#${pr.number} ${pr.title || ""}` : ""],
+        ["Issue", issue ? `#${issue.number} ${issue.title || ""}` : ""],
       ]);
     }
     return `
@@ -176,8 +211,8 @@ export function createEventDetailView({ api, navigate, params }) {
       return (
         head +
         kv([
-          ["Recipient", esc(p.handle || "")],
-          ["Reason", esc(p.reason || "")],
+          ["Recipient", p.handle || ""],
+          ["Reason", p.reason || ""],
         ])
       );
     }
@@ -185,11 +220,11 @@ export function createEventDetailView({ api, navigate, params }) {
       return (
         head +
         kv([
-          ["Agent", esc(p.agent_handle || "")],
-          ["Conversation", esc(p.conversation_key || "")],
+          ["Agent", p.agent_handle || ""],
+          ["Conversation", p.conversation_key || ""],
           ["Messages", p.count],
-          ["First", p.first_at ? esc(fmtDateTime(p.first_at)) : ""],
-          ["Last", p.last_at ? esc(fmtDateTime(p.last_at)) : ""],
+          ["First", p.first_at ? fmtDateTime(p.first_at) : ""],
+          ["Last", p.last_at ? fmtDateTime(p.last_at) : ""],
         ])
       );
     }
@@ -206,9 +241,9 @@ export function createEventDetailView({ api, navigate, params }) {
     let out =
       head +
       kv([
-        ["Sender", esc(p.sender || "")],
-        ["Subject", esc(p.subject || "")],
-        ["Recipient", esc(p.recipient_email || "")],
+        ["Sender", p.sender || ""],
+        ["Subject", p.subject || ""],
+        ["Recipient", p.recipient_email || ""],
       ]);
     if (msg)
       out += `<div class="block-label">Message</div><pre class="code">${esc(msg)}</pre>`;
@@ -246,7 +281,6 @@ export function createEventDetailView({ api, navigate, params }) {
   }
 
   function render(ev) {
-    raw = ev;
     const p = ev.payload || {};
     let title = ev.type;
     let body;
@@ -266,9 +300,9 @@ export function createEventDetailView({ api, navigate, params }) {
       body = renderGeneric(p);
     }
 
-    root.innerHTML = `
+    return `
       <div class="back-link" data-action="back">${icon("chevron", "sm")} Back to activity</div>
-      <div class="card" style="padding:18px">
+      <div class="card event-detail">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
           <span class="badge info">${esc(title)}</span>
           <span class="row-ts">${esc(fmtDateTime(ev.timestamp))}</span>
@@ -276,43 +310,88 @@ export function createEventDetailView({ api, navigate, params }) {
           <button class="btn sm" data-action="copy">${icon("copy", "sm")} Copy</button>
         </div>
         ${kv([
-          ["Type", esc(ev.type)],
-          ["Source", esc(ev.source || "")],
-          ["Summary", esc(ev.summary || "")],
-          ["Trace", ev.trace_id ? `<span class="mono">${esc(shortId(ev.trace_id, 16))}</span>` : ""],
+          ["Type", ev.type],
+          ["Source", ev.source || ""],
+          ["Summary", ev.summary || ""],
+          [
+            "Trace",
+            ev.trace_id
+              ? raw(
+                  `<span class="mono trace-link" data-action="open-trace" data-trace="${escAttr(
+                    ev.trace_id,
+                  )}">${esc(shortId(ev.trace_id, 16))} →</span>`,
+                )
+              : "",
+          ],
         ])}
         <div style="margin-top:12px">${body}</div>
       </div>`;
   }
 
   async function load(id) {
-    const ev = await api.event(id);
-    if (!ev || ev._error) {
-      root.innerHTML = `<div class="back-link" data-action="back">${icon("chevron", "sm")} Back</div>${empty("inbox", "Event not found")}`;
-      return;
+    try {
+      loadedEvent = await query("event", { id });
+    } catch (err) {
+      loadError = err.message;
     }
-    render(ev);
+    loading = false;
+    refresh();
   }
 
   return {
-    mount(el) {
-      root = el;
-      root.innerHTML = '<div class="skel skel-row" style="margin:24px 0"></div>';
+    slices: [],
+
+    mount() {
       load(params.id);
     },
-    onAction(action, target) {
-      if (action === "back") navigate("/events");
-      else if (action === "copy")
-        copyToClipboard(JSON.stringify(raw || {}, null, 2)).then(() => toast("Copied"));
-      else if (action === "toggle-prompt")
-        target.closest(".msg-block")?.classList.toggle("open");
-      else if (action === "toggle-think")
-        target.closest(".think")?.classList.toggle("open");
-      else if (action === "toggle-tool") {
-        const k = target.dataset.tkey;
-        const sel = window.CSS && CSS.escape ? CSS.escape(k) : k;
-        root.querySelector(`[data-tool-key="${sel}"]`)?.classList.toggle("open");
+
+    render() {
+      const back = `<div class="back-link" data-action="back">${icon("chevron", "sm")} Back</div>`;
+      if (loading) return back + '<div class="skel skel-row" style="margin:24px 0"></div>';
+      if (loadError || !loadedEvent) {
+        return (
+          back +
+          empty(
+            "inbox",
+            loadError === "no_event_store"
+              ? "No event store configured"
+              : "Event not found",
+            loadError === "offline" ? "Reconnecting…" : "",
+          )
+        );
       }
+      return render(loadedEvent);
+    },
+
+    onAction(action, target) {
+      if (action === "back") {
+        navigate("/events");
+        return;
+      }
+      if (action === "open-trace") {
+        navigate("/traces/" + encodeURIComponent(target.dataset.trace));
+        return;
+      }
+      if (action === "copy") {
+        copyToClipboard(JSON.stringify(loadedEvent || {}, null, 2)).then(() => toast("Copied"));
+        return;
+      }
+      if (action === "toggle-prompt") {
+        const k = target.dataset.pkey;
+        if (openPrompts.has(k)) openPrompts.delete(k);
+        else openPrompts.add(k);
+      } else if (action === "toggle-think") {
+        const k = target.dataset.tkey;
+        if (collapsedThinks.has(k)) collapsedThinks.delete(k);
+        else collapsedThinks.add(k);
+      } else if (action === "toggle-tool") {
+        const k = target.dataset.tkey;
+        if (openTools.has(k)) openTools.delete(k);
+        else openTools.add(k);
+      } else {
+        return;
+      }
+      refresh();
     },
   };
 }
