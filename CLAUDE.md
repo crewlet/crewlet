@@ -756,7 +756,14 @@ tests/                # Mirror structure of src/crewlet/.
                       #   test_dashboard/js/ (a three-function harness +
                       #   a vendored DOM, no npm and no build step) run
                       #   under whatever `node` is on PATH by a pytest
-                      #   wrapper that SKIPS when there is none
+                      #   wrapper that SKIPS when there is none.
+                      #   test_scripts/ is the other: scripts/ is shell,
+                      #   so its suites EXTRACT the pure helper functions
+                      #   and source them into a real bash, and assert the
+                      #   rest (what may never reach argv, what mode a
+                      #   file is created with) against the source — the
+                      #   same static shape tests/test_examples/
+                      #   test_local_stack.py uses for the Plane bootstrap
 examples/             # Working examples (the Nimbus example org:
                       #   nimbus.config.yaml + nimbus.company.yaml +
                       #   nimbus-docs/ + tool-skills/). The MINIMAL
