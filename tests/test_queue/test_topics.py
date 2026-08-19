@@ -45,12 +45,20 @@ def test_no_other_module_builds_the_subject_by_hand():
     Nine call sites formatted this f-string before it was unified; each
     one was a chance for a routing change to reach some producers and
     not others.  Docstrings are allowed to name the shape.
+
+    The tests tree is scanned too, and for a sharper reason than
+    tidiness: a test that hard-codes the subject asserts the *old* name
+    after a grammar change, so it fails in a place that has nothing to
+    do with the change — or, worse, a producer test and a consumer test
+    that each hard-code it keep agreeing with each other while agreeing
+    with nothing the engine does.
     """
-    src = pathlib.Path(__file__).resolve().parents[2] / "src" / "crewlet"
+    root = pathlib.Path(__file__).resolve().parents[2]
     pattern = re.compile(r'f"crewlet\.agent\.\{')
     offenders = [
-        str(path.relative_to(src))
-        for path in src.rglob("*.py")
+        str(path.relative_to(root))
+        for tree in (root / "src" / "crewlet", root / "tests")
+        for path in tree.rglob("*.py")
         if path.name != "topics.py" and pattern.search(path.read_text())
     ]
     assert offenders == []

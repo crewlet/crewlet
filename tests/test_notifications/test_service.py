@@ -20,6 +20,7 @@ from crewlet.notifications.service import (
 )
 from crewlet.org.models import Organization, OrgUnit, Role
 from crewlet.queue.memory import MemoryEventQueue
+from crewlet.queue.topics import agent_inbox_topic
 
 
 def _make_org(*roles: Role) -> Organization:
@@ -126,7 +127,7 @@ async def test_inbound_routes_to_agent_inbox(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     inbound_event = Event(
         type="inbound_notification",
@@ -175,7 +176,7 @@ async def test_inbound_resolves_by_email(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     inbound_event = Event(
         type="inbound_notification",
@@ -204,7 +205,7 @@ async def test_inbound_unresolvable_logs_warning(bus, pool):
 
     # Subscribe to both agent inboxes to make sure nothing arrives
     for agent in pool.agents:
-        await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", catch_all)
+        await bus.subscribe(agent_inbox_topic(agent.handle), "test", catch_all)
 
     inbound_event = Event(
         type="inbound_notification",
@@ -234,7 +235,7 @@ async def test_inbound_resolves_by_external_id(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     # No handle, no email — only metadata with assignee_account_id
     inbound_event = Event(
@@ -276,7 +277,7 @@ async def test_inbound_skips_self_action(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     # Webhook resolves to the engineer agent via ``assignee_account_id``;
     # ``actor_account_id`` is the same agent — i.e. the agent's own
@@ -314,7 +315,7 @@ async def test_inbound_resolves_by_github_login(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     inbound_event = Event(
         type="inbound_notification",
@@ -586,7 +587,7 @@ async def test_inbound_slack_body_enriched_with_prompt(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     await bus.publish(
         INBOUND_TOPIC,
@@ -654,7 +655,7 @@ async def test_rate_limit_drops_excess(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     # Send 5 notifications rapidly to the same agent
     for i in range(5):
@@ -686,7 +687,7 @@ async def test_no_rate_limit_by_default(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     for i in range(10):
         await bus.publish(
@@ -857,7 +858,7 @@ async def test_plane_raw_webhook_dispatches_to_transport(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     await bus.publish(
         INBOUND_TOPIC,
@@ -917,7 +918,7 @@ async def test_inbound_resolves_by_plane_user_id(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     await bus.publish(
         INBOUND_TOPIC,
@@ -1000,7 +1001,7 @@ async def test_plane_self_action_skipped(bus, pool):
     async def inbox_handler(event: Event):
         received.append(event)
 
-    await bus.subscribe(f"crewlet.agent.{agent.handle}.inbox", "test", inbox_handler)
+    await bus.subscribe(agent_inbox_topic(agent.handle), "test", inbox_handler)
 
     await bus.publish(
         INBOUND_TOPIC,

@@ -130,7 +130,7 @@ class TestTaskAssignedTriggersExecuteTurn:
         try:
             # Pick any agent
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             # Patch execute_turn to track calls
             assert engine.turn_engine is not None
@@ -181,7 +181,7 @@ class TestTaskAssignedTriggersExecuteTurn:
         await engine.start()
         try:
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             assert engine.turn_engine is not None
             execute_calls: list[Event] = []
@@ -306,7 +306,7 @@ class TestNotificationTriggersExecuteTurn:
         await engine.start()
         try:
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             assert engine.turn_engine is not None
             execute_calls: list[Event | None] = []
@@ -356,7 +356,7 @@ class TestExecutorEventParameter:
         try:
             assert engine.turn_engine is not None
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             event = Event(
                 type="task_assigned",
@@ -520,7 +520,7 @@ class TestInboxCoalescing:
         await engine.start()
         try:
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
             assert engine.turn_engine is not None
             turn_events: list[Event] = []
 

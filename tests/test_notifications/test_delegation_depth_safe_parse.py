@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from crewlet.events.types import Event, ExternalNotification
+from crewlet.queue.topics import agent_inbox_topic
 
 
 @dataclass
@@ -38,7 +39,7 @@ class _PartyStub:
         self.agent_id = agent_id
         self.is_human = False
         self.is_local = False
-        self.inbox_topic = f"crewlet.agent.{handle}.inbox"
+        self.inbox_topic = agent_inbox_topic(handle)
 
 
 class _HandleRegistryStub:
