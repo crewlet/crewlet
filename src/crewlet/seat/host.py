@@ -81,8 +81,11 @@ from crewlet.db.leases import (
     seat_resource,
 )
 
-#: ``on_release(handle, lease, *, reason)``.
+#: ``on_release(handle, lease, reason)`` — positional, all three.
 type ReleaseHook = Callable[[str, Lease, ReleaseReason], Awaitable[None]]
+
+#: ``on_admission(handle, admitted)`` — see ``SeatHost.on_admission``.
+type AdmissionHook = Callable[[str, bool], Awaitable[None]]
 
 logger = get_logger("seat.host")
 
@@ -137,6 +140,17 @@ SEAT_CLAIM_LIMIT_PER_SWEEP = 4
 # noise from twelve attempts a minute to one. It is deliberately not
 # permanent: the cause is often config, and config changes.
 SEAT_ACQUIRE_BACKOFF_SECONDS = SEAT_LEASE_TTL_SECONDS
+
+# How many seats one sweep may hand back to rebalance.
+#
+# The mirror of the claim limit, sized the same way and for the same
+# reason: giving a seat up is an MCP teardown and, on the node that takes
+# it, an MCP spawn. Two per sweep rather than four because a release is
+# the more disruptive half — it interrupts a live agent at a turn
+# boundary, while a claim only starts one — and because the fleet has no
+# deadline to meet here. Nothing is dark during a rebalance; the seats
+# are being served the whole time, just by the wrong node.
+SEAT_RELEASE_LIMIT_PER_SWEEP = 2
 
 
 class ReleaseReason(StrEnum):
@@ -242,9 +256,11 @@ class SeatHost:
     keep claiming seats that no longer exist."""
     on_acquire: Callable[[str, Lease], Awaitable[None]] | None = None
     on_release: ReleaseHook | None = None
-    """Tear a seat down. Called as ``on_release(handle, lease,
-    reason=...)`` — the reason decides whether in-flight work is finished
-    or abandoned (see :class:`ReleaseReason`).
+    """Tear a seat down. Called as ``on_release(handle, lease, reason)``
+    — three POSITIONAL arguments; a keyword-only ``reason`` raises
+    ``TypeError`` inside the release, which is swallowed as "teardown
+    could not be proven" and strands the seat. The reason decides whether
+    in-flight work is finished or abandoned (see :class:`ReleaseReason`).
 
     Must be **idempotent and tolerant of partial state**: a failed
     acquire releases the same seat, so the hook can be handed a seat
@@ -254,11 +270,31 @@ class SeatHost:
     Raise :class:`SeatReleaseError` when teardown cannot be *proven* —
     the host then keeps the lease rather than handing a seat to a peer
     while still serving it."""
+    on_admission: AdmissionHook | None = None
+    """Ownership of a HELD seat became unprovable, or provable again.
+
+    Called ``on_admission(handle, admitted)`` when a renew starts or
+    stops failing, and only for seats this node keeps — a seat it loses
+    goes through ``on_release`` instead.
+
+    It exists because the lease grace and the consumer are two different
+    clocks. A store blip freezes ``renewed_at``, so :meth:`may_start`
+    stops admitting turns within one heartbeat while the seat itself is
+    correctly kept (the row is untouched; shedding on a blip would tear
+    a healthy company down). The consumer, meanwhile, is still attached
+    and still being handed deliveries, each of which is refused. Without
+    a signal on the way back up, a delivery that arrived during the blip
+    would leave the attachment stopped for good: the node owns the seat,
+    is attached to it, and reads nothing from it ever again.
+
+    Fires only on the EDGE, so a store that is down for an hour produces
+    one call, not one per heartbeat."""
     ttl_seconds: float = SEAT_LEASE_TTL_SECONDS
     heartbeat_seconds: float = SEAT_HEARTBEAT_INTERVAL_SECONDS
     sweep_seconds: float = SEAT_SWEEP_INTERVAL_SECONDS
     claim_limit: int = SEAT_CLAIM_LIMIT_PER_SWEEP
     acquire_backoff_seconds: float = SEAT_ACQUIRE_BACKOFF_SECONDS
+    release_limit: int = SEAT_RELEASE_LIMIT_PER_SWEEP
     protocol: int = PROTOCOL_VERSION
 
     _held: dict[str, _Held] = field(default_factory=dict, init=False)
@@ -269,6 +305,11 @@ class SeatHost:
     Negative stickiness: a seat whose acquire pipeline failed is skipped
     by this node's claim order until the deadline. Peers are unaffected —
     they may well succeed where this node did not."""
+    _unproven_admission: set[str] = field(default_factory=set, init=False)
+    """Held seats whose last renew FAILED, so admission is not provable.
+
+    The edge-detector behind :attr:`on_admission` — membership changes
+    at most once per outage, not once per heartbeat."""
     _undead: dict[str, _Held] = field(default_factory=dict, init=False)
     """Seats whose teardown could not be proven, kept OUT of ``_held``
     (so nothing new starts on them) but still renewed (so no peer takes a
@@ -444,6 +485,7 @@ class SeatHost:
                 ),
             )
         self._undead.clear()
+        self._unproven_admission.clear()
         self._acquire_backoff.clear()
         self._seat_locks.clear()
         logger.info("seat_host_stopped", node=self.node_id)
@@ -481,6 +523,10 @@ class SeatHost:
         if they cannot be closed within the TTL (see :meth:`heartbeat`).
         """
         held = self._held.pop(handle, None)
+        # Whatever happens next, this seat's admission is no longer a
+        # live question here: the attachment goes with it, so a stale
+        # flag would suppress the resume after a future re-claim.
+        self._unproven_admission.discard(handle)
         if held is None:
             return False
         try:
@@ -578,6 +624,7 @@ class SeatHost:
                         seconds_since_renew=round(elapsed, 1),
                         ttl_seconds=self.ttl_seconds,
                     )
+                    await self._note_admission(handle, admitted=False)
                     continue
                 logger.error(
                     "seat_dropped_unrenewable",
@@ -602,6 +649,7 @@ class SeatHost:
                     current = self._held.get(handle) or self._undead.get(handle)
                     if current is held:
                         held.renewed_at = now
+                await self._note_admission(handle, admitted=True)
                 continue
             if handle in self._undead:
                 # An undead seat whose lease is genuinely gone: the row
@@ -628,6 +676,7 @@ class SeatHost:
                     continue
                 lost.append(handle)
                 self._held.pop(handle, None)
+                self._unproven_admission.discard(handle)
                 logger.warning(
                     "seat_lease_lost",
                     seat=handle,
@@ -648,7 +697,15 @@ class SeatHost:
         return tuple(lost)
 
     async def sweep(self) -> SweepResult:
-        """One placement pass: claim up to a fair share, rate-limited."""
+        """One placement pass: converge on a fair share, rate-limited.
+
+        Both directions. Claiming alone is only half of placement, and
+        the half that does nothing for a fleet that grows: a node that
+        booted alone holds every seat, and every peer that joins later
+        computes a share it can never reach because the seats it should
+        take are already held by a node with no reason to let go. Scaling
+        out would then do nothing at all until something died.
+        """
         seats = list(self.seats())
         capacity, live_nodes = await self._capacity(len(seats))
 
@@ -660,6 +717,9 @@ class SeatHost:
                 logger.info("seat_released_role_gone", seat=handle)
                 await self.release(handle, ReleaseReason.ROLE_GONE)
                 released.append(handle)
+
+        if not self._draining:
+            released.extend(await self._shed_to_capacity(capacity))
 
         claimed: list[str] = []
         blocked: int | None = None
@@ -708,6 +768,61 @@ class SeatHost:
                 del self._seat_locks[handle]
 
     # ── internals ────────────────────────────────────────────────────
+
+    async def _shed_to_capacity(self, capacity: int) -> list[str]:
+        """Hand back seats held above this node's fair share.
+
+        The give-back half of placement. It exists because the fair share
+        is recomputed from a live node count: the moment a peer joins,
+        every incumbent's share drops, and without this nothing ever acts
+        on that — the new node computes a share it cannot reach, and the
+        incumbent keeps serving seats it has already been told are not
+        its own.
+
+        **Voluntary**, so the seat is quiesced and its in-flight turn
+        finishes before the consumer detaches. A rebalance costs at most
+        one turn boundary of latency on each seat that moves; nothing is
+        abandoned and nothing goes dark, because the seat is served
+        continuously — first here, then there.
+
+        **Convergent, not oscillating**, and the ceiling is what
+        guarantees it: shares are ``ceil(seats / nodes)``, so they sum to
+        at least the seat count, and a node that has shed down to its
+        share has ``room == 0`` and cannot immediately re-claim what it
+        just gave up. The excess moves once and stops.
+
+        Rate-limited like claiming, and skipped entirely while draining —
+        a draining node is releasing everything anyway, and counting its
+        seats twice would only slow that down.
+        """
+        over = len(self._held) + len(self._undead) - capacity
+        if over <= 0:
+            return []
+        # Sorted, and NOT ordered by the ``preferred`` hint the way
+        # claiming is. The hint records the last node to claim a seat,
+        # which for every seat this node holds is this node — so it
+        # cannot discriminate among them, and ordering by it would only
+        # look like it was doing something. A stable order is what
+        # matters: it makes a shed reproducible, and two nodes
+        # rebalancing at once hold disjoint sets, so they cannot collide.
+        shed: list[str] = []
+        for handle in sorted(self._held)[: min(over, self.release_limit)]:
+            logger.info(
+                "seat_released_over_capacity",
+                seat=handle,
+                held=len(self._held),
+                capacity=capacity,
+            )
+            await self.release(handle, ReleaseReason.DRAIN)
+            # A release whose teardown could not be proven keeps the
+            # lease — the seat leaves ``_held`` but lands in ``_undead``,
+            # so no peer can take it. Reporting that as shed would claim
+            # the rebalance made room it did not make, and this node
+            # would shed a second seat next sweep on top of one it is
+            # still serving.
+            if handle not in self._held and handle not in self._undead:
+                shed.append(handle)
+        return shed
 
     async def _claim_up_to(
         self, seats: Sequence[str], room: int
@@ -900,6 +1015,34 @@ class SeatHost:
             # seat's lock, and asyncio.Lock is not reentrant. The reason
             # tells the hook the seat was never fully established.
             await self._release_locked(handle, ReleaseReason.ACQUIRE_FAILED)
+
+    async def _note_admission(self, handle: str, *, admitted: bool) -> None:
+        """Report a change in whether this seat's ownership is provable.
+
+        Edge-triggered: a store that is unreachable for an hour produces
+        one call, not one per heartbeat, so the consumer is stopped once
+        and resumed once. A hook failure is logged and swallowed — it
+        cannot be allowed to abort the heartbeat, which is what keeps
+        every OTHER seat on this node alive.
+        """
+        was_unproven = handle in self._unproven_admission
+        if admitted:
+            if not was_unproven:
+                return
+            self._unproven_admission.discard(handle)
+        else:
+            if was_unproven:
+                return
+            self._unproven_admission.add(handle)
+        logger.info("seat_admission_changed", seat=handle, admitted=admitted)
+        if self.on_admission is None:
+            return
+        try:
+            await self.on_admission(handle, admitted)
+        except Exception:
+            logger.exception(
+                "seat_admission_hook_failed", seat=handle, admitted=admitted
+            )
 
     async def _notify_release(
         self, handle: str, lease: Lease, reason: ReleaseReason

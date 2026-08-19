@@ -338,6 +338,7 @@ class Engine:
         learning_config: Any = None,
         scheduling_config: Any = None,
         embeddings: Any = None,
+        lease_store: Any = None,
     ) -> None:
         self.debug = debug
         self._turn_engine_config = turn_engine_config
@@ -479,6 +480,12 @@ class Engine:
         # backend is known — see ``_build_seat_host``.
         self._seat_host: Any = None
         self._seat_host_started = False
+        # An injected placement backend, for the caller that runs more
+        # than one engine against one fleet.  Left ``None``,
+        # ``_build_seat_host`` derives it from ``storage`` — the right
+        # default, because a process-local store is only ever correct
+        # for the process that is the whole fleet.
+        self._lease_store: Any = lease_store
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -609,6 +616,7 @@ class Engine:
         a2a_bus: A2ABus | None = None,
         embeddings: Any = None,
         company_config_store: Any = None,
+        lease_store: Any = None,
     ) -> Engine:
         """Construct an engine from Tier A bootstrap state only.
 
@@ -634,6 +642,7 @@ class Engine:
             debug=bootstrap.debug,
             api_port=bootstrap.api.port,
             api_host=bootstrap.api.host,
+            lease_store=lease_store,
         )
         engine._bootstrap = bootstrap
         engine._company_config_store = company_config_store
@@ -6109,16 +6118,31 @@ class Engine:
         using one believes it owns the whole company. That is correct for
         one node and catastrophic for two, which is why it is said out
         loud at boot rather than left as a debug line.
+
+        An explicit ``lease_store=`` overrides the derivation, for the
+        caller that runs several engines against one fleet in one
+        process — an embedding, a fleet test.  Each still mints its own
+        incarnation, so they are peers to each other exactly as separate
+        processes would be, and the warning above does not apply: the
+        store is shared, so the fleet is real.
         """
-        from crewlet.config import resolve_node_incarnation
+        from crewlet.config import new_node_incarnation
         from crewlet.db.client import Database
         from crewlet.db.leases import LeaseStore, MemoryLeaseStore
         from crewlet.seat.host import SeatHost
 
         bootstrap = getattr(self, "_bootstrap", None)
-        self._incarnation = resolve_node_incarnation(bootstrap)
-        if isinstance(self.storage, Database):
-            leases: Any = LeaseStore(self.storage)
+        # A FRESH incarnation per engine, not the process-cached one.
+        # Two engines in one process are two lease holders; sharing an
+        # identity would let each renew the other's lease and put both on
+        # one seat at the same fencing epoch — the exact hole the
+        # incarnation exists to close.
+        if not self._incarnation:
+            self._incarnation = new_node_incarnation(bootstrap)
+        if self._lease_store is not None:
+            leases: Any = self._lease_store
+        elif isinstance(self.storage, Database):
+            leases = LeaseStore(self.storage)
         else:
             leases = MemoryLeaseStore()
             logger.warning(
@@ -6140,7 +6164,47 @@ class Engine:
             seats=self._agent_seat_handles,
             on_acquire=self._acquire_seat,
             on_release=self._release_seat,
+            on_admission=self._seat_admission_changed,
         )
+
+    async def _seat_admission_changed(self, handle: str, admitted: bool) -> None:
+        """Stop or resume consuming a seat this node still holds.
+
+        The lease store went unreachable, or came back. Either way the
+        seat stays here — the row is untouched by a blip, and shedding on
+        one would tear a healthy company down over a two-second outage —
+        but ownership stops being *provable*, and a turn started without
+        proof is a turn a peer may be running too.
+
+        So the consumer is quiesced rather than detached: the attachment
+        and the subscription survive, in-flight work finishes, and
+        nothing new is fetched. The resume is the half that has to exist:
+        a delivery arriving during the blip quiesces the attachment
+        through ``DeferDelivery``, and with no inverse the node would
+        come back healthy, still own the seat, still be attached to it,
+        and never read from it again.
+
+        Pause holds are deliberately untouched in both directions — a
+        seat mid-sandbox is paused for its own reason, and lifting that
+        here would deliver into a suspended turn.
+        """
+        topics = (
+            (agent_inbox_topic(handle), agent_inbox_group(handle)),
+            (agent_control_topic(handle), agent_control_group(handle)),
+        )
+        for topic, group in topics:
+            try:
+                if admitted:
+                    await self.event_queue.unquiesce(topic, group)
+                else:
+                    await self.event_queue.quiesce(topic, group)
+            except Exception:
+                logger.exception(
+                    "seat_admission_gate_failed",
+                    seat=handle,
+                    topic=topic,
+                    admitted=admitted,
+                )
 
     async def claim_worker_duty(self, duty: str, ttl_seconds: float = 45.0) -> bool:
         """Claim a fleet-wide singleton duty for this node, briefly.

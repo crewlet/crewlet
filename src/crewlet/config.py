@@ -902,11 +902,29 @@ def resolve_node_incarnation(bootstrap: BootstrapConfig | None = None) -> str:
     Computed once per process and cached: two calls return the same
     value, so a caller cannot accidentally fence itself out by
     re-resolving.
+
+    That cache is right for the usual case — one engine per process —
+    and wrong for the other one.  Two :class:`~crewlet.engine.Engine`
+    objects in ONE process (an embedding, a fleet test) are two lease
+    holders, and handing them the same identity recreates exactly the
+    hole this function exists to close: each could renew the other's
+    lease, and both would hold a seat at the same fencing epoch.  Those
+    callers use :func:`new_node_incarnation`.
     """
     global _INCARNATION  # noqa: PLW0603
     if not _INCARNATION:
-        _INCARNATION = f"{resolve_node_id(bootstrap)}:{uuid4().hex[:8]}"
+        _INCARNATION = new_node_incarnation(bootstrap)
     return _INCARNATION
+
+
+def new_node_incarnation(bootstrap: BootstrapConfig | None = None) -> str:
+    """Mint a FRESH holder identity, bypassing the process cache.
+
+    For a caller that is itself one lease holder among several in this
+    process.  Each engine holds its own for its whole life — minting a
+    second one mid-run would fence the engine out of its own seats.
+    """
+    return f"{resolve_node_id(bootstrap)}:{uuid4().hex[:8]}"
 
 
 class TurnEngineConfig(BaseModel):

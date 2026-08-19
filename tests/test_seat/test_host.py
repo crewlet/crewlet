@@ -29,6 +29,7 @@ from crewlet.db.leases import (
     seat_resource,
 )
 from crewlet.seat.host import (
+    SEAT_RELEASE_LIMIT_PER_SWEEP,
     ReleaseReason,
     SeatHost,
     SeatReleaseError,
@@ -907,3 +908,272 @@ async def test_a_store_blip_does_not_make_every_node_claim_everything(
     host.leases = _Unavailable(leases, list_live=_boom)
     capacity, live = await host._capacity(4)
     assert (capacity, live) == (2, 2), "a blip widened the share to everything"
+
+
+# ── giving seats back: the other half of placement ───────────────────
+
+
+async def test_a_node_that_booted_alone_makes_room_when_a_peer_joins(
+    leases: Any,
+) -> None:
+    """Scaling out has to actually move work.
+
+    Claiming alone converges only for a fleet that shrinks. A node that
+    booted first holds every seat, and a peer joining later computes a
+    share it can never reach — every seat it wants is held by a node with
+    no reason to let go. Without the give-back, adding a node to a
+    running company does nothing at all until something dies.
+    """
+    a = _host(leases, "node-a")
+    await a._renew_node_presence()
+    await a.sweep()
+    assert set(a.held_handles) == {"ceo", "eng", "ops"}
+
+    b = _host(leases, "node-b")
+    await b._renew_node_presence()
+
+    # a notices the fleet grew and hands back its excess.
+    result = await a.sweep()
+    assert result.capacity == 2
+    assert len(a.held_handles) == 2
+    assert len(result.lost) == 1
+
+    # And the seat it gave up is claimable, so the fleet converges.
+    await b.sweep()
+    assert len(b.held_handles) == 1
+    assert not set(a.held_handles) & set(b.held_handles)
+    assert set(a.held_handles) | set(b.held_handles) == {"ceo", "eng", "ops"}
+
+
+async def test_the_give_back_settles_instead_of_ping_ponging(leases: Any) -> None:
+    """Convergence, and the ceiling is what guarantees it.
+
+    Shares are ``ceil(seats / nodes)``, so they sum to at least the seat
+    count and a node at its share has no room to re-claim what it just
+    shed. Sweeping both nodes repeatedly must therefore reach a split and
+    stay there — a rebalance that oscillates would respawn MCP children
+    on every tick forever.
+    """
+    a = _host(leases, "node-a", seats=lambda: [f"s{i}" for i in range(5)])
+    b = _host(leases, "node-b", seats=lambda: [f"s{i}" for i in range(5)])
+    await a._renew_node_presence()
+    await a.sweep()  # alone: takes all five
+    await b._renew_node_presence()
+
+    for _ in range(8):
+        await a.sweep()
+        await b.sweep()
+
+    held_a, held_b = set(a.held_handles), set(b.held_handles)
+    assert held_a | held_b == {f"s{i}" for i in range(5)}
+    assert not held_a & held_b
+    assert len(held_a) <= 3 and len(held_b) <= 3
+
+    # Stable: another round moves nothing.
+    before = (a.held_handles, b.held_handles)
+    await a.sweep()
+    await b.sweep()
+    assert (a.held_handles, b.held_handles) == before
+
+
+async def test_the_give_back_is_rate_limited_like_claiming(leases: Any) -> None:
+    """A release is an MCP teardown here and a spawn on whoever takes it.
+
+    Shedding eight seats in one tick would fork the whole company's
+    subprocess trees twice inside a second, for a rebalance nothing is
+    waiting on — no seat is dark while it is held by the wrong node.
+    """
+    a = _host(leases, "node-a", seats=lambda: [f"s{i}" for i in range(10)])
+    await a._renew_node_presence()
+    for _ in range(4):
+        await a.sweep()  # alone, claim-limited: ends up holding all ten
+    assert len(a.held_handles) == 10
+
+    for node in ("node-b", "node-c", "node-d"):
+        await _host(leases, node)._renew_node_presence()
+
+    result = await a.sweep()  # capacity is now ceil(10/4) = 3
+    assert result.capacity == 3
+    assert len(result.lost) == SEAT_RELEASE_LIMIT_PER_SWEEP
+    assert len(a.held_handles) == 10 - SEAT_RELEASE_LIMIT_PER_SWEEP
+
+
+async def test_the_shed_order_is_stable(leases: Any) -> None:
+    """A rebalance has to be reproducible.
+
+    Deliberately NOT ordered by the ``preferred`` hint, the way claiming
+    is: the hint records the last node to claim a seat, so for every seat
+    this node holds it names this node. Ordering by it would look like
+    stickiness and do nothing.
+    """
+    a = _host(leases, "node-a", seats=lambda: ["ceo", "eng", "ops"])
+    await a._renew_node_presence()
+    await a.sweep()
+    assert set(a.held_handles) == {"ceo", "eng", "ops"}
+    hints = [(await leases.get(seat_resource(h))).preferred for h in a.held_handles]
+    assert hints == ["node-a"] * 3, (
+        "the hint names the last claimer, so it cannot rank a node's own seats"
+    )
+
+    await _host(leases, "node-b")._renew_node_presence()
+    assert (await a.sweep()).lost == ("ceo",)
+
+
+async def test_a_shed_that_cannot_be_proven_is_not_reported_as_room_made(
+    leases: Any,
+) -> None:
+    """An unproven teardown keeps the lease, so the seat did not move.
+
+    Counting it as shed would tell the fleet a rebalance made room that
+    no peer can actually take — and this node would then shed a second
+    seat next sweep on top of one it is still serving.
+    """
+
+    async def _stuck(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        raise SeatReleaseError("consumer will not close")
+
+    a = _host(leases, "node-a", on_release=_stuck)
+    await a._renew_node_presence()
+    await a.sweep()
+    assert len(a.held_handles) == 3
+
+    await _host(leases, "node-b")._renew_node_presence()
+    result = await a.sweep()
+    assert result.lost == ()
+    assert len(a.unproven_handles) == 1
+
+
+async def test_a_draining_node_does_not_shed_twice(leases: Any) -> None:
+    """``release_all`` is already giving every seat back; a capacity shed
+    on top of it only slows the drain down and logs a rebalance that is
+    not happening."""
+    a = _host(leases, "node-a")
+    await a._renew_node_presence()
+    await a.sweep()
+    await _host(leases, "node-b")._renew_node_presence()
+
+    await a.begin_drain()
+    result = await a.sweep()
+    assert result.lost == ()
+    assert len(a.held_handles) == 3
+
+
+# ── admission: the blip that keeps the seat ──────────────────────────
+
+
+async def test_a_failed_renew_reports_admission_lost_and_the_recovery_reports_it_back(
+    leases: Any,
+) -> None:
+    """The signal the consumer needs, in both directions.
+
+    A blip freezes ``renewed_at``, so admission stops being provable
+    within one heartbeat while the seat itself is correctly kept — the
+    row is untouched, and shedding on a two-second outage would tear a
+    healthy company down. The consumer has to stop reading, and then it
+    has to start again: without the second edge the node comes back
+    healthy, still owning the seat, and never serves it.
+    """
+    calls: list[tuple[str, bool]] = []
+
+    async def _admission(handle: str, admitted: bool) -> None:
+        calls.append((handle, admitted))
+
+    host = _host(leases, seats=lambda: ["ceo"], on_admission=_admission)
+    await host._renew_node_presence()
+    await host.sweep()
+    assert host.held_handles == ("ceo",)
+
+    async def _boom(*_a: Any, **_k: Any) -> bool:
+        raise LeaseError("store unreachable")
+
+    host.leases = _Unavailable(leases, renew=_boom)
+    assert await host.heartbeat() == ()
+    assert host.held_handles == ("ceo",), "a blip keeps the seat"
+    assert calls == [("ceo", False)]
+
+    host.leases = leases
+    await host.heartbeat()
+    assert calls == [("ceo", False), ("ceo", True)]
+
+
+async def test_admission_is_reported_on_the_edge_not_every_heartbeat(
+    leases: Any,
+) -> None:
+    """An hour-long outage is one call, not two hundred and forty.
+
+    The hook stops and starts a consumer; running it per tick would
+    reattach-storm a seat for the whole outage.
+    """
+    calls: list[tuple[str, bool]] = []
+
+    async def _admission(handle: str, admitted: bool) -> None:
+        calls.append((handle, admitted))
+
+    host = _host(leases, seats=lambda: ["ceo"], on_admission=_admission)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    async def _boom(*_a: Any, **_k: Any) -> bool:
+        raise LeaseError("store unreachable")
+
+    host.leases = _Unavailable(leases, renew=_boom)
+    for _ in range(4):
+        await host.heartbeat()
+    assert calls == [("ceo", False)]
+
+    host.leases = leases
+    for _ in range(4):
+        await host.heartbeat()
+    assert calls == [("ceo", False), ("ceo", True)]
+
+
+async def test_a_seat_that_leaves_forgets_it_was_unproven(leases: Any) -> None:
+    """A stale flag would suppress the resume after a re-claim, leaving
+    a seat this node legitimately owns attached and silent."""
+    calls: list[tuple[str, bool]] = []
+
+    async def _admission(handle: str, admitted: bool) -> None:
+        calls.append((handle, admitted))
+
+    host = _host(leases, seats=lambda: ["ceo"], on_admission=_admission)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    async def _boom(*_a: Any, **_k: Any) -> bool:
+        raise LeaseError("store unreachable")
+
+    host.leases = _Unavailable(leases, renew=_boom)
+    await host.heartbeat()
+    assert calls == [("ceo", False)]
+
+    host.leases = leases
+    await host.release("ceo")
+    await host.sweep()  # re-claimed, fresh attachment
+    assert host.held_handles == ("ceo",)
+    assert calls == [("ceo", False)], "the release already reset the flag"
+
+    host.leases = _Unavailable(leases, renew=_boom)
+    await host.heartbeat()
+    assert calls == [("ceo", False), ("ceo", False)]
+
+
+async def test_an_admission_hook_failure_does_not_abort_the_heartbeat(
+    leases: Any,
+) -> None:
+    """The heartbeat is what keeps every OTHER seat on this node alive.
+    Letting one seat's gate take it down turns a queue hiccup into a
+    node-wide lease lapse."""
+
+    async def _boom_hook(handle: str, admitted: bool) -> None:
+        raise RuntimeError("the broker will not answer")
+
+    host = _host(leases, seats=lambda: ["ceo", "eng"], on_admission=_boom_hook)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    async def _boom(*_a: Any, **_k: Any) -> bool:
+        raise LeaseError("store unreachable")
+
+    host.leases = _Unavailable(leases, renew=_boom)
+    assert await host.heartbeat() == ()
+    assert set(host.held_handles) == {"ceo", "eng"}
