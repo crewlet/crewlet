@@ -491,9 +491,20 @@ behind its stale row.
 
 ---
 
-## Phase 5 — Seat host
+## Phase 5 — Seat host — DONE
 
-The largest phase.
+The largest phase. Every gate closed and every item shipped, but not
+every item as written: 5.2's design failed review and was rewritten,
+5.4's turn claim failed review 5-of-5 and shipped as a completion ledger,
+and 5.3 / 5.5 / 5.6 / 5.7 folded into the revised 5.2 because each was a
+correctness precondition for it rather than a follow-on. One clause of
+5.5 was dropped on purpose: budget consumption is **not** epoch-fenced,
+because the counter is fleet-wide and a zombie's tokens were genuinely
+spent — fencing them would under-count a real cost. What fencing does
+not yet cover is named in
+[`docs/concepts/seat-ownership.md`](docs/concepts/seat-ownership.md):
+the learning tables and the onboarding markers are still written
+unfenced.
 
 **Entry gates:** (a) the broker measurement harness has produced numbers for
 session-death timing, cursor continuity on owner handoff, and prefetch
