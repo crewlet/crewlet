@@ -1,5 +1,8 @@
 // Agent detail: live state, current task, per-phase token summary, durable
 // memory, and the LLM invocation history (with the in-flight call) last.
+// The seat's raw event list is NOT here — Activity renders it, with
+// filters this page never had, and a second copy of it below the turns
+// buried the thing the page is actually for. The header links across.
 //
 // Two things changed here and they are related. The in-flight call is no
 // longer reconstructed from the raw event stream — the server projects it
@@ -14,7 +17,6 @@ import {
   fmtNum,
   fmtTime,
   mdLite,
-  newestFirst,
   relTime,
   shortId,
   trunc,
@@ -32,8 +34,7 @@ import {
   effectiveAgentState,
   stateLabel,
 } from "../state.js";
-import { empty, phaseBar, sectionHead, skeletonRows } from "../ui.js";
-import { traceNode } from "../traceNodes.js";
+import { empty, phaseBar } from "../ui.js";
 import { copyToClipboard, toast } from "../dom.js";
 import {
   isCodingAgentPhase,
@@ -68,14 +69,6 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
   let loadError = "";
   let disposed = false;
   const phaseWindow = 7;
-
-  // This seat's event history, read from the store beneath the live
-  // feed. Separate from `llm`, which is only the LLM invocations.
-  let history = [];
-  let historyLoading = false;
-  let historyExhausted = false;
-  let historyNoStore = false;
-  const HISTORY_PAGE = 50;
 
   // Expansion state.
   //
@@ -227,6 +220,8 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
           <span class="badge ${stateBadgeClass(st)}"><i class="dot"></i>${esc(stateLabel(st))}${esc(phaseSuffix(a))}</span>
           ${tokenChip(a)}
           ${budgetChip(a)}
+          <button class="btn sm" data-action="seat-events"
+                  title="This seat's events on Activity">${icon("inbox", "sm")} Events</button>
         </div>
       </div>
       ${failure ? renderFailureCard(failure) : ""}`;
@@ -676,87 +671,15 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
     query("agent_memory", { id })
       .then((m) => {
         memory = m;
-        refresh();
+        if (!disposed) refresh();
       })
       .catch(() => {});
     query("tokens", { since_days: phaseWindow, agent_role: data.role })
       .then((t) => {
         phaseSummary = t;
-        refresh();
+        if (!disposed) refresh();
       })
       .catch(() => {});
-    loadHistory();
-  }
-
-  // This seat's events, from the store.
-  //
-  // `related_agent` is a deliberately broad match: the agent's own
-  // events, PLUS everything sharing a trace with one — which is how the
-  // inbound webhook that woke it appears in its history. The section
-  // says so, because a reader who is not told will believe the agent
-  // emitted that Jira event itself.
-  async function loadHistory() {
-    if (historyLoading || historyExhausted || historyNoStore) return;
-    historyLoading = true;
-    refresh();
-    try {
-      const params = { related_agent: data.role, limit: HISTORY_PAGE };
-      const oldest = history[history.length - 1];
-      if (oldest) {
-        params.before = oldest.timestamp;
-        params.before_id = oldest.id;
-      }
-      const rows = await query("events", params);
-      const known = new Set(history.map((e) => e.id));
-      const fresh = (rows || []).filter((e) => e && e.id && !known.has(e.id));
-      history = history.concat(fresh).sort(newestFirst);
-      // Zero rows, not a short page: `related_agent` over-fetches and
-      // post-filters server-side, so its page size is best-effort and a
-      // short page says nothing about whether more exists.
-      if (!fresh.length) historyExhausted = true;
-    } catch (err) {
-      if (err.message === "no_event_store") historyNoStore = true;
-    } finally {
-      historyLoading = false;
-      if (!disposed) refresh();
-    }
-  }
-
-  function renderHistory() {
-    if (historyNoStore) return "";
-    if (!history.length && historyLoading) {
-      return sectionHead("inbox", "Event history", null, null) + skeletonRows(4);
-    }
-    if (!history.length) return "";
-    return (
-      sectionHead("inbox", "Event history", history.length, null) +
-      `<div class="hist-note">This seat's events, and the triggers that
-        caused them — anything sharing a trace with one of its own.</div>` +
-      `<div class="list">${history
-        .map((ev) => traceNode(ev, { keyPrefix: "ah" }))
-        .join("")}</div>` +
-      (historyExhausted
-        ? ""
-        : `<div class="show-more ${historyLoading ? "is-loading" : ""}"
-             ${historyLoading ? "" : 'data-action="more-history"'}
-             data-k="hist-pager">${
-               historyLoading ? "Reading history…" : "Load more"
-             }</div>`)
-    );
-  }
-
-  // The same rule the store's ``related_agent`` filter applies, so a
-  // pushed event and a stored one qualify identically. The tag keys are
-  // stamped server-side onto every push (`serialize_event`), precisely
-  // so this does not have to re-derive them from the payload.
-  const AGENT_TAG_KEYS = ["agent_role", "target", "recipient", "sender"];
-
-  function relatesToSeat(ev) {
-    const role = data?.role || "";
-    if (!role) return false;
-    if (ev.actor === role) return true;
-    const tags = ev.tags || {};
-    return AGENT_TAG_KEYS.some((k) => tags[k] === role);
   }
 
   function isMine(payload) {
@@ -794,8 +717,7 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         ${renderPhaseSummary()}
         ${renderMemory()}
         <div class="sec"><span class="sec-title">${icon("cpu", "sm")} LLM Invocations <span class="sec-count">${llm.length}</span></span></div>
-        <div class="turns">${renderTurns()}</div>
-        ${renderHistory()}`;
+        <div class="turns">${renderTurns()}</div>`;
     },
 
     // A completed phase becomes a history row the moment it lands, so the
@@ -803,16 +725,6 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
     // live call, the tokens, the state — arrives on the agent push.
     onEvent(ev) {
       if (!data || llmSub) return;
-      // The event history takes anything routed to this seat, which is
-      // a broader test than `isMine`: it matches the same tag keys the
-      // store's `related_agent` filter does, so a live row and a
-      // historical one qualify by one rule rather than two.
-      if (history.length && relatesToSeat(ev)) {
-        if (!history.some((e) => e.id === ev.id)) {
-          history = [ev, ...history].sort(newestFirst);
-          refresh();
-        }
-      }
       if (!isMine(ev.payload || {})) return;
       const record = recordFromEvent(ev);
       if (!record) return;
@@ -827,8 +739,12 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         const turnId = target.dataset.turn;
         const card = target.closest(".turn");
         overrides.set(`turn:${turnId}`, !(card && card.classList.contains("open")));
-      } else if (action === "more-history") {
-        loadHistory();
+      } else if (action === "seat-events") {
+        // The seat's own event list used to live at the bottom of this
+        // page and dominated it. Activity already renders that list, with
+        // filters this page never had, so the page links there instead of
+        // carrying a second copy.
+        navigate("/events?actor=" + encodeURIComponent(data?.role || ""));
         return;
       } else if (action === "open") {
         navigate("/events/" + encodeURIComponent(target.dataset.id));

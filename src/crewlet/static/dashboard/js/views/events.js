@@ -32,10 +32,13 @@ const PAGE = 60;
 // server's MAX_EVENT_LIMIT.
 const HISTORY_PAGE = 100;
 
-export function createEventsView({ navigate, refresh, query, store }) {
+export function createEventsView({ navigate, refresh, query, store, params }) {
   const expanded = new Set();
   const cats = new Set();
-  const agents = new Set();
+  // Seeded from `#/events?actor=<role>` so another view can hand this one
+  // a seat to open on — the agent page does, in place of the second event
+  // list it used to render itself.
+  const agents = new Set(params?.actor ? [params.actor] : []);
   // Failures cut across every category — a dead phase is `system`, a
   // dead task is `task` — so this is its own toggle rather than another
   // category pill. It is the one filter an operator reaches for under
@@ -160,6 +163,11 @@ export function createEventsView({ navigate, refresh, query, store }) {
       )
       .join("");
 
+    // A selected actor always gets a pill, even at zero matches in the
+    // loaded window: an active filter the reader cannot see is an empty
+    // list with no way back. This is reachable from a URL, so the filter
+    // can be set before a single matching event has loaded.
+    for (const a of agents) if (!(a in actorCounts)) actorCounts[a] = 0;
     const agentPills = Object.keys(actorCounts)
       .sort()
       .map(

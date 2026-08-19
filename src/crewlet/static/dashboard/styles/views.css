@@ -1261,18 +1261,6 @@ pre.code.msg-pre {
   padding-left: calc(14px + var(--depth, 0) * 18px);
 }
 
-/* The agent page's own history, and the note that has to accompany it:
-   `related_agent` also matches everything sharing a trace with one of
-   the seat's events, which is how the inbound webhook that woke it
-   appears here. A reader not told that will believe the agent emitted
-   it. */
-.hist-note {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  margin: -4px 0 10px;
-  text-wrap: pretty;
-}
-
 /* The pager has two jobs that must not look alike: revealing rows
    already in memory is instant, reading the store is a network trip
    that can fail or run out. */

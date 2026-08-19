@@ -717,6 +717,10 @@ src/crewlet/          # Main package
                       #   Screens: Dashboard, Company (Overview / People
                       #   Directory / Org Chart / Audit log), Agents,
                       #   Activity, Tokens, Tools, Schedules, Configuration.
+                      #   A seat's raw event list belongs to Activity ALONE
+                      #   (#/events?actor=<role> seeds its actor filter);
+                      #   the agent page links there rather than rendering
+                      #   a second copy below its turns.
                       #   EVERY nav entry is backed by a real endpoint — no
                       #   placeholder screens. org.js flattens the /org tree
                       #   into SEATS (unit chain + effective lead + inherited

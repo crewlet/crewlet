@@ -430,6 +430,21 @@ Two rules keep it working:
   reader had just collapsed. `recordFromLiveCall` stamps `_key` for
   this, and views read it through `keyFor(record)`.
 
+## One list per thing
+
+A seat's page answers "what is this agent doing and what did it cost".
+Its raw event list is a different question — "what happened, across the
+company" — and Activity already answers that one, with category, failure
+and actor filters the agent page never had. Rendering a second copy of it
+below the turns pushed the page's own content off the fold, so the agent
+page links across instead (`#/events?actor=<role>`, which seeds Activity's
+actor filter and shows it as a pill even before a matching event loads).
+
+The rule generalises: when a screen wants a list another screen already
+owns, link to it filtered. A second implementation is a second set of
+filters to maintain, a second paging path, and two answers to one
+question.
+
 ## What a live row shows
 
 A live row and the finished turn you expand afterwards run through the
