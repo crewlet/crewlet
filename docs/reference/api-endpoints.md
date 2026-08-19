@@ -181,6 +181,15 @@ state with an older event — including a final progress round that
 overtakes its own phase completion, which would otherwise re-open the
 row of a phase that had already finished.
 
+Every one of those comparisons normalizes through
+`timescaledb._time.ts_key` first.  The same instant reaches the API in
+more than one encoding (`Z`, `+00:00`, naive, a non-UTC offset), and as
+raw strings those order differently: `…05Z` sorts *after* `…05+00:00`
+for the same moment, and `13:00+01:00` sorts after `12:30+00:00` while
+being half an hour earlier.  Compared that way a straggler round
+resurrects a phase that has already finished, and a stale event
+clobbers newer state.
+
 A **failed** phase is a first-class part of this. When a phase dies, the
 projection stamps its in-flight call `failed`, keeps it on screen rather
 than clearing it, and records the classified cause on the agent as

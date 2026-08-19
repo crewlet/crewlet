@@ -55,6 +55,7 @@ from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.events.types import event_failed
+from crewlet.timescaledb._time import ts_key
 
 logger = get_logger("api.live_state")
 
@@ -283,12 +284,12 @@ class LiveState:
         # ``agent_phase_completed`` ids already folded into the spend
         # rollup — the rollup's analogue of the above.
         self._counted_phase_ids: dict[str, Any] = {}
-        # ``(turn_id, phase, iteration)`` → timestamp of the completion
-        # that ended that call.  A phase publishes its last progress
-        # round and its completed event back to back on DIFFERENT
-        # topics, and the standalone API consumes those through one
-        # wildcard subscription, where cross-topic order is not
-        # guaranteed.  A progress round arriving after its own
+        # ``(turn_id, phase, iteration)`` → the normalized instant
+        # (``ts_key``) of the completion that ended that call.  A phase
+        # publishes its last progress round and its completed event back
+        # to back on DIFFERENT topics, and the standalone API consumes
+        # those through one wildcard subscription, where cross-topic
+        # order is not guaranteed.  A progress round arriving after its own
         # completion would find no live call to match and seed a fresh
         # one — an in-flight row for a phase that finished, which
         # nothing would ever clear.
@@ -446,7 +447,10 @@ class LiveState:
         """
         if etype not in _EVENT_STATE:
             return False
-        ts = str(envelope.get("timestamp", ""))
+        # Normalized to a comparable instant, never re-emitted:
+        # ``_state_ts`` is internal bookkeeping, so the raw encoding has
+        # nowhere to go and nothing to preserve it for.
+        ts = ts_key(str(envelope.get("timestamp", "")))
         # Reorder guard: a strictly-older event must not clobber newer
         # state.  Equal timestamps are allowed through (same-instant
         # bursts) — the later-applied wins, matching the store's
@@ -650,7 +654,13 @@ class LiveState:
         phase = payload.get("phase", "")
         iteration = int(payload.get("iteration", 0) or 0)
         round_num = int(payload.get("round_num", 0) or 0)
+        # Two values, deliberately: ``ts`` is what goes back out on the
+        # wire as ``updated_at`` and must keep the encoding it arrived
+        # in, while ``at`` is the normalized instant every comparison
+        # below uses.  See ``ts_key``'s note on why the raw strings are
+        # not safely comparable.
         ts = str(envelope.get("timestamp", ""))
+        at = ts_key(ts)
 
         # The phase already published its completion and this round is
         # not newer than it: a straggler that lost a cross-topic race,
@@ -663,7 +673,7 @@ class LiveState:
             finished_at = self._finished_calls.get(
                 self._call_key(turn_id, phase, iteration)
             )
-            if finished_at and (not ts or ts <= finished_at):
+            if finished_at and (not at or at <= finished_at):
                 return ""
 
         cur = agent.live_call
@@ -674,7 +684,7 @@ class LiveState:
         if cur is not None and self._same_call(cur, turn_id, phase, iteration):
             if round_num < int(cur.get("round_num", -1)):
                 return ""
-        elif cur is not None and ts and str(cur.get("updated_at", "")) > ts:
+        elif cur is not None and at and ts_key(str(cur.get("updated_at", ""))) > at:
             return ""
 
         agent.current_phase = phase or agent.current_phase
@@ -762,7 +772,7 @@ class LiveState:
                     payload.get("phase", ""),
                     int(payload.get("iteration", 0) or 0),
                 ),
-                str(envelope.get("timestamp", "")),
+                ts_key(str(envelope.get("timestamp", ""))),
             )
         cur = agent.live_call
         if cur is None:
