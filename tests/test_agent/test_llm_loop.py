@@ -9,7 +9,7 @@ import pytest
 
 from crewlet.agent.llm_loop import (
     LoopResult,
-    _assistant_text_with_reasoning,
+    assistant_text_with_reasoning,
     execute_tool,
     run_tool_loop,
     sanitize_tool_output,
@@ -185,7 +185,7 @@ def test_assistant_text_with_reasoning_wraps_in_think_tags():
             reasoning_content="Now I'm sure.",
         ),
     ]
-    text = _assistant_text_with_reasoning(messages)
+    text = assistant_text_with_reasoning(messages)
     assert "<think>Let me think...</think>" in text
     assert "<think>Now I'm sure.</think>" in text
     assert "Round 1 answer." in text
@@ -199,7 +199,7 @@ def test_assistant_text_with_reasoning_no_reasoning_falls_back_to_content():
         Message(role="user", content="hi"),
         Message(role="assistant", content="hey"),
     ]
-    text = _assistant_text_with_reasoning(messages)
+    text = assistant_text_with_reasoning(messages)
     assert text == "hey"
     assert "<think>" not in text
 
@@ -549,13 +549,22 @@ async def test_loop_progress_events_carry_turn_coordinates(surface, ctx):
     )
     progress = [e for _, e in queue.published if isinstance(e, AgentTurnProgress)]
     assert progress, "expected a progress event after the tool round"
-    ev = progress[0]
-    assert ev.turn_id == "turn-abc"
-    assert ev.iteration == 2
-    # Phase comes from the surface (``for_execute`` here).
-    assert ev.phase == "execute"
-    assert ev.role == "Engineer"
-    assert ev.tool_executions and ev.tool_executions[0]["name"] == "echo"
+    for ev in progress:
+        assert ev.turn_id == "turn-abc"
+        assert ev.iteration == 2
+        # Phase comes from the surface (``for_execute`` here).
+        assert ev.phase == "execute"
+        assert ev.role == "Engineer"
+    # The opening update carries the prompt and nothing else — no round
+    # has answered yet, which ``round_num=-1`` is what says so.
+    assert progress[0].round_num == -1
+    assert progress[0].response == ""
+    # Then the round publishes twice: once the moment the model has
+    # spoken (before its tools run) and once its tool results are in.
+    rounds = progress[1:]
+    assert [ev.response for ev in rounds[:2]] == ["working", "working"]
+    assert rounds[0].tool_executions == []
+    assert rounds[1].tool_executions[0]["name"] == "echo"
 
 
 async def test_loop_progress_events_carry_trigger_source(surface, ctx):
@@ -1066,3 +1075,313 @@ async def test_a_publish_failure_does_not_mask_the_real_error(surface, ctx):
             ctx,
             _BrokenQueue(),
         )
+
+
+# -- Live progress: reasoning streams, and streams on time ---------------
+
+
+async def test_loop_progress_response_carries_reasoning(surface, ctx):
+    """A reasoning model's thinking must reach the LIVE progress event,
+    not just the phase record published when the phase ends.
+
+    The live row and the finished turn you expand afterwards render
+    through the same dashboard code (``responseBody``), which turns
+    ``<think>...</think>`` into a "Reasoning" block.  The progress event
+    used to be built from a content-only accumulator, so an extended-
+    thinking model streamed its tool calls against an empty response and
+    its reasoning appeared only once the phase was over — the live view
+    and the record disagreed about what the model had said.
+    """
+    from crewlet.events.types import AgentTurnProgress
+
+    provider = _ProviderStub(
+        completions=[
+            Completion(
+                content="Calling echo.",
+                reasoning_content="The user asked me to echo, so I will.",
+                tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+            ),
+            Completion(content="Done.", reasoning_content="That covers it."),
+        ]
+    )
+    queue = _QueueStub()
+    await run_tool_loop(
+        provider=provider,
+        messages=[Message(role="user", content="please echo")],
+        surface=surface,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=queue,
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    progress = [e for _, e in queue.published if isinstance(e, AgentTurnProgress)]
+    assert progress
+    first = progress[1].response  # progress[0] is the prompt-only opener
+    assert "<think>The user asked me to echo, so I will.</think>" in first
+    assert first.index("<think>") < first.index("Calling echo.")
+    assert "<think>That covers it.</think>" in progress[-1].response
+
+
+async def test_loop_progress_response_matches_the_phase_record(surface, ctx):
+    """The last live update and the finished record are the SAME text.
+
+    Both are built by ``assistant_text_with_reasoning`` over the same
+    message list, which is what makes the live row settle into the
+    record rather than being replaced by a differently-assembled one.
+    """
+    from crewlet.events.types import AgentTurnProgress
+
+    provider = _ProviderStub(
+        completions=[
+            Completion(
+                content="Calling echo.",
+                reasoning_content="Echo first.",
+                tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+            ),
+            Completion(content="Done.", reasoning_content="That covers it."),
+        ]
+    )
+    queue = _QueueStub()
+    messages = [Message(role="user", content="please echo")]
+    await run_tool_loop(
+        provider=provider,
+        messages=messages,
+        surface=surface,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=queue,
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    progress = [e for _, e in queue.published if isinstance(e, AgentTurnProgress)]
+    assert progress[-1].response == assistant_text_with_reasoning(messages)
+
+
+async def test_loop_progress_publishes_before_the_rounds_tools_run(ctx):
+    """The model's output is published the moment it arrives — before
+    the round's tools execute.
+
+    Publishing only after the tool loop meant a round whose tool took a
+    minute showed nothing at all for that minute, then everything at
+    once.  Reasoning is what the operator wants during the wait, so it
+    must not queue behind the tool it explains.
+    """
+    from crewlet.events.types import AgentTurnProgress
+
+    order: list[str] = []
+
+    async def _slow(params: dict[str, Any], ctx_: AgentContext) -> ToolResult:
+        order.append("tool")
+        return ToolResult(success=True, output="ok")
+
+    reg = ToolRegistry()
+    reg.register(
+        SimpleTool(
+            name="slow",
+            description="a slow tool",
+            parameters={"type": "object"},
+            fn=_slow,
+        )
+    )
+    slow_surface = ToolSurface.for_execute(
+        reg, role_mcp_tools=[], tools_needed=["slow"], always_on=[]
+    )
+
+    class _RecordingQueue:
+        def __init__(self) -> None:
+            self.published: list[tuple[str, Any]] = []
+
+        async def publish(self, topic: str, event: Any) -> None:
+            self.published.append((topic, event))
+            if isinstance(event, AgentTurnProgress):
+                order.append("progress")
+
+    queue = _RecordingQueue()
+    provider = _ProviderStub(
+        completions=[
+            Completion(
+                content="Thinking out loud.",
+                reasoning_content="Here is why.",
+                tool_calls=[ToolCall(id="c1", name="slow", arguments={})],
+            ),
+            Completion(content="final"),
+        ]
+    )
+    await run_tool_loop(
+        provider=provider,
+        messages=[Message(role="user", content="go")],
+        surface=slow_surface,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=queue,
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    # order[0] is the prompt-only opener, published before the provider
+    # call; then the model's output, then the tool it asked for.
+    assert order[:3] == ["progress", "progress", "tool"]
+
+
+async def test_loop_progress_covers_the_final_no_tool_round(surface, ctx):
+    """The round that ends the loop streams too.
+
+    It makes no tool call, so it never reached the old post-tool publish
+    — the phase's closing answer (and, for a thinking model, the whole
+    reasoning behind it) appeared only when the phase record landed.
+    """
+    from crewlet.events.types import AgentTurnProgress
+
+    provider = _ProviderStub(
+        completions=[
+            Completion(content="Here is my answer.", reasoning_content="Weighing it.")
+        ]
+    )
+    queue = _QueueStub()
+    await run_tool_loop(
+        provider=provider,
+        messages=[Message(role="user", content="answer me")],
+        surface=surface,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=queue,
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    progress = [e for _, e in queue.published if isinstance(e, AgentTurnProgress)]
+    assert len(progress) == 2  # the prompt-only opener, then the round
+    assert "<think>Weighing it.</think>" in progress[1].response
+    assert "Here is my answer." in progress[1].response
+
+
+async def test_loop_progress_skips_rounds_with_nothing_new_to_show(surface, ctx):
+    """A round that emits only a tool call publishes once, not twice.
+
+    The pre-tool checkpoint exists to surface assistant text early; a
+    round with neither prose nor reasoning has none, so it costs no
+    extra event.
+    """
+    from crewlet.events.types import AgentTurnProgress
+
+    provider = _ProviderStub(
+        completions=[
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+            ),
+            Completion(content="final"),
+        ]
+    )
+    queue = _QueueStub()
+    await run_tool_loop(
+        provider=provider,
+        messages=[Message(role="user", content="go")],
+        surface=surface,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=queue,
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    progress = [e for _, e in queue.published if isinstance(e, AgentTurnProgress)]
+    # The prompt-only opener, then round 0 (tool-only → one publish,
+    # after its tools), then round 1 (the closing answer → one publish).
+    assert len(progress) == 3
+    assert progress[0].round_num == -1
+    assert progress[1].tool_executions[0]["name"] == "echo"
+    assert progress[2].response.endswith("final")
+
+
+async def test_loop_publishes_the_prompt_before_the_first_provider_call(ctx):
+    """The phase's prompt reaches the live view while the FIRST call is
+    still in flight.
+
+    ``AgentPhaseStarted`` cannot carry it — every phase runner publishes
+    that event and only then builds its prompt — so the projection's
+    placeholder call has no messages and the dashboard rendered "No
+    prompt recorded" for the whole of a phase's first and largest call.
+    The onboarding pass showed it worst: a 60k-token prompt against a
+    reasoning model, with nothing on screen saying what was asked.
+    """
+    from crewlet.events.types import AgentTurnProgress
+
+    seen: list[Any] = []
+
+    class _OrderedProvider:
+        model = "stub"
+
+        async def complete(self, messages, **_):
+            seen.append("provider")
+            return Completion(content="done")
+
+    class _OrderedQueue:
+        published: list[tuple[str, Any]] = []
+
+        def __init__(self) -> None:
+            self.published = []
+
+        async def publish(self, topic: str, event: Any) -> None:
+            self.published.append((topic, event))
+            if isinstance(event, AgentTurnProgress):
+                seen.append("progress")
+
+    queue = _OrderedQueue()
+    reg = ToolRegistry()
+    bare = ToolSurface.for_execute(
+        reg, role_mcp_tools=[], tools_needed=[], always_on=[]
+    )
+    await run_tool_loop(
+        provider=_OrderedProvider(),
+        messages=[
+            Message(role="system", content="You are the CEO."),
+            Message(role="user", content="Complete your onboarding now."),
+        ],
+        surface=bare,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=3,
+        event_queue=queue,
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    assert seen[0] == "progress", "the prompt did not go out before the LLM call"
+    opener = [e for _, e in queue.published if isinstance(e, AgentTurnProgress)][0]
+    assert [m["role"] for m in opener.prompt_messages] == ["system", "user"]
+    assert opener.prompt_messages[0]["content"] == "You are the CEO."
+    # No round has answered, and the projection reads rounds as
+    # ``round_num + 1`` — so the opener must not claim one.
+    assert opener.round_num == -1
+    assert opener.response == ""
+    assert opener.tool_executions == []
+
+
+async def test_a_progress_publish_failure_never_breaks_the_phase(surface, ctx):
+    """A live view of the phase is never part of it.
+
+    A broker hiccup on a progress publish must not kill an otherwise
+    healthy turn — and the opening publish reaches further than the
+    others, firing before the provider is called at all, where an
+    unguarded raise would end a phase that had not yet run.
+    """
+
+    class _BrokenQueue:
+        async def publish(self, topic: str, event: Any) -> None:
+            raise RuntimeError("queue is down")
+
+    result = await run_tool_loop(
+        provider=_ProviderStub(completions=[Completion(content="finished")]),
+        messages=[Message(role="user", content="go")],
+        surface=surface,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=3,
+        event_queue=_BrokenQueue(),
+        turn_id="turn-abc",
+        iteration=0,
+    )
+    assert result.text == "finished"

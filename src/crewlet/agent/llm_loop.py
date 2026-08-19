@@ -14,6 +14,10 @@ Public surface:
 - :func:`execute_tool` — dispatch a named tool against a
   ``ToolSurface`` (falling back to the tool registry for unknown
   names). Centralises validation and secret redaction.
+- :func:`assistant_text_with_reasoning` — render a conversation's
+  assistant turns as the one displayable string both the live
+  ``AgentTurnProgress`` and the durable ``AgentPhaseCompleted`` carry
+  as their ``response``, reasoning included.
 - :func:`sanitize_tool_output` — strip control characters from tool
   output before it returns to the LLM (no length truncation).
 - :func:`validate_tool_result` — reject binary / non-UTF-8 data,
@@ -45,6 +49,7 @@ from crewlet.events.types import (
     BudgetExhausted,
     Event,
     PromptSize,
+    format_reasoning_and_content,
 )
 from crewlet.providers.llm.protocol import LLMProvider, Message
 from crewlet.queue.protocol import EventQueue
@@ -438,6 +443,33 @@ ProgressCallback = Callable[[AgentTurnProgress], Awaitable[None]]
 _MAX_FORCED_TOOL_RETRIES = 2
 
 
+def assistant_text_with_reasoning(messages: list[Message]) -> str:
+    """Render a conversation's assistant turns as ONE displayable string.
+
+    Each assistant message contributes its reasoning wrapped in
+    ``<think>...</think>`` immediately before that round's visible
+    content (see
+    :func:`~crewlet.events.types.format_reasoning_and_content`, the
+    shared wire-format rule), rounds joined by a blank line.
+
+    This is the single builder of the ``response`` field on BOTH the
+    per-phase :class:`~crewlet.events.types.AgentPhaseCompleted` record
+    and the per-round :class:`~crewlet.events.types.AgentTurnProgress`
+    live update.  One function over one message list is what makes the
+    dashboard's live row and the finished turn you expand afterwards
+    the same text: the live update used to be assembled from a separate
+    content-only accumulator, so a reasoning model streamed its tool
+    calls against an empty response and its thinking appeared only once
+    the phase ended.
+    """
+    parts = [
+        format_reasoning_and_content(msg.reasoning_content, msg.content)
+        for msg in messages
+        if msg.role == "assistant"
+    ]
+    return "\n\n".join(part for part in parts if part)
+
+
 async def run_tool_loop(
     *,
     provider: LLMProvider,
@@ -509,6 +541,84 @@ async def run_tool_loop(
 
     phase_name = getattr(surface, "phase", "") or provider_key
 
+    # Everything this loop appends to ``messages`` starts here.  A
+    # resumed Execute phase is handed the whole pre-suspend conversation,
+    # and its published phase record deliberately shows only the
+    # post-resume slice (``response_messages``) so the earlier segment
+    # isn't replayed as a second row.  Anchoring the live response to the
+    # same slice is what keeps the streaming row and the record it turns
+    # into identical on a resumed phase too.
+    response_slice_start = len(messages)
+
+    async def publish_progress(round_index: int) -> None:
+        """Push the round's state to live consumers (the dashboard).
+
+        Called once before the first provider call (``round_index=-1``,
+        carrying the prompt), then twice per round: once the moment the
+        model has spoken — so its reasoning and prose reach the live view
+        before the round's tools run, not after the slowest one returns —
+        and again once that round's tool results are in.  The projection
+        folds each into the same in-flight call (same ``turn_id`` /
+        ``phase`` / ``iteration`` / ``round_num``), so the row fills in
+        rather than flickering.
+
+        The response is rebuilt from the message slice on every publish
+        rather than accumulated incrementally.  That is O(rounds) per
+        publish and so quadratic over a phase — deliberately: one builder
+        over one message list is what guarantees the live row and the
+        phase record cannot disagree, and an accumulator would be a
+        second assembly of the same field, which is exactly the drift
+        this function exists to remove.  Measured, the trade is not
+        close: a 30-round phase spends 0.5 ms total rebuilding, and even
+        120 rounds of 4 KB responses costs 57 ms across a phase that made
+        120 LLM calls.  The same publish serializes a 20 KB+ prompt.
+
+        Failures are logged and swallowed.  This is a live view of the
+        phase, never part of it: a broker hiccup on a progress publish
+        must not kill a turn that is otherwise fine, and must never
+        stand in for the real error when the phase is already dying.
+        Every other telemetry publish in this module has always been
+        guarded this way; this one reached further than the rest once it
+        started firing before the first provider call, where an
+        unguarded raise would end a phase that had not yet run.
+        """
+        progress = AgentTurnProgress(
+            source=agent.role_name,
+            agent_id=agent.id_str,
+            role=agent.role_name,
+            turn_id=turn_id,
+            phase=phase_name,
+            iteration=iteration,
+            model=model,
+            trigger=trigger or {},
+            prompt=initial_prompt,
+            prompt_messages=prompt_messages,
+            response=assistant_text_with_reasoning(messages[response_slice_start:]),
+            input_tokens=turn_input_tokens,
+            output_tokens=turn_output_tokens,
+            total_tokens=turn_input_tokens + turn_output_tokens,
+            round_num=round_index,
+            tool_executions=list(executions),
+            a2a_context=a2a_context,
+        )
+        try:
+            if on_progress is not None:
+                await on_progress(progress)
+            else:
+                await event_queue.publish(
+                    f"crewlet.events.{progress.type}",
+                    progress,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "turn_progress_publish_failed",
+                agent_id=agent.id_str,
+                phase=phase_name,
+                round=round_index,
+            )
+
     # Point the caller's failure view at the live conversation before the
     # first provider call, so a phase that dies on round one still reports
     # the prompt it died on rather than an empty record.
@@ -535,6 +645,22 @@ async def run_tool_loop(
         await event_queue.publish(f"crewlet.events.{event.type}", event)
     except Exception:
         logger.exception("prompt_size_publish_failed")
+
+    # Put the phase's prompt on the live view BEFORE the first provider
+    # call.  ``AgentPhaseStarted`` cannot carry it — every phase runner
+    # publishes that event and only then builds its prompt — so the
+    # projection seeds its placeholder call with no messages at all, and
+    # the dashboard rendered "No prompt recorded" for the whole of the
+    # first (and largest, and usually slowest) call of the phase.  The
+    # onboarding pass showed it worst: one 60k-token prompt against a
+    # reasoning model, and the operator could not see what the agent had
+    # been asked until the round came back.
+    #
+    # ``round_num=-1`` is the "no round has answered yet" sentinel the
+    # projection's own placeholder already uses, so this update reads as
+    # zero rounds rather than claiming one.
+    if prompt_messages:
+        await publish_progress(-1)
 
     rounds_used = 0
     exhausted = False
@@ -631,6 +757,22 @@ async def run_tool_loop(
                 accumulated += "\n\n"
             accumulated += completion.content
 
+        # Keep the assistant message in the trace regardless of what we do
+        # next, so downstream fallback parsers (parse_plan_from_messages,
+        # parse_review_from_messages) and debuggers see what the model said.
+        # Appended BEFORE the branch below so the live progress event and the
+        # phase record are built from the same conversation — the message list
+        # is what both read.
+        messages.append(
+            Message(
+                role="assistant",
+                content=completion.content,
+                reasoning_content=completion.reasoning_content,
+                thinking_blocks=completion.thinking_blocks,
+                tool_calls=completion.tool_calls,
+            )
+        )
+
         if phase_progress is not None:
             phase_progress.input_tokens = turn_input_tokens
             phase_progress.output_tokens = turn_output_tokens
@@ -639,19 +781,17 @@ async def run_tool_loop(
             phase_progress.text = accumulated
             phase_progress.tool_executions = executions
 
+        # First checkpoint of the round: the model has spoken.  Publishing
+        # here rather than only after the round's tools is what puts the
+        # model's reasoning on the live view at the moment it exists —
+        # including on the final, no-tool-call round, which ends the loop
+        # below and so never reached the post-tool publish at all.  Rounds
+        # that produced neither prose nor reasoning have nothing new to
+        # show, so they skip it and cost no extra traffic.
+        if completion.content or completion.reasoning_content:
+            await publish_progress(round_num)
+
         if not completion.tool_calls:
-            # Keep the assistant message in the trace regardless of what we do
-            # next, so downstream fallback parsers (parse_plan_from_messages,
-            # parse_review_from_messages) and debuggers see what the model said.
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=completion.content,
-                    reasoning_content=completion.reasoning_content,
-                    thinking_blocks=completion.thinking_blocks,
-                    tool_calls=[],
-                )
-            )
             # Forced round: the caller demanded a tool call but the model
             # returned prose. Re-prompt and retry within budget instead of
             # accepting it as terminal — this is what makes the plan rescue and
@@ -688,15 +828,6 @@ async def run_tool_loop(
             exhausted = False
             break
 
-        messages.append(
-            Message(
-                role="assistant",
-                content=completion.content,
-                reasoning_content=completion.reasoning_content,
-                thinking_blocks=completion.thinking_blocks,
-                tool_calls=completion.tool_calls,
-            )
-        )
         terminated_by_tool = False
         for tool_call in completion.tool_calls:
             tool_result = await execute_tool(
@@ -763,32 +894,8 @@ async def run_tool_loop(
             phase_progress.tool_executions = executions
             phase_progress.text = accumulated
 
-        progress = AgentTurnProgress(
-            source=agent.role_name,
-            agent_id=agent.id_str,
-            role=agent.role_name,
-            turn_id=turn_id,
-            phase=phase_name,
-            iteration=iteration,
-            model=model,
-            trigger=trigger or {},
-            prompt=initial_prompt,
-            prompt_messages=prompt_messages,
-            response=accumulated,
-            input_tokens=turn_input_tokens,
-            output_tokens=turn_output_tokens,
-            total_tokens=turn_input_tokens + turn_output_tokens,
-            round_num=round_num,
-            tool_executions=list(executions),
-            a2a_context=a2a_context,
-        )
-        if on_progress is not None:
-            await on_progress(progress)
-        else:
-            await event_queue.publish(
-                f"crewlet.events.{progress.type}",
-                progress,
-            )
+        # Second checkpoint: this round's tool results are in.
+        await publish_progress(round_num)
         if terminated_by_tool or suspended:
             exhausted = False
             break
@@ -836,26 +943,6 @@ def _first_user_message(messages: list[Message]) -> str:
         if msg.role == "user":
             return msg.content or ""
     return ""
-
-
-def _assistant_text_with_reasoning(messages: list[Message]) -> str:
-    """Concatenate assistant content with reasoning wrapped in ``<think>``.
-
-    The dashboard's ``renderLLMResponse`` already knows how to render
-    ``<think>...</think>`` blocks inline, so by wrapping each round's
-    ``reasoning_content`` in those tags (immediately before the
-    round's visible content) we surface the model's thinking on the
-    phase-detail view without adding a new field.
-    """
-    parts: list[str] = []
-    for msg in messages:
-        if msg.role != "assistant":
-            continue
-        if msg.reasoning_content:
-            parts.append(f"<think>{msg.reasoning_content}</think>")
-        if msg.content:
-            parts.append(msg.content)
-    return "\n\n".join(parts)
 
 
 # Cap on the failure message carried on a phase event.  A provider
@@ -1087,7 +1174,7 @@ async def publish_phase_completed(
         if (rescue_loop is None and response_messages is not None)
         else response_source.messages
     )
-    response = _assistant_text_with_reasoning(src_messages) or response_source.text
+    response = assistant_text_with_reasoning(src_messages) or response_source.text
 
     # Merge main + rescue loop counters so the per-phase event reflects
     # everything the phase did. ``exhausted_rounds`` keeps the *main*

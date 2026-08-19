@@ -8,9 +8,8 @@ import assert from "node:assert";
 import { test, run } from "./harness.mjs";
 
 const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
-const { responseBody, failureOf, failureLabel, failureBlock } = await import(
-  new URL("llm.js", base)
-);
+const { responseBody, failureOf, failureLabel, failureBlock, stripThink } =
+  await import(new URL("llm.js", base));
 const { recordFromEvent, recordFromLiveCall, recordFromPhase } = await import(
   new URL("records.js", base)
 );
@@ -146,6 +145,61 @@ test("no live call means no record", () => {
 test("a phase payload with no failure produces no failure", () => {
   const record = recordFromPhase({ phase: "plan", response: "ok" }, "2026-08-18T10:00:00Z");
   assert.strictEqual(failureOf(record), null);
+});
+
+// --- Reasoning that streams -------------------------------------------
+//
+// The engine writes a model's thinking into the response as
+// `<think>...</think>` (see events.types.format_reasoning_and_content),
+// on the LIVE per-round update as well as the finished phase record.
+// The live row and the turn you expand afterwards therefore run the same
+// text through the same renderer.
+
+test("reasoning renders as a Reasoning block, live or finished", () => {
+  const html = responseBody("<think>Weighing the options.</think>\n\nHere goes.", [], {
+    inProgress: true,
+  });
+  assert.ok(html.includes("Reasoning"), "no reasoning block");
+  assert.ok(html.includes("Weighing the options."), "the thinking was dropped");
+  assert.ok(html.includes("Here goes."), "the visible answer was dropped");
+  assert.ok(!html.includes("&lt;think&gt;"), "the markers leaked into the body");
+});
+
+test("reasoning-only output still renders (a thinking model mid-round)", () => {
+  const html = responseBody("<think>Still deciding…</think>", [], { inProgress: true });
+  assert.ok(html.includes("Reasoning"));
+  assert.ok(html.includes("Still deciding…"));
+  assert.ok(!html.includes("No response text yet"), "claims nothing arrived");
+});
+
+test("stripThink leaves the reasoning text but takes the markers", () => {
+  // One-line previews have nowhere to draw a block; they must not print
+  // the raw markers either.
+  assert.strictEqual(stripThink("<think>why</think>then"), "whythen");
+  assert.strictEqual(stripThink("<think>why</think>then", " "), " why then");
+  assert.strictEqual(stripThink(null), "");
+});
+
+test("a live record keys off its coordinates, not its moving timestamp", () => {
+  // `updated_at` advances on every streamed round. If the toggle key
+  // moved with it, every round would hand the row a fresh identity and
+  // re-open whatever the reader had just collapsed.
+  const first = recordFromLiveCall({
+    turn_id: "t1",
+    phase: "plan",
+    iteration: 0,
+    updated_at: "2026-08-18T10:00:00Z",
+    in_progress: true,
+  });
+  const later = recordFromLiveCall({
+    turn_id: "t1",
+    phase: "plan",
+    iteration: 0,
+    updated_at: "2026-08-18T10:00:09Z",
+    in_progress: true,
+  });
+  assert.strictEqual(first._key, later._key);
+  assert.notStrictEqual(first.timestamp, later.timestamp);
 });
 
 run();

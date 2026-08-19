@@ -65,6 +65,15 @@ export function recordFromLiveCall(call) {
   if (!call || call.turn_id === undefined) return null;
   return {
     ...call,
+    // Stable identity for this call's expand/collapse state. A finished
+    // record is pinned by its timestamp — a resumed Execute phase
+    // publishes two records under the same (turn, phase, iteration) and
+    // only the timestamp separates them — but a streaming call must not
+    // be: `updated_at` moves on every round, so a timestamped key hands
+    // each round a fresh identity and silently re-opens whatever the
+    // reader had collapsed mid-stream. Now that reasoning streams too,
+    // that is a block someone is actually reading.
+    _key: `live|${call.turn_id}|${call.phase || ""}|${call.iteration || 0}`,
     _live: call.in_progress !== false,
     _failed: !!call.failed,
     timestamp: call.updated_at || "",

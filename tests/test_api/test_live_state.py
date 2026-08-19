@@ -286,6 +286,205 @@ class TestInFlightCall:
         # The newer round (2) must win over the stale round (1).
         assert live.agent_overlay("Lead")["live_call"]["response"] == "r2"
 
+    def test_progress_after_completion_does_not_resurrect_the_call(self) -> None:
+        """A straggler round for a finished phase must not re-open its row.
+
+        The phase's last progress round and its completion are published
+        back to back on DIFFERENT topics; the standalone API reads both
+        through one wildcard subscription, where cross-topic order is not
+        guaranteed.  Without the guard the late round finds no live call
+        to match, seeds a fresh one, and the seat renders as permanently
+        mid-phase — nothing clears a call whose completion already came
+        and went.
+        """
+        live = LiveState()
+        base = {"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
+        live.apply_event(_env("agent_phase_started", base))
+        live.apply_event(
+            _env("agent_phase_completed", base, ts="2026-06-14T12:00:05+00:00")
+        )
+        assert live.agent_overlay("Lead")["live_call"] is None
+
+        live.apply_event(
+            _env(
+                "agent_turn_progress",
+                {**base, "round_num": 3, "response": "late"},
+                ts="2026-06-14T12:00:04+00:00",
+                category="",
+            )
+        )
+        assert live.agent_overlay("Lead")["live_call"] is None
+
+    def test_resumed_phase_streams_again_after_its_checkpoint(self) -> None:
+        """A suspended Execute resumes under the SAME coordinates.
+
+        It publishes a completion checkpoint when it suspends on
+        ``run_sandbox``, then — once the detached run lands — resumes the
+        same loop and streams more rounds under the same
+        ``(turn_id, phase, iteration)``.  Those rounds are newer than the
+        checkpoint, so the finished-call guard must let them through; a
+        key-only guard would leave the resumed phase invisible.
+        """
+        live = LiveState()
+        base = {"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
+        live.apply_event(_env("agent_phase_started", base))
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {**base, "notes": "suspended: run_sandbox"},
+                ts="2026-06-14T12:00:05+00:00",
+            )
+        )
+        assert live.agent_overlay("Lead")["live_call"] is None
+
+        live.apply_event(
+            _env(
+                "agent_turn_progress",
+                {**base, "round_num": 4, "response": "back from the sandbox"},
+                ts="2026-06-14T12:09:00+00:00",
+                category="",
+            )
+        )
+        call = live.agent_overlay("Lead")["live_call"]
+        assert call is not None
+        assert call["response"] == "back from the sandbox"
+
+    def test_guards_compare_instants_not_raw_timestamp_strings(self) -> None:
+        """Timestamps arrive in more than one encoding for one instant.
+
+        ``2026-06-14T12:00:05Z`` and ``2026-06-14T12:00:05+00:00`` are
+        the same moment, and ``Z`` sorts AFTER ``+`` as a raw string — so
+        a straggler round encoded one way reads as newer than the
+        completion encoded the other, and resurrects a finished phase.
+        The repo has one normalizer for this (``timescaledb._time.ts_key``,
+        which exists because the assumption already broke once); every
+        comparison in the projection goes through it.
+        """
+        live = LiveState()
+        base = {"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
+        live.apply_event(_env("agent_phase_started", base))
+        live.apply_event(
+            _env("agent_phase_completed", base, ts="2026-06-14T12:00:05+00:00")
+        )
+        assert live.agent_overlay("Lead")["live_call"] is None
+
+        # Same instant as the completion, spelled with a Z.
+        live.apply_event(
+            _env(
+                "agent_turn_progress",
+                {**base, "round_num": 3, "response": "late"},
+                ts="2026-06-14T12:00:05Z",
+                category="",
+            )
+        )
+        assert live.agent_overlay("Lead")["live_call"] is None, (
+            "a straggler resurrected a finished phase across encodings"
+        )
+
+    def test_a_resumed_round_survives_a_mixed_encoding(self) -> None:
+        """The same normalization must not swallow genuinely newer work.
+
+        A naive-UTC round after an aware-UTC checkpoint is later in real
+        time; compared raw it sorts BEFORE it, which would leave a
+        resumed sandbox phase invisible for the rest of its run.
+        """
+        live = LiveState()
+        base = {"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
+        live.apply_event(_env("agent_phase_started", base))
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {**base, "notes": "suspended: run_sandbox"},
+                ts="2026-06-14T12:00:05+00:00",
+            )
+        )
+        live.apply_event(
+            _env(
+                "agent_turn_progress",
+                {**base, "round_num": 4, "response": "back from the sandbox"},
+                ts="2026-06-14T12:09:00",  # naive, and nine minutes later
+                category="",
+            )
+        )
+        call = live.agent_overlay("Lead")["live_call"]
+        assert call is not None, "the resumed phase never came back on screen"
+        assert call["response"] == "back from the sandbox"
+
+    def test_live_call_keeps_the_timestamp_encoding_it_arrived_in(self) -> None:
+        """Normalizing is for comparison only — ``updated_at`` goes back
+        out on the wire and must not be rewritten on the way through."""
+        live = LiveState()
+        base = {"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
+        live.apply_event(
+            _env(
+                "agent_turn_progress",
+                {**base, "round_num": 0, "response": "hi"},
+                ts="2026-06-14T12:00:05+00:00",
+                category="",
+            )
+        )
+        assert (
+            live.agent_overlay("Lead")["live_call"]["updated_at"]
+            == "2026-06-14T12:00:05+00:00"
+        )
+
+    def test_state_reorder_guard_compares_instants(self) -> None:
+        """The state guard is the same rule, on the same data.
+
+        A non-UTC offset separates the two comparisons unambiguously:
+        ``13:00:00+01:00`` is 12:00 UTC — half an hour BEFORE
+        ``12:30:00+00:00`` — yet sorts AFTER it as a raw string. Read
+        that way, a stale event clobbers newer state, and a seat that is
+        working renders as terminated.
+        """
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "agent_phase_started",
+                {"role": "Lead", "turn_id": "t", "phase": "plan", "iteration": 0},
+                ts="2026-06-14T12:30:00+00:00",
+            )
+        )
+        assert live.agent_overlay("Lead")["state"] == "working"
+        live.apply_event(
+            _env(
+                "agent_terminated",
+                {"role": "Lead"},
+                ts="2026-06-14T13:00:00+01:00",  # 12:00 UTC — half an hour older
+            )
+        )
+        assert live.agent_overlay("Lead")["state"] == "working", (
+            "an older event clobbered newer state across encodings"
+        )
+
+    def test_progress_does_not_overwrite_a_frozen_failed_call(self) -> None:
+        """A failed phase keeps its frozen call; a late round can't unfreeze it.
+
+        The frozen call is the only place the error, the prompt it died
+        on, and the tools that had run are still shown together.
+        """
+        live = LiveState()
+        base = {"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
+        live.apply_event(_env("agent_phase_started", base))
+        live.apply_event(
+            _env(
+                "agent_phase_completed",
+                {**base, "failed": True, "error": "boom", "error_kind": "rate_limit"},
+                ts="2026-06-14T12:00:05+00:00",
+            )
+        )
+        live.apply_event(
+            _env(
+                "agent_turn_progress",
+                {**base, "round_num": 9, "response": "straggler"},
+                ts="2026-06-14T12:00:04+00:00",
+                category="",
+            )
+        )
+        call = live.agent_overlay("Lead")["live_call"]
+        assert call["failed"] is True
+        assert call["response"] != "straggler"
+
 
 class TestTokenAccounting:
     def test_turn_tokens_accumulate(self) -> None:

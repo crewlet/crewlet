@@ -421,6 +421,47 @@ Two rules keep it working:
   updates its own set and calls `refresh()`; it never flips a class
   directly, because the next patch renders from state and would revert
   it.
+- **A streaming record's toggle keys must not move.** Toggle state is
+  keyed per record, and a stored record's key includes its timestamp —
+  that is what separates a resumed Execute phase's two records under
+  the same turn / phase / iteration. A *live* record must not use it:
+  `updated_at` advances on every streamed round, so a timestamped key
+  hands each round a fresh identity and silently re-opens whatever the
+  reader had just collapsed. `recordFromLiveCall` stamps `_key` for
+  this, and views read it through `keyFor(record)`.
+
+## One list per thing
+
+A seat's page answers "what is this agent doing and what did it cost".
+Its raw event list is a different question — "what happened, across the
+company" — and Activity already answers that one, with category, failure
+and actor filters the agent page never had. Rendering a second copy of it
+below the turns pushed the page's own content off the fold, so the agent
+page links across instead (`#/events?actor=<role>`, which seeds Activity's
+actor filter and shows it as a pill even before a matching event loads).
+
+The rule generalises: when a screen wants a list another screen already
+owns, link to it filtered. A second implementation is a second set of
+filters to maintain, a second paging path, and two answers to one
+question.
+
+## What a live row shows
+
+A live row and the finished turn you expand afterwards run through the
+same renderer (`llm.js` `responseBody`) over the same text — the engine
+builds the live `AgentTurnProgress.response` and the durable
+`AgentPhaseCompleted.response` with one function, so the row settles into
+the record rather than being replaced by a different rendering of it (see
+[Turn Engine § What streams during a
+turn](../concepts/turn-engine.md#what-streams-during-a-turn)).
+
+That text carries the model's reasoning wrapped in `<think>...</think>`,
+which `responseBody` turns into a collapsible **Reasoning** block placed
+inline with the numbered tool badges, in the order things happened.
+`llm.js` owns that grammar: anything needing the plain text — the
+collapsed row preview, the overview's live card — calls `stripThink`
+rather than open-coding the regex, which is how the agent view's live
+preview ended up as the one branch that never stripped at all.
 
 ## Motion
 

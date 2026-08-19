@@ -363,3 +363,42 @@ def test_llm_unavailable_summary():
     assert event.type == "llm_unavailable"
     assert "Engineer" in event.summary
     assert "2 providers tried" in event.summary
+
+
+# -- The <think> wire format ---------------------------------------------
+
+
+def test_format_reasoning_and_content_wraps_thinking():
+    """``<think>...</think>`` before the visible content is the contract
+    between the engine and the dashboard's response renderer.
+
+    Both the live per-round ``AgentTurnProgress`` and the per-phase
+    ``AgentPhaseCompleted`` build their ``response`` through this one
+    function.  They used to build it two different ways, and the live
+    one dropped reasoning entirely -- so a thinking model's live row
+    streamed tool calls against an empty response and only grew a
+    Reasoning block once its phase was over.
+    """
+    from crewlet.events.types import format_reasoning_and_content
+
+    out = format_reasoning_and_content("weighing it", "the answer")
+    assert out == "<think>weighing it</think>\n\nthe answer"
+
+
+def test_format_reasoning_and_content_without_reasoning_is_unchanged():
+    """A non-thinking model's response keeps its plain shape."""
+    from crewlet.events.types import format_reasoning_and_content
+
+    assert format_reasoning_and_content("", "the answer") == "the answer"
+    assert format_reasoning_and_content("  ", "the answer") == "the answer"
+
+
+def test_format_reasoning_and_content_surfaces_reasoning_alone():
+    """Thinking with no visible text (an output cap hit mid-thought)
+    still renders -- it is then the only signal the operator has."""
+    from crewlet.events.types import format_reasoning_and_content
+
+    assert format_reasoning_and_content("still deciding", "") == (
+        "<think>still deciding</think>"
+    )
+    assert format_reasoning_and_content("", "") == ""

@@ -160,15 +160,35 @@ own envelopes.
 
 Crucially, the projection holds each agent's **in-flight LLM call** —
 the latest `agent_turn_progress` (phase, round, model, accumulated
-response, tool calls so far) — and surfaces it as a `live_call` field on
-the agent in every snapshot.  `agent_turn_progress` is *stream-only*
+response *including the model's reasoning*, tool calls so far) — and
+surfaces it as a `live_call` field on the agent in every snapshot.  Its
+`response` is built by the same function that builds the finished
+phase record's, so the live row and the turn you expand afterwards are
+the same text rather than two assemblies of it — see [Turn Engine §
+What streams during a
+turn](../concepts/turn-engine.md#what-streams-during-a-turn).
+Each phase publishes an opening
+`agent_turn_progress` (`round_num = -1`) before its first provider call
+carrying the prompt, so the live row shows what the agent was asked while
+it is still answering.  `agent_turn_progress` is *stream-only*
 (never written to the event store); carrying `live_call` in the
 snapshot means a tab that refreshes or reconnects mid-call re-renders
 the live row immediately instead of waiting for the next progress
 event.  State transitions in the projection are
 gated on the event timestamp so out-of-order delivery (the standalone
 API's Pulsar topics order only *within* a topic) can't clobber newer
-state with an older event.
+state with an older event — including a final progress round that
+overtakes its own phase completion, which would otherwise re-open the
+row of a phase that had already finished.
+
+Every one of those comparisons normalizes through
+`timescaledb._time.ts_key` first.  The same instant reaches the API in
+more than one encoding (`Z`, `+00:00`, naive, a non-UTC offset), and as
+raw strings those order differently: `…05Z` sorts *after* `…05+00:00`
+for the same moment, and `13:00+01:00` sorts after `12:30+00:00` while
+being half an hour earlier.  Compared that way a straggler round
+resurrects a phase that has already finished, and a stale event
+clobbers newer state.
 
 A **failed** phase is a first-class part of this. When a phase dies, the
 projection stamps its in-flight call `failed`, keeps it on screen rather

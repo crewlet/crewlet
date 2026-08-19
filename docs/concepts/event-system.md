@@ -111,7 +111,9 @@ AgentTurnCompleted       # full LLM reasoning cycle with tokens/tools
 AgentTurnProgress        # incremental per-round updates (not persisted);
                          # carries turn_id/phase/iteration so live
                          # consumers can place in-flight rounds inside
-                         # the turn/phase grouping
+                         # the turn/phase grouping. Fires twice per
+                         # round -- when the model has spoken, then
+                         # when that round's tools have returned
 BudgetExhausted
 TurnGuardBreach          # runtime invariant fired (stall / max_iter / depth_cap /
                          # unhandled_exception / scheduled_timeout).
