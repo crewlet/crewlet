@@ -8,9 +8,11 @@ every event that asks it:
 - ``rate_limits`` — "how many notifications in the last second?", one row
   per bucket per window;
 - ``scheduled_runs`` — "has this fire already been claimed?", one row per
-  schedule fire.
+  schedule fire;
+- ``turn_completions`` — "has this trigger already been worked?", one row
+  per trigger a turn finished.
 
-All three were designed to be swept. Both migrations say so in as many
+The first three were designed to be swept. Both migrations say so in as many
 words (``020_webhook_deliveries.sql``: *"Rows are swept on a TTL rather
 than kept: this is a short-horizon 'did I just see this', not an audit
 log"*), and both ship the ``seen_at`` / ``window_start`` index a range
@@ -41,6 +43,7 @@ from typing import Any, Protocol
 
 from crewlet._logging import get_logger
 from crewlet.db.deliveries import DEFAULT_DEDUPE_TTL_SECONDS
+from crewlet.db.turn_completions import TURN_COMPLETION_RETENTION_SECONDS
 
 logger = get_logger("db.maintenance")
 
@@ -107,6 +110,7 @@ class MaintenanceWorker:
         deliveries: PurgeableStore | None = None,
         rate_limits: PurgeableStore | None = None,
         scheduled_runs: PurgeableStore | None = None,
+        turn_completions: PurgeableStore | None = None,
         interval_seconds: float = MAINTENANCE_INTERVAL_SECONDS,
         claim_duty: Any = None,
     ) -> None:
@@ -122,6 +126,14 @@ class MaintenanceWorker:
         if scheduled_runs is not None:
             self._targets.append(
                 ("scheduled_runs", scheduled_runs, SCHEDULED_RUN_RETENTION_SECONDS)
+            )
+        if turn_completions is not None:
+            self._targets.append(
+                (
+                    "turn_completions",
+                    turn_completions,
+                    TURN_COMPLETION_RETENTION_SECONDS,
+                )
             )
         self._interval = max(1.0, float(interval_seconds))
         self._claim_duty = claim_duty

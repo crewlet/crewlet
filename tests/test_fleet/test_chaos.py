@@ -317,3 +317,79 @@ async def test_a_killed_nodes_lease_is_never_released_by_the_killer(
     assert lease.owner == victim.engine._incarnation, (
         "the killed node handed its lease back; that is a graceful stop"
     )
+
+
+# ── the completion ledger ────────────────────────────────────────────
+
+
+async def test_a_turn_that_finished_is_not_re_run_by_the_successor(
+    fleet: Fleet,
+) -> None:
+    """The window the ledger exists for, and the only one.
+
+    A turn completes, its outbound effects ship — the Slack reply is
+    posted, the Jira comment is filed — and the node dies before the
+    delivery is acked. At-least-once then hands the trigger to the
+    seat's next owner. Without a record of what finished, that node
+    re-runs the whole turn and the person on the other end gets the
+    same answer twice, from an agent that has no idea it already spoke.
+    """
+    await fleet.balance()
+    await _shorten(fleet)
+    handle, victim, survivor = fleet.movable_seat()
+
+    await fleet.publish(handle, "answered-once")
+    await settle(
+        lambda: victim.markers(handle) == ["answered-once"],
+        what="the owner to finish the turn",
+    )
+    assert await fleet.completions.completed(
+        handle, [str(e.id) for e in fleet.published_ids(handle)]
+    ), "a finished turn recorded nothing"
+
+    # The ack never lands: the node dies and the trigger comes back.
+    await victim.kill()
+    for event in fleet.published_ids(handle):
+        await survivor.queue.publish(agent_inbox_topic(handle), event)
+
+    await asyncio.sleep(_TTL * 1.2)
+    await survivor.sweep()
+    await asyncio.sleep(0.3)
+
+    assert survivor.markers(handle) == [], (
+        "the successor re-ran a turn that had already answered"
+    )
+    assert [m for _n, m in fleet.turns_for(handle)] == ["answered-once"]
+
+
+async def test_an_unrecorded_trigger_is_still_run(fleet: Fleet) -> None:
+    """The other half, and the one that matters more.
+
+    A ledger that short-circuits too eagerly turns at-least-once into
+    at-most-once for exactly the case redelivery exists for: a node that
+    died BEFORE finishing leaves no record, and its trigger must run.
+    Losing it looks identical to an agent choosing not to reply.
+    """
+    await fleet.balance()
+    await _shorten(fleet)
+    handle, victim, survivor = fleet.movable_seat()
+
+    entered = asyncio.Event()
+    hold = asyncio.Event()
+
+    async def _blocking(agent: Any, **kwargs: Any) -> str:
+        entered.set()
+        await hold.wait()
+        return "never gets here"
+
+    victim.engine.turn_engine.run_turn = _blocking  # type: ignore[method-assign]
+    sent = asyncio.create_task(fleet.publish(handle, "never-finished"))
+    await settle(entered.is_set, what="the owner to start the turn")
+    await victim.kill(in_flight=[sent])
+
+    await asyncio.sleep(_TTL * 1.2)
+    await survivor.sweep()
+    await settle(
+        lambda: survivor.markers(handle) == ["never-finished"],
+        what="the successor to run the unfinished trigger",
+    )

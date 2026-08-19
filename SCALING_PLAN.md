@@ -1,10 +1,8 @@
 # Crewlet Node — Implementation Plan
 
-**Status:** phases 1–4 done; phase 5 all but 5.4 — 5.1, 5.2a, the
-revised 5.2 (which absorbed 5.5 and 5.7), 5.8 and 5.9 are in, and the
-chaos suite is gated. **5.4's design failed review 5-of-5** and has been
-replaced by a completion ledger, not yet built. Phases 6 and 7 not
-started. The companion analysis — why the current
+**Status:** phases 1–5 done. 5.4's original design failed review 5-of-5
+and shipped as a completion ledger instead; the chaos suite is gated.
+Phases 6 and 7 not started. The companion analysis — why the current
 engine is a singleton, the target architecture, and the adversarial review
 that shaped it — is [`SCALING.md`](SCALING.md). This file is the *how*: the
 phase-by-phase work breakdown, with file-level anchors, schema changes,
@@ -1410,7 +1408,7 @@ which is exactly the split the two-backend rule exists to expose.
   `SandboxCoordinator.recover()` (`coordinator.py:498`) is rewritten to this
   owned-seats-only shape.
 
-### 5.4 Turn claims — DESIGN FAILED REVIEW, UNANIMOUSLY
+### 5.4 Turn claims — REDESIGNED AND DONE (as a completion ledger)
 
 A pre-implementation review (5 lenses + a completeness critic, each
 finding then put through adversarial refutation) returned
@@ -1523,7 +1521,7 @@ would each read the other's claim as their own.
   turn-id set — with three TTLs and two opposite failure directions,
   composed nowhere.
 
-#### The revised design: a completion ledger
+#### The revised design: a completion ledger — SHIPPED
 
 Drop the state machine. Ship a table that records only what finished:
 
@@ -1574,12 +1572,50 @@ for the onboarding pass-lease, the episode and diary writes and
 `token_usage`; and a fleet harness with a fault-injectable ledger and a
 `kill()` that suppresses `finally`, or the exit criteria certify nothing.
 
-**Fixed already, out of this review:** the coalesced-partition path
-called `_handle_notification` directly and so never consulted
+**Deviations from the critic's sketch, and why:**
+
+- **The write is not `WHERE owner_epoch = $captured`.** There is nothing
+  for an INSERT's `WHERE` to fence against; the epoch is *recorded* on
+  the row for audit, and `ON CONFLICT DO NOTHING` makes the write
+  first-writer-wins, which is the property that was actually wanted. A
+  zombie recording a turn its successor already recorded is a no-op, and
+  either way the trigger ends up marked done exactly once.
+- **The read fails OPEN, not "closed unless `may_start` agrees".** The
+  conditional was a rule with two clocks in it. Not knowing whether work
+  was done has exactly one safe answer and it is the pre-ledger one —
+  run it — and the seat's own admission gate already refuses new turns
+  within one heartbeat of a store it cannot reach, so the closed case is
+  covered by a mechanism that already exists.
+- **`try_resume_from_answer` was not hoisted.** The bug it named is
+  real and is fixed (see below), but by routing the digest through the
+  same `_dispatch_inbox_event` every other trigger uses rather than by
+  moving the check up a frame. Filtering the ledger before the resume
+  check is harmless: a clarification answer is a fresh inbound event and
+  can never already be recorded.
+- **`kill()` does not need to suppress `finally`.** That requirement was
+  specific to the state machine's finally-delete. The ledger writes only
+  on success, so a killed node records nothing and its successor
+  re-runs — which is exactly what the harness already models. Confirmed
+  by disabling the ledger read and watching
+  `test_a_turn_that_finished_is_not_re_run_by_the_successor` fail.
+
+**Found by shipping it:** bumping `PROTOCOL_VERSION` to 2 immediately
+broke every seat claim, and the cause was a live bug the bump merely
+exposed — `Engine.claim_worker_duty` never passed `protocol=`, so every
+worker-duty lease was written at the store's default of 1. The
+mixed-version gate refuses to claim any seat while a live lower-protocol
+lease exists, so a node that took a duty could not then claim a single
+seat, on a fleet where it was the only node. Invisible while the version
+was 1, immediate the moment it moved.
+
+**Also fixed, out of this review:** the coalesced-partition path called
+`_handle_notification` directly and so never consulted
 `try_resume_from_answer` — a parked sandbox run whose answer arrived
 alongside a follow-up message stayed parked until the reaper killed it.
 And `docs/concepts/seat-ownership.md` claimed the epoch was threaded
-into *every* seat-scoped write, which was never true.
+into *every* seat-scoped write, which was never true; the learning
+tables, `token_usage` and the onboarding markers are still unfenced, and
+the doc now says so. Fencing them is outstanding work, tracked there.
 
 ### 5.5 Epoch fencing on writes — SUPERSEDED, folded into the revised 5.2
 

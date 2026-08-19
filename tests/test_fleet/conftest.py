@@ -53,6 +53,9 @@ from crewlet.config import (  # noqa: E402
     SandboxProviderConfig,
 )
 from crewlet.db.leases import MemoryLeaseStore  # noqa: E402
+from crewlet.db.turn_completions import (  # noqa: E402
+    MemoryTurnCompletionStore,
+)
 from crewlet.engine import Engine  # noqa: E402
 from crewlet.events.types import Event  # noqa: E402
 from crewlet.queue.memory import MemoryEventQueue  # noqa: E402
@@ -201,7 +204,9 @@ class Fleet:
     nodes: list[_Node]
     handles: tuple[str, ...]
     leases: MemoryLeaseStore
+    completions: MemoryTurnCompletionStore
     company: CompanyConfig
+    _published: dict[str, list[Any]] = field(default_factory=dict)
 
     @property
     def a(self) -> _Node:
@@ -254,14 +259,22 @@ class Fleet:
         """
         from crewlet.queue.topics import agent_inbox_topic
 
-        await self.nodes[0].queue.publish(
-            agent_inbox_topic(handle),
-            Event(
-                type="task_assigned",
-                source="fleet-test",
-                payload={"task_id": marker, "task_description": marker},
-            ),
+        event = Event(
+            type="task_assigned",
+            source="fleet-test",
+            payload={"task_id": marker, "task_description": marker},
         )
+        self._published.setdefault(handle, []).append(event)
+        await self.nodes[0].queue.publish(agent_inbox_topic(handle), event)
+
+    def published_ids(self, handle: str) -> list[Any]:
+        """Every inbox event this fleet published to ``handle``.
+
+        Kept so a test can redeliver the SAME event — identity intact —
+        which is what a broker does with an unacked message and the only
+        way to exercise a ledger keyed on it.
+        """
+        return list(self._published.get(handle, []))
 
     def turns_for(self, handle: str) -> list[tuple[str, str]]:
         """``(node name, marker)`` for every turn on a seat, in real order."""
@@ -361,6 +374,10 @@ async def fleet(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
     # every other node's, which is exactly the state the phase exists to
     # make impossible.
     seed = MemoryEventQueue() if backend == "memory" else None
+    # ONE ledger for the fleet, like the lease table. A per-node ledger
+    # deduplicates nothing across a takeover, which is the only thing it
+    # is for — and would look from the outside exactly as though it did.
+    completions = MemoryTurnCompletionStore()
     journal: list[tuple[str, str, str]] = []
     nodes: list[_Node] = []
     for name in ("node-a", "node-b"):
@@ -372,14 +389,25 @@ async def fleet(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
             queue = PulsarEventQueue(PULSAR_URL)
         bootstrap = make_bootstrap()
         bootstrap.node.id = f"{name}-{suffix}"
-        engine = Engine.from_bootstrap(bootstrap, event_queue=queue, lease_store=leases)
+        engine = Engine.from_bootstrap(
+            bootstrap,
+            event_queue=queue,
+            lease_store=leases,
+            turn_completion_store=completions,
+        )
         await engine.apply_config(company)
         await engine.start()
         node = _Node(name=name, engine=engine, queue=queue, journal=journal)
         _instrument(node)
         nodes.append(node)
 
-    built = Fleet(nodes=nodes, handles=handles, leases=leases, company=company)
+    built = Fleet(
+        nodes=nodes,
+        handles=handles,
+        leases=leases,
+        completions=completions,
+        company=company,
+    )
     try:
         yield built
     finally:

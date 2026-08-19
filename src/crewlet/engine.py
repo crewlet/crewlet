@@ -82,6 +82,25 @@ logger = get_logger("engine")
 # — delivering messages to an agent whose turn is suspended mid-run.
 _NO_TURN_ENGINE_PAUSE_REASON = "no_turn_engine"
 
+# Inbox trigger types the completion ledger covers.
+#
+# These are the types that run a TURN, which is the only work whose
+# duplication costs anything outward-facing. The informational types
+# (``task_created`` / ``task_completed`` / ``task_delegated``) are logged
+# and dropped, so recording them would be bookkeeping about nothing.
+#
+# ``a2a_request`` / ``a2a_message`` are exempt for a harder reason, and
+# it is a phase-6 dependency rather than a preference: ``_handle_a2a``
+# drains the channel DESTRUCTIVELY, and the bus is process-local until
+# A2A moves onto the durable queue. A re-run on any node — including
+# this one — therefore finds an empty channel and tells the agent nobody
+# sent anything. Recording those completions would imply a
+# short-circuit-or-re-run choice that neither branch can honour, so the
+# ledger stays out of it until the channel state is durable.
+_LEDGERED_INBOX_TYPES = frozenset(
+    {"task_assigned", "notification", "external_notification"}
+)
+
 # Type alias for event handler callbacks (replaces old EventBus.EventHandler).
 _EventHandler = Callable[[Event], Awaitable[None]]
 
@@ -339,6 +358,7 @@ class Engine:
         scheduling_config: Any = None,
         embeddings: Any = None,
         lease_store: Any = None,
+        turn_completion_store: Any = None,
     ) -> None:
         self.debug = debug
         self._turn_engine_config = turn_engine_config
@@ -487,6 +507,11 @@ class Engine:
         # default, because a process-local store is only ever correct
         # for the process that is the whole fleet.
         self._lease_store: Any = lease_store
+        # The completion ledger — "has this trigger already been worked?"
+        # Derived from ``storage`` at start; injectable for the same
+        # reason the lease store is, and it must be the SAME object
+        # across a fleet or it deduplicates nothing across a takeover.
+        self._turn_completions: Any = turn_completion_store
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -618,6 +643,7 @@ class Engine:
         embeddings: Any = None,
         company_config_store: Any = None,
         lease_store: Any = None,
+        turn_completion_store: Any = None,
     ) -> Engine:
         """Construct an engine from Tier A bootstrap state only.
 
@@ -644,6 +670,7 @@ class Engine:
             api_port=bootstrap.api.port,
             api_host=bootstrap.api.host,
             lease_store=lease_store,
+            turn_completion_store=turn_completion_store,
         )
         engine._bootstrap = bootstrap
         engine._company_config_store = company_config_store
@@ -2625,6 +2652,7 @@ class Engine:
         # the storage backend, and skipped entirely without one: the
         # memory twins prune themselves inline, since a process-local
         # dict dies with the process.
+        self._build_turn_completion_store()
         self._start_maintenance_worker()
         if self._maintenance_worker is not None:
             try:
@@ -2878,6 +2906,15 @@ class Engine:
                 self._requeue_tasks.add(requeue)
                 requeue.add_done_callback(self._requeue_tasks.discard)
                 return
+            # Already worked? Read the completion ledger HERE — after
+            # every parking branch, so a parked partition is not marked
+            # done, and BEFORE coalescing, so recorded constituents drop
+            # out of the partition and only the remainder merges. A
+            # redelivery that overlaps a previous one partially (A+B,
+            # then A+B+C) therefore skips A and B and runs C.
+            events = await self._drop_worked_triggers(agent, events)
+            if not events:
+                return
             try:
                 if len(events) > 1:
                     merged = await self._coalesce_inbox_events(agent, events)
@@ -2891,6 +2928,7 @@ class Engine:
                         # unrelated message and its box stayed parked until
                         # the pause reaper killed it.
                         await self._dispatch_inbox_event(agent, merged)
+                        await self._record_worked_triggers(agent, events)
                         return
                     # Coalescing declined (heterogeneous partition —
                     # after the dedupe above, a genuine key-scheme bug)
@@ -2905,8 +2943,10 @@ class Engine:
                     # drain.
                     await self._requeue_inbox_events(agent, events[1:])
                     await self._dispatch_inbox_event(agent, events[0])
+                    await self._record_worked_triggers(agent, events[:1])
                     return
                 await self._dispatch_inbox_event(agent, events[0])
+                await self._record_worked_triggers(agent, events)
             except ShutdownDraining:
                 # The turn never started (engine draining) -- re-raise
                 # so the queue NAKs the partition and the next boot runs
@@ -5066,8 +5106,27 @@ class Engine:
             deliveries=PostgresDeliveryDedupeStore(self.storage),
             rate_limits=PostgresRateLimitStore(self.storage),
             scheduled_runs=ScheduledRunStore(self.storage),
+            turn_completions=self._turn_completions,
             claim_duty=lambda: self.claim_worker_duty("maintenance"),
         )
+
+    def _build_turn_completion_store(self) -> None:
+        """Wire the completion ledger, if there is somewhere to keep it.
+
+        Postgres or nothing. The memory twin exists and is used by tests,
+        but wiring it by default here would be worse than no ledger: it
+        is process-local, so it cannot deduplicate across the takeover
+        that is the entire reason the table exists, while looking from
+        the outside exactly as though it does.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.turn_completions import PostgresTurnCompletionStore
+
+        if self._turn_completions is not None:
+            return
+        if not isinstance(self.storage, Database):
+            return
+        self._turn_completions = PostgresTurnCompletionStore(self.storage)
 
     def _refresh_jira_routing(self, jira_transport: Any) -> None:
         """Re-seed a freshly-rebuilt JiraTransport's routing state.
@@ -6292,6 +6351,15 @@ class Engine:
                 owner=self._incarnation,
                 ttl_seconds=ttl_seconds,
                 preferred=self._node_id,
+                # THIS build's protocol, not the store's default. A duty
+                # lease written at the default sits in the table as a
+                # live lower-protocol row, and the mixed-version gate
+                # refuses every SEAT claim while one exists — so a node
+                # would take a duty and then be unable to claim a single
+                # seat, including on a fleet where it is the only node.
+                # Invisible while PROTOCOL_VERSION was 1 and immediate
+                # the moment it moved.
+                protocol=self._seat_host.protocol,
                 gated=False,
             )
         except Exception:
@@ -6464,6 +6532,109 @@ class Engine:
         if self._seat_host is None:
             return True
         return self._seat_host.may_start(handle) is not None
+
+    async def _drop_worked_triggers(
+        self, agent: AgentInstance, events: list[Event]
+    ) -> list[Event]:
+        """Remove triggers a previous turn already finished.
+
+        The window this closes: a turn completes, its outbound effects
+        ship, and the node dies before the delivery is acked. At-least-
+        once then hands the trigger to the seat's next owner, which
+        re-runs the whole thing — a second Slack reply, a second Jira
+        comment, a second push.
+
+        Only trigger types that actually RUN a turn are consulted;
+        anything else passes through untouched (see
+        :data:`_LEDGERED_INBOX_TYPES` for which, and why A2A is not one).
+
+        Fails OPEN, like the store: an unreadable ledger cannot tell you
+        whether work was done, and the only safe answer to that is the
+        one the engine gave before the ledger existed — run it.
+        """
+        if self._turn_completions is None or not events:
+            return events
+        candidates = [e for e in events if e.type in _LEDGERED_INBOX_TYPES]
+        if not candidates:
+            return events
+        worked = await self._turn_completions.completed(
+            agent.handle, [str(e.id) for e in candidates]
+        )
+        if not worked:
+            return events
+        kept = [e for e in events if str(e.id) not in worked]
+        skipped = len(events) - len(kept)
+        logger.info(
+            "turn_trigger_already_worked",
+            agent_handle=agent.handle,
+            skipped=skipped,
+            remaining=len(kept),
+        )
+        await self._publish_trigger_skipped(agent, events, worked)
+        return kept
+
+    async def _record_worked_triggers(
+        self, agent: AgentInstance, events: list[Event]
+    ) -> None:
+        """Record the constituent triggers this turn finished.
+
+        The CONSTITUENTS, never a derived id: a coalesced partition is
+        merged into one digest before the turn runs and that digest is
+        minted fresh on every coalesce, so a key taken from it would
+        differ on every redelivery and match nothing.
+
+        Called after the dispatch returns — which includes the sandbox
+        SUSPEND, deliberately. Past the suspend the pending row's
+        ``claim_for_resume`` is the at-most-once authority for the rest
+        of that work, and the trigger itself is finished with.
+
+        Fails open inside the store: the side effects already shipped,
+        so failing to record them costs at most one duplicate turn —
+        exactly the behaviour without a ledger.
+        """
+        if self._turn_completions is None or not events:
+            return
+        ids = [str(e.id) for e in events if e.type in _LEDGERED_INBOX_TYPES]
+        if not ids:
+            return
+        epoch = 0
+        if self._seat_host is not None:
+            epoch = self._seat_host.epoch_for(agent.handle) or 0
+        await self._turn_completions.record(
+            agent.handle,
+            ids,
+            turn_id=str(getattr(agent, "current_turn_id", "") or ""),
+            node=self._incarnation,
+            owner_epoch=epoch,
+        )
+
+    async def _publish_trigger_skipped(
+        self, agent: AgentInstance, events: list[Event], worked: set[str]
+    ) -> None:
+        """Announce a short-circuit, so the mechanism is auditable.
+
+        Without it a skipped trigger is invisible in every operator
+        surface the product has: the dashboard shows no turn, the logs
+        show no error, and "the agent never answered" and "the agent
+        already answered on a node that has since died" look identical.
+        """
+        from crewlet.events.types import TurnTriggerSkipped
+
+        for event in events:
+            if str(event.id) not in worked:
+                continue
+            with contextlib.suppress(Exception):
+                await self.event_queue.publish(
+                    "crewlet.events.turn_trigger_skipped",
+                    TurnTriggerSkipped(
+                        source="engine",
+                        agent_handle=agent.handle,
+                        agent_id=agent.id_str,
+                        trigger_id=str(event.id),
+                        trigger_type=event.type,
+                        reason="already_worked",
+                    ),
+                )
 
     def _dedupe_inbox_events(
         self, agent: AgentInstance, events: list[Event]

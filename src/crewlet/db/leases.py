@@ -72,7 +72,15 @@ logger = get_logger("db.leases")
 #
 # Bump this when the meaning of holding a lease changes — not when
 # something merely gains a field.
-PROTOCOL_VERSION = 1
+#
+# v2: holding a seat lease now means "consult and settle
+# ``turn_completions`` for this seat's triggers". A v1 node cannot: it
+# takes a seat over, never reads the completion row, and re-runs a turn
+# whose outbound effects already shipped — silent duplication, and
+# invisible, because a v1 node logs nothing about a table it does not
+# know exists. That is exactly the failure the ledger was built to
+# remove, so the two builds must not hold seats at the same time.
+PROTOCOL_VERSION = 2
 
 
 class LeaseError(RuntimeError):

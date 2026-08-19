@@ -98,6 +98,27 @@ It is **not** yet on every seat-scoped write. The learning tables (`episodes`, `
 
 **Fencing protects database state. It cannot protect outbound effects.** `run_sandbox` makes this concrete: it acquires a real, billed sandbox *before* the pending row is written, so no epoch-fenced insert can undo a box that is already pushing commits. The property the design offers is **bounded duplication**, not none — and what bounds it is the in-turn fence.
 
+## The completion ledger
+
+Fencing and admission bound the window in which two nodes could be working one seat. They do not close a narrower one: a turn **finishes**, its outbound effects ship, and the node dies before the delivery is acked. At-least-once then hands that trigger to the seat's next owner, which re-runs the whole turn — the same Slack reply, the same Jira comment, from an agent with no idea it already spoke.
+
+`turn_completions` records what finished, and is read before the next turn starts.
+
+It is deliberately **not** a claim, and the absences are the design:
+
+- **No `in_progress` state.** The seat lease is already the mutual exclusion — one consuming node, serial within it — so a claim's only honest disposition for a stale in-progress row is "supersede and re-run", which is exactly what you do with no row at all. An earlier design had one; five of five reviewers rejected it, because every other defect they found existed only to service that state.
+- **No expiry, no supersede rule.** A row means the work is done, and done does not lapse. Rows are deleted on a retention horizon by the `maintenance` duty — garbage collection, not semantics.
+- **Keyed on *constituent* event ids.** A multi-event partition is merged into one digest before the turn runs, and that digest is minted fresh on every coalesce, so a key taken from it would differ on every redelivery and match nothing. Recording constituents also means a redelivery that overlaps a previous partition only partially — A+B ran, then A+B+C arrives — skips A and B and runs C.
+
+**Both directions fail open, and that is the whole failure policy.** An unreadable ledger cannot tell you whether work was done, and the only safe answer to that is the one the engine gave before the table existed: run it. Failing closed would park real work during a database blip — and the seat's own admission gate already refuses new turns within one heartbeat of a store it cannot reach. The write happens *after* the side effects shipped, so failing to record them cannot un-ship them.
+
+Two exemptions, both deliberate:
+
+- **A2A triggers are not recorded.** `_handle_a2a` drains the channel destructively and the bus is process-local until A2A moves onto the durable queue, so a re-run finds an empty channel whatever the ledger says. Recording those completions would imply a choice neither branch can honour.
+- **A suspended sandbox turn IS recorded, at the suspend.** Past that point the pending run's own at-most-once flip is the authority for the rest of the work, and the trigger itself is finished with.
+
+A short-circuited trigger publishes `TurnTriggerSkipped`. Without it, "the agent never answered" and "the agent already answered, on a node that has since died" are the same observation.
+
 ## The unowned seat
 
 A seat is unowned during a lease gap, a claim ramp, a rebalance, or a full fleet restart. Its mail must survive all of them.
@@ -151,7 +172,7 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `scheduler` | Evaluates every schedule and fires what is due | The `scheduled_runs` claim already makes a fire at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `skill-clustering` | Synthesises skills from episodes | Reads every agent's episodes and **writes** skills: N nodes produce N sets of near-identical pages and N× the LLM spend |
 | `skill-curator` | Transitions skills active → stale → archived | Publishes a lifecycle event per transition, and races its own optimistic-concurrency guard |
-| `maintenance` | Retention sweeps for `webhook_deliveries`, `rate_limits`, `scheduled_runs` | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+| `maintenance` | Retention sweeps for `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions` | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
@@ -167,6 +188,9 @@ Two consequences worth stating plainly:
 
 - **Lease schema evolution is additive-only.** A column the older build does not select is invisible to it; one it *requires* is a crash.
 - **A downgrade across a protocol bump needs a full drain.** An older build has no protocol check at all, so it will happily take over a newer node's expired leases. Stop the whole fleet before rolling back.
+- **The wait is an outage window, and it is the point.** New nodes claim *nothing* until the last old lease lapses or is released — at the shipped 45-second TTL plus however long the old nodes take to drain. Plan the rollout for it rather than being surprised by it: the alternative is two builds disagreeing about what a lease obliges them to do, which is silent and unbounded rather than visible and finite.
+
+The current protocol is **2**. It moved for the completion ledger: after it, holding a seat lease means consulting and settling `turn_completions`, and a v1 node cannot — it takes a seat over, never reads the completion row, and re-runs a turn whose effects already shipped.
 
 ## What ownership looks like from outside
 

@@ -438,3 +438,33 @@ async def test_a_coalesced_partition_still_checks_for_a_parked_answer() -> None:
         engine.turn_engine = None
         await engine.stop()
         await queue.stop()
+
+
+async def test_taking_a_duty_does_not_block_this_node_from_claiming_seats() -> None:
+    """A duty lease carries THIS build's protocol, not the store default.
+
+    The mixed-version gate refuses to claim any seat while a live lease
+    is held at a lower protocol — that is what makes a rolling upgrade
+    converge. A duty lease written at the default protocol is such a
+    lease, so a node that took a duty could not then claim a single
+    seat, on a fleet where it is the only node. Invisible while
+    ``PROTOCOL_VERSION`` was 1, and immediate the moment it moved.
+    """
+    from crewlet.db.leases import PROTOCOL_VERSION, worker_resource
+
+    engine, queue = await _engine()
+    try:
+        assert await engine.claim_worker_duty("maintenance") is True
+        lease = await engine._seat_host.leases.get(worker_resource("maintenance"))
+        assert lease is not None
+        assert lease.protocol == PROTOCOL_VERSION
+
+        # And the gate it feeds still lets this node claim.
+        await engine._seat_host.release_all()
+        await engine._seat_host.sweep()
+        assert engine._seat_host.held_handles, (
+            "a duty lease blocked this node from claiming its own seats"
+        )
+    finally:
+        await engine.stop()
+        await queue.stop()

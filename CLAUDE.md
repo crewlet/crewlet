@@ -304,11 +304,24 @@ src/crewlet/          # Main package
                       #   fleet-wide credential cooldowns, and the
                       #   notification valve. Each ships a Postgres store
                       #   + a memory twin under one contract suite;
+                      #   turn_completions.py — the COMPLETION LEDGER:
+                      #   "has this trigger already been worked?", read
+                      #   before a turn and written after one. NOT a
+                      #   claim — no in_progress, no expiry, no
+                      #   supersede rule: the seat lease is already the
+                      #   mutual exclusion, so a claim's only honest
+                      #   disposition for a stale row is "re-run", which
+                      #   is what you do with no row. Keyed on
+                      #   CONSTITUENT event ids because a coalesced
+                      #   digest is minted fresh every time. BOTH
+                      #   directions fail open — not knowing whether
+                      #   work was done has one safe answer, and it is
+                      #   the pre-ledger one;
                       #   maintenance.py — MaintenanceWorker, the
-                      #   retention sweep for the three tables that
+                      #   retention sweep for the four tables that
                       #   answer "recently" and are written on every
                       #   event that asks (webhook_deliveries,
-                      #   rate_limits, scheduled_runs). Both migrations
+                      #   rate_limits, scheduled_runs, turn_completions). Both migrations
                       #   always SAID rows were swept on a TTL and both
                       #   ship the index for it; `purge` existed on the
                       #   stores and on their protocols and NOTHING
