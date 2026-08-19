@@ -1,8 +1,8 @@
 # Crewlet Node — Implementation Plan
 
-**Status:** phases 1–4 done; phase 5 in progress (5.1, 5.2a and the
-revised 5.2 done — which absorbed 5.5 and 5.7 — leaving 5.4, 5.8 and 5.9);
-phases 6 and 7 not started. The companion analysis — why the current
+**Status:** phases 1–4 done; phase 5 all but 5.4 (turn claims) — 5.1,
+5.2a, the revised 5.2 (which absorbed 5.5 and 5.7), 5.8 and 5.9 are all
+in; phases 6 and 7 not started. The companion analysis — why the current
 engine is a singleton, the target architecture, and the adversarial review
 that shaped it — is [`SCALING.md`](SCALING.md). This file is the *how*: the
 phase-by-phase work breakdown, with file-level anchors, schema changes,
@@ -1465,7 +1465,7 @@ only thing that bounds it.
   capability classification in `tools/capabilities.py`), bounding the zombie
   window to one round.
 
-### 5.8 Drain and readiness — PARTLY SHIPPED IN 5.2
+### 5.8 Drain and readiness — DONE
 
 Already done, as 5.2's drain-ordering work item: `/ready` returns 503 while
 draining, `Engine.stop()` begins with `begin_drain()` (which also drops the
@@ -1475,23 +1475,95 @@ only) and releases every seat through the **voluntary** path *before*
 whole drain while its heartbeat kept renewing them. Node death is the same
 flow via TTL expiry.
 
-What remains:
+**Landed since:** `release_all` releases seats **concurrently**, so each
+one leaves the moment its own turn finishes. Sequentially, a node holding
+a dozen seats paid the bounded drain timeout a dozen times, and the seat
+that went idle first stayed dark for the whole procession — held by a
+node that no longer wanted it and unclaimable by any peer. Deliberately
+uncapped, unlike claiming: the claim-rate limit is sized by the cost of
+an MCP *spawn* on the node taking a seat on, letting go costs a teardown,
+and the peers picking these up are throttled by their own claim limits
+anyway. Failures stay per seat, so one stuck consumer cannot strand
+eleven healthy ones.
 
-- **Release each seat as it goes idle**, rather than all of them in one
-  pass at stop. Peers then pick seats up one at a time instead of racing
-  for the whole set, which is what the claim-rate limit is sized for.
-- A seat in `AWAITING_SANDBOX` should release **immediately** — its state
-  is the PG row, so there is nothing local to wait for.
+**Already true, for a better reason than the plan gave.** "A seat in
+`AWAITING_SANDBOX` releases immediately" needed no work: the drain waits
+on a per-seat in-flight **counter**, not a read of `AgentState`, and the
+comment at `agent/turn.py` says why — a seat parked on a detached run
+stays `AWAITING_SANDBOX` for the whole run plus any clarification pause,
+so draining on the state would let one agent's pending question block a
+config apply and, through it, the whole node. A suspended turn returns
+and releases its count; the resume takes a fresh one.
 
-### 5.9 Workers behind singleton leases
+### 5.9 Workers behind singleton leases — DONE
 
-- Scheduler tick (epoch-gated: skip while the node's applied epoch lags —
-  fire identity is org-derived, `schedule/scheduler.py:184`),
-  `SkillClusteringScheduler` (`learning/skill_scheduler.py:117`),
-  `SkillCuratorWorker`, the sandbox waiter, the tool-skills boot walk, and
-  the dedupe-TTL sweep each claim `worker:{duty}`.
+Six `worker:{duty}` leases, each claimed per tick rather than held, so a
+node that dies mid-duty hands it back by lapsing: `seat-subscriptions`,
+`sandbox-waiter`, `scheduler`, `skill-clustering`, `skill-curator`,
+`maintenance`. A claim that *fails* skips the tick — unknown ownership is
+not ownership, and assuming otherwise is how every node decides it is the
+singleton at once.
 
-**Exit criteria (the chaos suite):** `kill -9` the owner mid-turn → takeover
+Two corrections to the list as written:
+
+- **The dedupe-TTL sweep did not exist.** The item read as though it were
+  a per-node loop to be gated; in fact `purge` existed on the stores and
+  on their protocols and *nothing anywhere called it*, so
+  `webhook_deliveries`, `rate_limits` and `scheduled_runs` all grew for
+  the life of the deployment. Both migrations say in as many words that
+  rows are swept on a TTL and both ship the index for it.
+  `db/maintenance.py` is that sweep, with one retention per table rather
+  than a global number — the ledger's floor is `catchup_max_seconds`,
+  because deleting a row a tick could still evaluate lets that fire run
+  twice.
+- **The tool-skills boot walk must NOT be a singleton.** It populates a
+  *process-local* registry, so a lease would leave every other node's
+  agents with no tool skills at all — a silent capability amputation.
+  The test is whether the work produces shared state (a duty) or warms a
+  local cache (not one). The episode-lifecycle worker is a third shape:
+  it consumes a fleet-wide subscription, so the broker already delivers
+  each request to exactly one node.
+
+The scheduler's epoch gate was already in place (`admits`), and its fire
+path was already org-derived after 5.2a — so the duty is about
+duplicated *work*, not correctness: every node walked the whole org every
+tick and all but one lost the claim race on every due fire.
+
+**Found and fixed on the way**, each of which the sweep would have turned
+from latent into live:
+
+- **The Postgres dedupe claim ignored its own TTL** — a bare `ON CONFLICT
+  DO NOTHING` with no time predicate claims a delivery key *forever*,
+  while the memory twin released it after five minutes. An operator
+  replaying a webhook ten minutes later watched it vanish, on Postgres
+  only. Expiry had been tested on the twin ONLY, which is the gap the
+  divergence lived in; it is a contract test on every backend now,
+  including a real database — where the first run promptly failed for a
+  reason the fake could not show, a 50 ms test TTL being shorter than two
+  round-trips.
+- **The memory rate-limit purge cleared everything**, ignoring its
+  cutoff, so the first sweep would have reset the LIVE window and let a
+  full limit through — housekeeping as a periodic hole in the valve. It
+  also keyed windows by *index*, which is not comparable to a time
+  cutoff for any window wider than a second.
+- **The episode-lifecycle worker resolved a role through the local
+  pool**, on a fleet-wide subscription: every compaction won by a
+  non-owner silently downgraded to the default aux provider instead of
+  the role's.
+
+**Exit criteria (the chaos suite) — GATED as `tests/test_fleet/test_chaos.py`,**
+except the turn-claim clause, which waits on 5.4. `_Node.kill()` models
+what a killed process leaves: leases held and unrenewed, deliveries
+fetched and unacked, no detach handshake — and a test asserts the kill
+releases nothing, or every other test there would be a graceful handoff
+in a chaos costume. Covered: takeover within TTL and not before; the
+successor attaches inbox AND control and spawns the instance; the epoch
+moves; mail published into the takeover window waits; a detached sandbox
+completion reaches the seat's new owner; a rolling restart under traffic
+loses no trigger and duplicates none. Both backends, real broker
+included.
+
+**Original exit criteria, for the record:** `kill -9` the owner mid-turn → takeover
 within TTL + attach, trigger redelivered, claim superseded, no lost trigger,
 duplicates only within the documented one-round window; node death during a
 detached sandbox run → resume on the new owner with the suspended
