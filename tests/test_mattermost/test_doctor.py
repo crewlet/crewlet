@@ -302,3 +302,55 @@ class TestWithoutTheWebsocketsExtra:
         assert "crewlet[mattermost]" in await doctor_mod._probe_seat_websocket(
             "https://chat.example", "tok", "engineer"
         )
+
+
+class TestUnrunChecksAreNotFailures:
+    """The diff added a third state (`?`) whose whole point is that an
+    unrun probe must not read as one that was tried and refused. Every
+    early return skipped it, so an unprovisioned seat and an unreachable
+    server both rendered FAILED for sockets nobody opened."""
+
+    @pytest.mark.asyncio
+    async def test_a_seat_with_no_token_does_not_claim_a_failed_socket(
+        self, fake_mattermost
+    ):
+        report = await _run(seat_tokens={"engineer": ""})
+
+        seat = report.seats[0]
+        assert not seat.websocket_checked
+        assert "no bot token resolved" in seat.problems[0]
+        # TOKEN is legitimately FAILED — there is no token. WS is not:
+        # nothing was ever dialled.
+        row = [ln for ln in format_report(report).splitlines() if "engineer" in ln][0]
+        assert row.split()[-2:] == ["?", "-"]
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_token_does_not_claim_a_failed_socket(
+        self, fake_mattermost
+    ):
+        _FakeClient.scripts = {"tok": {"token_bad": True}}
+        report = await _run()
+
+        seat = report.seats[0]
+        assert not seat.token_ok
+        assert not seat.websocket_checked
+        assert "not usable" in seat.problems[0]
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_server_checks_nothing_and_says_so(
+        self, fake_mattermost
+    ):
+        _FakeClient.anon = {"unreachable": True}
+        report = await _run()
+
+        assert not report.reachable
+        assert not report.site_url_checked
+        assert not report.browser_websocket_checked
+        assert not report.team_checked
+        rendered = format_report(report)
+        # Three faults that were never observed used to be reported here.
+        assert "site url      : (not checked)" in rendered
+        assert "browser ws    : ?" in rendered
+        assert "<< does not match url" not in rendered
+        assert "<< not found" not in rendered
+        assert "cannot reach" in rendered

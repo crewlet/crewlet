@@ -89,9 +89,12 @@ class SeatCheck:
     is_bot: bool = False
     disabled: bool = False
     websocket_ok: bool = False
-    #: ``False`` when the probe could not run at all, so the table can
-    #: say "unknown" rather than accusing a healthy seat of failing.
-    websocket_checked: bool = True
+    #: Whether the probe actually RAN.  Defaults to ``False`` — every
+    #: early return in :func:`_check_seat` (no token resolved, the token
+    #: rejected) leaves this seat without a socket attempt, and a default
+    #: of ``True`` rendered each of them as ``FAILED``: a socket that was
+    #: tried and refused, which is a different fault with a different fix.
+    websocket_checked: bool = False
     channels: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
 
@@ -110,10 +113,12 @@ class DoctorReport:
     server_version: str = ""
     site_url: str = ""
     site_url_ok: bool = False
+    site_url_checked: bool = False
     browser_websocket_ok: bool = False
-    browser_websocket_checked: bool = True
+    browser_websocket_checked: bool = False
     browser_websocket_detail: str = ""
     team_ok: bool = False
+    team_checked: bool = False
     seats: list[SeatCheck] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
 
@@ -245,9 +250,9 @@ async def _check_seat(
         # Skipped only when the dependency that opens it is absent —
         # already reported once, at the top of the report, rather than
         # repeated as a per-seat failure it is not.
-        seat.websocket_checked = probe_websocket
         if probe_websocket:
             failure = await _probe_seat_websocket(base_url, token, handle)
+            seat.websocket_checked = True
             seat.websocket_ok = not failure
             if failure:
                 seat.problems.append(f"websocket authentication failed: {failure}")
@@ -286,6 +291,7 @@ async def run_doctor(
         report.server_version = str((ping or {}).get("version") or "")
 
         config = await anon.client_config()
+        report.site_url_checked = True
         report.site_url = normalize_base_url(str(config.get("SiteURL") or ""))
         report.site_url_ok = bool(report.site_url) and site_url_origin_matches(
             base_url, report.site_url
@@ -309,9 +315,9 @@ async def run_doctor(
                 "System Console or the API"
             )
 
-        report.browser_websocket_checked = can_probe_websockets
         if can_probe_websockets:
             ok, detail = await _probe_browser_websocket(base_url)
+            report.browser_websocket_checked = True
             report.browser_websocket_ok = ok
             report.browser_websocket_detail = detail
             if not ok:
@@ -338,6 +344,7 @@ async def run_doctor(
             logger.debug("team_lookup_failed", handle=handle, error=str(exc))
         finally:
             await client.close()
+        report.team_checked = True
         if team_id:
             break
     report.team_ok = bool(team_id)
@@ -375,20 +382,33 @@ def _ws_cell(ok: bool, checked: bool) -> str:
 
 def format_report(report: DoctorReport) -> str:
     """Render a :class:`DoctorReport` for the terminal."""
+    # Every cell distinguishes "checked and bad" from "never checked".
+    # An unreachable server returns before the Site URL, the websocket
+    # and the team are ever queried, and rendering those as failures
+    # sends the reader after three faults that were never observed.
     browser_ws = _ws_cell(report.browser_websocket_ok, report.browser_websocket_checked)
+    if not report.site_url_checked:
+        site_url = "(not checked)"
+    else:
+        site_url = (report.site_url or "(unreported)") + (
+            "" if report.site_url_ok else "   << does not match url"
+        )
+    if not report.team_checked:
+        team = f"{report.team}   << not checked"
+    else:
+        team = f"{report.team}{'' if report.team_ok else '   << not found'}"
     lines = [
         f"url           : {report.url}",
         f"reachable     : {'yes' if report.reachable else 'NO'}"
         + (f" (Mattermost {report.server_version})" if report.server_version else ""),
-        f"site url      : {report.site_url or '(unreported)'}"
-        + ("" if report.site_url_ok else "   << does not match url"),
+        f"site url      : {site_url}",
         f"browser ws    : {browser_ws}"
         + (
             f" — {report.browser_websocket_detail}"
             if report.browser_websocket_detail
             else ""
         ),
-        f"team          : {report.team}{'' if report.team_ok else '   << not found'}",
+        f"team          : {team}",
     ]
     if report.seats:
         lines.append("")
