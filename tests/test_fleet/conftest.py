@@ -32,8 +32,10 @@ only as strong as the twin.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from conftest import make_bootstrap  # noqa: E402
+from crewlet._tasks import cancel_and_wait  # noqa: E402
 from crewlet.config import (  # noqa: E402
     CompanyConfig,
     LLMProviderConfig,
@@ -124,6 +127,8 @@ class _Node:
     honest record."""
     control: list[tuple[str, str]] = field(default_factory=list)
     """``(seat handle, turn id)`` per control event this node received."""
+    dead: bool = False
+    """Set by :meth:`kill`; teardown skips a graceful stop for these."""
 
     @property
     def turns(self) -> list[tuple[str, str]]:
@@ -141,6 +146,52 @@ class _Node:
 
     async def sweep(self) -> Any:
         return await self.engine._seat_host.sweep()
+
+    async def kill(self, *, in_flight: Sequence[asyncio.Task[Any]] = ()) -> None:
+        """Make this node VANISH, the way ``kill -9`` does.
+
+        Not ``stop()``. A graceful stop drains, releases every lease and
+        detaches every consumer, which is the one shutdown path that
+        cannot exercise takeover — nothing is left for a peer to take
+        over FROM. What a killed process leaves behind is the opposite:
+
+        - **leases still held, and no longer renewed.** They lapse at the
+          TTL, and until they do no peer may touch the seat. This is what
+          bounds takeover latency, and the only thing that makes the
+          window observable.
+        - **in-flight deliveries unacked.** The handler never returned,
+          so the broker eventually hands the message to whoever attaches
+          next. Modelled by CANCELLING the tasks running them: the queue
+          puts a cancelled delivery back at the front of its backlog,
+          which is what the Pulsar backend achieves with a NAK.
+        - **no detach handshake.** The consumer is simply gone.
+
+        ``in_flight`` is the memory backend's share of this: that twin
+        dispatches INSIDE ``publish``, so the task running a handler is
+        the publisher's, and only the caller knows which one that is. On
+        Pulsar the consume loops are the queue's own and are cancelled
+        here.
+        """
+        host = self.engine._seat_host
+        host._running = False
+        for task in list(host._tasks):
+            await cancel_and_wait(task)
+        host._tasks.clear()
+
+        for task in in_flight:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+        for sub in list(getattr(self.queue, "_subscriptions", [])):
+            task = getattr(sub, "task", None)
+            if task is not None:
+                await cancel_and_wait(task)
+
+        for topic, group in list(self.queue.attachments()):
+            with contextlib.suppress(Exception):
+                await self.queue.detach(topic, group)
+        self.dead = True
 
 
 @dataclass
