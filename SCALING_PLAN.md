@@ -1856,30 +1856,114 @@ resources.
 
 ---
 
-## Phase 7 — Placement, satellites, CLI convergence
+## Phase 7 — Placement, satellites, CLI convergence — DONE
 
-- Tier A `node.roles: [ingress, seats, workers]` (default: all).
-- `role.placement` on seats: pin to a node id or a label selector;
-  `node.labels` on the node. Lease claims filter on placement. Validation:
-  sandbox-enabled seats may not be satellite-pinned until the
-  waiter-reachability question is resolved
-  ([`SCALING.md` § open questions](SCALING.md#open-questions-before-implementation),
-  item 4) — the validator enforces the current answer either way.
-- CLI: `crewlet run` *is* the node. `crewlet run api` becomes a deprecated
-  alias for `crewlet run --roles ingress` (one minor release), then is
-  removed.
-- Fleet observability: a dashboard view over the lease table + per-node
-  apply status (per-node in-flight, seat ownership, epoch divergence).
-- Docs, the big flip: `docs/guides/deployment.md`'s
-  [Replica count](docs/guides/deployment.md#replica-count) section is
-  replaced with fleet guidance; `docs/concepts/overview.md`'s single-instance
-  statement is updated; a new `docs/guides/fleet.md` covers topology,
-  satellites, drain, and upgrade order; `SCALING.md` is updated to
-  "implemented" status with the plan's deviations recorded.
+Four items, three of them close to as written and one renamed.
 
-**Exit criteria:** a 3-node + 1-satellite example runs the Nimbus company
-end-to-end in the integration harness; the deployment docs describe (and
-only describe) topologies the chaos suite covers.
+**`node.roles` and `node.labels`.** Tier A, defaulting to all three
+roles — which is every deployment that exists, unchanged. The
+correctness half is the denominator: a node that does not run seats must
+be excluded from the count its peers divide by, or it shrinks everyone's
+share and strands the difference. Roles and labels ride the node's
+presence lease (`leases.meta`, migration 028, re-sent on every renew) so
+peers read them without a membership service, and a row written by an
+older build reads as "does everything, labelled with nothing" rather
+than as a node with no roles.
+
+The failure the item did not name: roles subtract from a *node*, so a
+fleet can be assembled — node by node, every config correct — into a
+shape where a whole job is done by nobody. Every symptom is an absence,
+so nothing raises. Checked against live presence and reported
+(`fleet_role_unmanned`), edge-triggered.
+
+**`role.placement`.** Pin to a node id, a label selector, or both ANDed.
+The item said "lease claims filter on placement", and a filter is
+exactly what does not work: nine seats pinned to one node and one free,
+across three nodes, gives a fleet-wide `ceil(10/3) = 4` — the pinned
+node takes four of its nine and five are claimable by nobody, stranded,
+while every node reports a healthy sweep. The share is computed per
+placement GROUP, over the nodes eligible for that group, and summed. With
+no placements anywhere it collapses to exactly the old arithmetic.
+
+Two behaviours the item did not specify and that the design needs: a
+seat that stops matching is handed back voluntarily (its own
+`ReleaseReason`, so a pin change is distinguishable from a rebalance),
+and a seat no live node matches is REPORTED, never placed by widening
+the selector — widening it is precisely what the operator asked the
+engine not to do. `PROTOCOL_VERSION` moved to 3: a build that does not
+know about placement claims a pinned seat and succeeds, because the
+lease is only a mutex, and the pin is then silently violated.
+
+**Validation: sandbox-enabled seats may not be satellite-pinned —
+REJECTED, and [open question 4](SCALING.md#open-questions-before-implementation-all-answered)
+answered instead.** The engine cannot check what a node can *reach*, only
+what it says it is, and the requirement is a network fact: the node
+holding the seat and the node holding `sandbox-waiter` must both reach
+the sandbox provider. A blanket refusal would also refuse the legitimate
+case (pin the heavy coding seat to the big box) while still not catching
+the illegitimate one. Two of the three worries dissolved: the waiter is a
+`workers` duty, so on a satellite it is on a core node by construction,
+and the OTLP receiver URL is explicit config, never derived from the
+launching node. What ships is the network facts stated in the fleet
+guide plus the two things the engine can actually know — a role nobody
+performs, and a seat nobody matches.
+
+**CLI: `crewlet run` is the node, not `crewlet node`.** The item had the
+CLI converging on a new command; renaming the one command every
+deployment already invokes, in order to introduce a synonym, is not
+convergence. `crewlet run --roles` is the node; `crewlet run api` is a
+deprecated alias for `--roles ingress` that warns on stderr. It was a
+second process shape with its own wiring — the app, the stream service
+and the config refresher built by hand in the same order as the embedded
+path but never provably the same way — and the duplicate event-store
+builder it needed is gone with it.
+
+**Fleet observability.** `GET /fleet` plus a dashboard view, read from
+the lease table rather than fanned out to peers' `/health` (peers may be
+mid-drain, and `/health` answers about the node that served it, so
+behind a load balancer a refresh tells a different story). Node presence
+with roles and labels, seat ownership, worker duties, per-node config
+epoch. In-flight counts stayed on `/health`: a lease says who holds a
+seat, not what that node is doing with it.
+
+**Found and fixed on the way:**
+
+- **Extensions had no way to be company-scoped** ([open question
+  5](SCALING.md#open-questions-before-implementation-all-answered)).
+  `on_engine_start` fires on every node, so an extension that polls an
+  API or writes a digest did it N times. `ctx.claim_duty` exposes the
+  engine's own per-tick singleton. Deliberately NOT the `scope: company`
+  field the question proposed: a declared scope implies a hold that
+  outlives the tick, which hands the job to whichever node booted first
+  for the life of its process — the design 5.9 already rejected.
+- **An ingress-only node launched MCP children.** They exist to serve an
+  agent's tool calls, and a node with no seats makes none — so it forked
+  a subprocess tree per shared server for nothing, and again on every
+  config activation.
+
+**Exit criteria — MET.** `tests/test_fleet/test_satellite.py` runs three
+core nodes and a satellite (`roles: [seats]` plus a label) over both
+queue backends: the pinned seat runs on the satellite and nowhere else, a
+trigger published from a core node reaches it, the satellite never takes
+a singleton duty, and when it leaves, the seat is reported unservable
+rather than taken by a node that does not match. The deployment guide now
+describes fleets by pointing at `docs/guides/fleet.md`, which describes
+the topologies the chaos and satellite suites actually cover — and says
+plainly which requirement (reaching the sandbox provider) is a network
+fact the engine cannot verify.
+
+**Original item, for the record:** Tier A `node.roles: [ingress, seats,
+workers]` (default: all); `role.placement` pinning to a node id or label
+selector with `node.labels` on the node, lease claims filtering on
+placement, and a validator refusing satellite-pinned sandbox seats until
+open question 4 is resolved; `crewlet run api` deprecated in favour of
+`crewlet run --roles ingress`; a fleet dashboard view over the lease
+table and per-node apply status; `docs/guides/deployment.md`'s replica
+count section replaced, `docs/concepts/overview.md`'s single-instance
+statement updated, a new `docs/guides/fleet.md`, and `SCALING.md` marked
+implemented. Exit criteria: a 3-node + 1-satellite example runs the
+Nimbus company end-to-end in the integration harness; the deployment docs
+describe (and only describe) topologies the chaos suite covers.
 
 ---
 

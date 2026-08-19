@@ -31,6 +31,35 @@ class ExtensionContext(BaseModel):
     observability: Any = None
     debug: bool = False
 
+    node_id: str = ""
+    """Which process this is. Stable across restarts, and the same value
+    the logs, ``/health`` and the lease table use."""
+
+    claim_duty: Any = None
+    """``await ctx.claim_duty("my-extension")`` → may this node do a
+    company-wide job right now?
+
+    Extensions run on **every** node — ``on_engine_start`` fires in each
+    process — so an extension that polls an API, writes a daily digest,
+    or reconciles an external system does it N times unless it asks. This
+    is the same primitive the engine's own singleton duties use, under
+    the same name, and it takes an arbitrary duty string so two
+    extensions never collide.
+
+    **Claim per tick, never once at start.** A claim is a short lease, so
+    holding one from ``on_engine_start`` means the node that happened to
+    boot first owns the job for the life of the process — including after
+    it stops being able to do it. Ask again each time you are about to
+    act; a node that dies mid-duty hands it back by lapsing, with no
+    handoff protocol.
+
+    ``None`` when the engine did not wire one (a bare
+    ``ExtensionContext`` in a test). Treat that as "yes": a fleet of one
+    is what an unwired engine is.
+
+    See ``docs/guides/extensions.md`` and
+    ``docs/concepts/seat-ownership.md#singleton-duties``."""
+
 
 @runtime_checkable
 class Extension(Protocol):

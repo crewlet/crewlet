@@ -71,6 +71,35 @@ just a fleet of one that may not stay that way:
 Use the pool for what it is for: inspecting or acting on a turn that is running
 *here* — state, current task, in-flight work.
 
+## Company-wide work needs a claim
+
+`on_engine_start` fires in **every** process, so an extension that polls an
+external API, writes a daily digest, or reconciles a remote system does it once
+per node unless it asks first:
+
+```python
+async def tick(self, ctx: ExtensionContext) -> None:
+    if ctx.claim_duty and not await ctx.claim_duty("acme-digest"):
+        return          # a peer is doing it this round
+    await self.write_digest()
+```
+
+The same primitive the engine's own [singleton
+duties](../concepts/seat-ownership.md#singleton-duties) use — the scheduler
+tick, the retention sweep, the sandbox waiter — and it takes any duty string, so
+two extensions never collide.
+
+**Claim per tick, never once at start.** A claim is a short lease, so holding one
+from `on_engine_start` gives the job to whichever node booted first for the life
+of that process, including after it stops being able to do it. Asking each time
+you are about to act means a node that dies mid-duty hands it back by lapsing,
+with no handoff protocol to write.
+
+`ctx.claim_duty` is `None` when the engine did not wire one (a bare
+`ExtensionContext` in a test) — treat that as yes, because a fleet of one is what
+an unwired engine is. `ctx.node_id` names the process, matching the logs,
+`/health`, and the lease table.
+
 ---
 
 ## Writing an Extension

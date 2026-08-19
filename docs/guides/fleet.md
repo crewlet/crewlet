@@ -135,6 +135,11 @@ node that holds the seat, or change that node's labels, and it releases
 the seat voluntarily at the next sweep — the in-flight turn finishes,
 then an eligible peer picks it up.
 
+**A placement narrows a seat, not a node.** A satellite that runs seats
+is eligible for every *unpinned* seat too — it will take its share of
+them like any other node. If a seat needs something only the core has,
+pin it to the core; do not assume a satellite will leave it alone.
+
 ### Placement and sandboxes
 
 A [sandboxed](../concepts/code-sandbox.md) seat may be pinned like any

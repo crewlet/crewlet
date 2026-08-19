@@ -1,24 +1,40 @@
 # Scaling Crewlet
 
-**Status:** analysis + target-architecture decision. Nothing here is implemented.
+**Status: implemented.** Phases 1–7 of
+[`SCALING_PLAN.md`](SCALING_PLAN.md) have shipped. A fleet is supported —
+seat leases with epoch fencing, owner-only inbox subscriptions, a
+completion ledger, singleton worker duties, a control plane for config,
+`node.roles`, and `role.placement` — and the chaos suite kills nodes
+mid-turn under load to certify it. The plan records what each phase
+changed and, more usefully, where the design below turned out to be
+wrong; this file is kept as the analysis it was, with the deviations
+noted where they matter.
 
-**Audience:** Crewlet maintainers. The operator-facing rule ("run exactly one
-engine") lives in [`docs/guides/deployment.md`](docs/guides/deployment.md#replica-count);
-this file explains *why* it exists and records the decided direction for
-lifting it. Breaking changes are in scope for the target design.
+**Audience:** Crewlet maintainers. The operator-facing guide is
+[`docs/guides/fleet.md`](docs/guides/fleet.md), which says when to run
+more than one node and how; this file explains why the single-process
+constraint existed and how it was lifted. The advice to scale up before
+scaling out survives on its own merits — one node is the design's
+degenerate case, not a lesser path.
 
 ---
 
-## The constraint today
+## The constraint this file was written about
 
-`crewlet run` must run as **exactly one process per company**. `crewlet run api`
-may run alongside it, but is also effectively single-instance today (see
+> **Historical.** What follows describes the engine as it was before the
+> work in [`SCALING_PLAN.md`](SCALING_PLAN.md). None of it is true of the
+> current build; it is kept because the analysis is what the design was
+> answering, and a reader of the design needs the problem in front of
+> them.
+
+`crewlet run` had to run as **exactly one process per company**. `crewlet run
+api` could run alongside it, but was also effectively single-instance (see
 [The wiring fork](#the-wiring-fork)).
 
-Nothing in the code enforces this and — until the change that added this file —
-nothing in the docs stated it. An operator who sets `replicas: 2` gets duplicate
-Slack replies, a token budget cap that is silently N× too large, and a config
-hot-reload that reaches one replica out of N, with no error anywhere.
+Nothing in the code enforced this and — until the change that added this file —
+nothing in the docs stated it. An operator who set `replicas: 2` got duplicate
+Slack replies, a token budget cap that was silently N× too large, and a config
+hot-reload that reached one replica out of N, with no error anywhere.
 
 ---
 
@@ -632,15 +648,23 @@ independently shippable and the fork dies early:
    on `crewlet node` (aliases for `run`/`run api` through a deprecation
    window).
 
-Steps 1–4 are pure wins even if sharding never ships: they fix the live bugs,
-the silent webhook drop, and the rotation holes in today's topology.
+All seven have shipped. One naming deviation in step 7: the CLI converged
+on `crewlet run` rather than a new `crewlet node`, because `crewlet run`
+*is* the node once what it does is a config value — a rename would have
+retired the one command every deployment already invokes in order to
+introduce a synonym. `crewlet run api` is the deprecated alias, mapping
+onto `crewlet run --roles ingress`.
+
+Steps 1–4 were pure wins even before sharding: they fixed the live bugs,
+the silent webhook drop, and the rotation holes in the old topology.
 
 ---
 
-## Open questions before implementation
+## Open questions before implementation — all answered
 
-The direction above is decided; these are the parts a paper design cannot
-settle, and each needs an answer before (or as part of) its migration phase.
+Each of these needed an answer a paper design could not settle. All seven
+have one now; the answer is recorded under each, and where the answer
+contradicted the question that is said plainly.
 
 1. **Empirical Pulsar validation.** The takeover windows rest on asserted
    broker behaviors, not measurements: session-death timing for a hard-killed
@@ -649,6 +673,14 @@ settle, and each needs an answer before (or as part of) its migration phase.
    `receiver_queue_size=1000` is never set explicitly anywhere in the repo),
    and Reader semantics on the config topic. Build a broker-integration
    harness and measure before freezing the lease TTL and heartbeat constants.
+
+   *Answered by measurement* — `tests/test_queue/test_broker_behavior.py`.
+   An attach is ~5 ms, a redelivery after a close ~9 ms, and the prefetch
+   default is the 1000 the question suspected: a wedged-but-alive node
+   holds its fetched-unacked messages for the full 30-minute ack timeout,
+   which is why the watchdog's only honest move is `os._exit`. The lease
+   TTL (45 s) and heartbeat (15 s) are set from those numbers, and the
+   plan's Gate (a) records each.
 2. **Mixed-version fleets.** The design assumes a homogeneous protocol, but
    upgrading the fleet itself puts a vN and a vN+1 node on the same lease
    table and topics mid-rolling-deploy. Introducing the turn-claim or changing
@@ -656,6 +688,14 @@ settle, and each needs an answer before (or as part of) its migration phase.
    in the lease table (a node refuses to claim seats while an older-protocol
    node holds any), or strictly additive schemas with behavior keyed on the
    fleet minimum. Currently undesigned; the largest unexamined surface.
+
+   *Answered: a protocol column on the lease, and an asymmetric gate.* A
+   node refuses to claim while any live lease is held at a lower
+   `protocol`; older nodes keep working, newer ones wait — visibly —
+   until the last old lease lapses. Schema evolution on that table is
+   additive-only, and rolling *back* across a bump needs a full stop,
+   because an older build has no check at all. Two bumps have used it
+   since: the completion ledger (v2) and placement (v3).
 3. **Test-backend parity.** `MemoryEventQueue`, the memory A2A bus, and the
    sandbox fakes must model the new semantics (owner-only subscription,
    per-topic pause, leases, claims) or the suite passes while only the
@@ -663,23 +703,70 @@ settle, and each needs an answer before (or as part of) its migration phase.
    `MemoryPendingSandboxRunStore` fallback the audit found is the existing
    shape of this trap — the memory backends must be semantic twins, and
    no-PG/no-broker modes must refuse multi-node operation loudly.
-4. **Satellites × sandbox.** The satellite story is reviewed for inbox, A2A,
-   and config — not for the sandbox path. The waiter singleton runs on some
-   other node and must reach the sandbox provider (E2B cloud: fine;
-   self-hosted E2B inside the satellite's network zone: not), and
-   `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must point at ingress nodes, never the
-   satellite. Decide whether sandbox-enabled seats may be satellite-pinned, or
-   whether the waiter duty follows such seats.
+
+   *Answered: every twin runs the same suite as its real backend, and
+   `tests/test_fleet` is parametrized over both queue backends.* "The
+   same criteria pass on the twin" is itself an exit criterion, so a twin
+   that models the broker wrongly fails there instead of certifying the
+   bug in CI. It caught real divergences both ways: a Postgres dedupe
+   claim that ignored its own TTL while the twin expired it, and a memory
+   queue that was broker-and-client in one object so one node's detach
+   dropped its peer's consumer. The no-database case does not refuse —
+   it is the single-node deployment — but it says so at boot
+   (`seat_placement_is_process_local`).
+4. **Satellites × sandbox.** *Answered: yes, they may be pinned, and the
+   waiter does not follow them.* The question assumed the engine could
+   validate this, and it cannot: the requirement is that the node holding
+   the seat and the node holding the `sandbox-waiter` duty can both reach
+   the sandbox provider, which is a network fact about the deployment,
+   not a config value. A validator refusing all satellite-pinned sandbox
+   seats would also refuse the legitimate case (pin the heavy coding seat
+   to the big box) while still not catching the illegitimate one.
+
+   Two of the three worries dissolved on inspection. The waiter is a
+   `workers` duty, so on a satellite — which is `roles: [seats]` by
+   definition — it is on a core node by construction. And
+   `CREWLET_SANDBOX_OTEL_RECEIVER_URL` is explicit config, never derived
+   from the node that launches a run, so a satellite cannot advertise
+   itself by accident. What ships instead of a validator is the honest
+   version: the network facts are stated in
+   [the fleet guide](docs/guides/fleet.md#placement-and-sandboxes), and
+   the engine reports what it *can* know — a role no live node performs
+   (`fleet_role_unmanned`) and a seat no live node matches
+   (`seats_unplaceable`).
 5. **The extension contract.** `ExtensionManager` runs `on_engine_start` on
    every process, and extensions are public API. An extension must be able to
    declare `scope: node | company`; company-scoped extensions run behind a
    singleton lease, and the diff/unregister path must reach every node, not
    only the one that received the activation.
+
+   *Answered, and the answer is not a `scope:` field.* Extensions get
+   `ctx.claim_duty(name)` — the same per-tick singleton the engine's own
+   duties use — and `ctx.node_id`. A declared `scope: company` would
+   imply a hold that outlives the tick, which is the design the workers
+   item already rejected: the node that booted first would own the job
+   for the life of its process, including after it stopped being able to
+   do it. Claiming per tick means a node that dies mid-duty hands it back
+   by lapsing, with no handoff protocol for an extension author to
+   write. The unregister half was answered earlier by the control plane:
+   a config activation reaches every node by the reconcile poll, so an
+   extension removed from a revision is torn down everywhere rather than
+   on the one node that received an event.
 6. **Fleet observability.** `/health`, the drain pill, and "watch the
    in-flight count converge" are per-node stories; behind a load balancer the
    operator needs a fleet view — per-node in-flight, the lease table, and
    divergence signals (a node whose applied epoch lags). The lease table is
    the natural data source; the view is undesigned.
+
+   *Answered: `GET /fleet` and the dashboard's Fleet view*, read from the
+   lease table exactly as the question suggested — node presence (with
+   each node's roles and labels), seat ownership, worker duties, and the
+   per-node config epoch from the control plane. In-flight counts stayed
+   on `/health`: they are per process, and a lease says who holds a seat,
+   not what that node is doing with it. What the question did not
+   anticipate is the two fields that matter most, both reporting an
+   absence — a role no live node performs, and a seat no live node
+   matches.
 7. **Second-order review.** The corrections in this doc were authored by the
    review pass that found the flaws and are one review deep. Before
    implementation, re-attack at minimum: the fleet-applied config gate's
@@ -687,12 +774,39 @@ settle, and each needs an answer before (or as part of) its migration phase.
    on others), and the republish-deferral × coalescing × turn-claim
    interaction inside an ownership-handoff window.
 
+   *Answered, and it changed two designs.* The partial-apply question
+   produced the three-valued apply status (`ok` / `error` / `degraded`,
+   where degraded means the rollback could not restore what it tore down)
+   and the rule that **lag alone never sheds** — every successful rollout
+   produces lag, so shedding on it makes the fastest node the cause of a
+   fleet-wide outage. The handoff-window question killed the turn claim
+   outright: five of five reviewers rejected it, and what replaced it is
+   a completion *ledger* — no `in_progress`, no expiry, no supersede
+   rule, because the seat lease is already the mutual exclusion and a
+   claim's only honest disposition for a stale row is "re-run", which is
+   what you do with no row.
+
 ---
 
-## Pre-existing bugs surfaced by this audit
+## Pre-existing bugs surfaced by this audit — all fixed
 
-These are **not** scaling bugs. They are live in the currently documented
-two-process deployment and are tracked separately from the work above.
+These were **not** scaling bugs. They were live in the two-process
+deployment as documented at the time, and were tracked separately from
+the work above. All three are fixed; the descriptions are kept as
+written, in the present tense they were written in, because each one is a
+better description of the failure than a summary of the fix would be.
+
+1. The embedding width is read from the active revision or the migration
+   is deferred — never guessed. There is no `1536` fallback, and
+   `--import-company` sizes the columns on a genuine cold start.
+2. `crewlet migrate` takes a PostgreSQL advisory lock and each migration
+   applies in its own transaction, so concurrent starts no longer race.
+   The explicit step is still recommended: it turns a schema change into
+   an observable step rather than a side effect of whichever process
+   started first.
+3. Every node builds the OTLP receiver through one construction path
+   (`build_sandbox_otel_receiver`), and there is no separate API process
+   to forget it in — an ingress-only node is an engine.
 
 1. **pgvector width is baked at 1536 by `crewlet run api`.**
    `_connect_and_migrate_from_db` derives `embedding_dimensions` from the active

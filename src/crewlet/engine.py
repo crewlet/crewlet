@@ -3374,6 +3374,11 @@ class Engine:
             org=self.org,
             observability=self.observability,
             debug=self.debug,
+            node_id=self._node_id,
+            # The same per-tick singleton the engine's own duties use.
+            # Extensions run on every node, so a company-wide job an
+            # extension does unconditionally is a job done N times.
+            claim_duty=self.claim_worker_duty,
         )
 
     def _build_tools_data(self) -> list[dict[str, Any]]:
