@@ -1,10 +1,18 @@
 # Crewlet Node — Implementation Plan
 
-**Status:** planned, not started. The companion analysis — why the current
+**Status:** phases 1–4 done; phase 5 in progress (5.1, 5.2a and the
+revised 5.2 done — which absorbed 5.5 and 5.7 — leaving 5.4, 5.8 and 5.9);
+phases 6 and 7 not started. The companion analysis — why the current
 engine is a singleton, the target architecture, and the adversarial review
 that shaped it — is [`SCALING.md`](SCALING.md). This file is the *how*: the
 phase-by-phase work breakdown, with file-level anchors, schema changes,
 tests, and exit criteria.
+
+Each phase heading carries its own marker; a phase with no marker has not
+started. **The next free migration number is `026`** — the plan's older
+sections name numbers that were taken by phases which shipped first, so
+check `src/crewlet/db/migrations/` rather than trusting a number written
+here.
 
 **Audience:** Crewlet maintainers.
 
@@ -41,7 +49,7 @@ These hold for every phase:
 
 ---
 
-## Phase 1 — Foundations
+## Phase 1 — Foundations — DONE
 
 Everything later depends on these four primitives. No behavior change for
 operators except the migrator.
@@ -255,7 +263,7 @@ single-claim on each counter, against PG and the memory twins.
 
 ---
 
-## Phase 4 — Control plane
+## Phase 4 — Control plane — DONE
 
 **Gate outcome: the design as written FAILED review** (one lens
 `redesign-needed`, two `implement-with-changes`). Three independent lenses
@@ -1402,17 +1410,29 @@ which is exactly the split the two-backend rule exists to expose.
 
 ### 5.4 Turn claims
 
-- Migration `022_turn_claims.sql` — the state machine from
+- Migration `026_turn_claims.sql` (NOT `022` as originally written — that
+  number went to rate limits) — the state machine from
   [`SCALING.md` § turn claims](SCALING.md#turn-claims--a-state-machine-not-an-insert):
   short-circuit only on `completed`; dead-epoch `in_progress` superseded;
   claim deleted in the same `finally` that defers the delivery; **sandbox
   resumes never take one** (the pending-row claim is already the
   at-most-once flip).
-- Lease-blocked deliveries defer by **republish-then-ack** (the identity-
-  preserving requeue machinery at `queue/pulsar.py:930`), never NAK
-  (3 × 1 s dead-letters healthy events, `pulsar.py:93-101`).
+- ~~Lease-blocked deliveries defer by republish-then-ack.~~ **Retired by
+  the revised 5.2, and it must not come back.** Republish-then-ack existed
+  to dodge a dead-letter cost that measurement showed does not exist — a
+  close-driven handoff returns messages at `redeliveryCount` 0 — and it
+  was itself the source of a conversation-reordering fatal, because
+  republished messages go to the topic tail while prefetched siblings
+  replay from the head. The shipped primitive is `DeferDelivery`: leave
+  the delivery unacked, stop consuming. What 5.4 still owes is only the
+  claim state machine.
 
-### 5.5 Epoch fencing on writes
+### 5.5 Epoch fencing on writes — SUPERSEDED, folded into the revised 5.2
+
+Moved in by the pre-implementation review: `may_start` is an
+*optimization*, and correctness has to come from the fencing token, so
+shipping owner-only attachment without fenced writes would have shipped a
+state already known to be wrong.
 
 - `pending_sandbox_run` mutations, turn-claim transitions, and budget
   consumption carry `WHERE owner_epoch = $current`. The waiter/reaper's
@@ -1433,20 +1453,35 @@ which is exactly the split the two-backend rule exists to expose.
   (`coordinator.py:433-447` returns today), so any misrouted claim reverts
   via the existing un-claim path instead of settling the run to `done`.
 
-### 5.7 In-turn fencing
+### 5.7 In-turn fencing — SUPERSEDED, folded into the revised 5.2
+
+Moved in for the same reason as 5.5, one level up: fencing protects
+database state and never outbound effects, so the property the phase can
+honestly claim is *bounded* duplication — and the in-turn fence is the
+only thing that bounds it.
 
 - The tool loop (`agent/llm_loop.py`) checks local lease validity before
   each LLM round and before each side-effect-bearing tool call (using the
   capability classification in `tools/capabilities.py`), bounding the zombie
   window to one round.
 
-### 5.8 Drain and readiness
+### 5.8 Drain and readiness — PARTLY SHIPPED IN 5.2
 
-- `/ready` flips off → stop claiming → **release each seat's lease as it
-  goes idle** (peers pick seats up one by one); a seat in
-  `AWAITING_SANDBOX` releases immediately (its state is the PG row). Node
-  death is the same flow via TTL expiry. Integrates with the existing
-  signal-handling design (`engine.py:2803+`).
+Already done, as 5.2's drain-ordering work item: `/ready` returns 503 while
+draining, `Engine.stop()` begins with `begin_drain()` (which also drops the
+node's presence lease, so peers recompute their share over serving nodes
+only) and releases every seat through the **voluntary** path *before*
+`pause_delivery()` — the old order blackholed the node's own seats for the
+whole drain while its heartbeat kept renewing them. Node death is the same
+flow via TTL expiry.
+
+What remains:
+
+- **Release each seat as it goes idle**, rather than all of them in one
+  pass at stop. Peers then pick seats up one at a time instead of racing
+  for the whole set, which is what the claim-rate limit is sized for.
+- A seat in `AWAITING_SANDBOX` should release **immediately** — its state
+  is the PG row, so there is nothing local to wait for.
 
 ### 5.9 Workers behind singleton leases
 
@@ -1471,7 +1506,7 @@ zero lost events; the memory twins pass the identical suite.
   (`a2a/service.py:105`); replies ride a durable response subject. The
   in-memory queue survives only as a same-node fast-path optimization behind
   the same interface — never a correctness dependency.
-- Migration `023_a2a_channels.sql`: channel bookkeeping (participants,
+- Migration `027_a2a_channels.sql` (NOT `023` as originally written — that number went to the control plane): channel bookkeeping (participants,
   requester, state) replaces the process-local `A2AService._channels`
   (`a2a/service.py:40`), so send/close authorization works cross-node; TTL
   close for abandoned channels.
