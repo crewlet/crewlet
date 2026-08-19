@@ -1249,7 +1249,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     async def _run_engine() -> None:
-        from crewlet.a2a.memory import MemoryA2ABus
         from crewlet.queue.pulsar import PulsarEventQueue
 
         queue_cfg = bootstrap.providers.queue
@@ -1260,7 +1259,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             auth_token=queue_cfg.auth_token,
             tls_trust_certs_path=queue_cfg.tls_trust_certs_path,
         )
-        a2a_bus = MemoryA2ABus()
 
         # Connect + two-phase migrate.  When --import-company is given
         # and the DB has no active revision, the file is loaded inside
@@ -1318,7 +1316,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         engine = Engine.from_bootstrap(
             bootstrap,
             event_queue=event_queue,
-            a2a_bus=a2a_bus,
             storage=storage,
             embeddings=embeddings,
             company_config_store=company_config_store,

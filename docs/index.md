@@ -50,7 +50,7 @@ How the engine works, one subsystem per page:
 - **[Scheduling](concepts/scheduling.md)** — Role/unit-scoped cron-style recurring work (standups, audits, nightly jobs)
 - **[Knowledge System](concepts/knowledge-system.md)** — Query-time knowledge-base search behind the `KnowledgeSearcher` seam (Confluence CQL or Plane page search — one backend per org) + private `agent_diary`
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles
-- **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A bus + learning loop
+- **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A channels + learning loop
 - **[Decision Framework](concepts/decision-framework.md)** — DACI model for multi-agent decisions
 
 ## Integrations

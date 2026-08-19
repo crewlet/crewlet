@@ -1030,7 +1030,7 @@ def test_plan_prompt_includes_human_colleagues_note_in_mixed_org():
     defn = AgentDefinition(role=org.get_role("Engineer"), org=org)
     prompt = build_plan_prompt(defn, tool_catalogue="(none)")
     assert "## Human colleagues" in prompt
-    assert "NOT on the A2A bus" in prompt
+    assert "NOT on A2A" in prompt
     assert "asynchronously" in prompt
 
 

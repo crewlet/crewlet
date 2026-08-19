@@ -112,10 +112,12 @@ It is deliberately **not** a claim, and the absences are the design:
 
 **Both directions fail open, and that is the whole failure policy.** An unreadable ledger cannot tell you whether work was done, and the only safe answer to that is the one the engine gave before the table existed: run it. Failing closed would park real work during a database blip — and the seat's own admission gate already refuses new turns within one heartbeat of a store it cannot reach. The write happens *after* the side effects shipped, so failing to record them cannot un-ship them.
 
-Two exemptions, both deliberate:
+Two notes on coverage:
 
-- **A2A triggers are not recorded.** `_handle_a2a` drains the channel destructively and the bus is process-local until A2A moves onto the durable queue, so a re-run finds an empty channel whatever the ledger says. Recording those completions would imply a choice neither branch can honour.
+- **Only trigger types that run a turn are consulted.** The informational ones (`task_created` / `task_completed` / `task_delegated`) are logged and dropped, so recording them would be bookkeeping about nothing.
 - **A suspended sandbox turn IS recorded, at the suspend.** Past that point the pending run's own at-most-once flip is the authority for the rest of the work, and the trigger itself is finished with.
+
+[A2A](event-system.md#ephemeral-a2a-channels-crewleta2a) was exempt while its content rode a process-local queue that `_handle_a2a` drained destructively — a re-run found an empty channel whatever the ledger said, so neither branch of the choice could be honoured. The content rides the durable wake event now, and the exemption is gone. The hop that carries the **answer back** is the one that needs it: the responder is guarded twice over (it replies and closes, and a closed channel refuses a second answer), but the reply reaching the asker lands on a channel that is already closed by design, so the ledger is the only thing between a redelivery and a second turn spent acting on the same answer.
 
 A short-circuited trigger publishes `TurnTriggerSkipped`. Without it, "the agent never answered" and "the agent already answered, on a node that has since died" are the same observation.
 

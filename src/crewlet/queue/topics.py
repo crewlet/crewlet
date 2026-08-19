@@ -2,7 +2,7 @@
 
 An agent's inbox subject (``crewlet.agent.{handle}.inbox``) is the
 engine's routing primitive: the notification service publishes to it,
-the scheduler fires into it, the A2A bus wakes a colleague through it,
+the scheduler fires into it, an A2A ask wakes a colleague through it,
 the sandbox coordinator resumes a suspended turn on it, and the engine
 subscribes one consumer per seat to it.  Nine call sites formatted that
 f-string by hand, which is nine chances for a producer and a consumer

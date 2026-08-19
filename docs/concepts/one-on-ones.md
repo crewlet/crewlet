@@ -10,7 +10,7 @@ exist:
 | Piece | Role in a 1:1 | Where it lives |
 |---|---|---|
 | **Scheduler** | fires the recurring 1:1 (the trigger) | [Scheduling](scheduling.md) |
-| **A2A bus** | the private, multi-round manager↔report conversation | [Agent Runtime](agent-runtime.md#built-in-tools) (`a2a_ask`) |
+| **A2A channels** | the private manager↔report exchange | [Agent Runtime](agent-runtime.md#built-in-tools) (`a2a_ask`) |
 | **Learning loop** | turns the conversation into durable memory | [Agent Learning](agent-learning.md) (`PersistDecider`) |
 
 Because it reuses these, the engine ships **no 1:1 code** — what an operator
@@ -20,14 +20,23 @@ provides is a schedule and a [playbook](#the-11-playbook).
 
 ## Why no dedicated tool
 
-A 1:1 is mechanically just a private, back-and-forth agent-to-agent
-conversation, which `a2a_ask` and the A2A bus already provide: every message
-on a channel wakes the other participant for a fresh turn, so the channel is
-inherently multi-round (see [A2A](agent-runtime.md)). A `request_1on1`
+A 1:1 is mechanically just a private agent-to-agent exchange, which
+`a2a_ask` already provides: the ask wakes the other participant for a fresh
+turn, that turn's answer wakes the asker back, and either side can open
+another channel to go a round deeper (see
+[A2A](event-system.md#ephemeral-a2a-channels-crewleta2a)). A `request_1on1`
 wrapper over `A2AService` would be a thin alias of the kind the project
 deliberately avoids (`slack_message`, `jira_comment`-style wrappers —
 see `crewlet.tools.colleague`); it would carry a different description
 and nothing else.
+
+**One exchange is one channel.** Ask, answer, closed — the answering turn's
+final response *is* the reply, so there is no tool for a model to remember to
+call and no channel left open waiting for a second round that never comes. A
+deeper conversation is a follow-up `a2a_ask`, which is another exchange, and
+the [delegation-depth cap](turn-engine.md#invariants) (default 3) bounds how
+many of them a single 1:1 can run before the engine stops it — a real ceiling
+worth designing the playbook around.
 
 The one apparent objection — `a2a_ask`'s own guidance steers agents toward
 Slack/Jira for "reviews / feedback / status" — dissolves on inspection. That
@@ -66,12 +75,14 @@ units:
         cron: "0 14 * * 4"          # 14:00 every Thursday
         # target: each  (default) — every direct member runs its own 1:1
         task: >
-          Hold your weekly 1:1 with your manager. Open it over the private A2A
-          bus with a2a_ask (a 1:1 is private — do NOT use Slack or Jira): use
-          query_episodes to recall what you shipped and where you got stuck,
-          walk your manager through it, ask for feedback, and note the action
-          items you agree on. Follow the "Manager 1:1" playbook page in the
-          team knowledge base.
+          Hold your weekly 1:1 with your manager. Open it on a private A2A
+          channel with a2a_ask (a 1:1 is private — do NOT use Slack or Jira):
+          use query_episodes to recall what you shipped and where you got
+          stuck, and put the whole review in the one brief — what you shipped,
+          where you are blocked, and the specific feedback you want — because
+          your manager answers it in one reply. Note the action items you
+          agree on. Follow the "Manager 1:1" playbook page in the team
+          knowledge base.
     roles:
       - name: Engineer A
       - name: Engineer B
@@ -103,7 +114,7 @@ playbook, same durability.
 
 ## Who initiates, and the human-manager case
 
-- **Agent manager ↔ agent report** → the A2A bus, as above. On the scheduled
+- **Agent manager ↔ agent report** → A2A channels, as above. On the scheduled
   path the report opens the channel; on-demand the manager opens it. Either
   way the *manager drives the review* — authority is in the playbook, not in
   who clicked "start".
@@ -136,23 +147,27 @@ residue lands in the right place on its own:
   PersistDecider writing-style rule.)
 
 So a 1:1 does not need its own memory machinery; it inherits the standard
-loop. The conversation itself stays private and ephemeral (A2A channels are
-in-memory); only the *outcomes* — diary facts, Jira action items, Confluence
-policy — persist.
+loop. The conversation itself stays private and ephemeral — the channel is a
+row that says who spoke to whom and that it is closed, never a transcript
+anyone can browse; only the *outcomes* — diary facts, Jira action items,
+Confluence policy — persist.
 
 ---
 
 ## Bounds
 
-- **Convergence** is the playbook's job: it tells the manager to wrap up in a
-  small number of exchanges (≤ ~4) with explicit action items.
-- **Loop safety** is the engine's job: A2A wakes carry the delegation depth +
-  chain, and the TurnEngine's delegation-depth cap bounds an
-  unbounded ping-pong regardless of what the LLMs do.
+- **Convergence** is the playbook's job: it tells both sides to put the
+  substance in the *first* exchange and to wrap up with explicit action items
+  rather than trading one question at a time.
+- **Loop safety** is the engine's job, twice over. A channel carries exactly
+  one exchange — the answering turn replies and closes it, and a closed
+  channel refuses a second answer — so a volley cannot start on one channel
+  at all. Across channels, each `a2a_ask` increments the delegation depth
+  (the reply carries the ask's depth unchanged, so only asks are charged),
+  and the TurnEngine's cap stops the chain regardless of what the LLMs do.
 - **Scheduled timeout** bounds only the **kickoff** turn (the report opening
-  the channel), *not* the whole conversation — the conversation spans many
-  turns (each reply re-wakes the other side), so `timeout_seconds` is not the
-  convergence control.
+  the channel), *not* the whole conversation — each exchange is its own turn
+  on each side, so `timeout_seconds` is not the convergence control.
 
 ---
 
@@ -203,8 +218,10 @@ the backend's page editor thereafter — no redeploy.
 
 - [Scheduling](scheduling.md) — the `each` / `lead` targets, at-most-once
   delivery, catchup, the per-fire timeout.
-- [Agent Runtime](agent-runtime.md) — `a2a_ask` and the A2A bus; built-in
-  tools (`query_episodes`).
+- [Agent Runtime](agent-runtime.md) — `a2a_ask`; built-in tools
+  (`query_episodes`).
+- [Event System](event-system.md#ephemeral-a2a-channels-crewleta2a) — what an
+  A2A channel is, and why one exchange is one channel.
 - [Agent Learning](agent-learning.md) — the `PersistDecider` tiers and the
   `## Relevant knowledge` prefetch that surfaces the playbook.
 - [Humans in the Org Chart](humans-in-the-org.md) — why a human manager's

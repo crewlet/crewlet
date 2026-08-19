@@ -14,7 +14,7 @@ name.
 
 What survives:
 
-- :func:`a2a_ask` -- the private agent-to-agent bus.  Pure engine
+- :func:`a2a_ask` -- private agent-to-agent channels.  Pure engine
   builtin (no MCP forwarding); the only path the LLM has for tight-
   loop / mechanical sync between agents that should NOT show up on
   the team's chat or issue tracker.  It forwards the caller's
@@ -61,7 +61,7 @@ async def _a2a_ask(params: dict[str, Any], context: AgentContext) -> ToolResult:
     target = party.handle if party is not None else role_urn
     requester = context.agent_handle or context.agent_id
 
-    # Human seats are not on the A2A bus — there is no agent behind
+    # Human seats are not on A2A — there is no agent behind
     # the inbox topic, so the channel would wait forever.  Fail with
     # actionable guidance instead.  (The A2AService enforces the same
     # invariant at the chokepoint; this earlier check gives the LLM
@@ -74,7 +74,7 @@ async def _a2a_ask(params: dict[str, Any], context: AgentContext) -> ToolResult:
             success=False,
             error=(
                 f"{party.name} ({party.handle}) is a human teammate — "
-                f"they are not on the A2A bus. Reach them where humans "
+                f"they are not on A2A. Reach them where humans "
                 f"read: mention them on Slack or comment on the "
                 f"relevant Jira issue, leave the state they need in "
                 f"the message, and end your turn — they reply "
@@ -95,9 +95,15 @@ async def _a2a_ask(params: dict[str, Any], context: AgentContext) -> ToolResult:
     parent_turn_id = getattr(turn_ctx, "turn_id", "") if turn_ctx else ""
 
     try:
+        # The brief rides the wake event. It used to be a second call
+        # into a per-channel in-memory queue, which meant the content
+        # lived on the opening node while the wake was delivered to
+        # whichever node owned the target's seat.
         channel_id = await context.a2a_service.request_channel(
             requester,
             target,
+            brief=brief,
+            sender_role=context.role,
             delegation_depth=depth,
             delegation_chain=list(chain),
             parent_turn_id=parent_turn_id,
@@ -108,17 +114,12 @@ async def _a2a_ask(params: dict[str, Any], context: AgentContext) -> ToolResult:
         # (or reach the target on a human surface) instead of posting
         # into a void.
         return ToolResult(success=False, error=str(exc))
-    try:
-        await context.a2a_service.send(
-            channel_id, requester, brief, sender_role=context.role
-        )
-    except Exception as exc:
-        return ToolResult(success=False, error=f"a2a send failed: {exc}")
 
     return ToolResult(
         output=(
-            f"Opened A2A channel {channel_id} with {target} and posted "
-            f"brief. They will reply on the same channel."
+            f"Opened A2A channel {channel_id} with {target} and delivered "
+            f"the brief. Their answer arrives as a new message on this "
+            f"channel — end your turn; it will wake you."
         )
     )
 
@@ -135,9 +136,14 @@ def register_colleague_tools(registry: ToolRegistry) -> None:
         SimpleTool(
             name="a2a_ask",
             description=(
-                "Ask a colleague a question via the private A2A bus. "
+                "Ask a colleague a question on a private A2A channel. "
                 "Opens an ephemeral 1:1 channel and delivers the "
-                "brief; they reply on the same channel.\n\n"
+                "brief; their answer comes back on the same channel "
+                "and wakes you, then the channel closes.\n\n"
+                "ONE ask, ONE answer -- so put everything you need "
+                "into the brief. There is no tool to send a follow-up "
+                "on the channel; if you genuinely need another round, "
+                "call a2a_ask again.\n\n"
                 "Use a2a_ask ONLY for tight-loop / mechanical sync "
                 "(high-frequency coordination that would spam a chat "
                 "channel, or internal state exchange a human teammate "

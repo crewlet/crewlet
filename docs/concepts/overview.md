@@ -59,7 +59,7 @@ flowchart TD
     subgraph proc["crewlet run — one process by default"]
         direction TB
         API["<b>API + dashboard</b><br/>webhook routes · REST · /config/* · live event stream"]
-        ENG["<b>Engine</b><br/>Agent handlers (one turn engine per seat)<br/>Notification SVC (inbound routing + outbound sends)<br/>A2A service (agent-to-agent bus)<br/>———<br/>Organization model — hierarchy, roles, DACI decisions<br/>Provider layer — LLM · embeddings · sandbox<br/>Tool registry — builtins · per-role MCP · A2A"]
+        ENG["<b>Engine</b><br/>Agent handlers (one turn engine per seat)<br/>Notification SVC (inbound routing + outbound sends)<br/>A2A service (agent-to-agent channels)<br/>———<br/>Organization model — hierarchy, roles, DACI decisions<br/>Provider layer — LLM · embeddings · sandbox<br/>Tool registry — builtins · per-role MCP · A2A"]
         API --- ENG
     end
     PULSAR["<b>Apache Pulsar</b><br/>crewlet.agent.*.inbox<br/>crewlet.notifications<br/>crewlet.config.*"]
@@ -146,7 +146,7 @@ src/crewlet/
 │                         #   prompts, turn_context, phase_model, llm_loop,
 │                         #   skills/ — knowledge-base-sourced tool-skill registry)
 ├── queue/                # EventQueue protocol (Pulsar + memory)
-├── a2a/                  # Agent-to-agent bus (protocol, memory, service)
+├── a2a/                  # Agent-to-agent channels (durable state, service)
 ├── db/                   # Database layer (asyncpg, migrations, token_usage,
 │                         #   deterministic agent-id derivation)
 ├── secrets/              # Company-config encryption at rest (SecretCipher,

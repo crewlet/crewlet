@@ -1762,23 +1762,97 @@ zero lost events; the memory twins pass the identical suite.
 
 ---
 
-## Phase 6 — A2A on the durable queue
+## Phase 6 — A2A on the durable queue — DONE
 
-- The opening brief rides the (already durable) inbox wake
-  (`a2a/service.py:105`); replies ride a durable response subject. The
-  in-memory queue survives only as a same-node fast-path optimization behind
-  the same interface — never a correctness dependency.
-- Migration `027_a2a_channels.sql` (NOT `023` as originally written — that number went to the control plane): channel bookkeeping (participants,
-  requester, state) replaces the process-local `A2AService._channels`
-  (`a2a/service.py:40`), so send/close authorization works cross-node; TTL
-  close for abandoned channels.
-- `_handle_a2a` (`engine.py:2448`) stops silently swallowing unknown
-  channels — with state in PG, "unknown" now genuinely means closed/expired
-  and is surfaced to the requester as a tool failure.
+The brief rides the inbox wake, channel state is in Postgres, and the
+`A2ABus` is deleted rather than kept as a fast path. Three deviations
+from the item as written, one of them the whole point of the phase.
 
-**Exit criteria:** cross-node `a2a_ask` integration test; a
-satellite-profile test (participant reachable only via broker + PG); leak
-test proving channel close tears down all resources.
+**A2A had no reply path at all.** The item assumed replies existed and
+needed a durable subject. They did not: `_handle_a2a`'s prompt told the
+answering agent to call `send_a2a_message` and `close_a2a_channel` —
+tools that are not registered anywhere, and which
+`tests/test_tools/test_builtin.py` asserts are *absent* — while
+`a2a_ask`'s own description promised *"they reply on the same channel"*.
+Every ask delivered a brief and every answer went nowhere. The answering
+turn's final text is the reply now: no new LLM-facing tool, no channel
+lifecycle for a model to manage and forget, and the promise is kept. One
+ask, one answer, then closed — which is also what stops two agents
+volleying, since the requester's own turn is triggered by the reply.
+
+**The in-memory queue is gone, not kept as a same-node fast path.** A
+second delivery path that only works within one process cannot be an
+optimization of the durable one; it can only disagree with it. It was
+also where the phase's real bug lived: the queue existed on the node
+that *opened* the channel while the wake was delivered to whichever node
+owned the *target's* seat, so cross-node the target woke to a channel
+that said nobody had sent anything.
+
+**The completion ledger's A2A exemption is lifted.** [5.4](#54-turn-claims--redesigned-and-done-as-a-completion-ledger)
+exempted `a2a_request` / `a2a_message` because `_handle_a2a` drained the
+channel destructively — a re-run found it empty whatever the ledger
+said. Content rides the durable event now, so an A2A trigger is
+re-runnable and is ledgered like any other. The hop that carries the
+answer *back* is the one that needs it: the responder is guarded twice
+over (it replies and closes, and a closed channel refuses a second
+answer), but the reply reaching the asker lands on a channel that is
+closed by design.
+
+**Found and fixed on the way:**
+
+- **The closed-channel refusal would have dropped every answer.** The
+  first cut refused any wake on a channel that was not open — correct
+  for the responder, fatal for the asker, whose reply arrives *after*
+  the responder closed the channel, every time. In-process the close
+  raced the delivery and lost, so the round trip passed on the memory
+  twin; on a real broker the consume loop is a separate task and the
+  close wins. The gate now applies to the responder only.
+- **The reply charged the delegation cap twice.** Ask at depth 1, answer
+  at 2 — so with the cap at its default 3 the first follow-up question
+  landed at 3 and the other agent's turn died on a `guard_breach`: a
+  legitimate second exchange ending as an engine failure event. The ask
+  is the delegation; the answer is that hop completing. Only asks are
+  charged now, so the cap reads as what it says — a bound on how many
+  exchanges a conversation runs.
+- **`request_channel` published its own trace backwards.** The wake went
+  out before `a2a_channel_opened` and `a2a_message_sent`, and the wake is
+  what runs the other agent's turn — inline, on the memory queue — so
+  the answer and the close reached the observability topics ahead of the
+  question that caused them.
+- **A channel to yourself was accepted.** `a2a_ask` against your own
+  handle opened a channel, woke you, was read as an incoming *answer*
+  (the responder test compares the woken seat against the requester),
+  and was never replied to: a turn spent on a question nobody was asked,
+  plus a row for the idle sweep. Refused at the same chokepoint that
+  refuses human seats.
+
+**Docs corrected, not just extended.** `docs/concepts/one-on-ones.md`
+described a 1:1 as a "private, multi-round" A2A conversation and the
+shipped playbook told the manager to "close the channel" — neither was
+ever true, and the reply path's absence made the whole pattern a
+one-way brief. Both now describe one exchange per channel, with a
+follow-up `a2a_ask` as the way to go deeper and the delegation cap as
+the ceiling. `docs/reference/design-decisions.md` still justified the
+in-memory bus with "agent threads share the same Engine process".
+
+**Exit criteria — MET.** `tests/test_a2a/test_handle_a2a.py` drives the
+wake, the reply, the refusals and the full round trip with nothing but a
+publish; `tests/test_a2a/test_channels.py` runs the store contract on
+both backends including a real database; `tests/test_integration/test_e2e.py`
+replaces the old bus-lifecycle test (which proved an `asyncio.Queue`
+works, not that A2A does) with the real ask → answer → close. The
+satellite-profile clause folds into phase 7, which is where node roles
+are introduced; the leak clause is the idle-close sweep plus the
+retention delete, both in `MaintenanceWorker` and both tested.
+
+**Original item, for the record:** the brief rides the inbox wake and
+replies ride a durable response subject, with the in-memory queue kept
+as a same-node fast path behind the same interface; migration
+`027_a2a_channels.sql` for channel bookkeeping; `_handle_a2a` stops
+swallowing unknown channels. Exit criteria: cross-node `a2a_ask`
+integration test; a satellite-profile test (participant reachable only
+via broker + PG); leak test proving channel close tears down all
+resources.
 
 ---
 

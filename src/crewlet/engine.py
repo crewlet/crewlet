@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
 from crewlet._logging import configure_logging, get_logger
 from crewlet._tasks import cancel_and_wait
-from crewlet.a2a.protocol import A2ABus
 from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.agent.pool import AgentPool
 from crewlet.agent.turn import TurnEngine
@@ -89,16 +88,28 @@ _NO_TURN_ENGINE_PAUSE_REASON = "no_turn_engine"
 # (``task_created`` / ``task_completed`` / ``task_delegated``) are logged
 # and dropped, so recording them would be bookkeeping about nothing.
 #
-# ``a2a_request`` / ``a2a_message`` are exempt for a harder reason, and
-# it is a phase-6 dependency rather than a preference: ``_handle_a2a``
-# drains the channel DESTRUCTIVELY, and the bus is process-local until
-# A2A moves onto the durable queue. A re-run on any node — including
-# this one — therefore finds an empty channel and tells the agent nobody
-# sent anything. Recording those completions would imply a
-# short-circuit-or-re-run choice that neither branch can honour, so the
-# ledger stays out of it until the channel state is durable.
+# ``a2a_request`` / ``a2a_message`` were exempt while the content rode a
+# process-local ``asyncio.Queue``: ``_handle_a2a`` drained it
+# DESTRUCTIVELY, so a re-run on any node — including this one — found an
+# empty channel and told the agent nobody had sent anything. Neither
+# branch of a short-circuit-or-re-run choice could be honoured, so the
+# ledger stayed out of it. The content rides the durable wake event now,
+# which makes an A2A trigger re-runnable and therefore ledgerable like
+# any other.
+#
+# The requester's hop NEEDS it. The responder's is guarded twice over —
+# it answers and closes, and a closed channel refuses a second answer —
+# but the hop that carries the reply BACK lands on a channel that is
+# already closed by design, so the ledger is the only thing standing
+# between a redelivery and a second turn spent acting on the same answer.
 _LEDGERED_INBOX_TYPES = frozenset(
-    {"task_assigned", "notification", "external_notification"}
+    {
+        "task_assigned",
+        "notification",
+        "external_notification",
+        "a2a_request",
+        "a2a_message",
+    }
 )
 
 # Type alias for event handler callbacks (replaces old EventBus.EventHandler).
@@ -346,7 +357,6 @@ class Engine:
         max_concurrent: int = 10,
         org_token_budget: int = 0,
         event_queue: EventQueue | None = None,
-        a2a_bus: A2ABus | None = None,
         github_config: Any = None,
         gitlab_config: Any = None,
         plane_config: Any = None,
@@ -538,13 +548,14 @@ class Engine:
         logger.debug("init_subsystem", subsystem="observability")
         self.observability = ObservabilityManager(self.event_queue)
 
-        # A2A bus + service (v2)
-        self._a2a_bus = a2a_bus
-        self.a2a_service: A2AService | None = None
-        if a2a_bus is not None:
-            from crewlet.a2a.service import A2AService
+        # A2A service. Always built: it needs no bus any more, only the
+        # durable queue every engine already has. It used to be gated on
+        # an ``a2a_bus`` argument, so an engine constructed without one
+        # had ``a2a_ask`` fail with "A2A service not available" — a
+        # wiring detail the agent experienced as a missing capability.
+        from crewlet.a2a.service import A2AService
 
-            self.a2a_service = A2AService(bus=a2a_bus, queue=self.event_queue)
+        self.a2a_service: A2AService | None = A2AService(queue=self.event_queue)
 
         # Background tasks / cleanup
         self._cancel_deadline_timers: Callable[[], None] | None = None
@@ -639,7 +650,6 @@ class Engine:
         *,
         storage: StorageBackend | None = None,
         event_queue: EventQueue | None = None,
-        a2a_bus: A2ABus | None = None,
         embeddings: Any = None,
         company_config_store: Any = None,
         lease_store: Any = None,
@@ -664,7 +674,6 @@ class Engine:
             organization=empty_org,
             storage=storage,
             event_queue=event_queue,
-            a2a_bus=a2a_bus,
             embeddings=embeddings,
             debug=bootstrap.debug,
             api_port=bootstrap.api.port,
@@ -1730,11 +1739,6 @@ class Engine:
             self._queue_started = True
             await self._apply_pending_hooks()
 
-            # 2.5 Start A2A bus (if configured)
-            if self._a2a_bus is not None:
-                logger.info("start_step", step="2.5/8", action="start_a2a_bus")
-                await self._a2a_bus.start()
-
             # 3. Start observability manager
             logger.info("start_step", step="3/8", action="start_observability")
             await self.observability.start()
@@ -2652,6 +2656,7 @@ class Engine:
         # the storage backend, and skipped entirely without one: the
         # memory twins prune themselves inline, since a process-local
         # dict dies with the process.
+        self._build_a2a_channel_store()
         self._build_turn_completion_store()
         self._start_maintenance_worker()
         if self._maintenance_worker is not None:
@@ -3119,17 +3124,22 @@ class Engine:
         )
 
     async def _handle_a2a(self, agent: AgentInstance, event: Event) -> None:
-        """Handle an A2A channel request or incoming message for an agent.
+        """Handle an A2A channel request or reply for an agent.
 
-        Reads pending messages from the A2A channel, builds a task
-        description with the conversation context, and triggers an
-        agent turn so the target agent can respond.
+        The message content arrives ON the event. It used to be read
+        out of a per-channel ``asyncio.Queue``, which is process-local:
+        the target of an ask wakes on the node that owns ITS seat, and
+        that is rarely the node that opened the channel — so cross-node
+        the queue was empty and the agent was told nobody had said
+        anything yet. Reading the payload also makes the trigger
+        re-runnable, which is what lets the completion ledger cover A2A
+        at all: a drained queue could not be re-read.
 
-        Handles both ``a2a_request`` (initial channel open) and
-        ``a2a_message`` (subsequent message on an existing channel).
+        Handles both ``a2a_request`` (the opening brief) and
+        ``a2a_message`` (a reply on an open channel).
         """
-        if self._a2a_bus is None:
-            logger.warning("a2a_bus_not_configured", agent_handle=agent.handle)
+        if self.a2a_service is None:
+            logger.warning("a2a_service_not_configured", agent_handle=agent.handle)
             return
 
         channel_id = event.payload.get("channel_id", "")
@@ -3138,6 +3148,8 @@ class Engine:
         requester = event.payload.get("requester", "") or event.payload.get(
             "sender", ""
         )
+        content = event.payload.get("content", "") or ""
+        sender_role = event.payload.get("sender_role", "") or ""
         if not channel_id:
             logger.warning(
                 "a2a_request_missing_channel",
@@ -3145,69 +3157,68 @@ class Engine:
             )
             return
 
+        channel = await self.a2a_service.channels.get(channel_id)
+        if channel is None:
+            # No longer swallowed. With the state durable, "unknown"
+            # genuinely means never opened — a typo'd or long-purged
+            # channel id — rather than "opened on another node".
+            logger.warning(
+                "a2a_channel_unknown",
+                agent_handle=agent.handle,
+                channel_id=channel_id,
+            )
+            return
+
+        # Only the party that did NOT open the channel answers on it.
+        # Otherwise the requester's turn — itself triggered by the reply
+        # — would answer the answer, and two agents would volley until
+        # the delegation cap stopped them.
+        #
+        # Read from the CHANNEL, not from the event type: the record is
+        # what both nodes agree on, and it settles the degenerate
+        # requester-is-target case the same way on either.
+        is_responder = agent.handle != channel.requester
+
+        if is_responder and not channel.is_open:
+            # An answer with nowhere to go. Closed means the
+            # conversation ended — the reply already shipped, or the
+            # idle sweep gave up on it — and either way nothing is
+            # waiting on a second one.
+            logger.warning(
+                "a2a_channel_not_open",
+                agent_handle=agent.handle,
+                channel_id=channel_id,
+                state=channel.state,
+            )
+            return
+        # The requester's hop is NOT gated on that. The responder closes
+        # the channel immediately after replying, so by the time the
+        # reply reaches the asker the channel is closed every time —
+        # refusing it here would drop the answer on the floor, which is
+        # the exact failure A2A had before it had a reply path at all.
+        # In-process the close raced the delivery and lost; on a real
+        # broker it wins, so this only ever looked correct on the twin.
+
         logger.info(
             "a2a_channel_join",
             agent_handle=agent.handle,
             channel_id=channel_id,
             requester=requester,
+            content_length=len(content),
         )
 
-        # Read pending message(s) from the A2A channel.  The requester
-        # may still be sending (race between wake event and send), so
-        # wait briefly for the first message.
-        messages: list[dict[str, str]] = []
-        try:
-            receiver = self._a2a_bus.receive(channel_id, agent.handle)
-            first = await asyncio.wait_for(receiver.__anext__(), timeout=10.0)
-            messages.append(
-                {
-                    "sender": first.sender,
-                    "role": first.sender_role,
-                    "content": first.content,
-                }
-            )
-            # Drain any additional immediately available messages.
-            while True:
-                try:
-                    msg = await asyncio.wait_for(receiver.__anext__(), timeout=0.5)
-                    messages.append(
-                        {
-                            "sender": msg.sender,
-                            "role": msg.sender_role,
-                            "content": msg.content,
-                        }
-                    )
-                except (TimeoutError, StopAsyncIteration):
-                    break
-        except (TimeoutError, StopAsyncIteration, KeyError):
-            pass
-
-        total_content_length = sum(len(m["content"]) for m in messages)
-        sender = messages[0]["sender"] if messages else requester
-
-        logger.info(
-            "a2a_messages_read",
-            agent_handle=agent.handle,
-            channel_id=channel_id,
-            message_count=len(messages),
-            sender=sender,
-            total_content_length=total_content_length,
-        )
-
-        # Publish delivery event for observability.
-        # Propagate the trace context from the originating a2a_request
-        # event so that sent + delivered events are grouped in the same
-        # dashboard trace.
-        if messages and self.event_queue is not None:
+        if self.event_queue is not None:
             from crewlet.events.types import A2AMessageDelivered
 
+            # Trace context comes from the originating event so sent and
+            # delivered group into one dashboard trace.
             delivered_event = A2AMessageDelivered(
                 source=agent.handle,
                 channel_id=channel_id,
                 recipient=agent.handle,
-                sender=sender,
-                message_count=len(messages),
-                total_content_length=total_content_length,
+                sender=requester,
+                message_count=1 if content else 0,
+                total_content_length=len(content),
                 trace_id=event.trace_id,
                 span_id=event.span_id,
                 parent_span_id=event.parent_span_id,
@@ -3216,33 +3227,38 @@ class Engine:
                 "crewlet.events.a2a_message_delivered", delivered_event
             )
 
-        # Build task description with A2A context.
+        role_tag = f" ({sender_role})" if sender_role else ""
         parts = [
             f"You received a direct agent-to-agent (A2A) message from '{requester}'.",
             f"A2A Channel: {channel_id}",
             "",
         ]
-        if messages:
-            parts.append("**Message(s):**")
-            for m in messages:
-                role_tag = f" ({m['role']})" if m["role"] else ""
-                parts.append(f"- **{m['sender']}{role_tag}:** {m['content']}")
+        if content:
+            parts.append("**Message:**")
+            parts.append(f"- **{requester}{role_tag}:** {content}")
         else:
-            parts.append(
-                f"'{requester}' opened an A2A channel with"
-                " you but hasn't sent a message yet."
-                " Use the A2A tools to check for messages."
+            parts.append(f"'{requester}' opened an A2A channel with no message.")
+        parts.append("")
+        if is_responder:
+            parts.extend(
+                [
+                    "*** INSTRUCTIONS ***",
+                    "- Answer in your final response. Whatever you say"
+                    f" is delivered to '{requester}' on this channel, and"
+                    " the channel then closes — you do not need a tool"
+                    " to reply, and there is no second round.",
+                    "- This is a private channel between you"
+                    f" and '{requester}' — not visible in Slack.",
+                ]
             )
-        parts.extend(
-            [
-                "",
-                "*** INSTRUCTIONS ***",
-                f"- Use `send_a2a_message` with channel_id=`{channel_id}` to respond.",
-                "- Use `close_a2a_channel` when the conversation is complete.",
-                "- This is a private channel between you"
-                f" and '{requester}' — not visible in Slack.",
-            ]
-        )
+        else:
+            parts.extend(
+                [
+                    "*** INSTRUCTIONS ***",
+                    "- This is the answer to a question you asked."
+                    " Act on it; the channel is now closed.",
+                ]
+            )
 
         task_description = "\n".join(parts)
 
@@ -3251,22 +3267,75 @@ class Engine:
             agent_handle=agent.handle,
             channel_id=channel_id,
             requester=requester,
-            message_count=len(messages),
+            responder=is_responder,
             prompt_length=len(task_description),
         )
 
-        if self.turn_engine is not None:
-            await self.turn_engine.run_turn(
-                agent,
-                task_description=task_description,
-                event=event,
-                org=self.org,
-                a2a_context={
-                    "channel_id": channel_id,
-                    "requester": requester,
-                    "message_count": len(messages),
-                },
+        if self.turn_engine is None:
+            return
+        answer = await self.turn_engine.run_turn(
+            agent,
+            task_description=task_description,
+            event=event,
+            org=self.org,
+            a2a_context={
+                "channel_id": channel_id,
+                "requester": requester,
+                "responder": is_responder,
+            },
+        )
+        if is_responder:
+            await self._answer_a2a(agent, channel_id, answer or "", event)
+
+    async def _answer_a2a(
+        self, agent: AgentInstance, channel_id: str, answer: str, event: Event
+    ) -> None:
+        """Deliver the turn's final text as the reply, then close.
+
+        THE reply path, and until now there was none. ``a2a_ask``'s own
+        description promises "they reply on the same channel", and the
+        wake prompt told the agent to call ``send_a2a_message`` — a tool
+        that does not exist and that ``tests/test_tools/test_builtin``
+        asserts is not registered. So every ask delivered a brief and
+        every answer went nowhere.
+
+        The turn's answer IS the reply: no new LLM-facing tool, and no
+        channel lifecycle for a model to manage and forget. One round
+        trip, then closed — which is what "tight-loop / mechanical sync"
+        means, and what stops two agents volleying.
+
+        Failures here are logged, not raised: the turn already happened,
+        and a delivery failure must not make the trigger look unhandled
+        and replay the whole thing.
+        """
+        if self.a2a_service is None:
+            return
+        try:
+            if answer.strip():
+                await self.a2a_service.reply(
+                    channel_id,
+                    agent.handle,
+                    answer,
+                    sender_role=agent.role_name,
+                    delegation_depth=event.delegation_depth,
+                    delegation_chain=list(event.delegation_chain or []),
+                    parent_turn_id=event.parent_turn_id,
+                )
+            else:
+                logger.warning(
+                    "a2a_answer_empty",
+                    agent_handle=agent.handle,
+                    channel_id=channel_id,
+                )
+        except Exception:
+            logger.exception(
+                "a2a_answer_failed",
+                agent_handle=agent.handle,
+                channel_id=channel_id,
             )
+        finally:
+            with contextlib.suppress(Exception):
+                await self.a2a_service.close_channel(channel_id, closer=agent.handle)
 
     async def _handle_notification(self, agent: AgentInstance, event: Event) -> None:
         """Handle an external notification: wake the agent and run a turn.
@@ -3684,10 +3753,9 @@ class Engine:
            guess at the orchestrator's grace period.
         4. Stop extensions
         5. Stop notification service, reflect engine, lifecycle workers
-        6. Stop A2A bus
-        7. Terminate agents and publish ``OrgStopped``
-        8. Stop MCP servers and close LLM provider clients
-        9. Stop event queue (final close) and close storage
+        6. Terminate agents and publish ``OrgStopped``
+        7. Stop MCP servers and close LLM provider clients
+        8. Stop event queue (final close) and close storage
 
         Each post-drain step has a short timeout (``_stop_step_timeout``)
         so a single teardown failure can't hang shutdown indefinitely.
@@ -3847,12 +3915,7 @@ class Engine:
                 self._episode_lifecycle_worker.stop(),
             )
 
-        # 6.5. Stop A2A bus
-        if self._a2a_bus is not None:
-            logger.debug("stopping_a2a_bus")
-            await _timed("a2a_bus", self._a2a_bus.stop())
-
-        # 7. Terminate all agents
+        # 6. Terminate all agents
         logger.debug("terminating_agents")
         for agent in self.agent_pool.active_agents:
             await _timed(f"terminate_{agent.handle}", self.agent_pool.terminate(agent))
@@ -3865,12 +3928,12 @@ class Engine:
             ),
         )
 
-        # 7.5. Stop MCP servers
+        # 7. Stop MCP servers
         logger.debug("stopping_mcp_servers")
         if self.mcp_bridge:
             await _timed("mcp_servers", self.mcp_bridge.stop_all())
 
-        # 7.7. Close LLM provider HTTP clients
+        # 7.5. Close LLM provider HTTP clients
         logger.debug("closing_llm_providers")
         for provider in self._llm_providers.values():
             if hasattr(provider, "close"):
@@ -5102,13 +5165,41 @@ class Engine:
             return
         if not isinstance(self.storage, Database):
             return
+        a2a_channels = (
+            self.a2a_service.channels if self.a2a_service is not None else None
+        )
         self._maintenance_worker = MaintenanceWorker(
             deliveries=PostgresDeliveryDedupeStore(self.storage),
             rate_limits=PostgresRateLimitStore(self.storage),
             scheduled_runs=ScheduledRunStore(self.storage),
             turn_completions=self._turn_completions,
+            a2a_channels=a2a_channels,
+            # Closing a channel nothing finished is housekeeping on the
+            # same shared table, on the same singleton, for the same
+            # reason: N nodes closing the same abandoned channels would
+            # publish N closed events for each one.
+            close_idle_a2a=(
+                self.a2a_service.close_idle_channels
+                if self.a2a_service is not None
+                else None
+            ),
             claim_duty=lambda: self.claim_worker_duty("maintenance"),
         )
+
+    def _build_a2a_channel_store(self) -> None:
+        """Point the A2A service at durable channel state, if there is any.
+
+        Without a database the service keeps its in-memory twin, which
+        is process-local — so cross-node authorization does not work,
+        exactly as seat placement does not. Same rule, said once here
+        and loudly at boot there.
+        """
+        from crewlet.a2a.channels import PostgresA2AChannelStore
+        from crewlet.db.client import Database
+
+        if self.a2a_service is None or not isinstance(self.storage, Database):
+            return
+        self.a2a_service.set_channel_store(PostgresA2AChannelStore(self.storage))
 
     def _build_turn_completion_store(self) -> None:
         """Wire the completion ledger, if there is somewhere to keep it.
@@ -6546,7 +6637,7 @@ class Engine:
 
         Only trigger types that actually RUN a turn are consulted;
         anything else passes through untouched (see
-        :data:`_LEDGERED_INBOX_TYPES` for which, and why A2A is not one).
+        :data:`_LEDGERED_INBOX_TYPES` for which, and why).
 
         Fails OPEN, like the store: an unreadable ledger cannot tell you
         whether work was done, and the only safe answer to that is the

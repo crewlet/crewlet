@@ -218,27 +218,33 @@ Org-wide announcements, department coordination, and team discussions happen thr
 - **Department** — leads-only coordination (via Slack department channel)
 - **Team** — team coordination, DACI decisions (via Slack team channel)
 
-### Ephemeral A2A Bus (`crewlet.a2a`)
+### Ephemeral A2A channels (`crewlet.a2a`)
 
-Low-latency, in-memory channels for private 1:1 or small-group conversations between agents. The Engine manages lifecycle:
+Private 1:1 conversations between agents, for tight-loop / mechanical sync that should *not* show up on the team's chat or issue tracker. One question, one answer, then the channel closes.
+
+An agent opens one with the `a2a_ask` tool and ends its turn. The brief travels **on the wake event** in the target's inbox, so it reaches whichever node owns that seat; the answering agent's **final response is the reply**, delivered back on the same channel and waking the asker. There is no `send_a2a_message` tool and no channel lifecycle for a model to manage — replying is just answering.
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent A
-    participant E as Engine (A2A Service)
-    participant B as Agent B
-    A->>E: request_channel("B")
-    E->>E: create channel, wake B
-    E-->>A: channel_id
-    E->>B: channel_id
-    Note over A,B: direct messages over the A2A Bus (asyncio.Queue)
-    A->>E: close_channel(ch)
-    E->>E: cleanup
+    participant A as Agent A (asks)
+    participant Q as Inbox topics
+    participant B as Agent B (answers)
+    A->>Q: a2a_ask → open channel, publish brief
+    Q->>B: a2a_request (brief on the event)
+    B->>B: turn runs
+    B->>Q: final response → reply, close channel
+    Q->>A: a2a_message (the answer)
+    A->>A: turn runs, acts on the answer
 ```
 
-| Aspect | External Channels (Slack) | A2A Bus |
+Both hops are ordinary inbox deliveries: durable, ordered per conversation, routed to the seat's owner, and covered by the [completion ledger](seat-ownership.md#the-completion-ledger) so a redelivery does not run the turn twice. Channel state — the two participants, open or closed, the message count — lives in the `a2a_channels` table, because every authorization decision reads it and the two parties are usually on different nodes. Without a database it falls back to an in-process store, which is correct for a single node and no more (same rule as [seat placement](seat-ownership.md)).
+
+A channel is closed by the answering turn. One whose answer never came — a crashed turn, a node that died between the wake and the reply — is closed by the maintenance sweep after `A2A_CHANNEL_IDLE_TIMEOUT_SECONDS` (1 hour, three times the longest a turn can legitimately still be running), and the row is deleted after seven days. Closed rows outlive the conversation on purpose: *closed* is the answer to "why did my reply bounce", while a vanished row is indistinguishable from a typo'd channel id.
+
+| Aspect | External Channels (Slack) | A2A channels |
 |---|---|---|
-| **Lifetime** | Permanent (Slack workspace) | Ephemeral (conversation) |
-| **Backend** | Slack API + Notification Service | `asyncio.Queue` (in-process) |
-| **Persistence** | Yes (Slack history) | No |
-| **Use case** | Broadcasting, team coordination | Private agent-to-agent chat |
+| **Lifetime** | Permanent (Slack workspace) | Ephemeral (one question and its answer) |
+| **Backend** | Slack API + Notification Service | Agent inbox topics + `a2a_channels` |
+| **Persistence** | Yes (Slack history) | State yes, content only as events |
+| **Visibility** | The team sees it | Private to the two agents |
+| **Use case** | Broadcasting, team coordination | Tight-loop / mechanical sync |

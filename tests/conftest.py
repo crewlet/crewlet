@@ -51,7 +51,6 @@ async def make_engine(
     company: CompanyConfig | None = None,
     storage: Any = None,
     event_queue: Any = None,
-    a2a_bus: Any = None,
     embeddings: Any = None,
     company_config_store: Any = None,
 ):
@@ -66,7 +65,6 @@ async def make_engine(
         bootstrap or make_bootstrap(),
         storage=storage,
         event_queue=event_queue,
-        a2a_bus=a2a_bus,
         embeddings=embeddings,
         company_config_store=company_config_store,
     )
@@ -81,7 +79,6 @@ async def make_engine_from_yaml(
     bootstrap: BootstrapConfig | None = None,
     storage: Any = None,
     event_queue: Any = None,
-    a2a_bus: Any = None,
     embeddings: Any = None,
 ):
     """Test-only helper: build an engine from a Tier B YAML fixture,
@@ -97,7 +94,6 @@ async def make_engine_from_yaml(
         company=load_company_config(path),
         storage=storage,
         event_queue=event_queue,
-        a2a_bus=a2a_bus,
         embeddings=embeddings,
     )
 

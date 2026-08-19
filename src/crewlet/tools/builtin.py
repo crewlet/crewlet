@@ -532,7 +532,7 @@ async def _lookup_colleague(
             else "on whichever surface the work lives"
         )
         lines.append(
-            f"Human teammate — not on the A2A bus. Mention or message them "
+            f"Human teammate — not on A2A. Mention or message them "
             f"{where}, include the context they need, and end your turn; "
             "they reply asynchronously and their reply will re-trigger you."
         )

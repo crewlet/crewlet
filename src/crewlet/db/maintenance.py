@@ -10,7 +10,12 @@ every event that asks it:
 - ``scheduled_runs`` — "has this fire already been claimed?", one row per
   schedule fire;
 - ``turn_completions`` — "has this trigger already been worked?", one row
-  per trigger a turn finished.
+  per trigger a turn finished;
+- ``a2a_channels`` — who is on an agent-to-agent channel and is it open,
+  one row per channel. This one is also CLOSED here when nothing
+  finished it, which is a state change rather than a delete: an
+  abandoned channel is a promise to the requester that a reply may still
+  arrive.
 
 The first three were designed to be swept. Both migrations say so in as many
 words (``020_webhook_deliveries.sql``: *"Rows are swept on a TTL rather
@@ -42,6 +47,10 @@ import contextlib
 from typing import Any, Protocol
 
 from crewlet._logging import get_logger
+from crewlet.a2a.channels import (
+    A2A_CHANNEL_IDLE_TIMEOUT_SECONDS,
+    A2A_CHANNEL_RETENTION_SECONDS,
+)
 from crewlet.db.deliveries import DEFAULT_DEDUPE_TTL_SECONDS
 from crewlet.db.turn_completions import TURN_COMPLETION_RETENTION_SECONDS
 
@@ -111,6 +120,8 @@ class MaintenanceWorker:
         rate_limits: PurgeableStore | None = None,
         scheduled_runs: PurgeableStore | None = None,
         turn_completions: PurgeableStore | None = None,
+        a2a_channels: PurgeableStore | None = None,
+        close_idle_a2a: Any = None,
         interval_seconds: float = MAINTENANCE_INTERVAL_SECONDS,
         claim_duty: Any = None,
     ) -> None:
@@ -135,6 +146,11 @@ class MaintenanceWorker:
                     TURN_COMPLETION_RETENTION_SECONDS,
                 )
             )
+        if a2a_channels is not None:
+            self._targets.append(
+                ("a2a_channels", a2a_channels, A2A_CHANNEL_RETENTION_SECONDS)
+            )
+        self._close_idle_a2a = close_idle_a2a
         self._interval = max(1.0, float(interval_seconds))
         self._claim_duty = claim_duty
         self._running = False
@@ -214,6 +230,17 @@ class MaintenanceWorker:
         bounds. Exposed so tests can drive a sweep without the interval.
         """
         deleted: dict[str, int] = {}
+        # Closing abandoned channels comes FIRST, so a channel closed
+        # this pass is a `closed` row an operator can find rather than
+        # one the retention delete removes in the same breath.
+        if self._close_idle_a2a is not None:
+            try:
+                closed = await self._close_idle_a2a(A2A_CHANNEL_IDLE_TIMEOUT_SECONDS)
+            except Exception:
+                logger.exception("maintenance_a2a_close_idle_failed")
+            else:
+                if closed:
+                    deleted["a2a_channels_closed"] = int(closed)
         for name, store, retention in self._targets:
             try:
                 count = await store.purge(retention)

@@ -36,17 +36,17 @@ class _QueueStub:
 @dataclass
 class _A2AStub:
     channels: list[str] = field(default_factory=list)
-    sent: list[tuple[str, str, str]] = field(default_factory=list)
+    briefs: list[tuple[str, str, str]] = field(default_factory=list)
 
     async def request_channel(self, requester: str, target: str, **kwargs: Any) -> str:
+        # The brief rides the wake event, so opening the channel IS
+        # delivering it. There is no second call: ``a2a_ask`` used to
+        # open and then ``send``, and the send went into a per-channel
+        # in-memory queue on whichever node happened to open it.
         cid = f"a2a-{len(self.channels)}"
         self.channels.append(cid)
+        self.briefs.append((cid, target, kwargs.get("brief", "")))
         return cid
-
-    async def send(
-        self, channel_id: str, sender: str, content: str, sender_role: str = ""
-    ) -> None:
-        self.sent.append((channel_id, sender, content))
 
 
 def _mk_ctx(*, a2a: _A2AStub | None = None) -> AgentContext:
@@ -125,7 +125,7 @@ async def test_a2a_ask_opens_channel_and_posts_brief():
     assert result.success
     assert "Opened A2A channel" in result.output
     assert a2a.channels  # channel created
-    assert a2a.sent  # brief delivered
+    assert a2a.briefs == [("a2a-0", "bob", "please look at PR 42")]
 
 
 async def test_a2a_ask_requires_role_urn_and_brief():
@@ -153,9 +153,6 @@ async def test_a2a_ask_surfaces_service_refusal():
     class _RefusingA2A:
         async def request_channel(self, requester, target, **kwargs):
             raise ValueError(f"a2a target '{target}' is not a live agent")
-
-        async def send(self, *a, **k):  # pragma: no cover
-            raise AssertionError("send must not be reached")
 
     queue = _QueueStub()
     ctx = AgentContext(

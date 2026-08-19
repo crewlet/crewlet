@@ -169,7 +169,7 @@ The engine prompts never name these tools (see [Tool Capabilities](tool-capabili
 | `jira_add_comment` / `jira_update_issue` | Jira | In-ticket collaboration and reassignment |
 | `confluence_add_footer_comment` / `confluence_add_comment` | Confluence | Page discussion; `@mention` uses the [platform-mentions skill](tool-skills.md) markup. The exact comment tool name is mcp-atlassian-version dependent; the LLM discovers whichever name the deployed server registered via `list_mcp_server_tools` |
 | `request_copilot_review` | GitHub | Request an automated review on an existing PR (an un-promoted lightweight option; code authoring goes through the [code sandbox](code-sandbox.md), not here) |
-| `a2a_ask` | Private A2A bus | The one engine builtin (`tools/colleague.py`). Narrowly scoped: tight-loop / mechanical sync only. See the tool description |
+| `a2a_ask` | Private A2A channel | The one engine builtin (`tools/colleague.py`). Narrowly scoped: tight-loop / mechanical sync only — one ask, one answer, then the channel closes. The answering turn's final response *is* the reply; there is no send/close tool. See the tool description |
 
 Every colleague-tool call publishes a `delegation.edge` event (`from_handle`, `to_handle`, `surface`, `context_id`, `reference`) so the dashboard can render a company-wide delegation graph.
 

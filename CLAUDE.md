@@ -288,7 +288,25 @@ src/crewlet/          # Main package
                       #   topic nobody reads. Imports nothing from crewlet;
                       #   tests/test_queue/test_topics fails the build on a
                       #   new hand-built f-string, in src/ AND in tests/)
-  a2a/                # Agent-to-agent bus (protocol, memory, service)
+  a2a/                # Agent-to-agent channels over the DURABLE queue.
+                      #   The A2ABus (an asyncio.Queue per channel) is
+                      #   GONE: it was a second delivery path beside the
+                      #   seat inbox that carried the wake, and a path
+                      #   that only works in one process cannot be a
+                      #   fast path for a fleet — the target woke on the
+                      #   node owning ITS seat and found the queue
+                      #   empty. channels.py = A2AChannelStore (Postgres
+                      #   + memory twin) — the participants and open/
+                      #   closed state every authorization decision
+                      #   reads; service.py carries the brief ON the
+                      #   wake event and REPLIES by publishing the
+                      #   answering turn's final text back (there was no
+                      #   reply path at all: the prompt named
+                      #   send_a2a_message, a tool that is not
+                      #   registered and that tests assert is absent).
+                      #   One ask, one answer, then closed — which is
+                      #   what stops a volley; a2a_ask charges the
+                      #   delegation cap, the reply does not
   db/                 # Database layer (asyncpg, migrations, token_usage,
                       #   deterministic agent-id derivation in agents.py;
                       #   client.py — Database.acquire()/transaction()/
@@ -318,10 +336,12 @@ src/crewlet/          # Main package
                       #   work was done has one safe answer, and it is
                       #   the pre-ledger one;
                       #   maintenance.py — MaintenanceWorker, the
-                      #   retention sweep for the four tables that
+                      #   retention sweep for the five tables that
                       #   answer "recently" and are written on every
                       #   event that asks (webhook_deliveries,
-                      #   rate_limits, scheduled_runs, turn_completions). Both migrations
+                      #   rate_limits, scheduled_runs, turn_completions,
+                      #   a2a_channels — plus the idle-close of A2A
+                      #   channels no turn ever answered). Both migrations
                       #   always SAID rows were swept on a TTL and both
                       #   ship the index for it; `purge` existed on the
                       #   stores and on their protocols and NOTHING
@@ -1044,7 +1064,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 4. **Task Engine** — ExecutionTracker, external PM tool integration
 5. **Decision Framework** — DACI behavioral guidance (via Slack channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL or Plane page search, one backend per org) + per-agent `agent_diary` (pgvector)
-7. **Communication** — external chat (Slack or Mattermost, or both) + ephemeral A2A Bus
+7. **Communication** — external chat (Slack or Mattermost, or both) + ephemeral A2A channels
 8. **Notification Service** — EventQueue-based, outbound-only transports
 9. **Provider Layer** — pluggable LLM, embeddings. Includes the `cli-agent` LLM type: a locally installed coding CLI driven on the operator's subscription instead of an API key, with per-seat filesystem isolation and an in-prompt tool-call envelope (see `docs/concepts/subscription-llm-backends.md`)
 10. **Database** — PostgreSQL (token_usage, agent_diary + episodes via pgvector)

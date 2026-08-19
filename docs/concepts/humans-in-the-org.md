@@ -254,7 +254,7 @@ founder seat above the agent CEO.
 | Inbox topics | None — nothing ever publishes to a human "inbox" |
 | Engine notifications | None — the engine never sends as itself; agents reach humans with their own tools |
 | Scheduler | `target: each` fans out to agent members only; an enabled `target: lead` schedule under a (possibly inherited) human lead is a **config error**; human seats cannot define role schedules |
-| A2A bus | Not addressable; `a2a_ask` returns guidance |
+| A2A channels | Not addressable; `a2a_ask` returns guidance |
 | Learning | No diary, no episodes, no synthesized skills (counterparty profiles *about* them still accrue) |
 | `GET /agents` | Excluded — they appear in `GET /org` with `"kind": "human"`; the dashboard org chart badges them `human` |
 
