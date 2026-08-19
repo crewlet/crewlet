@@ -87,7 +87,9 @@ def _raw(secret: str) -> types.SimpleNamespace:
     return types.SimpleNamespace(signing_secret=secret)
 
 
-async def test_maybe_generate_mints_when_missing_and_creating_hooks(monkeypatch):
+async def test_maybe_generate_mints_when_missing_and_creating_hooks(
+    monkeypatch, capsys
+):
     monkeypatch.delenv("GITLAB_SIGNING_SECRET", raising=False)
     sink = PrintSink()
     var = await _maybe_generate_signing_secret(
@@ -96,10 +98,12 @@ async def test_maybe_generate_mints_when_missing_and_creating_hooks(monkeypatch)
     assert var == "GITLAB_SIGNING_SECRET"
     # Exported for resolution + recorded to the sink for the engine.
     assert os.environ["GITLAB_SIGNING_SECRET"].startswith("whsec_")
-    assert sink._recorded and sink._recorded[0][0] == "GITLAB_SIGNING_SECRET"
+    # Asserted on the sink's actual contract — the line it wrote — rather
+    # than on private bookkeeping it has no reason to keep.
+    assert "export GITLAB_SIGNING_SECRET=whsec_" in capsys.readouterr().out
 
 
-async def test_maybe_generate_skips_without_webhook(monkeypatch):
+async def test_maybe_generate_skips_without_webhook(monkeypatch, capsys):
     monkeypatch.delenv("GITLAB_SIGNING_SECRET", raising=False)
     sink = PrintSink()
     assert (
@@ -109,10 +113,10 @@ async def test_maybe_generate_skips_without_webhook(monkeypatch):
         is None
     )
     assert "GITLAB_SIGNING_SECRET" not in os.environ
-    assert not sink._recorded
+    assert "export GITLAB_SIGNING_SECRET" not in capsys.readouterr().out
 
 
-async def test_maybe_generate_reuses_env_value(monkeypatch):
+async def test_maybe_generate_reuses_env_value(monkeypatch, capsys):
     monkeypatch.setenv("GITLAB_SIGNING_SECRET", "whsec_preset")
     sink = PrintSink()
     assert (
@@ -122,7 +126,8 @@ async def test_maybe_generate_reuses_env_value(monkeypatch):
         is None
     )
     assert os.environ["GITLAB_SIGNING_SECRET"] == "whsec_preset"
-    assert not sink._recorded  # not regenerated
+    # Not regenerated: nothing was minted, so nothing was written.
+    assert "export GITLAB_SIGNING_SECRET" not in capsys.readouterr().out
 
 
 async def test_maybe_generate_reuses_sink_file_value(tmp_path, monkeypatch):
@@ -140,7 +145,7 @@ async def test_maybe_generate_reuses_sink_file_value(tmp_path, monkeypatch):
     assert os.environ["GITLAB_SIGNING_SECRET"] == "whsec_fromfile"
 
 
-async def test_maybe_generate_noop_for_literal_secret():
+async def test_maybe_generate_noop_for_literal_secret(capsys):
     sink = PrintSink()
     assert (
         await _maybe_generate_signing_secret(
@@ -148,4 +153,4 @@ async def test_maybe_generate_noop_for_literal_secret():
         )
         is None
     )
-    assert not sink._recorded
+    assert "export GITLAB_SIGNING_SECRET" not in capsys.readouterr().out
