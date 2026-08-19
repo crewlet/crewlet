@@ -1107,3 +1107,132 @@ class TestBackfilledSender:
         # A second replayed post from the same person costs no second call.
         await fleet._username_for(seat, "humanid0000000000000000000")
         assert len(client.lookups) == 1
+
+
+class TestOnlyForwardableFramesAreBuffered:
+    """The bound is a promise about how much a seat can hold. Counting
+    raw frames let presence changes, typing indicators and channel-viewed
+    bookkeeping — none of which survives one line into the consumer —
+    exhaust the buffer during the very backfill it exists to survive."""
+
+    class _Socket:
+        def __init__(self, frames: list[str]) -> None:
+            self._frames = list(frames)
+
+        def __aiter__(self):
+            return self._iterate()
+
+        async def _iterate(self):
+            for frame in self._frames:
+                yield frame
+
+    @staticmethod
+    def _chatter(kind: str) -> str:
+        return json.dumps({"event": kind, "data": {"user_id": "u1"}, "seq": 1})
+
+    @pytest.mark.asyncio
+    async def test_chatter_never_reaches_the_buffer(self):
+        fleet = _fleet()
+        noise = [
+            self._chatter(k)
+            for k in (
+                "typing",
+                "status_change",
+                "channel_viewed",
+                "preferences_changed",
+            )
+        ]
+        socket = self._Socket([*noise, _frame("p1"), *noise, _frame("p2")])
+        inbox: asyncio.Queue[Any] = asyncio.Queue(events_module._MAX_BUFFERED_FRAMES)
+
+        await fleet._pump_frames(socket, inbox, "engineer")
+
+        drained = []
+        while not inbox.empty():
+            drained.append(inbox.get_nowait())
+        assert len(drained) == 3  # two posts and the sentinel
+        assert drained[-1] is events_module._SOCKET_CLOSED
+        assert [json.loads(d)["data"]["post"] for d in drained[:2]]
+
+    @pytest.mark.asyncio
+    async def test_chatter_cannot_stall_the_pump_at_the_ceiling(self, monkeypatch):
+        """The failure this prevents: a seat reconnecting to a busy team
+        fills every slot with presence noise while the backfill runs, the
+        pump blocks, the socket stops being drained, and the connection
+        is closed under it — which reconnects, and backfills again."""
+        monkeypatch.setattr(events_module, "_MAX_BUFFERED_FRAMES", 2)
+        fleet = _fleet()
+        socket = self._Socket([self._chatter("typing") for _ in range(50)])
+        inbox: asyncio.Queue[Any] = asyncio.Queue(2)
+
+        await asyncio.wait_for(fleet._pump_frames(socket, inbox, "engineer"), timeout=1)
+
+        assert inbox.qsize() == 1
+        assert inbox.get_nowait() is events_module._SOCKET_CLOSED
+
+    @pytest.mark.asyncio
+    async def test_an_undecodable_frame_is_dropped_and_logged(self, caplog):
+        fleet = _fleet()
+        inbox: asyncio.Queue[Any] = asyncio.Queue(8)
+
+        with caplog.at_level("DEBUG"):
+            await fleet._pump_frames(self._Socket(["{not json"]), inbox, "engineer")
+
+        assert inbox.get_nowait() is events_module._SOCKET_CLOSED
+        assert inbox.empty()
+        assert "mattermost_ws_undecodable_frame" in caplog.text
+
+
+class TestSeatCancellationDuringPumpTeardown:
+    """`_connect_once`'s teardown used to suppress CancelledError around
+    `await pump` to absorb the PUMP's cancellation. The same suppress
+    swallowed a cancellation delivered to the SEAT task while it was
+    parked there — so a decommission left the seat reconnecting and its
+    caller waiting on a task that never ends."""
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_parked_on_the_teardown_is_not_swallowed(self, monkeypatch):
+        import websockets
+
+        class _Conn:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def send(self, data):
+                return None
+
+            async def recv(self):
+                return json.dumps({"status": "OK", "seq_reply": 1})
+
+        monkeypatch.setattr(websockets, "connect", lambda *a, **kw: _Conn())
+
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        seat.user_id = "botuserid00000000000000000"  # skip identity resolution
+
+        parked = asyncio.Event()
+
+        async def _stubborn_pump(socket, inbox, handle=""):
+            # Ends the consumer immediately, then refuses to die on the
+            # first cancel — exactly like a pump suspended in a blocking
+            # put, which is the window the seat's own cancel lands in.
+            await inbox.put(events_module._SOCKET_CLOSED)
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                parked.set()
+                await asyncio.sleep(3600)
+
+        monkeypatch.setattr(fleet, "_pump_frames", _stubborn_pump)
+
+        task = asyncio.create_task(fleet._connect_once(seat))
+        await asyncio.wait_for(parked.wait(), timeout=2)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert task.cancelled()
