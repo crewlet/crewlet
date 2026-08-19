@@ -446,18 +446,64 @@ async def _ensure_token(
     nothing in the report to say which.  The superseded token is then
     revoked, so a seat is never the reason an unreferenced credential
     stays live on a bot account.
+
+    That promise is what makes an **unreadable token list** a refusal
+    rather than a shrug.  Minting without being able to enumerate what is
+    already there cannot revoke what it supersedes, so it leaves exactly
+    the credential this function says it never leaves: live,
+    non-expiring, referenced by no ``${VAR}``, and carrying the same
+    description as the good one — invisible to ``doctor`` (which has only
+    the seat tokens the config names) and never revisited, because the
+    next run finds every var populated and returns early.
+
+    The one exemption is an account **this run created**: its token list
+    is empty by construction, so nothing can be stranded.  Refusing there
+    too would abort a first-ever provision — the most travelled path in
+    the docs — over a hazard that cannot exist.  "Fail closed on
+    unknowable state" does not apply to a state that is known.
     """
     missing = [var for var in token_vars if not sink.existing(var)]
-    stale = await _our_token_ids(client, user_id)
+    stale, unreadable = await _our_token_ids(client, user_id)
     if not missing and stale is None:
-        # The list could not be read, and unknowable is not the same as
-        # absent: minting here would strand the credential the config
-        # already carries.
+        # Unknowable is not the same as absent: minting here would strand
+        # the credential the config already carries.
         result.token_action = "exists"
+        result.notes.append(
+            f"could not read the bot's token list ({unreadable}) — left the "
+            "recorded token in place, unverified"
+        )
         return
     if not missing and stale:
         result.token_action = "exists"
+        if len(stale) > 1:
+            # Nothing here will clean these up: a fully provisioned seat
+            # returns before the supersede loop, so surplus tokens of
+            # ours survive every future run. Saying so is the difference
+            # between an operator who can revoke them and one who never
+            # learns they exist — they carry the same description as the
+            # live one, so only this listing distinguishes them.
+            result.notes.append(
+                f"{len(stale)} crewlet-engine tokens are active on this bot; "
+                "only one is referenced by the config. Revoke the surplus in "
+                "Profile > Security > Personal Access Tokens, or re-provision "
+                "the seat with its ${VAR}s cleared to replace them all"
+            )
         return
+    if stale is None and result.bot_action != "created":
+        result.token_action = "skipped"
+        raise MattermostError(
+            f"could not list @{result.username}'s personal access tokens "
+            f"({unreadable}). Refusing to mint one blind: Mattermost reveals a "
+            "token's value only at creation, so a token this run left "
+            "unreferenced on the account could never be revoked. Check the "
+            "admin credential and System Console > Integrations > Integration "
+            "Management, then re-run — this seat resumes"
+        )
+    if stale is None:
+        result.notes.append(
+            f"could not read the token list ({unreadable}) — minted anyway, "
+            "which is safe because this run created the account"
+        )
     if not missing:
         result.notes.append(
             "the recorded token is no longer active on the server — minting a fresh one"
@@ -479,7 +525,12 @@ async def _ensure_token(
             recorded.append(var)
     except BaseException:
         await _roll_back_mint(
-            client, sink, user_id=user_id, token_id=token_id, recorded=recorded
+            client,
+            sink,
+            user_id=user_id,
+            token_id=token_id,
+            recorded=recorded,
+            result=result,
         )
         raise
     result.token_action = "minted"
@@ -518,6 +569,7 @@ async def _roll_back_mint(
     user_id: str,
     token_id: str,
     recorded: list[str],
+    result: SeatResult,
 ) -> None:
     """Undo a mint whose value could not be persisted everywhere.
 
@@ -532,12 +584,22 @@ async def _roll_back_mint(
     a crash between them should leave the recoverable state (dead values
     in the env file, which the next run re-mints over) rather than the
     unrecoverable one (a live orphan nothing will ever revoke).
+
+    A revoke that FAILS is named in the report, not just logged.  It
+    leaves a live token on the account whose id exists nowhere else — a
+    log line an operator has to already be tailing is not a record of a
+    credential they now have to revoke by hand.
     """
     if token_id:
         try:
             await client.revoke_user_access_token(token_id)
             logger.warning("mattermost_unpersisted_token_revoked", user=user_id)
-        except Exception:
+        except Exception as exc:
+            result.notes.append(
+                f"the token minted for this seat could not be persisted OR "
+                f"revoked ({exc}) — it is live on the account as {token_id}; "
+                "revoke it in Profile > Security > Personal Access Tokens"
+            )
             logger.exception("mattermost_token_revoke_failed", user=user_id)
     for var in recorded:
         try:
@@ -546,26 +608,35 @@ async def _roll_back_mint(
             logger.exception("mattermost_token_discard_failed", user=user_id, var=var)
 
 
-async def _our_token_ids(client: MattermostClient, user_id: str) -> list[str] | None:
-    """Ids of the bot's active tokens that this tool minted.
+async def _our_token_ids(
+    client: MattermostClient, user_id: str
+) -> tuple[list[str] | None, str]:
+    """Ids of the bot's active tokens that this tool minted, and why not.
 
-    ``None`` when the list could not be read — which is *not* the same
-    as "there are none": minting on a read failure would strand the
-    credential the config already carries, and revoking on one would tear
-    down a seat that is working.
+    Returns ``(ids, "")`` on a successful read and ``(None, cause)`` when
+    the list could not be read — which is *not* the same as "there are
+    none": minting on a read failure would strand the credential the
+    config already carries, and revoking on one would tear down a seat
+    that is working.
+
+    The cause travels with the answer rather than going to a debug log.
+    Every branch that acts on ``None`` has to tell the operator what to
+    fix — a 403 on the admin credential, personal access tokens switched
+    off, a proxy rewriting the path are three different remedies, and
+    "could not list tokens" names none of them.
     """
     try:
         tokens = await client.list_user_access_tokens(user_id)
     except MattermostError as exc:
         logger.debug("mattermost_token_list_failed", user=user_id, error=str(exc))
-        return None
+        return None, str(exc)
     return [
         str(t.get("id") or "")
         for t in tokens
         if str(t.get("description") or "") == TOKEN_DESCRIPTION
         and t.get("is_active", True)
         and t.get("id")
-    ]
+    ], ""
 
 
 async def provision(

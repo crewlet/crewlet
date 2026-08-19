@@ -263,6 +263,44 @@ async def test_env_file_sink_discard_of_an_unknown_var_is_a_no_op(tmp_path):
     assert path.read_text() == "KEEP=k\n"
 
 
+async def test_env_file_sink_discard_removes_every_duplicate_line(
+    tmp_path, monkeypatch
+):
+    # A shell applies the LAST assignment, so removing only the effective
+    # line promotes the one it was shadowing — turning a discard meant to
+    # erase a revoked token into a downgrade to an older secret.
+    path = tmp_path / ".env"
+    path.write_text("DOOMED=older-token\nKEEP=k\nexport DOOMED=newer-token\nTAIL=t\n")
+    monkeypatch.delenv("DOOMED", raising=False)
+    sink = EnvFileSink(str(path))
+    assert sink.existing("DOOMED") == "newer-token"
+
+    await sink.discard("DOOMED")
+
+    assert path.read_text() == "KEEP=k\nTAIL=t\n"
+    assert sink.existing("DOOMED") == ""
+    # Both survivors are still addressable — the reindex held across two
+    # removals at different positions.
+    assert (sink.existing("KEEP"), sink.existing("TAIL")) == ("k", "t")
+    await sink.record("TAIL", "t2")
+    assert path.read_text() == "KEEP=k\nTAIL=t2\n"
+
+
+async def test_env_file_sink_record_collapses_duplicate_lines(tmp_path, monkeypatch):
+    # A shadowed duplicate holds a superseded credential, in a secrets
+    # file, for as long as the file lives.
+    path = tmp_path / ".env"
+    path.write_text("A=1\nDUP=first\nB=2\nDUP=second\nC=3\n")
+    monkeypatch.delenv("DUP", raising=False)
+    sink = EnvFileSink(str(path))
+
+    await sink.record("DUP", "third")
+
+    assert path.read_text() == "A=1\nB=2\nDUP=third\nC=3\n"
+    values = [sink.existing(v) for v in ("A", "B", "C", "DUP")]
+    assert values == ["1", "2", "3", "third"]
+
+
 async def test_print_sink_discard_prints_the_shell_counterpart(capsys):
     # ``--print`` output is a shell fragment an operator sources; the
     # counterpart of ``export VAR=...`` is ``unset VAR``, not silence,

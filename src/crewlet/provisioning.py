@@ -17,12 +17,15 @@ Three sinks ship:
 - :class:`EnvFileSink` — an env file the operator sources.
 - :class:`PrintSink` — ``export VAR=token`` lines on stdout.
 
-``record`` and ``flush`` are **async** because a sink may persist
-remotely. That also makes write-through affordable: a minted credential
-is unretrievable from the upstream API, so the window between "minted"
-and "persisted" is a window in which a crash orphans a live credential.
-Every sink here persists inside ``record``; ``flush`` is the closing
-safety net, not the moment the write happens.
+``record``, ``discard`` and ``flush`` are **async** because a sink may
+persist remotely. That also makes write-through affordable: a minted
+credential is unretrievable from the upstream API, so the window between
+"minted" and "persisted" is a window in which a crash orphans a live
+credential. Every sink here persists inside ``record``; ``flush`` is the
+closing safety net, not the moment the write happens. ``discard`` is the
+other half — a credential revoked because it could not be persisted
+everywhere must not be left standing in the vars that *were* written,
+since a dead token reads exactly like a live one.
 
 Integration-specific seat scans (e.g. GitLab's conventional
 ``sandbox.env.GITLAB_TOKEN`` key) stay in the integration's own
@@ -31,6 +34,7 @@ Integration-specific seat scans (e.g. GitLab's conventional
 
 from __future__ import annotations
 
+import bisect
 import os
 from typing import Any, Protocol
 
@@ -128,7 +132,15 @@ class EnvFileSink:
     def __init__(self, path: str) -> None:
         self._path = path
         self._lines: list[str] = []
-        self._index: dict[str, int] = {}
+        # EVERY line assigning a key, not just the last one.  An env file
+        # may legitimately carry a key twice (an operator appended a
+        # line, two runs wrote through different paths), and a shell
+        # takes the LAST assignment — so a map holding only one index
+        # cannot say which lines are shadowing which.  That is invisible
+        # while values only ever get rewritten, and wrong the moment one
+        # is removed: dropping the effective line promotes the shadowed
+        # one, turning a discard into a downgrade to an older secret.
+        self._index: dict[str, list[int]] = {}
         self._exported: set[str] = set()
         self._existed = os.path.exists(path)
         self._dirty = False
@@ -143,11 +155,12 @@ class EnvFileSink:
                 if key.startswith(_EXPORT_PREFIX):
                     key = key[len(_EXPORT_PREFIX) :].strip()
                     self._exported.add(key)
-                self._index[key] = i
+                self._index.setdefault(key, []).append(i)
 
     def existing(self, var: str) -> str:
-        if var in self._index:
-            value = self._lines[self._index[var]].split("=", 1)[1].strip()
+        for index in reversed(self._index.get(var, [])):
+            # Last assignment first: that is the one a shell would apply.
+            value = self._lines[index].split("=", 1)[1].strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
                 value = value[1:-1]
             if value:
@@ -157,10 +170,17 @@ class EnvFileSink:
     async def record(self, var: str, token: str) -> None:
         prefix = _EXPORT_PREFIX if var in self._exported else ""
         line = f"{prefix}{var}={token}"
-        if var in self._index:
-            self._lines[self._index[var]] = line
+        indexes = self._index.get(var, [])
+        if indexes:
+            # Write the effective (last) line and DELETE the ones it was
+            # already shadowing.  Each of those holds a superseded
+            # credential, in a secrets file, for as long as the file
+            # lives — and this module does not leave dead credentials
+            # lying around anywhere else either.
+            self._lines[indexes[-1]] = line
+            self._drop_lines(indexes[:-1])
         else:
-            self._index[var] = len(self._lines)
+            self._index[var] = [len(self._lines)]
             self._lines.append(line)
         self._dirty = True
         # Write-through: a minted credential is unretrievable from the
@@ -168,23 +188,41 @@ class EnvFileSink:
         self._write()
 
     async def discard(self, var: str) -> None:
-        """Drop ``var``'s line entirely, rather than blanking it.
+        """Drop ``var``'s lines entirely, rather than blanking them.
 
         A blank ``VAR=`` still claims the name, and :meth:`existing`
         would fall through to ``os.environ`` — which, for the operator
         who sourced the last run's file, still holds the dead value.
-        Removing the line is what makes the next run re-mint.
+        Removing the lines is what makes the next run re-mint.
+
+        *Every* line for the key goes, not just the effective one:
+        removing only the last would promote a shadowed assignment, so a
+        discard meant to erase a dead token would instead hand the shell
+        an older one.
         """
-        index = self._index.pop(var, None)
-        if index is None:
+        indexes = self._index.get(var, [])
+        if not indexes:
             return
-        del self._lines[index]
-        self._index = {
-            key: (i - 1 if i > index else i) for key, i in self._index.items()
-        }
+        self._drop_lines(indexes)
         self._exported.discard(var)
         self._dirty = True
         self._write()
+
+    def _drop_lines(self, indexes: list[int]) -> None:
+        """Remove these line numbers and reindex what is left."""
+        doomed = set(indexes)
+        if not doomed:
+            return
+        self._lines = [line for i, line in enumerate(self._lines) if i not in doomed]
+        shift = sorted(doomed)
+        rebuilt: dict[str, list[int]] = {}
+        for key, positions in self._index.items():
+            kept = [
+                i - bisect.bisect_left(shift, i) for i in positions if i not in doomed
+            ]
+            if kept:
+                rebuilt[key] = kept
+        self._index = rebuilt
 
     async def flush(self) -> None:
         # A run that recorded nothing must not conjure a file into

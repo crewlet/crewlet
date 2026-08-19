@@ -288,7 +288,36 @@ to say which, and an unreferenced token left live on a bot account is one
 nothing can ever name again. If a value cannot be persisted everywhere, the
 new token is revoked *and* every `${VAR}` already written is cleared —
 because a var holding a revoked token is indistinguishable, to the engine,
-from a working one, and the seat's socket simply never opens.
+from a working one, and the seat's socket simply never opens. If it can be
+persisted neither everywhere nor revoked, the report names the token id and
+tells you to revoke it by hand.
+
+That same promise is why a seat is **refused** rather than minted when its
+bot's token list cannot be read at all — a 403 on the admin credential,
+personal access tokens switched off, a proxy rewriting the path. A mint that
+cannot enumerate what is already there cannot revoke what it supersedes, so
+it would leave a live, non-expiring token referenced by no `${VAR}`, carrying
+the same `crewlet-engine` description as the good one, invisible to
+[`doctor`](#checking-an-install-crewlet-mattermost-doctor) and never revisited
+— the next run finds every var populated and returns early. The seat fails
+with the underlying cause, the rest of the fleet still provisions, and the
+seat resumes on a re-run once the read works.
+
+Two deliberate exceptions to that refusal:
+
+- **A bot this run created.** Its token list is empty by construction, so
+  nothing can be stranded, and refusing would abort a first-ever provision
+  over a hazard that cannot exist. The mint proceeds with a note.
+- **A seat whose `${VAR}`s all already have values.** Nothing is minted, so
+  nothing can be stranded; the recorded token is left in place with a note
+  saying it could not be verified.
+
+When the list *is* readable and shows more than one live `crewlet-engine`
+token on a fully provisioned seat, the report says so. Nothing revokes them
+automatically — only one is referenced by the config and the provisioner
+cannot tell which of the others some other operator is relying on — but they
+carry the same description as the live one, so this listing is the only thing
+that distinguishes them.
 
 ### The admin token
 
