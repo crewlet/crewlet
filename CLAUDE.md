@@ -156,9 +156,14 @@ src/crewlet/          # Main package
                       #   fails the build on a new re.compile of the grammar
   provisioning.py     # Integration-agnostic ${VAR}-minting contract shared
                       #   by the provisioning CLIs: TokenSink protocol
-                      #   (record/flush are ASYNC — a sink may persist
-                      #   remotely, and write-through closes the
-                      #   minted-but-unpersisted window) + SecretStoreSink
+                      #   (record/discard/flush are ASYNC — a sink may
+                      #   persist remotely, and write-through closes the
+                      #   minted-but-unpersisted window; discard is the
+                      #   other half — a credential revoked because it
+                      #   could not be persisted everywhere must not be
+                      #   left standing in the vars that WERE written,
+                      #   since a dead token reads exactly like a live
+                      #   one) + SecretStoreSink
                       #   (encrypted secret_values — the engine reads it back
                       #   directly, no file to source) / EnvFileSink
                       #   (understands `export VAR=value` lines; created 0600
