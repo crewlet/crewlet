@@ -276,9 +276,27 @@ its seat rather than passing as a note — a bot hears nothing from a channel
 it is not in.
 
 "Already provisioned" is checked against the server as well as the env file.
-A `${VAR}` still holding a token that has since been revoked — by
-`--decommission`, by an admin, by a restore from an older `.env` — is
-re-minted, so the documented recovery below actually recovers.
+"Already provisioned" is **proven by using the credential**, not inferred.
+The reconcile takes the value the `${VAR}` actually holds and authenticates
+with it: only a token that answers as *this seat's bot* counts. A `${VAR}`
+holding a token that has since been revoked — by `--decommission`, by an
+admin, by a restore from an older `.env` — is re-minted, so the documented
+recovery below actually recovers; so is one that authenticates as a
+different account, which is how a copy-pasted var gets caught.
+
+The weaker test — "the bot has *some* live `crewlet-engine` token" — reads
+as provisioned in exactly the case that matters. A run whose mint reached
+the server but whose response was lost leaves a live token this tool never
+saw; that token would then vouch for the dead value in the env file, on
+every run, forever. A 5xx or a network failure during the check is *not* a
+rejection: the seat is left exactly as it was, with a note, because
+re-minting on "cannot tell" destroys a credential that works.
+
+A seat's own `${VAR}`s are the only ones written. `MATTERMOST_ADMIN_TOKEN`
+is excluded from the scan outright — it is the operator's credential, the
+bootstrap writes it into the same `.env`, and a config that points a seat's
+`mcp_env` credential key at it would otherwise have a bot token silently
+replace a system-admin one.
 
 A mint is **all or nothing for the seat**. When a seat names its token in
 two different `${VAR}`s, a fresh token is written to *both*, and the token
@@ -308,9 +326,15 @@ Two deliberate exceptions to that refusal:
 - **A bot this run created.** Its token list is empty by construction, so
   nothing can be stranded, and refusing would abort a first-ever provision
   over a hazard that cannot exist. The mint proceeds with a note.
-- **A seat whose `${VAR}`s all already have values.** Nothing is minted, so
-  nothing can be stranded; the recorded token is left in place with a note
-  saying it could not be verified.
+- **A seat whose recorded token already works.** It is proven directly, so
+  the listing was only ever going to report surplus tokens; nothing is
+  minted and nothing can be stranded.
+
+If the mint call itself fails *after* the server created the token — a read
+timeout on the response, a proxy that drops it — the value is live on the
+account and readable by nobody. The reconcile takes an inventory before
+minting precisely so it can identify that token by difference, and revokes
+it; if even that cannot be done, the report says so with the id.
 
 When the list *is* readable and shows more than one live `crewlet-engine`
 token on a fully provisioned seat, the report says so. Nothing revokes them
@@ -399,12 +423,15 @@ already in the config do the work, resolved the same way the engine resolves
 them (secret store, then environment). The exit code is non-zero when any
 check fails, so it drops into a deploy script.
 
-Both websocket rows read `?` on an install without the `websockets` package
-(`pip install 'crewlet[mattermost]'`). That is reported once, as its own
-problem, rather than as two failures: the socket was never *tried*, and a
-`FAILED` there would send you hunting for a server fault when the engine
-could not have opened an inbound connection at all. Every other check still
-runs and still answers.
+Every cell distinguishes **checked and bad** from **never checked**. A `?`
+in a websocket column, `(not checked)` for the Site URL, `<< not checked` on
+the team — none of those is a failure, and reporting them as one sends you
+after faults nobody observed. An unreachable server returns before the Site
+URL, the browser socket and the team are ever queried; a seat whose token
+did not resolve or was rejected never gets a socket dialled; and an install
+without the `websockets` package (`pip install 'crewlet[mattermost]'`) can
+open neither socket, which is reported once as its own problem rather than
+as two failures. Everything that *can* be answered still is.
 
 ```
 url           : http://203.0.113.7:8065
@@ -643,7 +670,15 @@ the old token under **Profile → Security → Personal Access Tokens**, delete
 the stale line from `.env`, and re-run; the script mints a fresh one. It
 stops for the same reason when it cannot *read* the token list at all —
 usually because personal access tokens are turned off under **System Console
-→ Integrations → Integration Management**.
+→ Integrations → Integration Management** — or when the list comes back a
+full page long, since the answer may be on the next one.
+
+Credentials never travel through a process's arguments. `/proc/<pid>/cmdline`
+is readable by every account on the machine, so the admin password and both
+tokens reach `curl` through its config on stdin and reach the env-file writer
+through the environment (`/proc/<pid>/environ` is owner-only). The env file
+and its temp copy are created `0600` — the mode goes on at creation, never
+by a `chmod` after the token is already on disk.
 
 Provision the agent bots in the same run by pointing it at a company config:
 

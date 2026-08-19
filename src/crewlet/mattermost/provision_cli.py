@@ -26,6 +26,7 @@ from crewlet._logging import get_logger
 from crewlet.db.secret_values import SecretStoreError
 from crewlet.mattermost.client import MattermostClient, MattermostError
 from crewlet.mattermost.provision import (
+    ADMIN_TOKEN_VAR,
     MattermostProvisionAborted,
     ProvisionReport,
     decommission,
@@ -38,7 +39,9 @@ logger = get_logger("mattermost.provision_cli")
 #: Environment variable holding the system-admin token the reconcile
 #: authenticates with.  Never read from the company config: it is an
 #: operator credential, not part of the company's own identity.
-ADMIN_TOKEN_ENV = "MATTERMOST_ADMIN_TOKEN"
+#: One definition, shared with the reconcile — which refuses to mint a
+#: seat's bot token into this var precisely because it is the operator's.
+ADMIN_TOKEN_ENV = ADMIN_TOKEN_VAR
 
 
 class MattermostConfigError(Exception):

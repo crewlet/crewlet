@@ -306,6 +306,22 @@ class MattermostClient:
         """The instance URL, without the ``/api/v4`` suffix."""
         return self._base_url
 
+    def with_token(self, token: str) -> MattermostClient:
+        """A client for the same instance, authenticated as *token*.
+
+        The seam for proving a credential by USING it rather than
+        inferring it from a listing — the provisioner's "is the value we
+        recorded still the bot's token?" check. Shares only the URL and
+        transport configuration; the caller owns the new client and must
+        close it.
+        """
+        return type(self)(
+            self._base_url,
+            token,
+            timeout=self._timeout,
+            transport=self._transport,
+        )
+
     def _http(self) -> httpx.AsyncClient:
         if self._closed:
             # Rebuilding here would be worse than failing: the caller
