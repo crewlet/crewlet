@@ -35,7 +35,7 @@ import {
   statStrip,
   turnRail,
 } from "../ui.js";
-import { failureLabel } from "../llm.js";
+import { failureLabel, stripThink } from "../llm.js";
 
 // Rows on the overview's activity feed. The full history is one click
 // away on Activity; this is a glance, not a log.
@@ -178,9 +178,7 @@ export function createDashboardView({ store }) {
       { length: Math.min(Math.max(roundCount, 1), 12) },
       (_, i) => `<i class="pip" style="--i:${i}"></i>`,
     ).join("");
-    const text = call.response
-      ? trunc(call.response.replace(/<\/?think>/g, " "), 260)
-      : "";
+    const text = call.response ? trunc(stripThink(call.response, " "), 260) : "";
     const tools = (call.tool_executions || []).slice(-4);
     // How long since this call last moved. A row whose last round landed
     // minutes ago drops its animation and says its age instead — pips

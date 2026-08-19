@@ -249,6 +249,21 @@ export function promptSections(record, opts = {}) {
     .join("");
 }
 
+// Strip the ``<think>`` markers from a response, leaving the reasoning
+// text itself. For one-line previews, where the block structure the
+// full renderer draws has nowhere to go and the raw tags would read as
+// literal markup.
+//
+// This module owns the ``<think>`` grammar the engine writes (see
+// ``crewlet.events.types.format_reasoning_and_content``), so the regex
+// lives here once. It was open-coded in three places, and the copy in
+// the agent view's live-row preview was the branch that never ran the
+// strip at all — invisible while live responses carried no reasoning,
+// and a row of literal "<think>" the moment they did.
+export function stripThink(text, replacement = "") {
+  return String(text || "").replace(/<\/?think>/g, replacement);
+}
+
 // Render the response body, interleaving <think> blocks and tool calls
 // inline. ``opts``:
 //   keyPrefix  — stable prefix for think/tool element keys (so toggles

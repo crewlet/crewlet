@@ -152,7 +152,7 @@ async def test_aux_telemetry_wraps_reasoning_in_think_tags() -> None:
     """Reasoning text from extended-thinking models must reach the
     dashboard wrapped in ``<think>...</think>`` tags so the existing
     renderer surfaces it inline -- mirrors
-    ``llm_loop._assistant_text_with_reasoning``."""
+    ``llm_loop.assistant_text_with_reasoning``."""
     queue = _QueueStub()
     provider = _ReasoningProvider(
         content='{"kind": "NOOP"}',

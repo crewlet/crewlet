@@ -1483,6 +1483,42 @@ class AgentPhaseStarted(Event):
         return f"{self.actor} started {self.phase} (iter {self.iteration})"
 
 
+def format_reasoning_and_content(reasoning: str, content: str) -> str:
+    """Render one assistant turn's reasoning + visible content as ONE string.
+
+    This is the wire format of the ``response`` field on
+    :class:`AgentPhaseCompleted` and :class:`AgentTurnProgress`: a
+    model's extended-thinking output is wrapped in ``<think>...</think>``
+    and placed immediately before the visible content it produced.  The
+    dashboard's ``responseBody`` (``static/dashboard/js/llm.js``) parses
+    those tags and renders each block as a collapsible "Reasoning"
+    section inline with the tool calls.
+
+    It lives here, beside the events whose field it defines, because
+    three call sites build that field and they must not drift: the
+    per-round live progress event and the per-phase completed event
+    (both in ``crewlet.agent.llm_loop``) and the auxiliary-LLM
+    telemetry wrapper (``crewlet.learning._aux_telemetry``).  When the
+    live event omitted reasoning and the completed one included it, a
+    reasoning model's thinking simply did not exist on the dashboard
+    until its phase ended -- the live view streamed tool calls against
+    an empty response.
+
+    Empty reasoning yields the visible content unchanged, so a
+    non-thinking model's response keeps its plain shape.  Reasoning
+    with no visible content (a thinking model that hit its output cap)
+    still renders, because the thinking is then the only signal there
+    is.
+    """
+    reasoning = (reasoning or "").strip()
+    content = (content or "").strip()
+    if not reasoning:
+        return content
+    if not content:
+        return f"<think>{reasoning}</think>"
+    return f"<think>{reasoning}</think>\n\n{content}"
+
+
 class AgentPhaseCompleted(Event):
     """Emitted once at the end of each Plan / Execute / Review / Sub-agent
     phase with full context so dashboards can render a per-phase timeline.

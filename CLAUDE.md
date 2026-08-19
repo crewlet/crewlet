@@ -206,7 +206,15 @@ src/crewlet/          # Main package
                       #     for the run_sandbox tool), review.py,
                       #   subagent.py, guards.py, prompts.py, turn_context.py,
                       #   phase_model.py, llm_loop.py (run_tool_loop suspend
-                      #     primitive — ToolResult.suspend),
+                      #     primitive — ToolResult.suspend; publishes
+                      #     AgentTurnProgress TWICE per round — once the
+                      #     model has spoken, before its tools run, and
+                      #     again once they return — and builds that
+                      #     response with the SAME
+                      #     assistant_text_with_reasoning the phase record
+                      #     uses, so the dashboard's live row and the turn
+                      #     you expand later are one text, reasoning
+                      #     included, not two assemblies of it),
                       #   extension.py (round-cap extension judge for Plan/Execute),
                       #   tool_discovery.py (activate_tool +
                       #     list_mcp_server_tools meta-tools shared by Plan/Execute),
@@ -668,7 +676,20 @@ src/crewlet/          # Main package
                       #   Source chip/block naming the event that triggered the
                       #   turn — notification triggers show a branded
                       #   integration badge (Slack/Jira/…) + sender via
-                      #   describe_trigger; eventDetail.js renders inbound
+                      #   describe_trigger. llm.js also OWNS the
+                      #   `<think>` grammar the engine writes
+                      #   (events.types.format_reasoning_and_content):
+                      #   responseBody turns it into a Reasoning block
+                      #   inline with the tool badges, and anything
+                      #   wanting the plain text (row previews, the
+                      #   overview live card) calls stripThink instead of
+                      #   re-writing the regex. It renders a LIVE row and a
+                      #   finished one identically because the engine
+                      #   builds both responses with ONE function — a live
+                      #   record's toggle identity is records.js `_key`
+                      #   (timestamp-free), since updated_at moves every
+                      #   round and would re-open what the reader
+                      #   collapsed; eventDetail.js renders inbound
                       #   notifications as a readable integration-branded view
                       #   (state.js integrationMeta/integrationBadge) — see
                       #   describe_trigger / turn-engine.md).

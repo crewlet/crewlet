@@ -43,6 +43,7 @@ import {
   failureOf,
   failureBlock,
   failureLabel,
+  stripThink,
   tokenStats,
   triggerSource,
 } from "../llm.js";
@@ -102,6 +103,15 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
 
   function recKey(r) {
     return `${r.turn_id}|${r.phase}|${r.iteration}|${r.timestamp}`;
+  }
+
+  // The identity a record's expand/collapse state hangs off. A record
+  // from the live projection carries its own timestamp-free `_key`
+  // (see records.js) because its timestamp moves on every streamed
+  // round; a stored record is keyed by `recKey`, whose timestamp is
+  // what separates a resumed Execute phase's two records.
+  function keyFor(r) {
+    return r._key || recKey(r);
   }
 
   function unshiftRecord(r) {
@@ -327,10 +337,12 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
   function rowPreview(r) {
     const failure = failureOf(r);
     if (failure) return failure.message || failureLabel(failure.kind);
-    if (r._live) {
-      return r.response ? trunc(r.response, 90) : "Working — response streams in…";
-    }
-    return trunc((r.response || "").replace(/<\/?think>/g, ""), 90);
+    // A one-line preview has nowhere to draw the reasoning block the
+    // body renders, so the markers come off either way — a live row's
+    // response carries them now too.
+    const text = trunc(stripThink(r.response), 90);
+    if (r._live) return text || "Working — response streams in…";
+    return text;
   }
 
   function rowBody(r, key) {
@@ -442,12 +454,8 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
           )
           .join("");
 
-        const liveRows = g.live
-          .map((lc) =>
-            phaseRow(lc, `live|${lc.turn_id}|${lc.phase}|${lc.iteration}`),
-          )
-          .join("");
-        const rows = g.items.map((r) => phaseRow(r, recKey(r))).join("");
+        const liveRows = g.live.map((lc) => phaseRow(lc, keyFor(lc))).join("");
+        const rows = g.items.map((r) => phaseRow(r, keyFor(r))).join("");
 
         // Onboarding groups get a distinct "setup" label and no trigger
         // chip; task turns keep the "turn <id>" label and the source.
@@ -635,11 +643,11 @@ export function createAgentView({ store, query, navigate, refresh, params }) {
         ${triggerSource(r.trigger)}
         ${toolsAvailable(r)}
         <div class="block-label">Prompt</div>${promptSections(r, {
-          keyPrefix: "detail|" + recKey(r),
+          keyPrefix: "detail|" + keyFor(r),
           isOpen: isPromptOpen,
         })}
         <div class="block-label">Response</div>${responseBody(r.response, r.tool_executions, {
-          keyPrefix: "detail|" + recKey(r),
+          keyPrefix: "detail|" + keyFor(r),
           thinkOpen: isThinkOpen,
           toolOpen: isToolOpen,
           codingAgent: isCodingAgentPhase(r),

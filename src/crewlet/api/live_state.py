@@ -185,9 +185,14 @@ class Change:
         )
 
 
-def _remember(seen: dict[str, None], key: str) -> None:
-    """Record ``key`` in a bounded, insertion-ordered id set."""
-    seen[key] = None
+def _remember(seen: dict[str, Any], key: str, value: Any = None) -> None:
+    """Record ``key`` in a bounded, insertion-ordered map.
+
+    Used as a set (``value=None``) for the event-id dedupes, and as a
+    key→timestamp map for the finished-call guard.  One pruning
+    implementation either way.
+    """
+    seen[key] = value
     while len(seen) > _TOKEN_DEDUPE_LIMIT:
         seen.pop(next(iter(seen)))
 
@@ -274,10 +279,32 @@ class LiveState:
         # totals — prevents double-counting hydrated turns against
         # streamed ones.  A ``dict`` used as an insertion-ordered set so
         # the oldest id evicts first once past ``_TOKEN_DEDUPE_LIMIT``.
-        self._counted_token_ids: dict[str, None] = {}
+        self._counted_token_ids: dict[str, Any] = {}
         # ``agent_phase_completed`` ids already folded into the spend
         # rollup — the rollup's analogue of the above.
-        self._counted_phase_ids: dict[str, None] = {}
+        self._counted_phase_ids: dict[str, Any] = {}
+        # ``(turn_id, phase, iteration)`` → timestamp of the completion
+        # that ended that call.  A phase publishes its last progress
+        # round and its completed event back to back on DIFFERENT
+        # topics, and the standalone API consumes those through one
+        # wildcard subscription, where cross-topic order is not
+        # guaranteed.  A progress round arriving after its own
+        # completion would find no live call to match and seed a fresh
+        # one — an in-flight row for a phase that finished, which
+        # nothing would ever clear.
+        #
+        # The timestamp is what makes this safe for a SUSPENDED Execute
+        # phase: it publishes a completion checkpoint under these exact
+        # coordinates and then, when the detached sandbox run lands,
+        # resumes the same loop and streams more rounds under them.
+        # Those rounds are strictly newer than the checkpoint, so only a
+        # round at or before it is dropped as a lost race.
+        #
+        # Bounded by the same ``_TOKEN_DEDUPE_LIMIT`` as the id sets
+        # above, which is generous here by orders of magnitude: an entry
+        # only has to outlive the seconds between a completion and a
+        # straggler round that raced it, not the process.
+        self._finished_calls: dict[str, Any] = {}
         # Per-phase spend records inside the rollup window, in the shape
         # ``aggregate_phase_events`` consumes: hydrated from the store at
         # startup and appended live.  Holding the *records* rather than a
@@ -489,7 +516,7 @@ class LiveState:
             agent.afk_reason = ""
             if payload.get("failed"):
                 self._record_phase_failure(agent, envelope, payload)
-            self._finish_live_call(agent, payload)
+            self._finish_live_call(agent, envelope, payload)
         elif etype == "reflection_completed":
             agent.state = "idle"
             agent.current_phase = None
@@ -625,6 +652,20 @@ class LiveState:
         round_num = int(payload.get("round_num", 0) or 0)
         ts = str(envelope.get("timestamp", ""))
 
+        # The phase already published its completion and this round is
+        # not newer than it: a straggler that lost a cross-topic race,
+        # not live work.  Seeding a call from it would put a permanent
+        # in-flight row on a finished phase.  A resumed phase's rounds
+        # ARE newer than its suspend checkpoint and pass through.
+        # Keyed on ``turn_id``, so a loop run outside the turn engine
+        # (no turn id) is never matched against an unrelated one.
+        if turn_id:
+            finished_at = self._finished_calls.get(
+                self._call_key(turn_id, phase, iteration)
+            )
+            if finished_at and (not ts or ts <= finished_at):
+                return ""
+
         cur = agent.live_call
         # Accept the update when there's no live call, when it's a newer
         # round of the same (turn, phase, iteration), or when it belongs
@@ -698,13 +739,31 @@ class LiveState:
                 "tool_executions", []
             )
 
-    def _finish_live_call(self, agent: AgentLive, payload: dict[str, Any]) -> None:
-        """Clear the in-flight call when its phase completes.
+    def _finish_live_call(
+        self, agent: AgentLive, envelope: dict[str, Any], payload: dict[str, Any]
+    ) -> None:
+        """Close out the in-flight call when its phase completes.
 
+        Records the call as finished (so no later progress round can
+        resurrect it — see ``_finished_calls``) and clears the live row.
         Only clears when the completed phase matches the live call — a
         late ``agent_phase_completed`` for a prior phase must not wipe a
         newer phase's live row.
         """
+        # Whatever the outcome, this phase is over: no later progress
+        # round belongs to it.  Recorded before the early returns below
+        # so it holds for a failed phase and for a completion that
+        # arrives with no live call to clear.
+        if turn_id := payload.get("turn_id", ""):
+            _remember(
+                self._finished_calls,
+                self._call_key(
+                    turn_id,
+                    payload.get("phase", ""),
+                    int(payload.get("iteration", 0) or 0),
+                ),
+                str(envelope.get("timestamp", "")),
+            )
         cur = agent.live_call
         if cur is None:
             return
@@ -729,6 +788,11 @@ class LiveState:
             and call.get("phase", "") == phase
             and int(call.get("iteration", 0) or 0) == iteration
         )
+
+    @staticmethod
+    def _call_key(turn_id: str, phase: str, iteration: int) -> str:
+        """Identity of one phase invocation, shared by both its events."""
+        return f"{turn_id}|{phase}|{iteration}"
 
     # -- tokens ----------------------------------------------------------
 

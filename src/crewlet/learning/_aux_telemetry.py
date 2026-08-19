@@ -26,7 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 from crewlet._logging import get_logger
-from crewlet.events.types import AgentPhaseCompleted
+from crewlet.events.types import AgentPhaseCompleted, format_reasoning_and_content
 from crewlet.providers.llm.protocol import Completion, LLMProvider, Message
 
 logger = get_logger("learning.aux_telemetry")
@@ -71,32 +71,23 @@ def effective_aux_timeout(provider: LLMProvider, requested: float) -> float:
 def format_response_with_reasoning(completion: Completion) -> str:
     """Combine reasoning + visible content into one string for the event.
 
-    Mirrors :func:`crewlet.agent.llm_loop._assistant_text_with_reasoning`
-    so aux-LLM calls render thinking the same way main-phase calls do
-    in the dashboard: reasoning is wrapped in ``<think>...</think>``
-    and prepended to the visible content.
-
-    The dashboard's ``renderLLMResponse`` already understands those
-    tags, so this is a zero-frontend-change fix.  Empty reasoning
-    yields the visible content unchanged (preserving the
-    pre-existing event shape for non-thinking models).
+    A thin :class:`Completion` adapter over
+    :func:`crewlet.events.types.format_reasoning_and_content` -- the one
+    rule for how an assistant turn's thinking reaches the ``response``
+    field -- so an aux-LLM call renders thinking exactly as a main-phase
+    call does.  This used to be a second, independently-written copy of
+    that rule; the copies drifted on whitespace handling, which is
+    precisely how a display field ends up meaning two things.
 
     Public so callers that pass a ``response_formatter`` to
     :func:`complete_with_telemetry` can build on top of it (e.g. the
-    personal-memory filter appends a "→ Resolved selection:" block
+    personal-memory filter appends a "-> Resolved selection:" block
     after this base format).
     """
-    reasoning = (getattr(completion, "reasoning_content", "") or "").strip()
-    content = (completion.content or "").strip()
-    if not reasoning:
-        return content
-    if not content:
-        # Cap-hit shape: the model produced reasoning but no visible
-        # text.  Surfacing the thinking is the only signal the
-        # operator has -- without this they see ``response=""`` and
-        # have to read the raw structlog to know thinking happened.
-        return f"<think>{reasoning}</think>"
-    return f"<think>{reasoning}</think>\n\n{content}"
+    return format_reasoning_and_content(
+        getattr(completion, "reasoning_content", "") or "",
+        completion.content or "",
+    )
 
 
 async def complete_with_telemetry(

@@ -343,6 +343,48 @@ Every turn opens one `agent.turn` OTel span with child spans `agent.turn.plan`, 
 
 The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its system prompt, user prompt, response, token counts, and decision (`extend` / `rescue`) — the same shape as the Plan/Execute/Review phase events, so the dashboard's per-agent "LLM Invocations" view renders judge calls alongside the main phases without any frontend change.
 
+### What streams during a turn
+
+A phase is not one LLM call — it is a loop of them, and an operator
+watching the dashboard is watching that loop. Two events carry it:
+
+| Event | When | Persisted |
+|---|---|---|
+| `AgentTurnProgress` | Twice per tool-call round | No — stream only |
+| `AgentPhaseCompleted` | Once, when the phase ends | Yes |
+
+**Twice per round**, because a round has two moments worth showing. The
+first fires the instant the model has answered, before any of that
+round's tools run: the model's prose and its reasoning are what explain
+the tool call that is about to happen, and holding them back until the
+round's slowest tool returns is holding them back for exactly as long as
+they are most useful. The second fires once that round's tool results are
+in. A round that emits only a tool call and no text has nothing new to
+show at the first moment and skips it, so a tool-only round still costs
+one event. The final round — the one that ends the phase by making no
+tool call — publishes at the first moment and then ends the loop, which
+is how a phase's closing answer streams at all.
+
+**The same text either way.** Both events build their `response` with
+`crewlet.agent.llm_loop.assistant_text_with_reasoning` over the same
+message list, so what streams live is what you read when you expand the
+finished turn — not a second assembly of it that can disagree. Reasoning
+from an extended-thinking model rides in that string wrapped in
+`<think>...</think>` (the wire format is
+`crewlet.events.types.format_reasoning_and_content`, shared with the
+[auxiliary-LLM telemetry](agent-learning.md)); the dashboard parses the
+markers and renders each one as a collapsible **Reasoning** block inline
+with the tool badges. The three builders of that field used to be three
+hand-written assemblies, and the live one omitted reasoning entirely: a
+thinking model's live row streamed tool calls against an empty response
+and only grew its reasoning once the phase was over.
+
+On a **resumed** Execute phase — one that suspended on `run_sandbox` and
+picked up when the detached run landed — both events are scoped to the
+post-resume slice of the conversation, because the pre-suspend segment
+was already published as its own record. The live row and the record
+therefore still agree across a suspend.
+
 ### Turn source (the triggering event)
 
 Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor — built by `crewlet.events.types.describe_trigger` from the turn's `TurnContext.trigger_event`. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack / jira / github / …), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration — a branded Slack/Jira badge with the sender — instead of a generic "external notification". The dashboard's "LLM Invocations" view renders this as the invocation's **source**: a compact chip on each turn header and a labelled "Source" block in the per-phase detail, linking to the full event when the trigger was persisted (`#/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
