@@ -914,3 +914,136 @@ class TestBatchOptionsAndOrdering:
         )
         parts = partition_by_key([aware, naive], lambda e: e.payload["conv"])
         assert order_partitions_oldest_first(parts) == parts
+
+
+class TestMemoryEventQueueFleet:
+    """One broker, several clients — the twin's model of a fleet.
+
+    A single :class:`MemoryEventQueue` is both a broker and a client, and
+    for one process that is invisible. For two it inverts the property
+    seat ownership rests on, so these assert the seam: subscriptions and
+    mail are shared, everything about an *attachment* is not.
+    """
+
+    async def test_a_clients_detach_leaves_its_peers_attached(self) -> None:
+        broker = MemoryEventQueue()
+        a, b = broker.client(), broker.client()
+        await a.start()
+        await b.start()
+        got_a: list[str] = []
+        got_b: list[str] = []
+
+        async def handler_a(event: Event) -> None:
+            got_a.append(event.type)
+
+        async def handler_b(event: Event) -> None:
+            got_b.append(event.type)
+
+        await a.subscribe("seat.inbox", "grp", handler_a)
+        await b.subscribe("seat.inbox", "grp", handler_b)
+        assert a.attachments() == [("seat.inbox", "grp")]
+        assert b.attachments() == [("seat.inbox", "grp")]
+
+        await a.detach("seat.inbox", "grp")
+        assert a.attachments() == []
+        assert b.attachments() == [("seat.inbox", "grp")], (
+            "one node's detach tore down its peer's consumer"
+        )
+
+        await a.publish("seat.inbox", Event(type="after", source="t"))
+        assert got_b == ["after"] and got_a == []
+
+    async def test_a_clients_pause_does_not_gate_its_peers(self) -> None:
+        """A hold describes one node's attachment.
+
+        Gating the subscription instead would let one node's sandbox
+        pause — or one node's shutdown — stop a peer from serving the
+        seat it owns.
+        """
+        broker = MemoryEventQueue()
+        a, b = broker.client(), broker.client()
+        await a.start()
+        await b.start()
+        got: list[str] = []
+
+        async def handler(event: Event) -> None:
+            got.append(event.type)
+
+        await a.subscribe("seat.inbox", "grp", lambda e: _never())
+        await b.subscribe("seat.inbox", "grp", handler)
+        await a.pause_topic("seat.inbox", "grp", reason="sandbox")
+
+        assert a.pause_holds("seat.inbox", "grp") == {"sandbox"}
+        assert b.pause_holds("seat.inbox", "grp") == set()
+
+        for _ in range(4):
+            await b.publish("seat.inbox", Event(type="work", source="t"))
+        assert got == ["work"] * 4, "a peer's hold stole the whole round robin"
+
+    async def test_stopping_one_client_leaves_the_broker_and_its_peers(self) -> None:
+        broker = MemoryEventQueue()
+        a, b = broker.client(), broker.client()
+        await a.start()
+        await b.start()
+        got: list[str] = []
+
+        async def handler(event: Event) -> None:
+            got.append(event.type)
+
+        await b.subscribe("seat.inbox", "grp", handler)
+        await a.stop()
+
+        await b.publish("seat.inbox", Event(type="still-serving", source="t"))
+        assert got == ["still-serving"]
+
+    async def test_unquiesce_resumes_and_delivers_what_was_held(self) -> None:
+        """Quiesce is not always followed by a detach.
+
+        A node whose lease store blipped keeps its seats and its
+        consumers; only the proof of ownership lapsed. Without an
+        inverse it would come back healthy and never read from them
+        again.
+        """
+        q = MemoryEventQueue()
+        await q.start()
+        got: list[str] = []
+
+        async def handler(event: Event) -> None:
+            got.append(event.type)
+
+        await q.subscribe("seat.inbox", "grp", handler)
+        assert await q.quiesce("seat.inbox", "grp") is True
+
+        await q.publish("seat.inbox", Event(type="held", source="t"))
+        assert got == []
+        assert [e.type for e in q.backlog("seat.inbox", "grp")] == ["held"]
+
+        assert await q.unquiesce("seat.inbox", "grp") is True
+        assert got == ["held"]
+        assert await q.unquiesce("seat.inbox", "grp") is False
+
+    async def test_unquiesce_leaves_pause_holds_alone(self) -> None:
+        """A seat resuming from a stale-renew window may still be paused
+        for a running sandbox; lifting that would deliver into a
+        suspended turn."""
+        q = MemoryEventQueue()
+        await q.start()
+        got: list[str] = []
+
+        async def handler(event: Event) -> None:
+            got.append(event.type)
+
+        await q.subscribe("seat.inbox", "grp", handler)
+        await q.pause_topic("seat.inbox", "grp", reason="sandbox")
+        await q.quiesce("seat.inbox", "grp")
+
+        await q.publish("seat.inbox", Event(type="held", source="t"))
+        await q.unquiesce("seat.inbox", "grp")
+
+        assert q.pause_holds("seat.inbox", "grp") == {"sandbox"}
+        assert got == []
+
+
+async def _never() -> None:
+    """A handler that should never be reached in the pause test."""
+    raise AssertionError("delivered to a paused attachment")

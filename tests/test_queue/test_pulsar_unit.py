@@ -946,12 +946,16 @@ class _RecordingConsumer:
     def __init__(self) -> None:
         self.closed = 0
         self.unsubscribed = 0
+        self.redelivered = 0
 
     def close(self) -> None:
         self.closed += 1
 
     def unsubscribe(self) -> None:
         self.unsubscribed += 1
+
+    def redeliver_unacknowledged_messages(self) -> None:
+        self.redelivered += 1
 
 
 def _attached(queue: PulsarEventQueue, topic: str, group: str) -> _Subscription:
@@ -1032,6 +1036,37 @@ async def test_quiesce_leaves_the_consumer_attached(
     assert sub.consumer.closed == 0
     assert queue._subscriptions == [sub]
     assert await queue.quiesce("nope", "g") is False
+
+
+async def test_unquiesce_restarts_the_loop_and_reclaims_the_prefetch(
+    queue: PulsarEventQueue,
+) -> None:
+    """The inverse quiesce needs, and the two things it must do.
+
+    The consume loop EXITS on the flag, so clearing it alone leaves the
+    attachment silent forever. And whatever the consumer had already
+    fetched was deliberately dropped unacked for a successor that, on
+    this path, never comes — so it has to be asked back, or it stays
+    hostage in the prefetch until the thirty-minute ack timeout.
+    """
+    sub = _attached(queue, "t", "g")
+    ran = 0
+
+    async def _loop() -> None:
+        nonlocal ran
+        ran += 1
+
+    sub.run = _loop
+
+    assert await queue.unquiesce("t", "g") is False, "nothing was quiescing"
+    assert await queue.quiesce("t", "g") is True
+    assert await queue.unquiesce("t", "g") is True
+
+    assert sub.quiescing is False
+    assert sub.consumer.redelivered == 1
+    assert sub.consumer.closed == 0, "resuming is not a re-attach"
+    await asyncio.sleep(0)
+    assert ran == 1
 
 
 async def test_a_quiescing_batch_stops_between_partitions(

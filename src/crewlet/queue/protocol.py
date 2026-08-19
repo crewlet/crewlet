@@ -244,6 +244,24 @@ class EventQueue(Protocol):
         """
         ...
 
+    async def unquiesce(self, topic: str, group: str) -> bool:
+        """Resume an attachment that was quiesced. Returns whether it was.
+
+        The inverse of :meth:`quiesce`, and it exists because quiescing
+        is not always followed by a detach. A node whose lease store
+        blipped keeps its seats — the row is untouched — but stops
+        admitting new turns until it can prove ownership again, and a
+        delivery arriving inside that window quiesces the attachment via
+        :class:`DeferDelivery`. Without an inverse, the node would hold
+        the seat, stay attached, and consume nothing for the rest of its
+        life: owned, attached, and silently deaf.
+
+        Does NOT touch pause holds — a seat resuming from a stale-renew
+        window may still be legitimately paused for a running sandbox,
+        and clearing that would deliver into a suspended turn.
+        """
+        ...
+
     async def detach(self, topic: str, group: str) -> bool:
         """Close this process's consumer(s), leaving the subscription.
 

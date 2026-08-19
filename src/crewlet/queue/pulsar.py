@@ -6,9 +6,12 @@ single internal subject language (dot-separated subjects with ``*`` /
 translates that language onto Pulsar's topic + subscription model:
 
 - A subject (e.g. ``crewlet.agent.alice.inbox``) maps to a persistent
-  Pulsar topic ``persistent://{tenant}/{namespace}/{subject}``.  The
-  engine never talks to the admin API; a non-default tenant/namespace
-  must exist before start (created out-of-band with ``pulsar-admin``).
+  Pulsar topic ``persistent://{tenant}/{namespace}/{subject}``.  Topics
+  are auto-created; a non-default tenant/namespace is not, and must
+  exist before start (created out-of-band with ``pulsar-admin``).
+  Subscription *lifecycle* — create and delete — does go through the
+  admin REST API (:mod:`crewlet.queue.admin`), because both operations
+  have to work with no consumer attached: see :meth:`ensure_subscription`.
 - :meth:`subscribe` (competing consumers within a ``group``) maps to a
   **Shared** subscription whose name is the group — every member of the
   group shares one cursor, so each message goes to exactly one member.
@@ -276,7 +279,10 @@ class _Subscription:
     the dead-letter budget on a healthy message.
 
     ``task`` is assigned right after construction, because the consume
-    closure has to capture this record to see the flag.
+    closure has to capture this record to see the flag.  ``run`` keeps
+    that closure so :meth:`PulsarEventQueue.unquiesce` can start a fresh
+    task: the loop EXITS when the flag is set, so clearing the flag alone
+    would leave the attachment permanently silent.
     """
 
     consumer: Any
@@ -285,6 +291,7 @@ class _Subscription:
     group: str = ""
     task: asyncio.Task[None] | None = None
     quiescing: bool = False
+    run: Callable[[], Awaitable[None]] | None = None
 
 
 class PulsarEventQueue:
@@ -534,6 +541,45 @@ class PulsarEventQueue:
         if matched:
             logger.info("subscription_quiesced", topic=topic, group=group)
         return bool(matched)
+
+    async def unquiesce(self, topic: str, group: str) -> bool:
+        """Resume a quiesced attachment. Returns whether one was resumed.
+
+        The consume loop **exits** when the flag is set — that is what
+        stops it fetching — so this restarts it from the stored closure
+        rather than only clearing the flag.  Without the restart a node
+        whose lease store blipped would keep its seats, keep its
+        consumers, and read nothing from them ever again.
+
+        Pause holds are untouched: a seat coming back from a stale-renew
+        window may still be paused for a running sandbox.
+        """
+        resumed = 0
+        for sub in self._subscriptions:
+            if sub.topic != topic or sub.group != group or not sub.quiescing:
+                continue
+            sub.quiescing = False
+            # Ask for whatever this consumer fetched and never dispatched.
+            #
+            # Quiescing drops fetched-but-undispatched messages on the
+            # floor deliberately — they are left UNACKED so the seat's
+            # next owner gets them at ``redeliveryCount`` 0, and the
+            # thing that hands them back is the consumer CLOSING. On this
+            # path nothing closes: the same consumer resumes. Without
+            # this call those messages stay hostage in the client's
+            # prefetch until the ack timeout, which is thirty minutes —
+            # so a two-second store blip would silently cost half an hour
+            # of a seat's mail.
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(sub.consumer.redeliver_unacknowledged_messages)
+            if sub.run is not None and (sub.task is None or sub.task.done()):
+                sub.task = asyncio.create_task(sub.run())
+            resumed += 1
+        if resumed:
+            logger.info(
+                "subscription_unquiesced", topic=topic, group=group, consumers=resumed
+            )
+        return bool(resumed)
 
     async def detach(self, topic: str, group: str) -> bool:
         """Close this process's consumer(s), leaving the subscription.
@@ -791,6 +837,7 @@ class PulsarEventQueue:
                     continue
                 await self._process_message(sub, msg, handler)
 
+        sub.run = _consume
         sub.task = asyncio.create_task(_consume())
         self._subscriptions.append(sub)
         logger.debug("subscription_added", topic=topic, group=group)
@@ -850,6 +897,7 @@ class PulsarEventQueue:
                     sub, msgs, handler, batch_key, received_at=received_at
                 )
 
+        sub.run = _consume
         sub.task = asyncio.create_task(_consume())
         self._subscriptions.append(sub)
         logger.debug("batch_subscription_added", topic=topic, group=group)
