@@ -342,6 +342,132 @@ class TestRetries:
         assert calls["n"] == 3
 
     @pytest.mark.asyncio
+    async def test_a_token_mint_is_never_retried(self, monkeypatch):
+        """The method that motivates the rule: a repeat after a lost
+        answer mints a SECOND live token whose value no caller ever sees,
+        so nothing can persist or revoke it."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(503, text="restarting")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError):
+                await client.create_user_access_token("u1", "crewlet-engine")
+        finally:
+            await client.close()
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_lost_answer_on_a_write_is_not_repeated(self, monkeypatch):
+        """A read timeout is indistinguishable from "the server applied it
+        and the answer was lost", so a non-repeatable write must fail
+        rather than guess."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.ReadTimeout("timed out")
+
+        client = _client(handler)
+        try:
+            with pytest.raises(MattermostError):
+                await client.create_bot("agent-swe", "Agent SWE")
+        finally:
+            await client.close()
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_connect_failure_on_a_write_IS_retried(self, monkeypatch):
+        """A failure raised before a byte left this process proves the
+        server never saw the request — safe to repeat even for a mint,
+        and the case that matters when a container is still starting."""
+        slept: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            slept.append(delay)
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("connection refused")
+            return httpx.Response(201, json={"id": "t1", "token": "minted"})
+
+        client = _client(handler)
+        try:
+            minted = await client.create_user_access_token("u1", "crewlet-engine")
+        finally:
+            await client.close()
+        assert minted["token"] == "minted"
+        assert slept
+
+    @pytest.mark.asyncio
+    async def test_a_rate_limited_write_IS_retried(self, monkeypatch):
+        """429 is the one retryable status that proves the request was
+        rejected BEFORE processing, so repeating it cannot repeat a side
+        effect — even for a token mint."""
+        slept: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            slept.append(delay)
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "1"}, text="slow")
+            return httpx.Response(201, json={"id": "t1", "token": "minted"})
+
+        client = _client(handler)
+        try:
+            minted = await client.create_user_access_token("u1", "crewlet-engine")
+        finally:
+            await client.close()
+        assert minted["token"] == "minted"
+        assert slept == [1.0]
+
+    @pytest.mark.asyncio
+    async def test_a_post_with_an_idempotency_key_is_retried(self, monkeypatch):
+        """``create_post`` opts back in: the server deduplicates on the
+        pending id, and an agent's reply is worth insisting on."""
+
+        async def _sleep(delay: float) -> None:
+            return None
+
+        monkeypatch.setattr("crewlet.mattermost.client.asyncio.sleep", _sleep)
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(503, text="restarting")
+            return httpx.Response(201, json={"id": "p1"})
+
+        client = _client(handler)
+        try:
+            await client.create_post("c1", "hello")
+        finally:
+            await client.close()
+        assert calls["n"] == 2
+
+    @pytest.mark.asyncio
     async def test_a_4xx_is_not_retried(self):
         calls = {"n": 0}
 

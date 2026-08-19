@@ -57,6 +57,36 @@ DIRECT_CHANNEL_TYPES = frozenset({CHANNEL_DIRECT, CHANNEL_GROUP})
 #: every other 5xx is not going to change on a second try.
 _RETRY_STATUSES = frozenset({429, 502, 503, 504})
 
+#: The subset of those that prove the request was **rejected before it
+#: was processed**.  A rate-limited request never reached the handler, so
+#: repeating it cannot repeat a side effect — which makes 429 safe to
+#: retry for any method, including the ones that mint credentials.  A
+#: 502/504 from a proxy, or a read timeout, says nothing of the sort: the
+#: request may have been applied and only the answer lost.
+_REJECTED_BEFORE_PROCESSING = frozenset({429})
+
+#: Transport failures raised BEFORE any byte of the request left this
+#: process.  Like a 429, they prove the server never saw it, so they are
+#: repeated for any method.  Everything else in the ``httpx.HTTPError``
+#: tree — a read timeout, a reset mid-response, a server that hung up —
+#: leaves it unknowable whether the request was applied and only the
+#: answer lost, which is the case that mints a second access token.
+_PRE_SEND_TRANSPORT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+)
+
+#: Methods HTTP defines as idempotent, and which this client uses that
+#: way.  Repeating one of these cannot create a second anything, so they
+#: are retried on any retryable failure.  A POST is retried only when its
+#: caller says the operation is safe to repeat (see ``_request``'s
+#: ``retry`` argument) — the alternative is what this replaced: a read
+#: timeout on ``POST /users/{id}/tokens`` minting a SECOND personal
+#: access token, live on the account, its value never seen by the caller
+#: that would have persisted or revoked it.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE"})
+
 #: Total wall clock one call may spend waiting out retries, mirroring
 #: ``slack/api.py``'s budgeted wait rather than inventing a second
 #: pattern.  Ten seconds absorbs a proxy hiccup, a brief 429 and a
@@ -306,19 +336,35 @@ class MattermostClient:
         params: dict[str, Any] | None = None,
         json: Any | None = None,
         timeout: httpx.Timeout | float | None = None,
+        retry: bool | None = None,
     ) -> Any:
         """One API call, with every failure mode funnelled into one type.
 
         Retries the handful of statuses that mean "ask again" — the rate
         limiter, and a proxy or server mid-restart — honouring
         ``Retry-After`` where the server sends one, within a wall-clock
-        budget.  A retry is safe for the reads this client makes, and
-        safe for the one write it makes because
-        :meth:`create_post` carries the idempotency key Mattermost
-        deduplicates on.
+        budget.
+
+        **What may be retried is decided per call, not per status.** Two
+        failures prove the server never ran the request — a 429 from the
+        rate limiter, and a transport error raised before a byte left
+        this process — and those are repeated for any method.  Everything
+        else (a 502/504 from a proxy, a reset mid-response, a server that
+        hung up) leaves it unknowable whether the request was applied and
+        only the answer lost, so it is repeated only for an idempotent
+        method, or for a POST whose caller passes ``retry=True`` because
+        that operation is safe to deliver twice — it sets a state, or it
+        carries an idempotency key.
+
+        Retrying the rest would mint a second bot account, or a second
+        personal access token that is live on the account with a value
+        no caller ever saw, and so cannot be persisted or revoked.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _RETRY_BUDGET_SECONDS
+        repeatable = (
+            retry if retry is not None else method.upper() in _IDEMPOTENT_METHODS
+        )
         attempt = 0
         while True:
             attempt += 1
@@ -331,10 +377,18 @@ class MattermostClient:
                     **({"timeout": timeout} if timeout is not None else {}),
                 )
             except httpx.HTTPError as exc:
-                # status=0: the request never reached the server. Callers
-                # only catch MattermostError, so letting httpx through
-                # here aborts whole sequences rather than one call.
-                delay = self._retry_delay(attempt, None, loop, deadline)
+                # status=0: the request never reached the server, OR its
+                # answer was lost on the way back — indistinguishable from
+                # here, which is why a non-repeatable call must fail
+                # rather than guess. Callers only catch MattermostError,
+                # so letting httpx through would abort whole sequences
+                # rather than one call.
+                never_sent = isinstance(exc, _PRE_SEND_TRANSPORT_ERRORS)
+                delay = (
+                    self._retry_delay(attempt, None, loop, deadline)
+                    if repeatable or never_sent
+                    else None
+                )
                 if delay is None:
                     raise MattermostError(
                         f"transport error: {exc}",
@@ -352,7 +406,9 @@ class MattermostClient:
                 await asyncio.sleep(delay)
                 continue
 
-            if resp.status_code in _RETRY_STATUSES:
+            if resp.status_code in _RETRY_STATUSES and (
+                repeatable or resp.status_code in _REJECTED_BEFORE_PROCESSING
+            ):
                 raw = resp.headers.get("retry-after", "")
                 hinted = parse_retry_after(raw) if raw else None
                 delay = self._retry_delay(attempt, hinted, loop, deadline)
@@ -666,7 +722,11 @@ class MattermostClient:
         }
         if root_id:
             payload["root_id"] = root_id
-        return await self._request("POST", "/posts", json=payload)
+        # Safe to repeat precisely BECAUSE of the key above: the server
+        # deduplicates a create whose pending id it has already seen. An
+        # agent's reply is worth retrying — losing it to a proxy hiccup is
+        # a turn's work thrown away.
+        return await self._request("POST", "/posts", json=payload, retry=True)
 
     async def posts_since(self, channel_id: str, since_ms: int) -> list[dict[str, Any]]:
         """Posts **created** in a channel since *since_ms*.
@@ -760,7 +820,13 @@ class MattermostClient:
     async def create_bot(
         self, username: str, display_name: str, description: str = ""
     ) -> dict[str, Any]:
-        """Create a bot account."""
+        """Create a bot account.
+
+        Not retried: a repeat after a lost answer collides with the
+        account the first attempt created, turning a success into a
+        reported conflict. The reconcile is find-or-create, so a re-run
+        picks it up cleanly instead.
+        """
         return await self._request(
             "POST",
             "/bots",
@@ -776,12 +842,21 @@ class MattermostClient:
         return await self._request("PUT", f"/bots/{bot_user_id}", json=fields)
 
     async def enable_bot(self, bot_user_id: str) -> dict[str, Any]:
-        """Re-enable a previously disabled bot."""
-        return await self._request("POST", f"/bots/{bot_user_id}/enable")
+        """Re-enable a previously disabled bot.
+
+        Retryable: it sets a state rather than creating anything, so
+        applying it twice lands on the same state.
+        """
+        return await self._request("POST", f"/bots/{bot_user_id}/enable", retry=True)
 
     async def disable_bot(self, bot_user_id: str) -> dict[str, Any]:
-        """Disable a bot without deleting it (decommission)."""
-        return await self._request("POST", f"/bots/{bot_user_id}/disable")
+        """Disable a bot without deleting it (decommission).
+
+        Retryable for the same reason as :meth:`enable_bot`, and it is
+        the call that actually stops a decommissioned seat acting — worth
+        insisting on.
+        """
+        return await self._request("POST", f"/bots/{bot_user_id}/disable", retry=True)
 
     async def create_user_access_token(
         self, user_id: str, description: str
@@ -791,6 +866,13 @@ class MattermostClient:
         The token value is returned **once**, here; afterwards only its
         id and description are readable, so the caller must persist it
         before doing anything else.
+
+        Never retried, and this is the method that motivates the rule: a
+        read timeout after the server minted the token would, on a
+        retry, mint a SECOND one — live on the account, indistinguishable
+        from the first, and with a value no caller ever saw, so nothing
+        can persist or revoke it. A clean failure here is resumable; a
+        silent duplicate is not.
         """
         return await self._request(
             "POST",
