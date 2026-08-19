@@ -9,6 +9,7 @@ express a semantic is a bug in the twin.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -20,6 +21,7 @@ from crewlet.db.leases import (
     LeaseError,
     LeaseStore,
     MemoryLeaseStore,
+    node_resource,
     seat_resource,
     worker_resource,
 )
@@ -47,7 +49,7 @@ class _FakeSQL:
             raise RuntimeError("database is down")
         q = " ".join(query.split())
         if q.startswith("INSERT INTO leases"):
-            resource, owner, ttl, preferred, protocol, gated = args
+            resource, owner, ttl, preferred, protocol, gated, meta = args
             row = self.rows.get(resource)
             now = self._now()
             # The mixed-version guard: both the INSERT's ``WHERE NOT
@@ -67,6 +69,8 @@ class _FakeSQL:
                 if live and not mine:
                     return None  # ON CONFLICT ... WHERE rejected the update
                 epoch = row["epoch"] if (live and mine) else row["epoch"] + 1
+            # The meta CASE: an empty payload leaves what is there.
+            decoded = json.loads(meta) if isinstance(meta, str) else dict(meta or {})
             self.rows[resource] = {
                 "resource": resource,
                 "owner": owner,
@@ -74,6 +78,7 @@ class _FakeSQL:
                 "expires_at": now + timedelta(seconds=float(ttl)),
                 "preferred": preferred or (row or {}).get("preferred", ""),
                 "protocol": protocol,
+                "meta": decoded or dict((row or {}).get("meta") or {}),
             }
             return dict(self.rows[resource])
         if q.startswith("UPDATE leases SET expires_at = now() + make_interval"):
@@ -636,3 +641,62 @@ async def test_fleet_protocol_floor_ignores_lapsed_leases(store: Any) -> None:
     await store.try_acquire("seat:ceo", owner="old:1", ttl_seconds=30, protocol=1)
     await _expire(store, "seat:ceo")
     assert await store.fleet_protocol_floor() is None
+
+
+# ---------------------------------------------------------------------
+# meta — what the holder IS, not just that it holds
+# ---------------------------------------------------------------------
+
+
+async def test_meta_round_trips(store: Any) -> None:
+    """Node presence carries the node's roles and labels here."""
+    payload = {"roles": ["seats"], "labels": {"zone": "eu"}}
+    lease = await store.try_acquire(
+        node_resource("n1"), owner="n1:a", ttl_seconds=60, meta=payload
+    )
+    assert lease is not None and lease.meta == payload
+    read = await store.get(node_resource("n1"))
+    assert read is not None and read.meta == payload
+    (live,) = await store.list_live("node:")
+    assert live.meta == payload
+
+
+async def test_a_claim_that_says_nothing_leaves_meta_alone(store: Any) -> None:
+    """A seat claim must not blank a presence row it does not own.
+
+    Both backends implement this as "an empty payload keeps what is
+    there" rather than as a per-resource rule, so a renew that forgets to
+    re-send the profile does not silently un-label a node mid-flight —
+    which peers would read as a node that matches no placement at all.
+    """
+    resource = node_resource("n1")
+    await store.try_acquire(
+        resource, owner="n1:a", ttl_seconds=60, meta={"roles": ["workers"]}
+    )
+    again = await store.try_acquire(resource, owner="n1:a", ttl_seconds=60)
+    assert again is not None and again.meta == {"roles": ["workers"]}
+
+
+async def test_meta_is_replaced_not_merged(store: Any) -> None:
+    """A node that drops a role must stop advertising it.
+
+    Merging would make a role impossible to remove without a restart AND
+    a lease expiry, and the whole point of re-sending the profile on
+    every renew is that it tracks the live process.
+    """
+    resource = node_resource("n1")
+    await store.try_acquire(
+        resource, owner="n1:a", ttl_seconds=60, meta={"roles": ["seats", "workers"]}
+    )
+    updated = await store.try_acquire(
+        resource, owner="n1:a", ttl_seconds=60, meta={"roles": ["seats"]}
+    )
+    assert updated is not None and updated.meta == {"roles": ["seats"]}
+
+
+async def test_a_lease_without_meta_reads_as_empty(store: Any) -> None:
+    """The pre-migration row shape. ``NodeProfile.from_meta`` turns this
+    into "does everything, labelled with nothing" — the old behaviour,
+    which is the only safe reading of a peer that never told you."""
+    lease = await store.try_acquire(seat_resource("ceo"), owner="n1:a", ttl_seconds=60)
+    assert lease is not None and lease.meta == {}

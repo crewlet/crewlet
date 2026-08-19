@@ -53,6 +53,7 @@ async def make_engine(
     event_queue: Any = None,
     embeddings: Any = None,
     company_config_store: Any = None,
+    lease_store: Any = None,
 ):
     """Build an engine and (optionally) apply a Tier B config.
 
@@ -67,6 +68,7 @@ async def make_engine(
         event_queue=event_queue,
         embeddings=embeddings,
         company_config_store=company_config_store,
+        lease_store=lease_store,
     )
     if company is not None:
         await engine.apply_config(company)

@@ -35,6 +35,7 @@ from crewlet.seat.host import (
     SeatReleaseError,
     SweepResult,
 )
+from crewlet.seat.placement import NodeProfile, SeatPlacement, parse_roles
 
 _TEST_DSN = os.environ.get("CREWLET_TEST_DSN", "")
 
@@ -895,19 +896,20 @@ async def test_a_store_blip_does_not_make_every_node_claim_everything(
     node into "I should own everything" simultaneously. Mutual exclusion
     still prevents double ownership, but the fleet degenerates to
     whoever sweeps first taking the lot."""
-    host = _host(leases, node="node-a", seats=lambda: ["a", "b", "c", "d"])
+    seats = ["a", "b", "c", "d"]
+    host = _host(leases, node="node-a", seats=lambda: seats)
     await host._renew_node_presence()
     # A second node is live.
     await leases.try_acquire(node_resource("node-b"), owner="node-b:1", ttl_seconds=30)
-    capacity, live = await host._capacity(4)
-    assert (capacity, live) == (2, 2)
+    plan, live = await host._plan(seats)
+    assert (plan.capacity, live) == (2, 2)
 
     async def _boom(*_a: Any, **_k: Any) -> list[Any]:
         raise LeaseError("store unreachable")
 
     host.leases = _Unavailable(leases, list_live=_boom)
-    capacity, live = await host._capacity(4)
-    assert (capacity, live) == (2, 2), "a blip widened the share to everything"
+    plan, live = await host._plan(seats)
+    assert (plan.capacity, live) == (2, 2), "a blip widened the share to everything"
 
 
 # ── giving seats back: the other half of placement ───────────────────
@@ -1247,3 +1249,149 @@ async def test_a_release_that_raises_is_reported_and_isolated(leases: Any) -> No
 
     await host.release_all()
     assert "ceo" not in host.held_handles and "ops" not in host.held_handles
+
+
+# ── placement ────────────────────────────────────────────────────────
+
+
+def _placed(**by_handle: SeatPlacement) -> Any:
+    return lambda handle: by_handle.get(handle, SeatPlacement())
+
+
+async def test_a_node_never_claims_a_seat_pinned_elsewhere(leases: Any) -> None:
+    """The whole point of a pin, and the reason the protocol version
+    moved: a build that ignores placement claims it and succeeds, because
+    the lease is only a mutex."""
+    placement = _placed(eng=SeatPlacement(node="node-b"))
+    a = _host(
+        leases,
+        "node-a",
+        seats=lambda: ["ceo", "eng"],
+        placement_of=placement,
+        profile=NodeProfile(node_id="node-a"),
+    )
+    b = _host(
+        leases,
+        "node-b",
+        seats=lambda: ["ceo", "eng"],
+        placement_of=placement,
+        profile=NodeProfile(node_id="node-b"),
+    )
+    await a._renew_node_presence()
+    await b._renew_node_presence()
+
+    await a.sweep()
+    assert "eng" not in a.held_handles
+    await b.sweep()
+    assert "eng" in b.held_handles
+
+
+async def test_a_label_selector_matches_the_nodes_own_labels(leases: Any) -> None:
+    placement = _placed(gpu=SeatPlacement(labels={"gpu": "true"}))
+    big = _host(
+        leases,
+        "big",
+        seats=lambda: ["gpu"],
+        placement_of=placement,
+        profile=NodeProfile(node_id="big", labels={"gpu": "true"}),
+    )
+    small = _host(
+        leases,
+        "small",
+        seats=lambda: ["gpu"],
+        placement_of=placement,
+        profile=NodeProfile(node_id="small", labels={"gpu": "false"}),
+    )
+    await big._renew_node_presence()
+    await small._renew_node_presence()
+
+    await small.sweep()
+    assert small.held_handles == ()
+    await big.sweep()
+    assert big.held_handles == ("gpu",)
+
+
+async def test_a_seat_nobody_matches_is_reported_and_left_alone(leases: Any) -> None:
+    """Not widened. Widening the selector is precisely what the operator
+    asked the engine not to do — so the seat goes unserved and the sweep
+    says so, which is the only way anyone finds out."""
+    host = _host(
+        leases,
+        "node-a",
+        seats=lambda: ["ceo", "gpu"],
+        placement_of=_placed(gpu=SeatPlacement(labels={"gpu": "true"})),
+        profile=NodeProfile(node_id="node-a"),
+    )
+    await host._renew_node_presence()
+    result = await host.sweep()
+    assert result.unplaceable == ("gpu",)
+    assert host.held_handles == ("ceo",)
+
+
+async def test_a_seat_that_stops_matching_is_handed_back(leases: Any) -> None:
+    """A live apply narrows the selector under a node that is holding
+    the seat. Voluntary, so the in-flight turn finishes — but it must
+    happen, or an eligible peer can never take it."""
+    placements: dict[str, SeatPlacement] = {}
+    released: list[tuple[str, str]] = []
+
+    async def _on_release(handle: str, _lease: Any, reason: Any) -> None:
+        released.append((handle, str(reason)))
+
+    host = _host(
+        leases,
+        "node-a",
+        seats=lambda: ["ceo"],
+        placement_of=lambda h: placements.get(h, SeatPlacement()),
+        profile=NodeProfile(node_id="node-a"),
+        on_release=_on_release,
+    )
+    await host._renew_node_presence()
+    await host.sweep()
+    assert host.held_handles == ("ceo",)
+
+    placements["ceo"] = SeatPlacement(node="node-b")
+    result = await host.sweep()
+    assert host.held_handles == ()
+    assert released == [("ceo", "placement")]
+    assert result.lost == ("ceo",)
+
+
+async def test_an_ingress_only_node_claims_nothing_but_is_still_present(
+    leases: Any,
+) -> None:
+    """It must be visible to the fleet (the dashboard lists it, and it
+    holds worker duties if it has that role) while never appearing in
+    the seat denominator."""
+    api = _host(
+        leases,
+        "api",
+        seats=lambda: ["ceo", "eng"],
+        profile=NodeProfile(node_id="api", roles=parse_roles(["ingress"])),
+    )
+    await api._renew_node_presence()
+    result = await api.sweep()
+    assert api.held_handles == ()
+    assert result.capacity == 0
+
+    seat_node = _host(leases, "node-b", seats=lambda: ["ceo", "eng"])
+    await seat_node._renew_node_presence()
+    result = await seat_node.sweep()
+    # Two live nodes, but only one runs seats — so the share is both
+    # seats, not one. Counting the API node would strand the other.
+    assert result.capacity == 2
+    assert set(seat_node.held_handles) == {"ceo", "eng"}
+
+
+async def test_the_profile_reaches_peers_on_the_presence_lease(leases: Any) -> None:
+    host = _host(
+        leases,
+        "node-a",
+        profile=NodeProfile(
+            node_id="node-a", roles=parse_roles(["seats"]), labels={"zone": "eu"}
+        ),
+    )
+    await host._renew_node_presence()
+    lease = await leases.get(node_resource("node-a"))
+    assert lease is not None
+    assert NodeProfile.from_meta("node-a", lease.meta) == host.profile

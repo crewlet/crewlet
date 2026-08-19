@@ -27,11 +27,13 @@ from crewlet.org.models import (
     OrgUnit,
     Role,
     RoleKind,
+    RolePlacementConfig,
     RoleSandboxConfig,
     Schedule,
 )
 from crewlet.providers.llm.cli_profiles import CLIAgentName
 from crewlet.sandbox.setup import SandboxSetupStep
+from crewlet.seat.placement import DEFAULT_NODE_ROLES, NodeRole
 from crewlet.secrets.resolver import lookup_secret, resolve_env
 from crewlet.tools.capabilities import ToolAnnotations
 
@@ -812,6 +814,56 @@ class NodeConfig(BaseModel):
     """This process's identity. Empty resolves via ``CREWLET_NODE_ID``,
     then falls back to ``node-0`` (the single-process default, so nothing
     has to be set to run one engine)."""
+
+    roles: list[NodeRole] = Field(default_factory=lambda: sorted(DEFAULT_NODE_ROLES))
+    """What this process is willing to do: ``ingress`` (serve the HTTP
+    API and its webhooks), ``seats`` (claim seat leases and run agents),
+    ``workers`` (run the company-wide singleton duties). Defaults to all
+    three — one process running a whole company, which is every existing
+    deployment.
+
+    Subtracting a role subtracts it from THIS node, never from the
+    company, so the fleet as a whole still needs every role somewhere: a
+    fleet with no ``workers`` node runs no scheduler, no retention sweep
+    and no sandbox waiter, and one with no ``ingress`` node never hears a
+    webhook. Neither is detectable from a single node's config, so the
+    engine checks it against live node presence at runtime and says so
+    (``fleet_role_unmanned``).
+
+    A node that does not run seats is also excluded from the seat
+    denominator its peers divide by — see
+    :mod:`crewlet.seat.placement`."""
+
+    labels: dict[str, str] = Field(default_factory=dict)
+    """Free-form facts about where this process runs (``zone: eu``,
+    ``gpu: "true"``), matched by a seat's ``role.placement`` selector.
+    Advertised to peers on this node's presence lease, so a label change
+    takes effect on the next heartbeat rather than at the next config
+    activation.
+
+    Values are strings; a selector compares them exactly. Nothing here
+    means anything to the engine on its own — the org decides what to
+    select on."""
+
+    @field_validator("roles")
+    @classmethod
+    def _validate_roles(cls, v: list[NodeRole]) -> list[NodeRole]:
+        if not v:
+            raise ValueError(
+                "node.roles must name at least one of "
+                f"{', '.join(sorted(str(r) for r in NodeRole))} — a node "
+                f"with no roles does nothing at all. Omit the key to run "
+                f"every role, which is the single-process default."
+            )
+        return v
+
+    @field_validator("labels")
+    @classmethod
+    def _validate_labels(cls, v: dict[str, str]) -> dict[str, str]:
+        for key in v:
+            if not key or not key.strip():
+                raise ValueError("node.labels keys must be non-empty")
+        return v
 
     @field_validator("id")
     @classmethod
@@ -2868,6 +2920,11 @@ class RoleConfig(AuthoredModel):
     """Per-role :doc:`code sandbox </concepts/code-sandbox>` gate.
     Absent → the seat is never offered the ``run_sandbox`` tool."""
 
+    placement: RolePlacementConfig | None = None
+    """Which nodes in the fleet may run this seat (see
+    :doc:`the fleet guide </guides/fleet>`). Absent → any node that runs
+    seats, which is what a single-process deployment always means."""
+
     integrations: RoleIntegrationsConfig = Field(default_factory=RoleIntegrationsConfig)
     schedules: list[Schedule] = Field(default_factory=list)
 
@@ -3284,6 +3341,7 @@ def _parse_role(data: RoleConfig | dict[str, Any]) -> Role:
         llm_sandbox=llm_sandbox,
         learning_enabled=cfg.learning_enabled,
         sandbox=cfg.sandbox,
+        placement=cfg.placement,
         mcp_env={k: dict(v) for k, v in cfg.mcp_env.items()},
         slack=slack,
         mattermost=mattermost,

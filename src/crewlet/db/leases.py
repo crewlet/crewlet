@@ -35,7 +35,7 @@ the same contract suite runs against both.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -80,7 +80,16 @@ logger = get_logger("db.leases")
 # invisible, because a v1 node logs nothing about a table it does not
 # know exists. That is exactly the failure the ledger was built to
 # remove, so the two builds must not hold seats at the same time.
-PROTOCOL_VERSION = 2
+#
+# v3: claiming a seat now means "and this node satisfies its
+# ``role.placement``". A v2 node has no such concept, so it claims a
+# seat pinned to one node id or to a label it does not carry — and
+# succeeds, because the lease is only a mutex and knows nothing about
+# where a seat belongs. The operator's pin is then silently violated:
+# the seat runs, on the wrong node, with nothing to see. Placement is a
+# constraint whose whole value is that it holds, so a build that
+# ignores it must not hold seats beside a build that honours it.
+PROTOCOL_VERSION = 3
 
 
 class LeaseError(RuntimeError):
@@ -140,6 +149,15 @@ class Lease:
     test and raise ``TypeError`` on the first production tick."""
     preferred: str = ""
     protocol: int = 1
+    meta: dict[str, Any] = field(default_factory=dict)
+    """What the holder is, beyond that it holds this. Node presence
+    carries the node's roles and labels here so a peer can answer "is
+    this node eligible for this seat" without a membership service —
+    see :mod:`crewlet.seat.placement`. Empty for everything else.
+
+    A row written by a build that predates the column reads as ``{}``,
+    which :meth:`~crewlet.seat.placement.NodeProfile.from_meta` treats as
+    the old behaviour rather than as a node with no roles."""
 
 
 class LeaseBackend(Protocol):
@@ -154,6 +172,7 @@ class LeaseBackend(Protocol):
         preferred: str = "",
         protocol: int = 1,
         gated: bool = True,
+        meta: dict[str, Any] | None = None,
     ) -> Lease | None: ...
 
     async def renew(
@@ -182,6 +201,27 @@ def _validate(resource: str, owner: str, ttl_seconds: float | None = None) -> No
         raise ValueError("ttl_seconds must be positive")
 
 
+def _decode_meta(raw: Any) -> dict[str, Any]:
+    """``meta`` as a dict, whatever the driver handed back.
+
+    asyncpg returns JSONB as a string unless a codec is registered, and
+    the repo registers one — but this must not depend on that, because
+    a caller holding a raw connection (a migration, a test fixture)
+    would then get a string where every reader expects a mapping.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str | bytes) and raw:
+        import json
+
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            return {}
+        return dict(decoded) if isinstance(decoded, dict) else {}
+    return {}
+
+
 def _row_to_lease(row: dict[str, Any]) -> Lease:
     return Lease(
         resource=str(row["resource"]),
@@ -190,6 +230,7 @@ def _row_to_lease(row: dict[str, Any]) -> Lease:
         expires_at=row["expires_at"],
         preferred=str(row.get("preferred") or ""),
         protocol=int(row.get("protocol") or 1),
+        meta=_decode_meta(row.get("meta")),
     )
 
 
@@ -208,6 +249,7 @@ class LeaseStore:
         preferred: str = "",
         protocol: int = 1,
         gated: bool = True,
+        meta: dict[str, Any] | None = None,
     ) -> Lease | None:
         """Claim ``resource`` for ``owner``, or return ``None`` if held by another.
 
@@ -240,13 +282,15 @@ class LeaseStore:
         presence row written at the newer protocol blocks nobody.
         """
         _validate(resource, owner, ttl_seconds)
+        import json
+
         try:
             row = await self._db.fetchrow(
                 """
                 INSERT INTO leases (
-                    resource, owner, epoch, expires_at, preferred, protocol
+                    resource, owner, epoch, expires_at, preferred, protocol, meta
                 )
-                SELECT $1, $2, 1, now() + make_interval(secs => $3), $4, $5
+                SELECT $1, $2, 1, now() + make_interval(secs => $3), $4, $5, $7::jsonb
                 WHERE NOT $6 OR NOT EXISTS (
                     SELECT 1 FROM leases
                     WHERE expires_at > now() AND protocol < $5
@@ -264,6 +308,15 @@ class LeaseStore:
                         NULLIF(EXCLUDED.preferred, ''), leases.preferred
                     ),
                     protocol   = EXCLUDED.protocol,
+                    -- An empty payload leaves what is there. Presence is
+                    -- the only writer that has anything to say, and it
+                    -- says it on every renew; a seat claim passing
+                    -- nothing must not blank a row it does not own the
+                    -- meaning of.
+                    meta       = CASE
+                        WHEN EXCLUDED.meta = '{}'::jsonb THEN leases.meta
+                        ELSE EXCLUDED.meta
+                    END,
                     updated_at = now()
                 WHERE (
                         leases.expires_at <= now()
@@ -277,7 +330,8 @@ class LeaseStore:
                               AND older.protocol < EXCLUDED.protocol
                         )
                       )
-                RETURNING resource, owner, epoch, expires_at, preferred, protocol
+                RETURNING resource, owner, epoch, expires_at, preferred,
+                          protocol, meta
                 """,
                 resource,
                 owner,
@@ -285,6 +339,7 @@ class LeaseStore:
                 preferred,
                 int(protocol),
                 bool(gated),
+                json.dumps(meta or {}),
             )
         except Exception:
             logger.exception("lease_acquire_failed", resource=resource, owner=owner)
@@ -400,7 +455,8 @@ class LeaseStore:
         try:
             row = await self._db.fetchrow(
                 """
-                SELECT resource, owner, epoch, expires_at, preferred, protocol
+                SELECT resource, owner, epoch, expires_at, preferred, protocol,
+                       meta
                 FROM leases WHERE resource = $1
                 """,
                 resource,
@@ -419,7 +475,8 @@ class LeaseStore:
         try:
             rows = await self._db.execute(
                 """
-                SELECT resource, owner, epoch, expires_at, preferred, protocol
+                SELECT resource, owner, epoch, expires_at, preferred, protocol,
+                       meta
                 FROM leases
                 WHERE owner = $1 AND expires_at > now()
                 ORDER BY resource
@@ -446,7 +503,8 @@ class LeaseStore:
         try:
             rows = await self._db.execute(
                 """
-                SELECT resource, owner, epoch, expires_at, preferred, protocol
+                SELECT resource, owner, epoch, expires_at, preferred, protocol,
+                       meta
                 FROM leases
                 WHERE resource LIKE $1 || '%' AND expires_at > now()
                 ORDER BY resource
@@ -532,6 +590,7 @@ class MemoryLeaseStore:
         preferred: str = "",
         protocol: int = 1,
         gated: bool = True,
+        meta: dict[str, Any] | None = None,
     ) -> Lease | None:
         _validate(resource, owner, ttl_seconds)
         now = self._now()
@@ -558,6 +617,10 @@ class MemoryLeaseStore:
             # a new one so the gap is fenced.
             epoch = int(row["epoch"]) if (live and mine) else int(row["epoch"]) + 1
             kept_preferred = preferred or str(row.get("preferred") or "")
+        # An empty payload leaves what is there — the twin of the CASE in
+        # LeaseStore.try_acquire, and for the same reason: a seat claim
+        # that says nothing must not blank a presence row's roles.
+        kept_meta = dict(meta) if meta else dict((row or {}).get("meta") or {})
         self._rows[resource] = {
             "resource": resource,
             "owner": owner,
@@ -565,6 +628,7 @@ class MemoryLeaseStore:
             "expires_at": now + timedelta(seconds=float(ttl_seconds)),
             "preferred": kept_preferred,
             "protocol": int(protocol),
+            "meta": kept_meta,
         }
         return _row_to_lease(self._rows[resource])
 

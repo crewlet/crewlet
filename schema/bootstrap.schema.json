@@ -151,10 +151,34 @@
           "default": "",
           "title": "Id",
           "type": "string"
+        },
+        "roles": {
+          "items": {
+            "$ref": "#/$defs/NodeRole"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "object"
         }
       },
       "title": "NodeConfig",
       "type": "object"
+    },
+    "NodeRole": {
+      "description": "What a process is willing to do for the company.\n\nA node declares a subset; the default is all three, which is the\nsingle-process deployment and the shape every existing config\nalready has.",
+      "enum": [
+        "ingress",
+        "seats",
+        "workers"
+      ],
+      "title": "NodeRole",
+      "type": "string"
     },
     "QueueConfig": {
       "additionalProperties": false,
@@ -291,7 +315,13 @@
     "node": {
       "$ref": "#/$defs/NodeConfig",
       "default": {
-        "id": ""
+        "id": "",
+        "roles": [
+          "ingress",
+          "seats",
+          "workers"
+        ],
+        "labels": {}
       }
     },
     "debug": {

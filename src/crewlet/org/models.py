@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from crewlet._logging import get_logger
 from crewlet.env_refs import env_var_reference
 from crewlet.sandbox.setup import SandboxSetupStep
+from crewlet.seat.placement import SeatPlacement
 
 logger = get_logger("org.models")
 
@@ -380,6 +381,34 @@ class RoleSandboxMCPConfig(BaseModel):
     """Server names (from ``mcp_servers``) to expose to the coding agent."""
 
 
+class RolePlacementConfig(BaseModel):
+    """Which nodes may run a seat (``role.placement``).
+
+    ``node`` pins to one node id; ``labels`` requires every pair to
+    match that node's ``node.labels``. Give both and both must hold —
+    the conditions only ever narrow.
+
+    The engine cannot verify what a node can *reach*, only what it says
+    it is. Pinning a sandbox-enabled seat to a node that cannot reach
+    the sandbox provider produces a seat that claims fine and fails
+    every run; see ``docs/guides/fleet.md`` for the network facts a
+    topology has to be true for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    node: str = ""
+    """A node id (``node.id`` in that process's Tier A file). Exact
+    match. A seat pinned to a single node is unserved whenever that node
+    is down — deliberate, and reported."""
+
+    labels: dict[str, str] = Field(default_factory=dict)
+    """Label pairs a node must carry, all of them, matched exactly."""
+
+    def to_placement(self) -> SeatPlacement:
+        return SeatPlacement(node=self.node, labels=dict(self.labels))
+
+
 class RoleSandboxConfig(BaseModel):
     """Per-role code-runtime gate (``role.sandbox``).
 
@@ -537,6 +566,18 @@ class Role(BaseModel):
     sandbox: RoleSandboxConfig | None = None
     """Optional code-runtime gate. Absent → no sandboxed
     Execute backend for this role."""
+    placement: RolePlacementConfig | None = None
+    """Which nodes may run this seat. Absent → any node that runs seats.
+
+    A constraint on the fleet, not a schedule: the seat is claimed by
+    whichever eligible node gets there first, and a node that stops
+    matching hands it back at the next turn boundary. Narrowing it to a
+    set no live node satisfies leaves the seat unserved — the engine
+    reports that (``seats_unplaceable``) rather than quietly widening
+    the constraint, because widening it is exactly what the operator
+    asked it not to do.
+
+    Only meaningful for agent seats; a human seat is never claimed."""
     slack: dict[str, str] = Field(default_factory=dict)
     """Per-agent Slack app credentials for the SlackTransport.
 

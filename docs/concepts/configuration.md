@@ -59,6 +59,45 @@ registers under its identity would otherwise be orphaned on every restart.
 In Kubernetes use the pod name — a StatefulSet ordinal is ideal; under
 systemd, the host name.
 
+#### `node.roles`
+
+What this process is willing to do. Three roles, and the default is all
+three — one process running a whole company, which is every single-node
+deployment:
+
+```yaml
+node:
+  id: "${CREWLET_NODE_ID}"
+  roles: [seats]              # a satellite: agents only
+  labels:
+    zone: eu
+```
+
+| Role | What it does | What a fleet loses without it |
+|---|---|---|
+| `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
+| `seats` | Claims seat leases and runs agents | Every trigger queues up unread |
+| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, skill clustering and curation, seat-subscription creation | Nothing fires on a schedule, no sandbox run is collected, no table is swept |
+
+Subtracting a role subtracts it from **this node, never from the
+company**, so the fleet as a whole still needs every role somewhere. That
+is a shape no single node's config is wrong for, and every symptom of
+getting it wrong is an absence — so the engine checks it against live
+node presence and logs `fleet_role_unmanned` when nobody is doing a job.
+A node that does not run seats is also left out of the denominator its
+peers divide the seats by; counting it would strand the difference.
+
+#### `node.labels`
+
+Free-form facts about where this process runs, matched by a seat's
+[`role.placement`](../guides/fleet.md#placement) selector. Values are
+strings and are compared exactly. They are advertised to peers on this
+node's presence lease, so a label change takes effect one heartbeat after
+the restart that made it — not at the next config activation.
+
+Nothing here means anything to the engine on its own: the org decides
+what to select on.
+
 ### Tier B example (`company.yaml`)
 
 Everything that defines the company — see [examples/nimbus.company.yaml](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) for a complete reference.

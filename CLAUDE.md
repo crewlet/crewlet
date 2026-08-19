@@ -407,7 +407,20 @@ src/crewlet/          # Main package
                       #   docs/concepts/secret-store.md
   task/               # Task engine (models, tracker, escalation)
   seat/               # SEAT OWNERSHIP — which node runs which agent.
-                      #   See docs/concepts/seat-ownership.md.
+                      #   See docs/concepts/seat-ownership.md and
+                      #   docs/guides/fleet.md.
+                      #   placement.py — THE vocabulary node.roles /
+                      #   node.labels / role.placement share with the
+                      #   host; imports nothing from crewlet so config.py
+                      #   and host.py can both depend on it. Owns the
+                      #   capacity math, which is the part that is easy
+                      #   to get wrong: placement is NOT a filter over a
+                      #   fleet-wide fair share — 9 seats pinned to one
+                      #   node and 1 free over 3 nodes gives ceil(10/3)=4
+                      #   and strands 5 forever while every sweep reads
+                      #   healthy. Share is per placement GROUP, over the
+                      #   nodes eligible for it, summed; a node that does
+                      #   not run seats is not in the denominator.
                       #   host.py (SeatHost: converge on
                       #   ceil(seats/live nodes) in BOTH directions —
                       #   claiming alone only converges for a fleet that

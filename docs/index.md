@@ -71,6 +71,7 @@ Connecting the external surfaces agents work on:
 - **[Tools & MCP](guides/tools-and-mcp.md)** — Built-in tools, MCP integration, tool registry
 - **[Extensions](guides/extensions.md)** — Extension system, hooks, writing extensions
 - **[Deployment](guides/deployment.md)** — Docker, Pulsar sizing & auth, TimescaleDB observability, tracing
+- **[Running a Fleet](guides/fleet.md)** — When to run more than one node, node roles, seat placement, draining and rolling upgrades
 - **[Configure via API](guides/configure-via-api.md)** — End-to-end curl recipes for bootstrapping a company through `/config/*`
 
 ## Reference

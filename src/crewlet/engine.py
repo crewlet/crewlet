@@ -415,6 +415,11 @@ class Engine:
         # Control-plane state — see crewlet.db.config_plane.
         self._config_plane_store: Any = None
         self._node_id: str = ""
+        # What this node is willing to do, and how it is labelled.
+        # Resolved from Tier A at ``start``; the all-roles default until
+        # then, which is what an engine constructed directly (a test, an
+        # embedding) means by saying nothing.
+        self._node_profile: Any = None
         self._incarnation: str = ""
         self._applied_epoch: int = 0
         self._apply_attempts: int = 0
@@ -1752,6 +1757,7 @@ class Engine:
             # only makes the common case fast.  See
             # ``_subscribe_activation_nudge``.
             self._node_id = resolve_node_id(getattr(self, "_bootstrap", None))
+            self._resolve_node_profile()
             await self._subscribe_activation_nudge()
             if self._reconcile_task is None:
                 self._reconcile_task = asyncio.create_task(
@@ -3698,9 +3704,22 @@ class Engine:
             # Re-raise if start() failed
             start_task.result()
 
-            # Start embedded API server if configured
-            if self._api_port > 0:
+            # Start embedded API server if configured — and if this node
+            # terminates inbound traffic at all. A node without the
+            # ``ingress`` role that bound the port anyway would answer
+            # webhooks the operator routed elsewhere, and would put a
+            # dashboard on an address nothing is meant to reach.
+            from crewlet.seat.placement import NodeRole
+
+            if self._api_port > 0 and self.runs_role(NodeRole.INGRESS):
                 await self._start_embedded_api()
+            elif self._api_port > 0:
+                logger.info(
+                    "embedded_api_not_started",
+                    node=self._node_id,
+                    port=self._api_port,
+                    reason="node.roles does not include 'ingress'",
+                )
 
             # Block until shutdown signal
             if not stop_event.is_set():
@@ -6315,6 +6334,54 @@ class Engine:
 
     # ── seat ownership ───────────────────────────────────────────────
 
+    def _resolve_node_profile(self) -> Any:
+        """Read this node's roles and labels out of Tier A.
+
+        Cached on the engine because it is consulted on every duty claim
+        and every presence renew, and because a node's roles must not
+        change under a running process: the fleet reads them off a lease
+        that this node re-sends on a heartbeat, so a value that drifted
+        mid-run would be advertised without anything having restarted.
+        """
+        from crewlet.seat.placement import NodeProfile, parse_roles
+
+        bootstrap = getattr(self, "_bootstrap", None)
+        node_cfg = getattr(bootstrap, "node", None) if bootstrap is not None else None
+        self._node_profile = NodeProfile(
+            node_id=self._node_id,
+            roles=parse_roles([str(r) for r in getattr(node_cfg, "roles", [])] or None),
+            labels=dict(getattr(node_cfg, "labels", {}) or {}),
+        )
+        return self._node_profile
+
+    @property
+    def node_profile(self) -> Any:
+        """What this node is. Never ``None`` — an engine that never
+        resolved Tier A is the all-roles single-process default, which is
+        what a directly-constructed engine has always been."""
+        from crewlet.seat.placement import NodeProfile
+
+        if self._node_profile is None:
+            self._node_profile = NodeProfile(node_id=self._node_id)
+        return self._node_profile
+
+    def runs_role(self, role: Any) -> bool:
+        """Whether this node performs a given :class:`NodeRole`."""
+        return role in self.node_profile.roles
+
+    def _seat_placement(self, handle: str) -> Any:
+        """Where the seat behind ``handle`` may run, per the ACTIVE org.
+
+        Read fresh on every sweep rather than snapshotted: a live config
+        apply can move a pin, and a node holding a seat it no longer
+        matches has to find out.
+        """
+        from crewlet.seat.placement import ANYWHERE
+
+        role = self.org.agent_seat_by_handle(handle)
+        placement = getattr(role, "placement", None) if role is not None else None
+        return placement.to_placement() if placement is not None else ANYWHERE
+
     def _build_seat_host(self) -> Any:
         """Construct the placement host. Always — including single-node.
 
@@ -6373,6 +6440,8 @@ class Engine:
             owner=self._incarnation,
             node_id=self._node_id,
             seats=self._agent_seat_handles,
+            placement_of=self._seat_placement,
+            profile=self.node_profile,
             on_acquire=self._acquire_seat,
             on_release=self._release_seat,
             on_admission=self._seat_admission_changed,
@@ -6431,7 +6500,19 @@ class Engine:
         with no handoff protocol. Without a placement host — the
         single-node case — the answer is always yes: there is no fleet
         to be a singleton within.
+
+        A node without the ``workers`` role never claims one. It does not
+        merely lose the race, it does not enter it: the duty then belongs
+        to whichever node the operator gave the role to, which is the
+        entire point of subtracting it here. A fleet where NOBODY has the
+        role runs none of these duties at all, so that shape is checked
+        against live presence and reported — see
+        :meth:`_check_fleet_roles`.
         """
+        from crewlet.seat.placement import NodeRole
+
+        if not self.runs_role(NodeRole.WORKERS):
+            return False
         if self._seat_host is None:
             return True
         from crewlet.db.leases import worker_resource

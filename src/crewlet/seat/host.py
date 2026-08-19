@@ -10,10 +10,13 @@ The placement policy is deliberately dumb, and the reasons are worth
 stating because a cleverer one is a standing temptation:
 
 - **Greedy claim up to a fair share.** Capacity is ``ceil(seats / live
-  nodes)``, live nodes being the count of ``node:*`` presence leases. No
-  membership service, no gossip, no coordinator — every node computes the
-  same number from the same table and stops there. Two nodes racing for
-  the last seat is resolved by the lease, not by the arithmetic.
+  nodes)``, live nodes being the ``node:*`` presence leases of nodes that
+  actually run seats. No membership service, no gossip, no coordinator —
+  every node computes the same number from the same table and stops
+  there. Two nodes racing for the last seat is resolved by the lease, not
+  by the arithmetic. With ``role.placement`` in play the share is
+  computed per placement group and summed, because a single fleet-wide
+  ratio strands pinned seats — see :mod:`crewlet.seat.placement`.
 - **``preferred`` orders the attempt; it never gates it.** A seat whose
   hint names this node is tried first, so a rolling deploy tends to land
   seats back where their MCP children and caches are already warm. It is
@@ -65,7 +68,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -80,6 +82,33 @@ from crewlet.db.leases import (
     node_resource,
     seat_resource,
 )
+from crewlet.seat.placement import (
+    ANYWHERE,
+    NodeProfile,
+    NodeRole,
+    PlacementPlan,
+    SeatPlacement,
+    plan_placement,
+)
+
+#: What an operator loses when no live node performs a role. Absences
+#: every one of them, which is why they need saying out loud.
+_UNMANNED_HINTS: dict[NodeRole, str] = {
+    NodeRole.INGRESS: (
+        "no live node serves the HTTP API, so no webhook from any "
+        "integration reaches this company and the dashboard is down. "
+        "Give a node the 'ingress' role."
+    ),
+    NodeRole.SEATS: (
+        "no live node runs agents, so every trigger queues up unread. "
+        "Give a node the 'seats' role."
+    ),
+    NodeRole.WORKERS: (
+        "no live node runs the company-wide duties, so nothing fires on "
+        "a schedule, no sandbox run is ever collected, and the retention "
+        "sweeps do not run. Give a node the 'workers' role."
+    ),
+}
 
 #: ``on_release(handle, lease, reason)`` — positional, all three.
 type ReleaseHook = Callable[[str, Lease, ReleaseReason], Awaitable[None]]
@@ -172,6 +201,14 @@ class ReleaseReason(StrEnum):
     #: The role was decommissioned. Voluntary, but must not defer at all:
     #: the events are for a role that no longer exists.
     ROLE_GONE = "role_gone"
+    #: This node stopped matching the seat's ``role.placement`` — the
+    #: selector changed under a live apply, or this node's labels did.
+    #: Voluntary: the lease is still held, so the in-flight turn finishes
+    #: and an eligible peer picks the seat up. Distinct from ``DRAIN``
+    #: only so the log says which of the two happened; a rebalance and a
+    #: pin change look identical otherwise, and one of them is an
+    #: operator action they will want to see land.
+    PLACEMENT = "placement"
     #: ``renew`` returned False, or the TTL grace expired. Fenced.
     LEASE_LOST = "lease_lost"
     #: The acquire pipeline failed partway. Fenced — the seat was never
@@ -210,6 +247,13 @@ class SweepResult:
     live_nodes: int
     claimed: tuple[str, ...] = ()
     lost: tuple[str, ...] = ()
+    unplaceable: tuple[str, ...] = ()
+    """Seats whose ``role.placement`` matches no live seat-running node.
+
+    Nothing this node can act on — a pin to a node that is down, a label
+    nobody carries — but it is the one placement failure that is
+    otherwise invisible: the seat is simply not served, and every node in
+    the fleet reports a perfectly healthy sweep."""
     blocked_by_protocol: int | None = None
     """The fleet's protocol floor when an older-protocol peer is holding
     leases and this node is therefore refusing to claim. ``None`` when
@@ -254,6 +298,23 @@ class SeatHost:
     """Current seat handles, read fresh each sweep — the org changes
     under a live config apply, and a snapshot taken at construction would
     keep claiming seats that no longer exist."""
+    placement_of: Callable[[str], SeatPlacement] | None = None
+    """Where a seat may run, read fresh alongside ``seats``. ``None``
+    (and any handle it does not know) means anywhere, which is the whole
+    company before anyone writes a ``role.placement``.
+
+    Every seat's placement is needed, not just this node's: the fair
+    share is computed per placement GROUP, so a node has to know how the
+    seats it cannot run are distributed to know how many of the ones it
+    can run are its own."""
+    profile: NodeProfile | None = None
+    """What this node is — its roles and labels. ``None`` means the
+    all-roles, no-labels default, which is the single-process
+    deployment.
+
+    Advertised to peers on the presence lease every heartbeat rather
+    than at config-activation time, so a label or role change lands
+    within one TTL of the restart that made it."""
     on_acquire: Callable[[str, Lease], Awaitable[None]] | None = None
     on_release: ReleaseHook | None = None
     """Tear a seat down. Called as ``on_release(handle, lease, reason)``
@@ -321,7 +382,16 @@ class SeatHost:
     _draining: bool = field(default=False, init=False)
     _last: SweepResult | None = field(default=None, init=False)
     _live_nodes: int = field(default=1, init=False)
-    """Last successfully-read fleet size, reused when the store blips."""
+    """Last successfully-read seat-running node count, for logs."""
+    _unmanned_roles: set[NodeRole] = field(default_factory=set, init=False)
+    """Roles no live node performs, as of the last read. The edge
+    detector behind ``fleet_role_unmanned`` — see
+    :meth:`_check_fleet_roles`."""
+    _live_profiles: list[NodeProfile] = field(default_factory=list, init=False)
+    """Last successfully-read fleet membership, reused when the store
+    blips. Profiles rather than a count, because placement needs to know
+    which peers are eligible for which seats, not merely how many there
+    are."""
 
     def _lock_for(self, handle: str) -> asyncio.Lock:
         """One lock per seat, held across a WHOLE acquire or release.
@@ -740,7 +810,9 @@ class SeatHost:
         out would then do nothing at all until something died.
         """
         seats = list(self.seats())
-        capacity, live_nodes = await self._capacity(len(seats))
+        plan, live_nodes = await self._plan(seats)
+        capacity = plan.capacity
+        eligible = set(plan.eligible)
 
         # Seats this node holds that the org no longer has (a role was
         # decommissioned under a live apply) are released, not kept.
@@ -749,6 +821,22 @@ class SeatHost:
             if handle not in seats:
                 logger.info("seat_released_role_gone", seat=handle)
                 await self.release(handle, ReleaseReason.ROLE_GONE)
+                released.append(handle)
+            elif handle not in eligible:
+                # Still a seat, no longer OURS to run: the placement
+                # selector changed under a live apply, or this node's
+                # labels or roles did. Released before the capacity shed,
+                # because an ineligible seat is not a question of how
+                # many we hold — no amount of spare capacity makes it
+                # ours again, and holding it means an eligible peer
+                # cannot take it.
+                logger.info(
+                    "seat_released_not_placeable_here",
+                    seat=handle,
+                    node=self.node_id,
+                    placement=self._placement(handle).describe(),
+                )
+                await self.release(handle, ReleaseReason.PLACEMENT)
                 released.append(handle)
 
         if not self._draining:
@@ -762,7 +850,19 @@ class SeatHost:
             # a node that is already in trouble.
             room = min(capacity - len(self._held) - len(self._undead), self.claim_limit)
             if room > 0:
-                claimed, blocked = await self._claim_up_to(seats, room)
+                claimed, blocked = await self._claim_up_to(plan.eligible, room)
+
+        if plan.unplaceable:
+            logger.warning(
+                "seats_unplaceable",
+                node=self.node_id,
+                seats=list(plan.unplaceable),
+                hint=(
+                    "no live node that runs seats matches these seats' "
+                    "role.placement, so nothing is serving them. Start a "
+                    "node that matches, or widen the selector."
+                ),
+            )
 
         self._prune_seat_locks(seats)
         result = SweepResult(
@@ -771,6 +871,7 @@ class SeatHost:
             live_nodes=live_nodes,
             claimed=tuple(claimed),
             lost=tuple(released),
+            unplaceable=plan.unplaceable,
             blocked_by_protocol=blocked,
         )
         self._last = result
@@ -896,7 +997,12 @@ class SeatHost:
         return claimed, await self._protocol_block()
 
     async def _claim_order(self, seats: Sequence[str]) -> list[str]:
-        """Unheld seats, this node's ``preferred`` ones first.
+        """Unheld seats this node may run, its ``preferred`` ones first.
+
+        The caller passes the ELIGIBLE handles, already filtered by
+        placement — eligibility is not a preference to be sorted, it is
+        the difference between a seat this node may hold and one it may
+        not.
 
         Stickiness, and only stickiness: a seat whose hint names this
         node is *tried* first so a restart or a rolling deploy tends to
@@ -935,10 +1041,25 @@ class SeatHost:
         rest = [h for h in candidates if seat_resource(h) not in hinted]
         return mine + rest
 
-    async def _capacity(self, seat_count: int) -> tuple[int, int]:
-        """``(fair share, live node count)``.
+    def _profile(self) -> NodeProfile:
+        return self.profile or NodeProfile(node_id=self.node_id)
 
-        When the node count cannot be read, the LAST known count is
+    def _placement(self, handle: str) -> SeatPlacement:
+        if self.placement_of is None:
+            return ANYWHERE
+        try:
+            return self.placement_of(handle) or ANYWHERE
+        except Exception:
+            # A seat the org no longer describes, or a caller that
+            # raised. "Anywhere" is the pre-placement answer and the only
+            # one that cannot strand the seat.
+            logger.exception("seat_placement_lookup_failed", seat=handle)
+            return ANYWHERE
+
+    async def _plan(self, seats: Sequence[str]) -> tuple[PlacementPlan, int]:
+        """``(what this node may claim and how much, live node count)``.
+
+        When the fleet cannot be read, the LAST known membership is
         reused rather than assuming a fleet of one. A partial store
         failure — a timeout on the scan while point writes still succeed
         — would otherwise turn every node in the fleet into "I should own
@@ -946,19 +1067,60 @@ class SeatHost:
         double ownership, but the fleet degenerates to whoever sweeps
         first taking the claim limit every 5 s until it holds the lot,
         undoing the balance for no reason. Before the first successful
-        read there is no last count, and one is the honest assumption.
+        read there is nothing to reuse, and a fleet of one — this node —
+        is the honest assumption.
         """
+        me = self._profile()
         try:
-            live_nodes = max(1, len(await self.leases.list_live("node:")))
-            self._live_nodes = live_nodes
+            live = [
+                NodeProfile.from_meta(lease.resource.removeprefix("node:"), lease.meta)
+                for lease in await self.leases.list_live("node:")
+            ]
+            self._live_profiles = live
         except LeaseError:
-            live_nodes = self._live_nodes
+            live = self._live_profiles
             logger.warning(
                 "seat_capacity_unavailable",
                 node=self.node_id,
-                assumed_live_nodes=live_nodes,
+                assumed_live_nodes=max(1, len(live)),
             )
-        return math.ceil(seat_count / live_nodes), live_nodes
+        plan = plan_placement(
+            [(h, self._placement(h)) for h in seats], me=me, live=live
+        )
+        self._live_nodes = max(1, plan.seat_nodes)
+        self._check_fleet_roles([*live, me])
+        return plan, plan.seat_nodes
+
+    def _check_fleet_roles(self, live: Sequence[NodeProfile]) -> None:
+        """Say something when the fleet has nobody doing one of the jobs.
+
+        ``node.roles`` subtracts a role from THIS node, never from the
+        company — so a fleet can be configured, node by node, into a
+        shape where a whole job is done by nobody, and no single node's
+        config is wrong. The symptoms are all absences: no scheduled
+        tasks ever fire, no retention sweep ever runs, no webhook is ever
+        received. Nothing errors, so nothing surfaces.
+
+        Edge-triggered. A fleet that is missing ``workers`` for an hour
+        should say so once and again when it comes back, not 720 times.
+        """
+        by_role = {
+            NodeRole.INGRESS: any(n.runs_ingress for n in live),
+            NodeRole.SEATS: any(n.runs_seats for n in live),
+            NodeRole.WORKERS: any(n.runs_workers for n in live),
+        }
+        unmanned = {role for role, manned in by_role.items() if not manned}
+        for role in sorted(unmanned - self._unmanned_roles):
+            logger.warning(
+                "fleet_role_unmanned",
+                node=self.node_id,
+                role=str(role),
+                live_nodes=len({n.node_id for n in live}),
+                hint=_UNMANNED_HINTS[role],
+            )
+        for role in sorted(self._unmanned_roles - unmanned):
+            logger.info("fleet_role_manned", node=self.node_id, role=str(role))
+        self._unmanned_roles = unmanned
 
     async def _protocol_block(self) -> int | None:
         try:
@@ -1004,6 +1166,12 @@ class SeatHost:
                 preferred=self.node_id,
                 protocol=self.protocol,
                 gated=False,
+                # Re-sent on EVERY renew, not written once at claim. The
+                # profile describes the live process, so a node that
+                # restarts with different roles or labels has to be able
+                # to correct what its peers believe about it without
+                # waiting for its presence lease to lapse first.
+                meta=self._profile().to_meta(),
             )
         except LeaseError:
             return

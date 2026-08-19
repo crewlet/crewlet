@@ -1501,6 +1501,17 @@
           ],
           "default": null
         },
+        "placement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RolePlacementConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "integrations": {
           "$ref": "#/$defs/RoleIntegrationsConfig"
         },
@@ -1766,6 +1777,26 @@
         }
       },
       "title": "RolePhaseLLMConfig",
+      "type": "object"
+    },
+    "RolePlacementConfig": {
+      "additionalProperties": false,
+      "description": "Which nodes may run a seat (``role.placement``).\n\n``node`` pins to one node id; ``labels`` requires every pair to\nmatch that node's ``node.labels``. Give both and both must hold \u2014\nthe conditions only ever narrow.\n\nThe engine cannot verify what a node can *reach*, only what it says\nit is. Pinning a sandbox-enabled seat to a node that cannot reach\nthe sandbox provider produces a seat that claims fine and fails\nevery run; see ``docs/guides/fleet.md`` for the network facts a\ntopology has to be true for.",
+      "properties": {
+        "node": {
+          "default": "",
+          "title": "Node",
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "object"
+        }
+      },
+      "title": "RolePlacementConfig",
       "type": "object"
     },
     "RoleSandboxConfig": {
