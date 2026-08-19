@@ -1,8 +1,10 @@
 # Crewlet Node — Implementation Plan
 
-**Status:** phases 1–4 done; phase 5 all but 5.4 (turn claims) — 5.1,
-5.2a, the revised 5.2 (which absorbed 5.5 and 5.7), 5.8 and 5.9 are all
-in; phases 6 and 7 not started. The companion analysis — why the current
+**Status:** phases 1–4 done; phase 5 all but 5.4 — 5.1, 5.2a, the
+revised 5.2 (which absorbed 5.5 and 5.7), 5.8 and 5.9 are in, and the
+chaos suite is gated. **5.4's design failed review 5-of-5** and has been
+replaced by a completion ledger, not yet built. Phases 6 and 7 not
+started. The companion analysis — why the current
 engine is a singleton, the target architecture, and the adversarial review
 that shaped it — is [`SCALING.md`](SCALING.md). This file is the *how*: the
 phase-by-phase work breakdown, with file-level anchors, schema changes,
@@ -1408,24 +1410,176 @@ which is exactly the split the two-backend rule exists to expose.
   `SandboxCoordinator.recover()` (`coordinator.py:498`) is rewritten to this
   owned-seats-only shape.
 
-### 5.4 Turn claims
+### 5.4 Turn claims — DESIGN FAILED REVIEW, UNANIMOUSLY
 
-- Migration `026_turn_claims.sql` (NOT `022` as originally written — that
-  number went to rate limits) — the state machine from
+A pre-implementation review (5 lenses + a completeness critic, each
+finding then put through adversarial refutation) returned
+**`redesign-needed` from five of five** — a worse result than the 5.2
+round's three of four. 40 findings raised, **24 survived refutation**,
+six of them fatal. The design below is kept for the record; what gets
+built is the **completion ledger** that follows it.
+
+#### The original design
+
+- Migration `026_turn_claims.sql` — the state machine from
   [`SCALING.md` § turn claims](SCALING.md#turn-claims--a-state-machine-not-an-insert):
+  `turn_claim(seat, trigger_id, claimed_by, owner_epoch, state, expires_at)`,
   short-circuit only on `completed`; dead-epoch `in_progress` superseded;
   claim deleted in the same `finally` that defers the delivery; **sandbox
-  resumes never take one** (the pending-row claim is already the
-  at-most-once flip).
-- ~~Lease-blocked deliveries defer by republish-then-ack.~~ **Retired by
-  the revised 5.2, and it must not come back.** Republish-then-ack existed
-  to dodge a dead-letter cost that measurement showed does not exist — a
-  close-driven handoff returns messages at `redeliveryCount` 0 — and it
-  was itself the source of a conversation-reordering fatal, because
-  republished messages go to the topic tail while prefetched siblings
-  replay from the head. The shipped primitive is `DeferDelivery`: leave
-  the delivery unacked, stop consuming. What 5.4 still owes is only the
-  claim state machine.
+  resumes never take one**.
+- ~~Lease-blocked deliveries defer by republish-then-ack.~~ Already
+  retired by the revised 5.2: measurement showed the dead-letter cost it
+  dodged does not exist, and it was itself the source of a
+  conversation-reordering fatal. The shipped primitive is
+  `DeferDelivery`.
+
+#### Why it failed
+
+**F1 — the key cannot survive the boundary it exists to survive.**
+`trigger_id` can only be `Event.id`, and for the dominant trigger class
+that id is *minted below the retry boundary*. `coalesce_notifications`
+(`notifications/coalesce.py:119`) returns a new `ExternalNotification`
+with no `id=`, so a digest gets a fresh `uuid4` **on every call** — and
+it is called from inside the seat-inbox batch handler itself. A node
+dies mid-digest-turn, the constituents redeliver, they re-coalesce into
+a digest with a different id, the claim misses, and the whole turn
+re-runs. That is exactly the scenario the table is being built to
+prevent, and it fires 100% of the time for any multi-event partition.
+The same shape appears upstream: one `raw_webhook` fans out to N
+notifications in an unguarded loop, so any failure after the first
+publish re-mints every id on redelivery — with no node death involved
+at all.
+
+Gate (c)'s C1 already recorded this and resolved it to *constituent*
+ids, and the normative text at `SCALING.md` and in this section was
+never updated to match — it is still one `trigger_id` and one row. Nor
+is the C1 resolution implementable where the design puts the claim: the
+merged event does not carry its constituents' ids (`CoalescedMessage`
+has no id field), and `_handle_notification` is handed only the merged
+event.
+
+**F2 — `in_progress` at a still-LIVE epoch has no rule, and it is the
+majority case.** The state machine defines `completed` (short-circuit)
+and dead-epoch `in_progress` (supersede). The third state — a row this
+node still owns, unexpired, on a redelivered trigger — is what an ack
+timeout produces on a healthy node, and the design says nothing about
+it. Short-circuit and the trigger is lost; supersede and the seat runs
+its own turn twice concurrently.
+
+**F3 — `in_progress` buys no exclusion the seat lease does not already
+provide.** This is the critic's central point and the reason the
+redesign is a *simplification*. The seat has exactly one consumer
+(5.2), that consumer is serial, and the only defined disposition for
+`in_progress` is "supersede and re-run" — which is what you would do
+with no row at all. Every other fatal and serious finding —
+`expires_at`'s undefined value, the unfenced delete-on-failure, the
+claim-then-defer and claim-then-requeue paths, the resume exemption, the
+suspend transition, the store-unavailable contract — exists *only*
+because `in_progress` exists.
+
+**F4 — the exemptions are not implementable where the claim is taken.**
+"Sandbox resumes never take a turn claim" is stated at a frame above the
+one where the resume test lives, and C1's keying forces the claim even
+higher.
+
+**F5 — `claimed_by` is specified as `node_id`**, the exact identity
+`db/leases.py` forbids for a holder: two processes sharing a node id
+would each read the other's claim as their own.
+
+#### What the critic found that no lens did
+
+- **`PROTOCOL_VERSION` is not bumped, and the constant's own comment
+  names this feature as its reason for existing** — *"two nodes that
+  disagree about ... whether a turn claim fences a resume will each be
+  individually correct and jointly wrong."* Without a bump, a rolling
+  deploy has a v1 node take over a seat, never read the `completed` row,
+  and re-run the turn. The bump is not free either: new nodes claim
+  nothing until the last v1 lease lapses, which is an operator-visible
+  stall the exit criteria never mentioned.
+- **A2A triggers cannot be re-run at all.** `_handle_a2a` drains the
+  channel destructively and the bus is process-local until phase 6, so a
+  superseded A2A turn re-runs against an empty channel and tells the
+  agent nobody sent anything. Two of the four claim-covered trigger
+  types cannot honour the design's central promise.
+- **The onboarding pass-lease turns "supersede and re-run" into a
+  *degraded* turn, not a duplicate one.** A node killed mid-turn never
+  releases its 15-minute pass claim, so the successor's re-run answers
+  the human as an un-onboarded agent.
+- **The learning writes are the duplicate that is not recoverable
+  noise.** A zombie that completes between fence checks writes a second
+  episode, diary entry, counterparty update and synthesis input — none
+  of them epoch-fenced — and every later turn retrieves them. "Bounded
+  duplication" was an incomplete cost statement.
+- **The state machine is structurally untestable in the suite that gates
+  it.** `tests/test_fleet/conftest.py`'s `kill()` models death by
+  cancelling tasks, and cancellation runs `finally` blocks — so the
+  design's "delete the claim in the same `finally`" fires on every
+  killed node in the harness, which can therefore never produce the
+  leaked row that supersede exists for. The harness needs a
+  fault-injectable claim store and a `kill()` that suppresses `finally`.
+- **Eight idempotency mechanisms already exist on this path** —
+  per-drain dedupe, the HTTP delivery claim, four per-transport rings,
+  `scheduled_runs`, `claim_for_resume`, `try_claim_pass`, ReflectEngine's
+  turn-id set — with three TTLs and two opposite failure directions,
+  composed nowhere.
+
+#### The revised design: a completion ledger
+
+Drop the state machine. Ship a table that records only what finished:
+
+```sql
+turn_completions(
+  seat         text,
+  trigger_id   uuid,        -- one row per CONSTITUENT inbox event id
+  turn_id      uuid,
+  node         text,        -- the incarnation, not the node id
+  owner_epoch  bigint,
+  completed_at timestamptz  DEFAULT now(),
+  PRIMARY KEY (seat, trigger_id)
+)
+```
+
+No `state`, no `in_progress`, no `expires_at`, no supersede rule —
+because the seat lease is already the mutual exclusion, and re-running
+an unrecorded trigger is already the correct behaviour.
+
+- **Written** at the end of a turn, one `INSERT … ON CONFLICT DO
+  NOTHING` over the constituent id list, fenced
+  `WHERE owner_epoch = $captured_at_admission`, never as an upsert.
+  Fails **open** with a logged exception: the side effects already
+  shipped, and refusing to record them cannot un-ship them.
+- **Read** once per drain at the dispatch boundary — after the same-id
+  dedupe, after all four parking branches, after `try_resume_from_answer`,
+  and **before** coalescing, so already-recorded constituents drop out of
+  the partition and only the remainder merges. A partially-overlapping
+  re-partition then short-circuits the constituents it has and runs the
+  ones it does not, which the single-key design could not express at all.
+  Fails **closed** only when `may_start()` agrees the outage broke
+  renewal; otherwise it takes the existing requeue-and-ack park.
+- **Recorded at the sandbox suspend boundary**, because `claim_for_resume`
+  on the pending row is the authority past that point.
+- **`a2a_*` is exempt entirely**, with a comment pointing at phase 6.
+- **Retention** joins the existing `MaintenanceWorker`:
+  `TURN_COMPLETION_RETENTION_SECONDS = 7 × 24 × 3600`, justified against
+  `_INBOX_ACK_TIMEOUT_MS × _MAX_REDELIVER ≈ 5 h` plus an unbounded
+  unowned-seat backlog. Twin included in the shared contract suite.
+- **`PROTOCOL_VERSION` bumps to 2**, with the deploy stall it buys
+  written into `docs/concepts/seat-ownership.md`.
+- **`TurnTriggerSkipped`** is emitted when a trigger short-circuits, so
+  the mechanism is auditable rather than invisible in every operator
+  surface the product has.
+
+Ships alongside: epoch-fencing (or an explicit written-down exemption)
+for the onboarding pass-lease, the episode and diary writes and
+`token_usage`; and a fleet harness with a fault-injectable ledger and a
+`kill()` that suppresses `finally`, or the exit criteria certify nothing.
+
+**Fixed already, out of this review:** the coalesced-partition path
+called `_handle_notification` directly and so never consulted
+`try_resume_from_answer` — a parked sandbox run whose answer arrived
+alongside a follow-up message stayed parked until the reaper killed it.
+And `docs/concepts/seat-ownership.md` claimed the epoch was threaded
+into *every* seat-scoped write, which was never true.
 
 ### 5.5 Epoch fencing on writes — SUPERSEDED, folded into the revised 5.2
 

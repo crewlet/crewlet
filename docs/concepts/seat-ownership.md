@@ -92,7 +92,9 @@ That also gives the right answer during a database blip. The lease row is untouc
 
 ## Fencing: what it protects, and what it cannot
 
-The epoch is threaded into every seat-scoped database write as `WHERE owner_epoch = $epoch`, and checked in the turn loop before every round and before every write-capable tool. A zombie's late write bounces; a zombie's turn stops within a round.
+The epoch is threaded into the **sandbox run state** — every mutation on a live `pending_sandbox_run` row carries `WHERE owner_epoch = $epoch` — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
+
+It is **not** yet on every seat-scoped write. The learning tables (`episodes`, `agent_diary`, counterparty profiles), `token_usage`, and the onboarding markers and pass-claims are written unfenced, so a zombie that completes a turn between fence checks can write a second episode and a second diary entry for one human message. That is the least visible duplicate the design admits to and the one worth naming: a doubled Slack post is obvious and recoverable, while doubled agent memory is retrieved by every later turn's episode recall. Closing it is outstanding work.
 
 **Fencing protects database state. It cannot protect outbound effects.** `run_sandbox` makes this concrete: it acquires a real, billed sandbox *before* the pending row is written, so no epoch-fenced insert can undo a box that is already pushing commits. The property the design offers is **bounded duplication**, not none — and what bounds it is the in-turn fence.
 

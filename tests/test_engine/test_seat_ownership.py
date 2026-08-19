@@ -376,3 +376,65 @@ async def test_a_duty_is_held_by_exactly_one_node() -> None:
         await peer_queue.stop()
         await engine.stop()
         await queue.stop()
+
+
+# ── coalescing must not bypass the sandbox resume ────────────────────
+
+
+async def test_a_coalesced_partition_still_checks_for_a_parked_answer() -> None:
+    """A digest is dispatched like any other trigger.
+
+    The clarification check lives in ``_dispatch_inbox_event``, and the
+    coalesced path used to call ``_handle_notification`` directly — so a
+    parked run whose answer arrived ALONGSIDE a follow-up message never
+    resumed. That is not an exotic interleaving: a threaded reply plus
+    one more line is exactly what a human answering a question looks
+    like, and the cost is a real sandbox sitting paused until the reaper
+    kills it, with the human's answer filed as unrelated chatter.
+    """
+    from crewlet.events.types import ExternalNotification
+
+    engine, queue = await _engine(roles=[{"name": "CEO"}])
+    try:
+        asked: list[str] = []
+
+        class _Coordinator:
+            async def try_resume_from_answer(self, agent, event) -> bool:
+                asked.append(event.type)
+                return True  # this WAS the answer; nothing else should run
+
+        engine._sandbox_coordinator = _Coordinator()
+
+        # Non-None so the handler passes its no-turn-engine park. Never
+        # called: the resume claims the digest first, and teardown puts
+        # it back before ``stop`` walks the real shutdown path.
+        engine.turn_engine = object()  # type: ignore[assignment]
+        handled: list[object] = []
+        engine._handle_notification = lambda a, e: handled.append(e)  # type: ignore[assignment]
+
+        agent = engine.agent_pool.get_by_handle("ceo")
+        assert agent is not None
+        conversation = {"conversation": "slack:C1:9"}
+        await engine._make_agent_handler(agent)(
+            [
+                ExternalNotification(
+                    source="slack",
+                    notification_source="slack",
+                    body="yes, use the staging bucket",
+                    metadata=conversation,
+                ),
+                ExternalNotification(
+                    source="slack",
+                    notification_source="slack",
+                    body="...and squash the commits",
+                    metadata=conversation,
+                ),
+            ]
+        )
+
+        assert asked, "the coalesced digest never reached the resume check"
+        assert handled == [], "the answer was handled as an unrelated message"
+    finally:
+        engine.turn_engine = None
+        await engine.stop()
+        await queue.stop()

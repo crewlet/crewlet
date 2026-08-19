@@ -2882,7 +2882,15 @@ class Engine:
                 if len(events) > 1:
                     merged = await self._coalesce_inbox_events(agent, events)
                     if merged is not None:
-                        await self._handle_notification(agent, merged)
+                        # Through the SAME dispatch as a single event, not
+                        # straight to ``_handle_notification``. Going direct
+                        # skipped the sandbox clarification check, so a
+                        # parked run whose answer happened to arrive
+                        # alongside a follow-up message — which is what a
+                        # threaded reply looks like — was handled as an
+                        # unrelated message and its box stayed parked until
+                        # the pause reaper killed it.
+                        await self._dispatch_inbox_event(agent, merged)
                         return
                     # Coalescing declined (heterogeneous partition —
                     # after the dedupe above, a genuine key-scheme bug)
