@@ -996,6 +996,38 @@ class TestFrameBufferIsBounded:
         assert caplog.text.count("mattermost_frame_buffer_full") == 2
 
     @pytest.mark.asyncio
+    async def test_a_consumer_keeping_pace_at_the_ceiling_logs_once(self, caplog):
+        """The stall is over once the buffer drains below HALF, not merely
+        below the brim. Without that hysteresis a consumer keeping pace
+        right at the ceiling re-arms the warning on every second frame,
+        which is how one slow moment becomes a log flood."""
+        fleet = _fleet()
+        socket = self._Socket(400)
+        inbox: asyncio.Queue[Any] = asyncio.Queue(8)
+
+        with caplog.at_level("WARNING"):
+            pump = asyncio.create_task(fleet._pump_frames(socket, inbox, "engineer"))
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert inbox.full()
+            # Free two slots at a time, so the pump genuinely observes a
+            # not-full buffer at the top of its loop — and then refills
+            # it. Without hysteresis that re-arms the warning on every
+            # cycle; with it the buffer never falls to half, so the stall
+            # is still the same stall.
+            for _ in range(10):
+                inbox.get_nowait()
+                inbox.get_nowait()
+                for _ in range(6):
+                    await asyncio.sleep(0)
+                assert inbox.full()
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pump
+
+        assert caplog.text.count("mattermost_frame_buffer_full") == 1
+
+    @pytest.mark.asyncio
     async def test_the_sentinel_waits_for_room_rather_than_being_dropped(self):
         """``put_nowait`` would drop it on a full buffer and the consumer
         would wait forever on a socket that has already closed."""
@@ -1183,6 +1215,22 @@ class TestOnlyForwardableFramesAreBuffered:
         assert "mattermost_ws_undecodable_frame" in caplog.text
 
 
+class _HandshakeConn:
+    """A connection that completes the auth handshake and nothing more."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send(self, data):
+        return None
+
+    async def recv(self):
+        return json.dumps({"status": "OK", "seq_reply": 1})
+
+
 class TestSeatCancellationDuringPumpTeardown:
     """`_connect_once`'s teardown used to suppress CancelledError around
     `await pump` to absorb the PUMP's cancellation. The same suppress
@@ -1191,23 +1239,36 @@ class TestSeatCancellationDuringPumpTeardown:
     caller waiting on a task that never ends."""
 
     @pytest.mark.asyncio
+    async def test_the_connection_builds_its_inbox_with_the_bound(self, monkeypatch):
+        """Every other buffer test constructs its own queue, so reverting
+        `asyncio.Queue(_MAX_BUFFERED_FRAMES)` to `asyncio.Queue()` in
+        `_connect_once` passed the whole suite. This pins the wiring."""
+        import websockets
+
+        monkeypatch.setattr(websockets, "connect", lambda *a, **kw: _HandshakeConn())
+
+        fleet = _fleet()
+        await fleet.register_seat("engineer", "tok")
+        seat = fleet._seats["engineer"]
+        seat.user_id = "botuserid00000000000000000"
+
+        seen: dict[str, Any] = {}
+
+        async def _capture(socket, inbox, handle=""):
+            seen["maxsize"] = inbox.maxsize
+            await inbox.put(events_module._SOCKET_CLOSED)
+
+        monkeypatch.setattr(fleet, "_pump_frames", _capture)
+        await asyncio.wait_for(fleet._connect_once(seat), timeout=2)
+
+        assert seen["maxsize"] == events_module._MAX_BUFFERED_FRAMES
+        assert seen["maxsize"] > 0  # an unbounded queue reports 0
+
+    @pytest.mark.asyncio
     async def test_a_cancel_parked_on_the_teardown_is_not_swallowed(self, monkeypatch):
         import websockets
 
-        class _Conn:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *exc):
-                return False
-
-            async def send(self, data):
-                return None
-
-            async def recv(self):
-                return json.dumps({"status": "OK", "seq_reply": 1})
-
-        monkeypatch.setattr(websockets, "connect", lambda *a, **kw: _Conn())
+        monkeypatch.setattr(websockets, "connect", lambda *a, **kw: _HandshakeConn())
 
         fleet = _fleet()
         await fleet.register_seat("engineer", "tok")
