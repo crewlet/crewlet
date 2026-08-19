@@ -1177,3 +1177,73 @@ async def test_an_admission_hook_failure_does_not_abort_the_heartbeat(
     host.leases = _Unavailable(leases, renew=_boom)
     assert await host.heartbeat() == ()
     assert set(host.held_handles) == {"ceo", "eng"}
+
+
+# ── draining ─────────────────────────────────────────────────────────
+
+
+async def test_seats_are_released_together_not_in_a_queue(leases: Any) -> None:
+    """A drain costs one bounded wait, not one per seat.
+
+    A voluntary release waits for that seat's in-flight turn. In
+    sequence, a node holding a dozen seats pays that timeout twelve
+    times, and the seat that went idle FIRST stays dark for the whole
+    procession — unclaimable by any peer, for no reason.
+    """
+    holds: dict[str, asyncio.Event] = {}
+    entered: list[str] = []
+
+    async def _slow(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        entered.append(handle)
+        await holds.setdefault(handle, asyncio.Event()).wait()
+
+    host = _host(leases, seats=lambda: ["ceo", "eng", "ops"], on_release=_slow)
+    await host._renew_node_presence()
+    await host.sweep()
+    assert len(host.held_handles) == 3
+
+    task = asyncio.create_task(host.release_all())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert sorted(entered) == ["ceo", "eng", "ops"], (
+        "releases ran in sequence; the last seat waited on the first"
+    )
+
+    for event in holds.values():
+        event.set()
+    await task
+    assert host.held_handles == ()
+
+
+async def test_one_stuck_seat_does_not_strand_the_others(leases: Any) -> None:
+    """An unproven teardown keeps THAT seat's lease and says nothing
+    about the rest — the whole point of failing closed per seat."""
+
+    async def _stuck(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        if handle == "eng":
+            raise SeatReleaseError("consumer will not close")
+
+    host = _host(leases, seats=lambda: ["ceo", "eng", "ops"], on_release=_stuck)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    await host.release_all()
+
+    assert host.held_handles == ()
+    assert host.unproven_handles == ("eng",)
+
+
+async def test_a_release_that_raises_is_reported_and_isolated(leases: Any) -> None:
+    """Anything other than SeatReleaseError is a bug in the hook, not a
+    verdict on the seat — but it must not take the drain down with it."""
+
+    async def _boom(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        if handle == "eng":
+            raise RuntimeError("hook is broken")
+
+    host = _host(leases, seats=lambda: ["ceo", "eng", "ops"], on_release=_boom)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    await host.release_all()
+    assert "ceo" not in host.held_handles and "ops" not in host.held_handles

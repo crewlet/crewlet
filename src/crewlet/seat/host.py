@@ -491,15 +491,48 @@ class SeatHost:
         logger.info("seat_host_stopped", node=self.node_id)
 
     async def release_all(self, reason: ReleaseReason = ReleaseReason.DRAIN) -> None:
-        """Hand every seat back, one at a time.
+        """Hand every seat back — each one the moment IT goes idle.
+
+        Concurrently, not one after another, and the difference is the
+        whole point of a graceful drain. A voluntary release waits for
+        that seat's in-flight turn under a bounded timeout; run in
+        sequence, a node holding a dozen seats pays that timeout a dozen
+        times over, and the eleventh seat stays dark for the whole
+        procession even though it went idle first. Released together,
+        each seat leaves as soon as its own turn finishes and the drain
+        costs one timeout rather than N.
+
+        Deliberately uncapped, unlike claiming. The claim-rate limit is
+        sized by the cost of an MCP *spawn* on the node taking a seat on;
+        letting go costs a teardown, and the peers picking these up are
+        throttled by their own claim limits anyway — so the only thing a
+        release cap would add is a longer drain.
+
+        Failures are per seat: a teardown that cannot be proven keeps
+        THAT seat's lease (see :meth:`_release_locked`) and says nothing
+        about the others, so one stuck consumer must not strand eleven
+        healthy seats.
 
         Releasing expires the row in place rather than deleting it, so
         the epoch stays monotonic and ``preferred`` survives — a peer can
         claim immediately, and a rolling deploy tends to bring the seat
         home afterwards.
         """
-        for handle in list(self._held):
-            await self.release(handle, reason)
+        handles = list(self._held)
+        if not handles:
+            return
+        results = await asyncio.gather(
+            *(self.release(handle, reason) for handle in handles),
+            return_exceptions=True,
+        )
+        for handle, result in zip(handles, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "seat_release_raised",
+                    seat=handle,
+                    reason=str(reason),
+                    error=str(result),
+                )
 
     async def release(
         self, handle: str, reason: ReleaseReason = ReleaseReason.DRAIN
