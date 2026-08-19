@@ -1,18 +1,27 @@
 # Crewlet Node — Implementation Plan
 
-**Status:** phases 1–5 done. 5.4's original design failed review 5-of-5
-and shipped as a completion ledger instead; the chaos suite is gated.
-Phases 6 and 7 not started. The companion analysis — why the current
-engine is a singleton, the target architecture, and the adversarial review
-that shaped it — is [`SCALING.md`](SCALING.md). This file is the *how*: the
-phase-by-phase work breakdown, with file-level anchors, schema changes,
-tests, and exit criteria.
+**Status: all seven phases done.** A fleet is supported and certified by
+a chaos suite that kills nodes mid-turn under load, plus a satellite
+suite for pinned placement — both parametrized over the memory twin and
+a real broker.
 
-Each phase heading carries its own marker; a phase with no marker has not
-started. **The next free migration number is `026`** — the plan's older
-sections name numbers that were taken by phases which shipped first, so
-check `src/crewlet/db/migrations/` rather than trusting a number written
-here.
+The plan is kept as a record of what each phase changed and, more
+usefully, **where the plan was wrong**: 5.4's turn claim failed review
+5-of-5 and shipped as a completion ledger instead; phase 6 discovered
+that A2A had no reply path at all; phase 7's satellite validator was
+rejected in favour of answering the open question it was deferring to.
+Each phase heading carries its outcome, and the original item is kept
+verbatim underneath it.
+
+The companion analysis — why the engine used to be a singleton, the
+target architecture, and the adversarial review that shaped it — is
+[`SCALING.md`](SCALING.md), whose seven open questions are all answered
+there. The operator-facing guide is
+[`docs/guides/fleet.md`](docs/guides/fleet.md).
+
+**The next free migration number is `029`** — the plan's older sections
+name numbers that were taken by phases which shipped first, so check
+`src/crewlet/db/migrations/` rather than trusting a number written here.
 
 **Audience:** Crewlet maintainers.
 
