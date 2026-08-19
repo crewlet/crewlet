@@ -377,8 +377,14 @@ class StatusPoster(Protocol):
         no text to empty and no clear operation at all — it lapses on its
         own — so overloading the payload made "raise the indicator" and
         "clear the indicator" indistinguishable, and such a backend had
-        to refuse both.  Optional: a poster that does not implement it
-        falls back to ``set_status(..., "")``.
+        to refuse both.
+
+        **Required**, and deliberately without a generic fallback: the
+        only candidate — ``set_status(..., "")`` — *raises* the indicator
+        on a poster that ignores its ``status`` argument, which is the
+        entire class of backend this method exists for. A fallback here
+        would do the opposite of what it was asked, silently, on exactly
+        the backends that need it.
         """
         ...
 
@@ -728,15 +734,13 @@ class WorkingStatusDriver:
         await self._finish(session, cancel=False)
 
     async def _clear(self, session: _Session) -> None:
-        """Take a session's indicator down, however this backend does it."""
-        clear = getattr(self._poster, "clear_status", None)
-        if clear is None:
-            # A poster written before the protocol split still clears the
-            # only way it knows.
-            await self._post(session, "")
-            return
+        """Take a session's indicator down, however this backend does it.
+
+        Never raises: clearing is a cosmetic side-channel, and a turn
+        must not fail because an indicator would not come down.
+        """
         try:
-            await clear(
+            await self._poster.clear_status(
                 session.handle,
                 session.conversation.channel,
                 session.conversation.thread_id,
