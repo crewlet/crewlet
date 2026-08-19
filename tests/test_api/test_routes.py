@@ -441,8 +441,8 @@ class TestAgentEndpoints:
         assert resp.status_code == 200
         assert resp.json()["name"] == "Lead"
 
-    def test_cmd_api_event_store_aggregates_tokens(self) -> None:
-        """``cmd_api`` must wrap the
+    def test_the_event_store_aggregates_tokens(self) -> None:
+        """``cmd_run`` must wrap the
         persistent leg in a ``CompositeEventStore`` so ``/agents`` returns
         non-zero token totals.
 
@@ -450,23 +450,24 @@ class TestAgentEndpoints:
         zero — aggregation is done at the composite layer via
         ``list_token_usage_events``.  Wiring
         ``BufferedEventStore(TimescaleDBEventStore(...))`` directly would
-        make the standalone API dashboard report zero tokens for every
-        agent.  This test calls the real ``_build_api_event_store``
-        helper to gate the wiring end-to-end.
+        make the dashboard report zero tokens for every agent.  This
+        test calls the real ``_build_engine_event_store`` helper to gate
+        the wiring end-to-end — one helper now, because an ingress-only
+        node is an engine and there is no second process shape with its
+        own store wiring to keep in step.
         """
         from datetime import UTC, datetime
 
-        from crewlet.cli import _build_api_event_store
+        from crewlet.cli import _build_engine_event_store
+        from crewlet.timescaledb import MemoryEventStore
 
         async def _seed() -> object:
-            # db=None → helper returns a CompositeEventStore with two
-            # MemoryEventStore legs (the "no persistent store" fallback).
-            # This still exercises the composite wrapping that the
-            # TimescaleDB path also relies on.  Writing through the
-            # top-level store exercises whatever write path the helper
-            # actually produces, so this test fails cleanly if the
-            # helper stops returning a composite.
-            store = _build_api_event_store(None)
+            # No persistent leg → the helper still returns a composite,
+            # which is what the aggregation depends on. Writing through
+            # the top-level store exercises whatever write path the
+            # helper actually produces, so this test fails cleanly if it
+            # stops returning one.
+            store = _build_engine_event_store(MemoryEventStore(), None)
             await store.start()
             now = datetime.now(UTC)
             await store.write_event(

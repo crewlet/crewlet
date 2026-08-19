@@ -564,7 +564,7 @@ extensions:
 Each entry names an extension module and its settings — see
 [Extensions](../guides/extensions.md) for the loader contract and the hook
 surface. (The REST API is not an extension; run it embedded via `api.port`
-or standalone via `crewlet run api`.)
+or on its own node via `crewlet run --roles ingress`.)
 
 ---
 

@@ -298,7 +298,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
        --env-file .env.gitlab
    ```
    Only `nimbus-hq/nimbuscore` is seeded by the bootstrap, so the config's other projects (`nimbusk0s`, `console`, `website`) are dropped with a note — create them in the UI if you want them, then re-run (the reconcile is idempotent).
-5. **Run the engine** with the minted tokens sourced (add your base runtime `config.yaml` — providers, queue, DB — per the [quickstart](../getting-started/quickstart.md)). With `api.port: 80` in that Tier A file, the engine's **embedded API** receives the GitLab webhooks and serves the dashboard — one process is the whole stack; binding 80 needs privileged-port access on Linux (see the example config's `api` comment). (Do *not* also start the standalone `crewlet run api` here — the two would fight over the port; that command is for [split deployments](../guides/deployment.md#running-the-engine--api) only):
+5. **Run the engine** with the minted tokens sourced (add your base runtime `config.yaml` — providers, queue, DB — per the [quickstart](../getting-started/quickstart.md)). With `api.port: 80` in that Tier A file, the engine's **embedded API** receives the GitLab webhooks and serves the dashboard — one process is the whole stack; binding 80 needs privileged-port access on Linux (see the example config's `api` comment). (Do *not* also start a second, ingress-only node here — the two would fight over the port; splitting ingress off is for [fleets](../guides/fleet.md) only):
    ```bash
    source .env.gitlab
    crewlet run config.yaml --import-company nimbus.local.company.yaml

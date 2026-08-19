@@ -10,12 +10,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from crewlet.cli import (
-    _build_api_event_store,
-    _build_engine_event_store,
-)
+from crewlet.cli import _build_engine_event_store
 from crewlet.timescaledb import (
-    BufferedEventStore,
     CompositeEventStore,
     MemoryEventStore,
     TimescaleDBEventStore,
@@ -27,25 +23,10 @@ from crewlet.timescaledb import (
 # --------------------------------------------------------------------------- #
 
 
-def test_build_api_event_store_fallback_returns_composite() -> None:
-    """Without a Database the helper still returns a composite."""
-    store = _build_api_event_store(None)
-    assert isinstance(store, CompositeEventStore)
-
-
-def test_build_api_event_store_with_db_returns_composite() -> None:
-    """With a Database passed in, the helper wraps
-    ``BufferedEventStore(TimescaleDBEventStore(db))`` in a composite.
-    """
-    # A sentinel object is enough — ``TimescaleDBEventStore`` doesn't
-    # touch the DB until a query/write is issued.
-    fake_db = object()
-    store = _build_api_event_store(fake_db)
-    assert isinstance(store, CompositeEventStore)
-    persistent = store._persistent  # type: ignore[attr-defined]
-    assert isinstance(persistent, BufferedEventStore)
-    backing = persistent._store  # type: ignore[attr-defined]
-    assert isinstance(backing, TimescaleDBEventStore)
+# There used to be a second builder here, for the standalone API
+# process. There is no second process shape any more — an ingress-only
+# node is an engine with ``--roles ingress`` — so there is one builder,
+# and no pair of near-identical wirings to keep in step.
 
 
 def test_build_engine_event_store_without_persistent_returns_composite() -> None:

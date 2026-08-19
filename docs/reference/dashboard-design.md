@@ -34,6 +34,7 @@ placeholder or a coming-soon stub.
 | Tokens | `#/tokens` | the pushed spend rollup; a `tokens` query for any other window |
 | Tools | `#/tools` | `/tools` |
 | Schedules | `#/schedules` | `/schedules` |
+| Fleet | `#/fleet` | `/fleet` (the lease table) |
 | Configuration | `#/config` | `/config` *(auth-gated, secrets redacted server-side)* |
 
 `js/org.js` is where the `/org` tree is flattened into **seats** — every role

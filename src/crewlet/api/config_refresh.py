@@ -75,6 +75,7 @@ def _serialize_agent_roles(payload: dict[str, Any]) -> list[dict[str, Any]]:
             # list: there is no AgentInstance, no diary, no turns.
             return
         handle = role.get("handle") or slugify(name)
+        placement = role.get("placement") or {}
         out.append(
             {
                 "id": str(derive_agent_id(org_name, handle)) if org_name else "",
@@ -87,6 +88,21 @@ def _serialize_agent_roles(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 # attached -- the live meter is engine-only, the cap is
                 # config and must render either way.
                 "token_budget": int(role.get("token_budget", 0) or 0),
+                # Where the seat may run, for the fleet view. Derived
+                # here so it inherits this function's handle derivation
+                # and its human-seat exclusion — a second walk over the
+                # payload would have to repeat both, and a seat whose
+                # handle it derived differently is a seat the fleet view
+                # reports as unplaceable forever.
+                "placement": {
+                    "node": str(placement.get("node") or ""),
+                    "labels": {
+                        str(k): str(v)
+                        for k, v in (placement.get("labels") or {}).items()
+                    },
+                }
+                if isinstance(placement, dict) and placement
+                else {},
             }
         )
 

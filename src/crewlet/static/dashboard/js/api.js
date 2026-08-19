@@ -45,4 +45,24 @@ export const api = {
       return null;
     }
   },
+
+  /**
+   * The fleet as the lease table sees it, or `null`.
+   *
+   * A REST read rather than a socket query, and not live state: leases
+   * move on their own with no event to push, so the Fleet view polls.
+   */
+  async fleet() {
+    try {
+      const stored = apiToken();
+      const response = await fetch(
+        BASE + "/fleet",
+        stored ? { headers: { Authorization: "Bearer " + stored } } : undefined,
+      );
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  },
 };

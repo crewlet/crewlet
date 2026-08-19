@@ -125,7 +125,7 @@ store is a better home for it than a file someone has to remember to source.
 
 | When | What picks up a new value |
 |---|---|
-| `crewlet run` / `crewlet run api` boot | Reads the whole table before resolving any Tier B `${VAR}` |
+| `crewlet run` boot (every node role) | Reads the whole table before resolving any Tier B `${VAR}` |
 | A config revision activates (`PUT /config`, `crewlet config import`) | **Every** node re-reads the store as it converges on the new activation epoch — engine and API halves alike |
 | Otherwise | The running process keeps its snapshot |
 

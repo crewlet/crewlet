@@ -63,6 +63,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Start embedded API server on this port (for webhooks)",
     )
     run_p.add_argument(
+        "--api-host",
+        default="",
+        help=(
+            "Bind host for the API server, overriding api.host in the Tier A config."
+        ),
+    )
+    run_p.add_argument(
+        "--roles",
+        default="",
+        metavar="ROLE[,ROLE...]",
+        help=(
+            "What this node runs, overriding node.roles in the Tier A "
+            "config: ingress (serve the HTTP API and its webhooks), "
+            "seats (claim seat leases and run agents), workers (the "
+            "company-wide singleton duties). Default: all three. "
+            "See docs/guides/fleet.md."
+        ),
+    )
+    run_p.add_argument(
         "--import-company",
         type=Path,
         default=None,
@@ -845,6 +864,31 @@ def _build_api_parser() -> argparse.ArgumentParser:
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _parse_role_flag(raw: str) -> list[Any]:
+    """``--roles ingress,seats`` → node roles, or a usable error.
+
+    Rejects an unknown name rather than dropping it: a typo that
+    silently subtracted a role would leave a fleet doing a job nobody
+    does, which is the failure this whole surface exists to make
+    visible.
+    """
+    from crewlet.seat.placement import NodeRole
+
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if not names:
+        raise ValueError(
+            "--roles needs at least one of "
+            f"{', '.join(sorted(str(r) for r in NodeRole))}"
+        )
+    try:
+        return [NodeRole(name) for name in names]
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc} — --roles takes any of "
+            f"{', '.join(sorted(str(r) for r in NodeRole))}"
+        ) from exc
+
+
 def _migration_vars(config: CompanyConfig) -> dict[str, str]:
     """Build template vars for SQL migrations from config.
 
@@ -1001,42 +1045,6 @@ async def _import_company_for_run(
     )
     print(f"Imported {company_config_path} as revision {revision_id}")
     return await store.get_active()
-
-
-def _build_api_event_store(db: Any | None) -> Any:
-    """Build the event store for the standalone API process.
-
-    Wraps the persistent leg in a ``CompositeEventStore`` so that
-    ``/agents`` aggregates per-agent token totals via the composite's
-    ``list_token_usage_events`` path.  Per-store ``get_agent_states``
-    deliberately leaves token counters at zero, so wiring
-    ``BufferedEventStore`` directly would make the API dashboard
-    report zero tokens.
-
-    The memory leg accumulates the webhook trace events that
-    ``routes._log_event`` writes via ``event_store.write_event``
-    (the composite's ``write_event`` dual-writes both legs), capped at
-    ``MemoryEventStore.max_events``.  The API process does NOT receive
-    engine events, so the only token-bearing data lives in the
-    persistent leg — token aggregation effectively reads from there
-    via ``list_token_usage_events`` deduped by ``event_id``.
-
-    When ``db`` is ``None`` (e.g. in tests that don't spin up a real
-    database), falls back to two in-memory legs — still wrapped in a
-    composite so the per-store wiring stays consistent.
-    """
-    from crewlet.timescaledb import (
-        BufferedEventStore,
-        CompositeEventStore,
-        MemoryEventStore,
-        TimescaleDBEventStore,
-    )
-
-    if db is not None:
-        persistent = BufferedEventStore(TimescaleDBEventStore(db))
-        return CompositeEventStore(persistent, MemoryEventStore())
-
-    return CompositeEventStore(MemoryEventStore(), MemoryEventStore())
 
 
 def _build_engine_event_store(memory_store: Any, persistent_store: Any | None) -> Any:
@@ -1247,6 +1255,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+    # --roles / --api-host override the Tier A file. Applied to the
+    # bootstrap object rather than threaded separately so there is one
+    # answer to "what does this node run" — the engine reads Tier A, and
+    # a flag that bypassed it would be invisible to the presence lease
+    # that tells the rest of the fleet.
+    if getattr(args, "roles", ""):
+        try:
+            bootstrap.node.roles = _parse_role_flag(args.roles)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+    if getattr(args, "api_host", ""):
+        bootstrap.api.host = args.api_host
 
     async def _run_engine() -> None:
         from crewlet.queue.pulsar import PulsarEventQueue
@@ -1805,144 +1827,46 @@ def cmd_schema(args: argparse.Namespace) -> int:
 
 
 def cmd_api(args: argparse.Namespace) -> int:
-    """Start the standalone API server (Tier A bootstrap + Tier B from DB)."""
+    """``crewlet run api`` — DEPRECATED alias for ``crewlet run --roles ingress``.
 
-    from crewlet._env import load_env_file
-    from crewlet.config import load_bootstrap_config
+    There is one node type now, and what it does is a config value.
+    ``crewlet run api`` was a second process shape with its own wiring:
+    it built the app, the stream service and the config refresher by
+    hand, in the same order as the engine's embedded path but never
+    provably the same way, and every fix to one had to be remembered for
+    the other. An ingress-only node IS the standalone API — an engine
+    that claims no seats, runs no duties, and serves the routes.
 
-    config_path: Path = args.config
-
-    # Load .env next to the bootstrap file, falling back to CWD
-    load_env_file(config_path)
-
-    level = logging.DEBUG if args.debug else logging.INFO
-    configure_logging(level=level)
-
-    if not config_path.exists():
-        print(
-            f"Error: bootstrap config not found: {config_path}",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        bootstrap = load_bootstrap_config(config_path)
-    except Exception as exc:
-        print(f"Error: invalid bootstrap config: {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        _bind_node_identity(bootstrap)
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-
-    # Queue backend from Tier A
-    from crewlet.queue.pulsar import PulsarEventQueue
-
-    queue_cfg = bootstrap.providers.queue
-    event_queue = PulsarEventQueue(
-        queue_cfg.url,
-        tenant=queue_cfg.tenant,
-        namespace=queue_cfg.namespace,
-        auth_token=queue_cfg.auth_token,
-        tls_trust_certs_path=queue_cfg.tls_trust_certs_path,
+    Kept for one minor release so a deployment that names it does not
+    break on upgrade. It maps its ``--host`` / ``--port`` onto the run
+    command's flags and forces ``--roles ingress``; the deprecation goes
+    to stderr, where a supervisor's logs will keep it.
+    """
+    print(
+        "warning: `crewlet run api` is deprecated and will be removed in a "
+        "future release. Use `crewlet run <config> --roles ingress "
+        f"--api-host {args.host} --api-port {args.port}` — an ingress-only "
+        "node is the standalone API, on the same code path as every other "
+        "node. See docs/guides/fleet.md.",
+        file=sys.stderr,
     )
-
-    try:
-        from crewlet.api.app import attach_config_refresh, create_app
-        from crewlet.api.streaming import StreamService
-    except ImportError:
-        print(
-            "Error: crewlet[api] extras required. "
-            "Install with: pip install crewlet[api]",
-            file=sys.stderr,
+    return cmd_run(
+        argparse.Namespace(
+            config=args.config,
+            debug=args.debug,
+            api_port=args.port,
+            api_host=args.host,
+            roles="ingress",
+            import_company=None,
+            import_confluence=None,
+            update_confluence=False,
+            create_confluence_space=False,
+            prune_confluence=False,
+            import_plane=None,
+            update_plane=False,
+            prune_plane=False,
         )
-        return 1
-
-    async def _run_api() -> None:
-        import uvicorn
-
-        # Connect + migrate. Safe to run concurrently with the engine:
-        # the run takes an advisory lock, and the pgvector width comes
-        # from the active revision or defers — it is never guessed, which
-        # is what made this call race the engine for the right to bake
-        # the wrong column type.
-        db, company_config_store, _active, _ic = await _connect_and_migrate_from_db(
-            bootstrap
-        )
-
-        # Event store: the helper wraps the persistent leg in a
-        # CompositeEventStore so /agents aggregates per-agent token
-        # totals (see _build_api_event_store).
-        event_store = _build_api_event_store(db)
-
-        stream = StreamService()
-
-        # ``app.state.agent_roles`` / ``org_data`` / ``tools_data``
-        # / ``github_webhook_secret`` / ``forge_app_id`` are all
-        # populated by ``attach_config_refresh`` after the app starts
-        # (from the active revision, then refreshed live on every
-        # ``ConfigRevisionActivated`` event) — the same derivation the
-        # embedded API uses.
-        #
-        # The OTLP receiver is built here too. In a split deployment THIS
-        # is the externally-reachable process, so it is what
-        # CREWLET_SANDBOX_OTEL_RECEIVER_URL names; omitting it answered
-        # 503 to every trace, metric and log a detached coding run
-        # exported. Tokens are signed, so the engine mints and this
-        # process verifies without sharing memory.
-        from crewlet.sandbox.otel import build_sandbox_otel_receiver
-
-        app = create_app(
-            event_queue=event_queue,
-            event_store=event_store,
-            database=db,
-            stream=stream,
-            bootstrap=bootstrap,
-            company_config_store=company_config_store,
-            sandbox_otel_receiver=build_sandbox_otel_receiver(bootstrap),
-        )
-
-        await event_store.start()
-        await event_queue.start()
-        # Engine emits events on ``crewlet.events.>``.  Subscribe with
-        # an ephemeral broadcast consumer so every API instance gets
-        # every event without competing with peers; ``ingest`` updates
-        # the live-state projection and fans the event out to dashboards.
-        stream_unsubscribe = await event_queue.subscribe_stream(
-            "crewlet.events.>", stream.ingest
-        )
-        # Subscribe to revision_activated + prime app.state from the
-        # active revision (if any).  After this, the dashboard reads
-        # /agents and /org against the up-to-date Tier B payload, and
-        # any subsequent PUT /config refreshes app.state in place.
-        await attach_config_refresh(app)
-
-        try:
-            uv_config = uvicorn.Config(
-                app,
-                host=args.host,
-                port=args.port,
-                log_level="debug" if args.debug else "info",
-            )
-            server = uvicorn.Server(uv_config)
-            await server.serve()
-        finally:
-            await stream_unsubscribe()
-            await event_queue.stop()
-            await event_store.close()
-            await db.close()
-
-    print(f"Starting crewlet API from {config_path} on {args.host}:{args.port} …")
-    try:
-        asyncio.run(_run_api())
-    except KeyboardInterrupt:
-        _print_safe("\nShutdown requested (Ctrl+C).")
-    except (RuntimeError, ValueError) as exc:
-        _print_safe(f"Error: {exc}")
-        return 1
-    return 0
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────

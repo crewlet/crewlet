@@ -210,7 +210,7 @@ The API's cached projection refreshes `app.state.org_data`, `agent_roles`, `tool
 
 It follows the same activation pointer, and deliberately follows the **pointer rather than the local apply outcome**: these fields decide whether inbound verification succeeds, and refusing deliveries because an apply failed would drop events the queue could otherwise have held. Keeping a stale node from *processing* work is the posture gate's job, not the receiver's.
 
-A merged node (engine + embedded API in one process) drives that refresh from the engine's own reconcile tick rather than a second loop, so the two halves can never disagree about which epoch they are on. A standalone `crewlet run api` runs the loop itself.
+A merged node (one that runs both `ingress` and `seats`) drives that refresh from the engine's own reconcile tick rather than a second loop, so the two halves can never disagree about which epoch they are on. An ingress-only node runs the loop itself.
 
 ---
 

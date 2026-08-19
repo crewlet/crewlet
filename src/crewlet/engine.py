@@ -4117,8 +4117,24 @@ class Engine:
         environment variables (``stdio``) or HTTP headers (``http``).
         This is how each agent gets its own identity in Jira/Confluence
         (``atlassian``), Slack, GitHub, etc.
+
+        Skipped entirely on a node that does not run seats. MCP children
+        exist to serve an agent's tool calls, and a node with no agents
+        makes none — so an ingress-only node launching them forks a
+        subprocess tree per shared server for nothing, and does it again
+        on every config activation.
         """
+        from crewlet.seat.placement import NodeRole
+
         if not self._mcp_configs:
+            return
+        if not self.runs_role(NodeRole.SEATS):
+            logger.info(
+                "mcp_servers_not_started",
+                node=self._node_id,
+                count=len(self._mcp_configs),
+                reason="node.roles does not include 'seats'",
+            )
             return
 
         self.mcp_bridge = MCPToolBridge()

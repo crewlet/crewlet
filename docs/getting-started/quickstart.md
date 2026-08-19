@@ -324,16 +324,16 @@ curl -X PUT http://localhost:8000/config \
 
 ## Split deployment (optional)
 
-Run the API as its own process when you want webhooks to keep arriving while
-you restart the engine, or the two on different hosts. Set `api.port: 0` in
-the Tier A file (so the engine's embedded API stays off), then:
+Run ingress as its own node when you want webhooks to keep arriving while
+you restart the agents, or the two on different hosts. Same command, given
+different roles:
 
 ```bash
-crewlet run config.yaml           # terminal 1: the engine
-crewlet run api config.yaml       # terminal 2: the API (binds 8000 by default)
+crewlet run config.yaml --roles seats,workers --api-port 0        # terminal 1
+crewlet run config.yaml --roles ingress --api-port 8000           # terminal 2
 ```
 
-The standalone API exposes the same REST endpoints, webhook handlers
+The ingress node exposes the same REST endpoints, webhook handlers
 (`/webhooks/jira`, `/webhooks/slack/{handle}`, `/webhooks/github`,
 `/webhooks/gitlab`, `/webhooks/plane`, `/webhooks/confluence`,
 `/webhooks/forge`), and the `/config/*` CRUD surface (see

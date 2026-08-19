@@ -37,6 +37,7 @@ import { createPeopleView } from "./views/people.js";
 import { createAuditView } from "./views/audit.js";
 import { createAgentsView } from "./views/agents.js";
 import { createSchedulesView } from "./views/schedules.js";
+import { createFleetView } from "./views/fleet.js";
 import { createConfigView } from "./views/config.js";
 import { createAgentView } from "./views/agent.js";
 import { createEventDetailView } from "./views/eventDetail.js";
@@ -57,6 +58,7 @@ const VIEWS = {
   tokens: createTokensView,
   tools: createToolsView,
   schedules: createSchedulesView,
+  fleet: createFleetView,
   config: createConfigView,
   agent: createAgentView,
   llm: createAgentView, // the agent view owns the llm sub-route
@@ -75,6 +77,7 @@ const TITLES = {
   tokens: "Tokens",
   tools: "Tools",
   schedules: "Schedules",
+  fleet: "Fleet",
   config: "Configuration",
   eventDetail: "Event",
   trace: "Trace",
@@ -166,6 +169,7 @@ const NAV = [
   { name: "tokens", icon: "zap", label: "Tokens" },
   { name: "tools", icon: "wrench", label: "Tools" },
   { name: "schedules", icon: "clock", label: "Schedules" },
+  { name: "fleet", icon: "globe", label: "Fleet" },
   { name: "config", icon: "database", label: "Configuration" },
 ];
 
