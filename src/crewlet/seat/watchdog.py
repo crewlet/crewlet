@@ -87,6 +87,7 @@ class EventLoopWatchdog:
         "_beat",
         "_beat_interval",
         "_beat_task",
+        "_loop",
         "_on_stall",
         "_poll_interval",
         "_started",
@@ -111,6 +112,11 @@ class EventLoopWatchdog:
         # read as "stalled since the epoch".
         self._beat = time.monotonic()
         self._beat_task: asyncio.Task[Any] | None = None
+        # The loop the beat runs on, captured at ``start``. A watchdog
+        # that does not know this cannot tell a WEDGED loop from a GONE
+        # one, and they look identical from the thread: in both cases the
+        # beat simply stops refreshing. See ``_watch``.
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._started = False
@@ -129,6 +135,7 @@ class EventLoopWatchdog:
         self._started = True
         self._beat = time.monotonic()
         self._stop.clear()
+        self._loop = asyncio.get_running_loop()
         self._beat_task = asyncio.create_task(self._beat_loop())
         self._thread = threading.Thread(
             target=self._watch,
@@ -153,6 +160,7 @@ class EventLoopWatchdog:
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout=self._poll_interval * 2 + 0.5)
+        self._loop = None
         logger.info("loop_watchdog_stopped")
 
     async def _beat_loop(self) -> None:
@@ -165,8 +173,36 @@ class EventLoopWatchdog:
             lag = self.lag_seconds
             if lag <= self._threshold:
                 continue
+            if not self._loop_is_wedged():
+                # The beat stopped because its LOOP went away, not
+                # because the loop stopped turning — an engine that was
+                # abandoned rather than stopped, a `run_until_complete`
+                # that returned, a test's loop torn down underneath it.
+                #
+                # Both look identical from here: the beat simply stops
+                # refreshing. But there is nothing to shoot. The whole
+                # justification for exiting is that a wedged-BUT-ALIVE
+                # loop keeps the broker session open and holds a peer's
+                # messages hostage; a loop that is closed took the client
+                # and its IO threads with it. Killing the process here
+                # would be a 45-second suicide timer armed by any engine
+                # that was not explicitly stopped.
+                logger.info("loop_watchdog_stood_down", lag_seconds=round(lag, 1))
+                return
             self._on_stall(lag)
             return
+
+    def _loop_is_wedged(self) -> bool:
+        """Whether the stalled beat means a live loop that stopped turning.
+
+        Read from the watchdog thread, so it touches only what is safe to
+        read across threads: ``is_closed`` and ``is_running`` are plain
+        attribute reads, not loop operations.
+        """
+        loop = self._loop
+        if loop is None:
+            return False
+        return not loop.is_closed() and loop.is_running()
 
 
 def _hard_exit(lag: float) -> None:

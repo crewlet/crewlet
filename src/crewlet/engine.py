@@ -516,6 +516,13 @@ class Engine:
         # backend is known — see ``_build_seat_host``.
         self._seat_host: Any = None
         self._seat_host_started = False
+        # The event-loop watchdog. Lives and dies with the seat host,
+        # because what it protects is the seat host's promise: leases
+        # lapse on their own when the loop stalls, but the broker session
+        # does NOT — the client's IO threads keep answering keepalives,
+        # so the broker holds this node's prefetch for the full ack
+        # timeout while a peer runs the seats. Leaving collapses that.
+        self._loop_watchdog: Any = None
         # An injected placement backend, for the caller that runs more
         # than one engine against one fleet.  Left ``None``,
         # ``_build_seat_host`` derives it from ``storage`` — the right
@@ -2605,6 +2612,7 @@ class Engine:
         if self._seat_host is not None and not self._seat_host_started:
             await self._seat_host.start()
             self._seat_host_started = True
+            self._start_loop_watchdog()
 
         # Notification service wakes agents via the EventQueue inbox
         # subscriptions above; no direct engine coupling is needed.
@@ -3823,6 +3831,14 @@ class Engine:
         #
         # ``begin_drain`` also drops this node's presence lease, so peers
         # recompute their share over the nodes that will actually serve.
+        # Stopped before the release, not after. Teardown is the one part
+        # of the process that legitimately blocks the loop — reaping MCP
+        # subprocesses, joining threads, tearing down sandboxes — and an
+        # ``os._exit`` in the middle of it would abandon the seat release
+        # that makes the drain graceful. A shutdown that hangs is a
+        # SIGKILL away; a shutdown that exits without releasing costs
+        # every peer a full TTL of dark seats.
+        await self._stop_loop_watchdog()
         if self._seat_host is not None:
             try:
                 await self._seat_host.begin_drain()
@@ -4014,6 +4030,10 @@ class Engine:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(coro, timeout=2.0)
 
+        # Same reasoning as the graceful path: force-stop still runs
+        # teardown, and a watchdog exit through the middle of it turns
+        # "exit now" into "exit now, and leave the sandboxes running".
+        await _quiet(self._stop_loop_watchdog())
         await _quiet(self._stop_control_plane())
 
         # Embedded API: no graceful escalation here — force uvicorn out
@@ -6467,6 +6487,48 @@ class Engine:
             on_release=self._release_seat,
             on_admission=self._seat_admission_changed,
         )
+
+    def _start_loop_watchdog(self) -> None:
+        """Arm the one thing a stalled process can still do about itself.
+
+        A wedged event loop cannot be signalled — ``call_soon_threadsafe``
+        waits behind the same blockage — so no cross-thread mechanism can
+        stop this node's seat work from the outside. What a thread *can*
+        do unilaterally is end the process, and ending it is what the
+        fleet needs: the leases lapse on their own and peers take the
+        seats over, but the broker session does not lapse, so a
+        wedged-but-alive node keeps its prefetch of those seats' messages
+        for the full unacked-message timeout (~30 minutes, measured).
+        Exiting collapses that to a 9 ms redelivery.
+
+        The threshold is the seat lease TTL and is deliberately not a
+        config knob: past it this node is provably not the owner, and
+        letting the two numbers drift is precisely how a process gets to
+        be simultaneously "not the owner" and "still holding the mail".
+
+        Armed on every node, single or fleet. With one node there are no
+        peers waiting on the prefetch, but a wedged engine is a dead
+        engine either way, and exiting is what lets a supervisor notice.
+        """
+        if self._loop_watchdog is not None:
+            return
+        from crewlet.seat.host import SEAT_LEASE_TTL_SECONDS
+        from crewlet.seat.watchdog import EventLoopWatchdog
+
+        watchdog = EventLoopWatchdog(threshold_seconds=SEAT_LEASE_TTL_SECONDS)
+        try:
+            watchdog.start()
+        except Exception as exc:  # pragma: no cover — a thread that will not start
+            logger.warning("loop_watchdog_start_failed", error=str(exc))
+            return
+        self._loop_watchdog = watchdog
+
+    async def _stop_loop_watchdog(self) -> None:
+        watchdog, self._loop_watchdog = self._loop_watchdog, None
+        if watchdog is None:
+            return
+        with contextlib.suppress(Exception):
+            await watchdog.stop()
 
     async def _seat_admission_changed(self, handle: str, admitted: bool) -> None:
         """Stop or resume consuming a seat this node still holds.
