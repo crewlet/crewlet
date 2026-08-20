@@ -4,7 +4,7 @@
   "$defs": {
     "ApiAuthConfig": {
       "additionalProperties": false,
-      "description": "Bearer-token auth policy for the API.\n\nGuards **every** route except the ones that authenticate by other\nmeans or must be reachable to obtain a token at all: ``/health``,\n``/ready``, the dashboard shell and its static assets, ``/webhooks/*``\n(HMAC-verified per source) and ``/otlp/*`` (signed per-run token).\n\nIt did not always: auth covered only ``/config/*``, which left\n``/events``, ``/agents/{id}/memory`` and ``/ws/stream`` serving full\nLLM transcripts \u2014 prompts, tool arguments, diary entries \u2014 to anyone\nwho could reach the port.  Survivable behind a firewall, and not\nsomething to bless as the shape of an internet-facing deployment.",
+      "description": "Bearer-token auth policy for the API.\n\nWrites and the whole ``/config`` surface always require a token.\nReads are governed by :attr:`allow_anonymous_read`, which defaults\nto open \u2014 reading is what a dashboard does, and the page that would\nprompt for a token is itself served unauthenticated, so requiring\none by default puts a modal in front of every first load.\n\nExempt from auth entirely, because they authenticate by other means\nor must be reachable to obtain a token at all: ``/health``,\n``/ready``, the dashboard shell and its static assets,\n``/webhooks/*`` (HMAC-verified per source) and ``/otlp/*`` (signed\nper-run token).",
       "properties": {
         "tokens": {
           "items": {
@@ -19,7 +19,7 @@
           "type": "boolean"
         },
         "allow_anonymous_read": {
-          "default": false,
+          "default": true,
           "title": "Allow Anonymous Read",
           "type": "boolean"
         },
@@ -73,7 +73,7 @@
           "default": {
             "tokens": [],
             "disabled": false,
-            "allow_anonymous_read": false,
+            "allow_anonymous_read": true,
             "allowed_origins": []
           }
         }
@@ -298,7 +298,7 @@
         "host": "0.0.0.0",
         "port": 0,
         "auth": {
-          "allow_anonymous_read": false,
+          "allow_anonymous_read": true,
           "allowed_origins": [],
           "disabled": false,
           "tokens": []

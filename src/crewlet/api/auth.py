@@ -1,12 +1,16 @@
-"""Bearer-token auth for the ``/config/*`` routes.
+"""Bearer-token auth for the API.
 
 Tier A (``config.yaml``) lists the accepted tokens under
 ``api.auth.tokens``.  Each entry has an ``id`` (recorded in revision
 audit logs as ``created_by``) and a ``token`` (resolved from env at
-API startup).  The middleware mounted on the ``/config`` prefix
-extracts the bearer token, constant-time-compares against the loaded
-list, and either attaches ``request.state.operator_id`` or returns
-``401``.
+API startup).  The middleware is mounted at the app root: it extracts
+the bearer token, constant-time-compares against the loaded list, and
+either attaches ``request.state.operator_id`` or returns ``401``.
+
+What it guards is a policy decision, not a fixed prefix.  Writes and
+the whole ``/config`` surface always need a token.  Reads follow
+``api.auth.allow_anonymous_read``, which defaults to open — see
+:func:`requires_token`, the one place that rule is written down.
 
 Failed auth attempts log at WARNING via structlog with route + remote;
 the candidate token value is never logged.  Successful auth logs at
@@ -52,6 +56,17 @@ UNGUARDED_PREFIXES = ("/health", "/ready", "/webhooks/", "/otlp/", "/static/")
 # Methods treated as reads for ``allow_anonymous_read``.
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+# Bind hosts that no other machine can reach. Anonymous reads on one of
+# these are a laptop; anonymous reads on anything else are a decision
+# somebody may not have made deliberately, which is the difference
+# between stating the posture and warning about it.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "localhost6"})
+
+
+def bind_is_loopback(host: str) -> bool:
+    """Whether ``api.host`` binds an address only this machine can reach."""
+    return (host or "").strip().strip("[]").lower() in LOOPBACK_HOSTS
+
 
 def is_unguarded_path(path: str) -> bool:
     """Whether ``path`` is served without a bearer token."""
@@ -68,10 +83,16 @@ def load_tokens(bootstrap: Any) -> dict[str, str]:
     Fail-safe behaviour:
     - When ``api.auth.disabled`` is True, returns ``{}`` (every request
       is allowed).  Loud WARNING log.
-    - When no tokens are listed and neither ``disabled`` nor
-      ``allow_anonymous_read`` is set, raises :class:`TokenLoadError`.
-      Serving the API requires an explicit auth decision: it carries
-      LLM transcripts, and silence used to mean "open".
+    - When no tokens are listed and ``allow_anonymous_read`` is True
+      (the default), returns ``{}``: reads serve, writes and
+      ``/config`` are refused outright because no token can ever match.
+      A read-only deployment therefore has no credential to manage,
+      which is strictly safer than being made to mint one it will never
+      use.
+    - When no tokens are listed and ``allow_anonymous_read`` was turned
+      off, raises :class:`TokenLoadError` — that pair guards every route
+      behind a credential that does not exist, so nothing at all would
+      be reachable.
     - When a token resolves to the empty string (e.g. the env var is
       unset), raises :class:`TokenLoadError`.
     - Duplicate ``id`` entries raise :class:`TokenLoadError`.
@@ -89,16 +110,16 @@ def load_tokens(bootstrap: Any) -> dict[str, str]:
         return {}
 
     if not auth.tokens:
-        if getattr(auth, "allow_anonymous_read", False):
-            # An explicit decision: reads are open, writes and /config
-            # are refused outright since no token can ever match.
+        if getattr(auth, "allow_anonymous_read", True):
+            # Reads serve; writes and /config are refused outright,
+            # since no token can ever match.
             return {}
         raise TokenLoadError(
-            "api.auth.tokens is empty.  The API serves LLM transcripts "
-            "(/events, /agents/{id}/memory, /ws/stream), so it needs an "
-            "explicit decision: configure at least one bearer token, or "
-            "set api.auth.disabled: true (local dev) or "
-            "api.auth.allow_anonymous_read: true (network-isolated)."
+            "api.auth.allow_anonymous_read is False and api.auth.tokens "
+            "is empty, so every route is guarded by a token that does "
+            "not exist and nothing is reachable.  Configure at least one "
+            "bearer token, or leave allow_anonymous_read at its default "
+            "to serve reads without one."
         )
 
     seen_ids: dict[str, str] = {}
@@ -164,10 +185,16 @@ def check_bearer(request: Request) -> str | None:
 def requires_token(app_state: Any, *, path: str, method: str) -> bool:
     """Whether this request must carry a valid bearer token.
 
-    Note what is deliberately NOT exempted: ``/events``,
-    ``/agents/{id}/memory`` and ``/ws/stream`` all serve full LLM
-    transcripts, and used to be open because auth was scoped to
-    ``/config``.
+    The whole rule, in one function, because the HTTP middleware and the
+    WebSocket handshake both consult it and a surface that disagreed
+    with itself would be guarded in one place and open in the other.
+
+    ``allow_anonymous_read`` (default on) opens reads only.  What that
+    opens is worth naming rather than leaving to the reader's
+    imagination: ``/events``, ``/agents/{id}/memory`` and ``/ws/stream``
+    carry full LLM transcripts — prompts, tool arguments, diary entries.
+    Turning it off closes them, and the dashboard then authenticates its
+    socket like any other client.
     """
     if is_unguarded_path(path):
         return False

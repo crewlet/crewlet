@@ -154,8 +154,20 @@ One API wiring — the broadcast one — regardless of where the API runs.
 This is the phase that permanently retires the bug class behind all three
 live bugs.
 
-Deviations from the plan as written, both discovered in implementation:
+Deviations from the plan as written, discovered in implementation:
 
+- **The read posture inverted.** 2.4 planned bearer auth over the whole
+  surface with `allow_anonymous_read` as an opt-in escape hatch. Shipped
+  that way, and it was wrong on the case that matters most: the dashboard
+  is a read surface, its shell is served unauthenticated by necessity
+  (the page that asks for a token cannot itself require one), and a
+  guarded-by-default read surface therefore put a modal in front of every
+  first load — with `/ws/stream` refusing the handshake behind it. So
+  `allow_anonymous_read` defaults to **true**: writes and `/config` are
+  always guarded, reads are open unless an operator closes them. The knob,
+  the WS credential and the token-entry flow all shipped as planned; only
+  the default changed. What the open posture exposes is stated at startup
+  — at `WARNING` when `api.host` is not loopback, `INFO` when it is.
 - The `NodeStatus` provider became `NodeRuntime` and also carries the live
   MCP tool surface, since `_build_tools_data()` was the fourth thing only
   a co-located engine could answer. Still one injection point.
@@ -205,11 +217,16 @@ Deviations from the plan as written, both discovered in implementation:
 
 ### 2.4 Full-surface auth + CORS
 
-- Bearer auth (already implemented for `/config/*`) extends to every REST
-  and WS route; webhooks authenticate by HMAC, OTLP by signed token. CORS
-  default tightens to same-origin. The dashboard gets a token entry flow.
-- Escape hatch: explicit `api.auth.allow_anonymous_read: true` for
-  firewalled dev setups — opt-in, loudly logged.
+- Bearer auth (already implemented for `/config/*`) becomes a policy over
+  every REST and WS route rather than a prefix; webhooks authenticate by
+  HMAC, OTLP by signed token. CORS default tightens to same-origin. The
+  dashboard gets a token entry flow — including on the `/ws/stream`
+  handshake, which is the only place a browser can learn its credential
+  was refused.
+- `api.auth.allow_anonymous_read` decides the read half. It ships
+  defaulting to **true** (see the phase-level deviation above): writes and
+  `/config` always need a token, reads need one only when an operator
+  turns this off. Either posture is stated at startup.
 - After this ships: revisit the frank auth-gap paragraph in `SCALING.md`,
   and note the posture change in `SECURITY.md`.
 

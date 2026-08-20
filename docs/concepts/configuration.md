@@ -242,15 +242,41 @@ A revert creates a *new* revision whose payload equals a prior one — the audit
 
 ## Auth
 
-**Every route requires `Authorization: Bearer <token>`**, with a small set of
-deliberate exemptions. Tokens are listed in Tier A under `api.auth.tokens` and
-resolved from env vars at API startup. The matched token's `id` is recorded as
-`created_by` on each revision the request produces, so revision history carries
-meaningful attribution (`alice`, `ci-pipeline`, `ops`) rather than generic
-strings.
+**Writes and the whole `/config` surface require `Authorization: Bearer
+<token>`. Reads serve without one by default.** Tokens are listed in Tier A
+under `api.auth.tokens` and resolved from env vars at API startup. The matched
+token's `id` is recorded as `created_by` on each revision the request produces,
+so revision history carries meaningful attribution (`alice`, `ci-pipeline`,
+`ops`) rather than generic strings.
 
-Served **without** a token, because they authenticate by other means or must be
-reachable to obtain one:
+Reading is what a dashboard does, and the page that would prompt for a token is
+itself served unauthenticated — the page that asks for a credential cannot
+require one — so a guarded-by-default read surface puts a modal in front of
+every first load. Be clear-eyed about what open reads expose, though: `/events`,
+`/agents/{id}/memory` and `/ws/stream` carry full LLM transcripts — prompts,
+tool arguments, diary entries — to anyone who can reach the port. One line
+closes them:
+
+```yaml
+api:
+  auth:
+    allow_anonymous_read: false   # every route needs a token
+    tokens:
+      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+```
+
+With reads closed the dashboard authenticates its own socket and prompts for a
+token when the engine refuses it — including a banner that says *refused*
+rather than *disconnected*, since a rejected credential is not an outage that
+resolves itself.
+
+The API states which posture it took at startup, on `api_anonymous_read_enabled`
+— at `WARNING` when `api.host` is not loopback, at `INFO` when it is. A laptop
+and an internet-facing bind are not the same decision, and a warning that fires
+identically for both is one nobody reads by the third deployment.
+
+Served **without** a token in either posture, because they authenticate by other
+means or must be reachable to obtain one:
 
 | Path | Why |
 |------|-----|
@@ -259,27 +285,29 @@ reachable to obtain one:
 | `/otlp/*` | The signed per-run token in the path *is* the credential |
 | `/`, `/dashboard`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch |
 
-`/ws/stream` **is** guarded. Browsers can't set headers on a `WebSocket`, so it
-accepts `?token=…` as well as the `Authorization` header; prefer the header
-where a client can send one, since query strings tend to land in proxy access
-logs.
-
-> **This changed.** Auth previously covered only `/config/*`, which left
-> `/events`, `/agents/{id}/memory` and `/ws/stream` serving full LLM
-> transcripts — prompts, tool arguments, diary entries — to anyone who could
-> reach the port. If you run the dashboard, set a token in the UI when it
-> prompts; if you script against the API, add the header to your read calls
-> too.
-
-**Serving the API now requires an explicit decision.** Starting with no
-`api.auth.tokens` and no opt-out is refused at boot with a message naming the
-options, because silence used to mean "open":
+`/ws/stream` follows the same rule as every other read. When reads are closed it
+needs a credential like anything else — and browsers can't set headers on a
+`WebSocket`, so it accepts `?token=…` as well as the `Authorization` header.
+Prefer the header where a client can send one, since query strings tend to land
+in proxy access logs.
 
 | Setting | Effect |
 |---------|--------|
-| `api.auth.tokens` | The normal path. Every guarded route needs a listed token |
-| `api.auth.allow_anonymous_read: true` | `GET`/`HEAD` outside `/config` serve without a token; writes and the whole `/config` surface still require one. For a network-isolated deployment whose dashboard should stay one click away. Logged loudly at startup |
-| `api.auth.disabled: true` | Local development only. Everything serves unauthenticated, attribution becomes `"anonymous"`, loud WARNING at startup |
+| `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
+| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config` serve without a token; writes and the whole `/config` surface still require one |
+| `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
+| `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
+
+Two combinations are worth calling out:
+
+- **No tokens at all** is a legitimate posture, not a misconfiguration: reads
+  serve and writes are refused outright, because no token can ever match an
+  empty list. A deployment that never writes config through the API therefore
+  has no credential to manage — strictly safer than minting one it will not use.
+- **`allow_anonymous_read: false` with no tokens** is refused at boot. It guards
+  every route behind a credential that does not exist, which is not a strict
+  posture but an outage whose only symptom is a uniform `401` that reads exactly
+  like a wrong token.
 
 **CORS** defaults to same-origin. The dashboard is served by this process so it
 needs no entry; list any other browser origin explicitly in

@@ -570,11 +570,18 @@ property); nodes verify schema version at boot and wait, never migrate.
 
 ### Security prerequisite
 
-Blessing internet-facing homogeneous nodes requires closing a hole that is
-already indefensible today: bearer auth guards only `/config/*`, CORS is `*`,
-and `/events`, `/agents/{id}/memory`, and `/ws/stream` serve full LLM
-transcripts unauthenticated. Full-surface auth + CORS tightening ships
-**before** the topology change, not with it.
+Blessing internet-facing homogeneous nodes required closing a hole that was
+indefensible: bearer auth guarded only `/config/*`, CORS was `*`, and
+`/events`, `/agents/{id}/memory`, and `/ws/stream` served full LLM transcripts
+with no way to guard them at all. That shipped in phase 2.4, **before** the
+topology change rather than with it.
+
+What landed is a policy over the whole surface rather than a prefix, plus one
+switch. Writes and `/config` always need a token. Reads follow
+`api.auth.allow_anonymous_read`, which defaults to open — the hole is now a
+posture an operator chooses, stated at startup and closed by one line, instead
+of a shape of the code with no lever on it. An internet-facing deployment sets
+it to `false`; a laptop leaves it alone.
 
 ### Honest limits
 

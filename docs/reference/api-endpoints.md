@@ -10,10 +10,13 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 
 | Method | Path | Description |
 |--------|------|-------------|
-> **Auth.** Every route below requires `Authorization: Bearer <token>` except
-> `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the dashboard shell
-> (`/`, `/dashboard`, `/static/*`). `/ws/stream` is guarded and also accepts
-> `?token=…`, since browsers cannot set headers on a WebSocket. See
+> **Auth.** Writes and every `/config` route require
+> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside `/config`)
+> serve without one unless `api.auth.allow_anonymous_read: false` is set, at
+> which point they need the same token — `/ws/stream` included, and it accepts
+> `?token=…` too since browsers cannot set headers on a WebSocket. Never
+> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the
+> dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |

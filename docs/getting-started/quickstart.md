@@ -54,6 +54,9 @@ api:
                     # uses port 80 instead so webhook URLs need no port suffix —
                     # see examples/nimbus.config.yaml for the trade-offs.)
   auth:
+    # Needed for WRITES and for /config. Reads — the dashboard, /events,
+    # /agents — serve without one by default; add
+    # `allow_anonymous_read: false` here to guard those too.
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
@@ -301,15 +304,18 @@ agent go `Working`, step through **Plan → Execute → Review**, and return to
 UI. The same picture is available over the API:
 
 ```bash
-# Reads are authenticated — reuse the founder token from step 3.
-curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
-  http://localhost:8000/agents | python3 -m json.tool
-curl -s http://localhost:8000/health     # probes stay open
+curl -s http://localhost:8000/agents | python3 -m json.tool
+curl -s http://localhost:8000/health
 ```
 
-The dashboard prompts for the same token on first load and remembers it. See
-[Configuration § Auth](../concepts/configuration.md#auth) for the full rule and
-the `allow_anonymous_read` escape hatch.
+No token on those: reads serve without one by default, which is why the
+dashboard opened without asking you for anything. That also means anyone who can
+reach port 8000 can read the LLM transcripts on `/events` — fine on a laptop,
+a decision to make deliberately anywhere else. Set
+`api.auth.allow_anonymous_read: false` to guard reads, at which point every call
+above needs `-H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER"` and the
+dashboard prompts for the token on first load. See
+[Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting:

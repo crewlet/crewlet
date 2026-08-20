@@ -652,16 +652,17 @@ class ApiAuthTokenConfig(BaseModel):
 class ApiAuthConfig(BaseModel):
     """Bearer-token auth policy for the API.
 
-    Guards **every** route except the ones that authenticate by other
-    means or must be reachable to obtain a token at all: ``/health``,
-    ``/ready``, the dashboard shell and its static assets, ``/webhooks/*``
-    (HMAC-verified per source) and ``/otlp/*`` (signed per-run token).
+    Writes and the whole ``/config`` surface always require a token.
+    Reads are governed by :attr:`allow_anonymous_read`, which defaults
+    to open — reading is what a dashboard does, and the page that would
+    prompt for a token is itself served unauthenticated, so requiring
+    one by default puts a modal in front of every first load.
 
-    It did not always: auth covered only ``/config/*``, which left
-    ``/events``, ``/agents/{id}/memory`` and ``/ws/stream`` serving full
-    LLM transcripts — prompts, tool arguments, diary entries — to anyone
-    who could reach the port.  Survivable behind a firewall, and not
-    something to bless as the shape of an internet-facing deployment.
+    Exempt from auth entirely, because they authenticate by other means
+    or must be reachable to obtain a token at all: ``/health``,
+    ``/ready``, the dashboard shell and its static assets,
+    ``/webhooks/*`` (HMAC-verified per source) and ``/otlp/*`` (signed
+    per-run token).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -675,15 +676,22 @@ class ApiAuthConfig(BaseModel):
     every route without auth and logs a loud startup warning.
     Never use in production."""
 
-    allow_anonymous_read: bool = False
-    """Serve read-only routes (``GET`` / ``HEAD`` outside ``/config``)
-    without a token, while still requiring one for writes and for the
-    whole ``/config`` surface.
+    allow_anonymous_read: bool = True
+    """Whether read-only routes (``GET`` / ``HEAD`` outside ``/config``)
+    serve without a token.  Writes and the whole ``/config`` surface
+    always require one.
 
-    For a deployment already isolated at the network layer whose
-    dashboard should stay one click away.  It does expose LLM
-    transcripts to anyone who can reach the port, so it is opt-in and
-    logged at startup."""
+    Default ``True``: the dashboard is a read surface, and a browser
+    that has to be handed a bearer token before it will show an org
+    chart is friction on the common case.  It is a real exposure
+    nonetheless — the read surface carries LLM transcripts, agent diary
+    entries and the whole event stream — so the API states which posture
+    it took at startup, at WARNING when the bind host is not loopback.
+
+    Set ``False`` to guard the entire surface.  Everything a browser
+    needs then carries the token, including the ``/ws/stream``
+    handshake, and the dashboard prompts for one when the engine refuses
+    it."""
 
     allowed_origins: list[str] = Field(default_factory=list)
     """Browser origins permitted by CORS, e.g.

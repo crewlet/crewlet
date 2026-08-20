@@ -22,7 +22,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 
 from crewlet._logging import get_logger
-from crewlet.api.auth import ApiAuthMiddleware, load_tokens
+from crewlet.api.auth import ApiAuthMiddleware, bind_is_loopback, load_tokens
 from crewlet.api.config_audit import build_config_audit_routes
 from crewlet.api.config_entity_routes import build_config_entity_routes
 from crewlet.api.config_refresh import (
@@ -167,23 +167,34 @@ def create_app(
         routes.extend(build_config_audit_routes())
     if bootstrap is not None:
         # Mounted whenever Tier A is present, not only alongside the
-        # config routes: the guarded surface is now the whole API, and
-        # ``/events`` / ``/agents/{id}/memory`` / ``/ws/stream`` carry
-        # full LLM transcripts regardless of whether a config store is
-        # wired.
+        # config routes: what it guards is a policy decision the whole
+        # API is subject to (see ``requires_token``), and ``/events`` /
+        # ``/agents/{id}/memory`` / ``/ws/stream`` carry full LLM
+        # transcripts regardless of whether a config store is wired.
         auth_tokens = load_tokens(bootstrap)
         auth_disabled = bootstrap.api.auth.disabled
         auth_anonymous_read = bool(
-            getattr(bootstrap.api.auth, "allow_anonymous_read", False)
+            getattr(bootstrap.api.auth, "allow_anonymous_read", True)
         )
         if auth_anonymous_read and not auth_disabled:
-            logger.warning(
+            # Stated on every boot, because it is the default and a
+            # reader should never have to infer which posture they got.
+            # The LEVEL is what carries the judgement: bound to loopback
+            # this is a laptop, bound to anything else the transcripts
+            # are readable by whoever can reach the port — and a warning
+            # that fires on every deployment alike is a warning nobody
+            # reads by the third one.
+            reachable = not bind_is_loopback(bootstrap.api.host)
+            (logger.warning if reachable else logger.info)(
                 "api_anonymous_read_enabled",
+                host=bootstrap.api.host,
                 hint=(
                     "api.auth.allow_anonymous_read is True — every read "
-                    "route, including LLM transcripts on /events and "
-                    "/agents/{id}/memory, serves without a token. Writes "
-                    "and /config/* still require one."
+                    "route, including LLM transcripts on /events, "
+                    "/agents/{id}/memory and /ws/stream, serves without "
+                    "a token. Writes and /config/* still require one. "
+                    "Set api.auth.allow_anonymous_read: false to guard "
+                    "reads too."
                 ),
             )
         auth_enabled = True
