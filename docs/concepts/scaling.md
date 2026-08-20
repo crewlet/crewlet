@@ -207,6 +207,7 @@ theoretical one:
 ## See also
 
 - [Running a Fleet](../guides/fleet.md) — the operator guide: node roles, seat placement, draining and rolling upgrades
+- [Running One Agent Somewhere Else](../guides/satellite-nodes.md) — the satellite shape, walked end to end
 - [Seat Ownership](seat-ownership.md) — leases, epoch fencing, admission, the completion ledger, singleton duties
 - [Control Plane](control-plane.md) — how a config revision reaches every node, and the posture a lagging one takes
 - [Deployment](../guides/deployment.md) — processes, database, broker settings, probes

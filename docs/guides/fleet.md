@@ -95,6 +95,12 @@ node: {id: "${CREWLET_NODE_ID}", roles: [seats, workers]}
 node: {id: sat-eu-1, roles: [seats], labels: {zone: eu}}
 ```
 
+That last one is the shape to reach for when a *single* agent needs to
+be somewhere specific — a host that can see an internal API, a licensed
+binary, a GPU — and the rest of the company should stay put.
+**[Running One Agent Somewhere Else](satellite-nodes.md)** walks it end
+to end.
+
 ## Placement
 
 By default any node that runs seats may hold any seat, and the fleet
@@ -205,6 +211,9 @@ posture change.
 
 ## See also
 
+- [Running one agent somewhere else](satellite-nodes.md) — the
+  satellite shape end to end: pinning one seat to a host that can reach
+  what it needs, and what that pin costs
 - [Scaling out](../concepts/scaling.md) — the model underneath this guide:
   what a node is, what the fleet shares, and where the constants above
   (the 45-second TTL, the prefetch cap) were measured

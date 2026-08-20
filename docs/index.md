@@ -73,6 +73,7 @@ Connecting the external surfaces agents work on:
 - **[Extensions](guides/extensions.md)** — Extension system, hooks, writing extensions
 - **[Deployment](guides/deployment.md)** — Docker, Pulsar sizing & auth, TimescaleDB observability, tracing
 - **[Running a Fleet](guides/fleet.md)** — When to run more than one node, node roles, seat placement, draining and rolling upgrades
+- **[Running One Agent Somewhere Else](guides/satellite-nodes.md)** — Put a single seat on a host that can reach what it needs — an internal API, a licensed binary, a GPU, a lab network — without moving the company: what a satellite is, what moves with the seat (its MCP servers above all), what the node still needs outbound, and what a pin costs when the host is down
 - **[Configure via API](guides/configure-via-api.md)** — End-to-end curl recipes for bootstrapping a company through `/config/*`
 
 ## Reference
