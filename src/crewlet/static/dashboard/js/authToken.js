@@ -9,16 +9,33 @@ import { icon } from "./icons.js";
 const TOKEN_KEY = "crewlet_api_token";
 
 export function apiToken() {
-  return localStorage.getItem(TOKEN_KEY) || "";
+  // Reading storage can THROW, not merely return null: a browser in a
+  // privacy mode, a sandboxed iframe, a blocked third-party context. It
+  // is read on every fetch, including the degraded-mode snapshot poll —
+  // the one read that exists for when everything else is already down —
+  // so a throw here would blank the page precisely when the last state
+  // it holds is the only state it has.
+  try {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
 }
 
 /** Prompt for a token; calls `onSet` when one is entered. */
 export function promptForToken(onSet) {
   const v = window.prompt("Enter a Crewlet API token (from api.auth.tokens):");
-  if (v) {
+  if (!v) return;
+  try {
     localStorage.setItem(TOKEN_KEY, v.trim());
-    if (onSet) onSet();
+  } catch {
+    // Storage refused the write (quota, privacy mode). Say so rather
+    // than carrying on as if the token were saved — the next reload
+    // would silently be unauthenticated again.
+    window.alert("This browser refused to store the token.");
+    return;
   }
+  if (onSet) onSet();
 }
 
 /** The "you need a token" panel, shown in place of an auth-gated view. */

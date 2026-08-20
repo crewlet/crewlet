@@ -214,6 +214,7 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
     }
     if runtime is not None:
         body["in_flight"] = runtime.in_flight
+        body["engine_started_at"] = runtime.started_at
         shutting_down = runtime.shutting_down
         body["shutting_down"] = shutting_down
         # ``posture`` is what the node concluded about its own config

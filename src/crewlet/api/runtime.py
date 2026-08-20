@@ -48,6 +48,17 @@ class NodeRuntime(Protocol):
         ...
 
     @property
+    def started_at(self) -> str:
+        """When the co-located engine started, ISO-8601, or ``""``.
+
+        Deliberately separate from the API process's own ``started_at``:
+        split across two processes they are two clocks, and one merged
+        "uptime" would be the two-different-windows error in a new
+        place.
+        """
+        ...
+
+    @property
     def posture(self) -> str:
         """This node's config posture — see :mod:`crewlet.db.config_plane`.
 
@@ -125,6 +136,10 @@ class EngineNodeRuntime:
             return bool(self._engine.shutting_down or not self._engine.is_running)
         except Exception:
             return False
+
+    @property
+    def started_at(self) -> str:
+        return str(getattr(self._engine, "started_at", "") or "")
 
     @property
     def posture(self) -> str:

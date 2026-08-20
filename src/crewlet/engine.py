@@ -6918,7 +6918,7 @@ class Engine:
                     await self.event_queue.delete_subscription(topic, group)
                 except Exception:
                     logger.exception("inbox_unsubscribe_failed", handle=handle)
-            self._subscribed_inboxes.discard(handle)
+            self._subscribed_inboxes.pop(handle, None)
             # Keyed on the handle, not on a live instance: under seat
             # ownership the release above already terminated it, and on a
             # node that never held the seat there was never one to ask.

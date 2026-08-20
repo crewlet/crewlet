@@ -37,6 +37,7 @@ class FakeNodeRuntime:
         posture: str = "serve",
         applied_epoch: int = 0,
         seats: dict[str, Any] | None = None,
+        started_at: str = "",
     ) -> None:
         self._in_flight = in_flight
         self._shutting_down = shutting_down
@@ -44,6 +45,7 @@ class FakeNodeRuntime:
         self._posture = posture
         self._applied_epoch = applied_epoch
         self._seats = seats or {}
+        self._started_at = started_at
 
     def seats(self) -> dict[str, Any]:
         return dict(self._seats)
@@ -55,6 +57,10 @@ class FakeNodeRuntime:
     @property
     def shutting_down(self) -> bool:
         return self._shutting_down
+
+    @property
+    def started_at(self) -> str:
+        return self._started_at
 
     @property
     def posture(self) -> str:
