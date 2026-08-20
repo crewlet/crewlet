@@ -68,6 +68,20 @@ class Episode(BaseModel):
     review_outcome: ReviewOutcomeStr
     duration_ms: int
 
+    work_key: str = ""
+    """Identity of the unit of work this episode records — see
+    :mod:`crewlet.work_key`.
+
+    NOT ``turn_id``: two nodes that both complete a turn for one trigger
+    mint two turn ids, so a key taken from one records the duplicate
+    instead of collapsing it.  Derived from the trigger events instead,
+    which are the same across a re-run.
+
+    ``""`` for a turn with no ledgerable trigger (a scheduled fire, a
+    sub-agent, a sandbox resume).  Those rows are unconstrained by the
+    partial unique index, which is correct: they have no cross-node
+    duplicate to collapse."""
+
     # --- Lifecycle / compaction fields (defaults preserve raw shape) ---
 
     kind: EpisodeKindStr = "raw"

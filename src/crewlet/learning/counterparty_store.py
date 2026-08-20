@@ -39,6 +39,7 @@ class CounterpartyStoreProtocol(Protocol):
         subject_name: str = "",
         traits_patch: dict[str, Any] | None = None,
         increment_interactions: bool = True,
+        work_key: str = "",
     ) -> CounterpartyProfile: ...
 
     async def fetch(
@@ -71,11 +72,23 @@ class CounterpartyStore:
         subject_name: str = "",
         traits_patch: dict[str, Any] | None = None,
         increment_interactions: bool = True,
+        work_key: str = "",
     ) -> CounterpartyProfile:
         """Merge ``traits_patch`` into the profile row.
 
         Never overwrites ``first_seen_at`` on subsequent updates.
         Returns the row's state post-merge.
+
+        ``work_key`` makes the interaction count idempotent per unit of
+        work.  Two nodes that both complete a turn for one trigger would
+        otherwise each add ``+1``, and the profiler reads cadence off
+        that number -- a person counted twice looks twice as chatty as
+        they are, permanently, because nothing ever decrements it.  The
+        traits merge needs no such guard: ``||`` over the same keys is
+        idempotent, and two differently-worded observations of the same
+        exchange are two observations, which is what the field is for.
+        Empty (a turn with no ledgerable trigger) counts unconditionally,
+        exactly as before -- see :mod:`crewlet.work_key`.
         """
         if not observer_handle:
             raise ValueError("observer_handle is required")
@@ -95,9 +108,16 @@ class CounterpartyStore:
             """
             INSERT INTO counterparty_profiles (
                 observer_handle, subject_handle, subject_external_id,
-                subject_platform, subject_name, traits, interaction_count
+                subject_platform, subject_name, traits, interaction_count,
+                last_work_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+            -- ``last_work_key`` is seeded on the INSERT, not only on the
+            -- UPDATE. Without it the FIRST write leaves it empty, the
+            -- duplicate's UPDATE compares '' against the key it is
+            -- holding, finds no match, and counts the interaction twice
+            -- -- which is exactly the bug this guard exists to stop,
+            -- surviving in the one case it is guaranteed to be hit.
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $10)
             ON CONFLICT (
                 observer_handle, subject_handle, subject_external_id,
                 subject_platform
@@ -114,7 +134,21 @@ class CounterpartyStore:
                     WHEN $9::int = 1 THEN now()
                     ELSE counterparty_profiles.last_corroborated_at
                 END,
-                interaction_count = counterparty_profiles.interaction_count + $8
+                -- Skip the increment when this exact unit of work was
+                -- the last one counted. Only the LAST key is compared:
+                -- the duplicate this guards is always the immediately
+                -- preceding write (two nodes racing, or a redelivery),
+                -- never one from a week ago.
+                interaction_count = counterparty_profiles.interaction_count + CASE
+                    WHEN $10::text <> ''
+                     AND counterparty_profiles.last_work_key = $10::text
+                    THEN 0
+                    ELSE $8
+                END,
+                last_work_key = CASE
+                    WHEN $10::text <> '' THEN $10::text
+                    ELSE counterparty_profiles.last_work_key
+                END
             RETURNING observer_handle, subject_handle, subject_external_id,
                       subject_platform, subject_name, traits,
                       first_seen_at, last_updated_at, last_corroborated_at,
@@ -129,6 +163,7 @@ class CounterpartyStore:
             increment,
             increment,
             traits_changed,
+            work_key,
         )
         if not rows:
             raise RuntimeError("counterparty upsert returned no row")

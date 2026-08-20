@@ -32,6 +32,7 @@ from crewlet.learning.interaction import InboundInteraction
 from crewlet.learning.persist_decider import _extract_json_object
 from crewlet.org.models import Role
 from crewlet.providers.llm.protocol import LLMProvider, Message
+from crewlet.work_key import current_work_key
 
 logger = get_logger("learning.counterparty_profiler")
 
@@ -148,6 +149,12 @@ class CounterpartyProfiler:
                 subject_name=sender.display_name,
                 traits_patch=patch,
                 increment_interactions=True,
+                # Read from the ambient dispatch rather than threaded
+                # through the profiler's own signature: the profiler has
+                # no other reason to know about work identity, and the
+                # only thing it does with the key is hand it straight
+                # back to the store.
+                work_key=current_work_key(),
             )
         except Exception:
             logger.exception("counterparty_upsert_failed", turn_id=turn_id)

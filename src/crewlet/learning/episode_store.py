@@ -29,6 +29,7 @@ demand-proportional cost.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Protocol
 
@@ -51,6 +52,98 @@ DEFAULT_MAX_RAW_EPISODES_PER_AGENT = 500
 # write would be fine but unnecessary; checking every Nth keeps the
 # write path snappy under heavy traffic.
 DEFAULT_WRITE_CHECK_EVERY_N = 10
+
+
+# The row, written two ways.  ``INSERT … SELECT`` rather than ``INSERT …
+# VALUES`` so the guarded form can carry a ``WHERE``; the unguarded form
+# keeps the same shape so the two cannot drift in their column lists,
+# which is the way a pair of hand-maintained INSERTs always fails.
+_EPISODE_COLUMNS = """
+    id, agent_handle, agent_role, task_id, turn_id,
+    started_at, ended_at, plan_summary, task_summary,
+    tool_sequence, skills_used, review_outcome,
+    duration_ms, embedding,
+    kind, count, exemplar_turn_ids, consolidated_into_skill_id,
+    common_task_pattern, common_outcome, success_rate,
+    subjects_involved, notable_patterns, work_key
+"""
+
+_EPISODE_VALUES = """
+    $1::uuid, $2, $3, $4, $5::uuid,
+    $6, $7, $8, $9,
+    $10::jsonb, $11::jsonb, $12,
+    $13, $14::vector,
+    $15, $16, $17::jsonb, $18,
+    $19, $20, $21,
+    $22::jsonb, $23, $24
+"""
+
+_INSERT_EPISODE_SQL = f"""
+    INSERT INTO episodes ({_EPISODE_COLUMNS})
+    SELECT {_EPISODE_VALUES}
+"""
+
+# ``RETURNING`` is what tells the caller whether the row landed: with
+# ``WHERE NOT EXISTS`` a skipped insert is a successful statement that
+# wrote nothing, not an error.
+_INSERT_EPISODE_GUARDED_SQL = f"""
+    INSERT INTO episodes ({_EPISODE_COLUMNS})
+    SELECT {_EPISODE_VALUES}
+    WHERE NOT EXISTS (
+        SELECT 1 FROM episodes WHERE agent_handle = $2 AND work_key = $24
+    )
+    RETURNING id
+"""
+
+
+def _insert_args(episode: Episode, embedding_literal: str | None) -> tuple[Any, ...]:
+    """Positional arguments for both INSERT forms, in column order.
+
+    One builder for both so the ``$n`` placeholders and the values
+    cannot drift apart -- the failure mode of a duplicated INSERT is a
+    column silently written with its neighbour's value.
+    """
+    return (
+        str(episode.id),
+        episode.agent_handle,
+        episode.agent_role,
+        episode.task_id,
+        str(episode.turn_id),
+        episode.started_at,
+        episode.ended_at,
+        episode.plan_summary,
+        episode.task_summary,
+        json.dumps(episode.tool_sequence),
+        json.dumps(episode.skills_used),
+        episode.review_outcome,
+        episode.duration_ms,
+        embedding_literal,
+        episode.kind,
+        episode.count,
+        json.dumps([str(x) for x in episode.exemplar_turn_ids]),
+        (
+            str(episode.consolidated_into_skill_id)
+            if episode.consolidated_into_skill_id
+            else None
+        ),
+        episode.common_task_pattern,
+        episode.common_outcome,
+        episode.success_rate,
+        json.dumps(episode.subjects_involved),
+        episode.notable_patterns,
+        episode.work_key,
+    )
+
+
+def _lock_word(agent_handle: str, work_key: str) -> int:
+    """A signed 32-bit advisory-lock word for one agent's work key.
+
+    A hash collision costs a moment of needless serialization between
+    two unrelated episode writes and nothing else -- the ``WHERE NOT
+    EXISTS`` beneath it compares the real values.
+    """
+    digest = hashlib.sha256(f"{agent_handle}\n{work_key}".encode()).digest()
+    return int.from_bytes(digest[:4], "big", signed=True)
 
 
 class EpisodeStoreProtocol(Protocol):
@@ -151,6 +244,54 @@ class EpisodeStore:
             return None
         return _vector_literal(vectors[0])
 
+    # PostgreSQL keeps the two-argument advisory-lock space separate from
+    # the one-argument (bigint) space, so a key here can never collide
+    # with the migrator's lock however the second word hashes.
+    _WORK_KEY_LOCK_NAMESPACE = 0x4350  # "CP" — crewlet episodes
+
+    async def _insert(self, episode: Episode, embedding_literal: str | None) -> bool:
+        """Write the row.  ``False`` when this work is already recorded.
+
+        Two paths, and the split is the point:
+
+        * **No work key** -- a turn with no ledgerable trigger (a
+          scheduled fire, a sub-agent, a sandbox resume).  There is no
+          cross-node duplicate to collapse, so it takes the plain insert
+          and pays nothing for a guard it cannot use.
+        * **A work key** -- a transaction-scoped advisory lock on
+          ``(agent_handle, work_key)``, then ``INSERT … WHERE NOT
+          EXISTS``.
+
+        The lock is what makes it exact.  ``WHERE NOT EXISTS`` on its own
+        is evaluated under the statement's snapshot, so two concurrent
+        transactions can both see "not there" and both insert -- the
+        classic phantom.  Serializing on the key closes it, and a
+        transaction-scoped lock releases on commit with no unlock
+        bookkeeping and no way to outlive a killed process.
+
+        A unique index would be the obvious answer and is not available
+        here: ``episodes`` is a hypertable partitioned on ``ended_at``,
+        so every unique index must contain ``ended_at`` -- and the two
+        duplicate turns end at different times.  See
+        ``migrations/031_work_key.sql``.
+        """
+        if not episode.work_key:
+            await self._db.execute(
+                _INSERT_EPISODE_SQL, *_insert_args(episode, embedding_literal)
+            )
+            return True
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1::int, $2::int)",
+                self._WORK_KEY_LOCK_NAMESPACE,
+                _lock_word(episode.agent_handle, episode.work_key),
+            )
+            rows = await conn.execute(
+                _INSERT_EPISODE_GUARDED_SQL,
+                *_insert_args(episode, embedding_literal),
+            )
+        return bool(rows)
+
     async def write(self, episode: Episode) -> None:
         """Insert one raw episode, embedding its task+plan summary.
 
@@ -168,57 +309,27 @@ class EpisodeStore:
         embeddings-API outage doesn't lose the episode -- vector recall
         skips it (the partial HNSW index excludes NULLs) while the
         time-window / outcome queries still surface it.
+
+        **Idempotent per ``work_key``.**  Two nodes that both complete a
+        turn for one trigger write one row, not two -- see
+        :meth:`_insert`.  A duplicated episode is the least visible harm
+        this design admits to: a doubled Slack post is obvious and
+        recoverable, while a doubled memory is retrieved by every later
+        turn's episode recall and feeds skill synthesis.
         """
         embedding_literal = await self._embed_or_none(episode.embeddable_text)
-        await self._db.execute(
-            """
-            INSERT INTO episodes (
-                id, agent_handle, agent_role, task_id, turn_id,
-                started_at, ended_at, plan_summary, task_summary,
-                tool_sequence, skills_used, review_outcome,
-                duration_ms, embedding,
-                kind, count, exemplar_turn_ids, consolidated_into_skill_id,
-                common_task_pattern, common_outcome, success_rate,
-                subjects_involved, notable_patterns
+        if not await self._insert(episode, embedding_literal):
+            # Another node already recorded this unit of work. INFO
+            # rather than a warning: this is the guard doing its job, on
+            # exactly the paths designed to be able to produce a second
+            # turn for one trigger.
+            logger.info(
+                "episode_duplicate_skipped",
+                agent_handle=episode.agent_handle,
+                turn_id=str(episode.turn_id),
+                work_key=episode.work_key,
             )
-            VALUES (
-                $1::uuid, $2, $3, $4, $5::uuid,
-                $6, $7, $8, $9,
-                $10::jsonb, $11::jsonb, $12,
-                $13, $14::vector,
-                $15, $16, $17::jsonb, $18,
-                $19, $20, $21,
-                $22::jsonb, $23
-            )
-            """,
-            str(episode.id),
-            episode.agent_handle,
-            episode.agent_role,
-            episode.task_id,
-            str(episode.turn_id),
-            episode.started_at,
-            episode.ended_at,
-            episode.plan_summary,
-            episode.task_summary,
-            json.dumps(episode.tool_sequence),
-            json.dumps(episode.skills_used),
-            episode.review_outcome,
-            episode.duration_ms,
-            embedding_literal,
-            episode.kind,
-            episode.count,
-            json.dumps([str(x) for x in episode.exemplar_turn_ids]),
-            (
-                str(episode.consolidated_into_skill_id)
-                if episode.consolidated_into_skill_id
-                else None
-            ),
-            episode.common_task_pattern,
-            episode.common_outcome,
-            episode.success_rate,
-            json.dumps(episode.subjects_involved),
-            episode.notable_patterns,
-        )
+            return
         logger.info(
             "episode_stored",
             agent_handle=episode.agent_handle,
@@ -679,6 +790,11 @@ def _vector_literal(vec: list[float]) -> str:
 def _row_to_episode(row: dict) -> Episode:
     return Episode(
         id=row["id"],
+        # ``.get``: no read path selects this today, and one that starts
+        # to should not have to remember to plumb it. A field written and
+        # never read back is how a model quietly stops describing its
+        # own table.
+        work_key=row.get("work_key") or "",
         agent_handle=row["agent_handle"],
         agent_role=row["agent_role"],
         task_id=row.get("task_id") or "",

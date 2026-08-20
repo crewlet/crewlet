@@ -73,6 +73,7 @@ from crewlet.tools.capabilities import resolve_annotations
 from crewlet.tools.protocol import AgentContext, CheckContext, ToolResultValidator
 from crewlet.tools.registry import ToolRegistry, build_availability_set
 from crewlet.tools.surface import ToolSurface
+from crewlet.work_key import current_work_key
 
 logger = get_logger("agent.turn")
 
@@ -2320,6 +2321,13 @@ class TurnEngine:
                     skills_used=d.skills_used,
                     review_outcome=review_outcome,  # type: ignore[arg-type]
                     duration_ms=d.duration_ms,
+                    # Ambient rather than threaded through the turn: the
+                    # engine binds it around the dispatch, and every
+                    # frame between here and there has no other reason
+                    # to carry it. Empty for a turn with no ledgerable
+                    # trigger, which is the honest answer — there is no
+                    # cross-node duplicate to collapse.
+                    work_key=current_work_key(),
                 )
                 await self._episode_store.write(episode)
                 span.set_attribute("learning.outcome", "done")

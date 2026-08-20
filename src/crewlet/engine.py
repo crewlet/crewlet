@@ -68,6 +68,7 @@ from crewlet.tools.protocol import Tool
 from crewlet.tools.registry import ToolRegistry
 from crewlet.tools.run_sandbox_tool import register_run_sandbox_tool
 from crewlet.tools.spawn_subagent_tool import register_spawn_subagent_tool
+from crewlet.work_key import bind_work_key, derive_work_key
 
 logger = get_logger("engine")
 
@@ -2934,6 +2935,15 @@ class Engine:
             events = await self._drop_worked_triggers(agent, events)
             if not events:
                 return
+            # The identity of the work about to run, bound for the whole
+            # dispatch. Derived HERE because this is where the
+            # constituent list exists — the coalesced digest that reaches
+            # the turn is minted fresh on every merge, so a key taken
+            # from it would differ on every redelivery and match nothing
+            # (the same trap ``_record_worked_triggers`` documents).
+            work_key = derive_work_key(
+                [str(e.id) for e in events if e.type in _LEDGERED_INBOX_TYPES]
+            )
             try:
                 if len(events) > 1:
                     merged = await self._coalesce_inbox_events(agent, events)
@@ -2946,7 +2956,8 @@ class Engine:
                         # threaded reply looks like — was handled as an
                         # unrelated message and its box stayed parked until
                         # the pause reaper killed it.
-                        await self._dispatch_inbox_event(agent, merged)
+                        with bind_work_key(work_key):
+                            await self._dispatch_inbox_event(agent, merged)
                         await self._record_worked_triggers(agent, events)
                         return
                     # Coalescing declined (heterogeneous partition —
@@ -2961,10 +2972,21 @@ class Engine:
                     # NAK; the dedupe above collapses them on the next
                     # drain.
                     await self._requeue_inbox_events(agent, events[1:])
-                    await self._dispatch_inbox_event(agent, events[0])
+                    # The head alone ran, so the key is the head's alone.
+                    with bind_work_key(
+                        derive_work_key(
+                            [
+                                str(e.id)
+                                for e in events[:1]
+                                if e.type in _LEDGERED_INBOX_TYPES
+                            ]
+                        )
+                    ):
+                        await self._dispatch_inbox_event(agent, events[0])
                     await self._record_worked_triggers(agent, events[:1])
                     return
-                await self._dispatch_inbox_event(agent, events[0])
+                with bind_work_key(work_key):
+                    await self._dispatch_inbox_event(agent, events[0])
                 await self._record_worked_triggers(agent, events)
             except ShutdownDraining:
                 # The turn never started (engine draining) -- re-raise
