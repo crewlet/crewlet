@@ -115,9 +115,24 @@ def test_binding_reaches_log_records_inside_the_event_loop(
     the field silently never appears on the lines that matter."""
     import structlog
 
+    from crewlet import _logging
     from crewlet._logging import configure_logging, get_logger
 
     monkeypatch.setenv("CREWLET_NODE_ID", "crewlet-9")
+
+    # `configure_logging` latches after its first call — correct for an
+    # application, poison for a test that reads file-descriptor stderr.
+    # `logging.StreamHandler(sys.stderr)` binds the stderr OBJECT, so
+    # whichever earlier test first triggered the latch left the root
+    # handler pointed at ITS pytest capture buffer, and this assertion
+    # then read an empty `err` and failed — depending entirely on what
+    # ran before it. Force a handler bound to the stderr `capfd` is
+    # capturing now, and put the global state back afterwards so this
+    # test does not do the same thing to the next one.
+    root = logging.getLogger()
+    saved_handlers, saved_level = list(root.handlers), root.level
+    saved_latch = _logging._configured
+    _logging._configured = False
     configure_logging(level=logging.INFO)
     structlog.contextvars.clear_contextvars()
 
@@ -135,6 +150,9 @@ def test_binding_reaches_log_records_inside_the_event_loop(
         asyncio.run(_main())
     finally:
         structlog.contextvars.clear_contextvars()
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+        _logging._configured = saved_latch
 
     # structlog renders the bound field into the emitted line itself, so
     # assert on the rendered output rather than on LogRecord attributes.
