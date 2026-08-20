@@ -177,3 +177,63 @@ async def test_the_unmanned_warning_fires_on_the_edge_only(caplog: Any) -> None:
     finally:
         await engine.stop()
         await queue.stop()
+
+
+# ── ingress ──────────────────────────────────────────────────────────
+
+
+async def test_a_node_without_ingress_does_not_bind_the_api_port() -> None:
+    """One Tier A file has to work for every shape in the fleet.
+
+    `api.port` is set once and shipped everywhere — that is the point of
+    a shared config — so the port must be gated on the ROLE rather than
+    on being unset. A node without `ingress` that bound it anyway would
+    answer webhooks the operator routed elsewhere and put a dashboard on
+    an address nothing is meant to reach.
+
+    The satellite guide tells operators to rely on exactly this, which
+    is why it is asserted rather than assumed.
+    """
+    from crewlet.seat.placement import NodeRole
+
+    bootstrap = make_bootstrap(node=NodeConfig(id="sat-eu", roles=["seats"]))
+    bootstrap.api.port = 8099
+    engine = await make_engine(
+        bootstrap=bootstrap,
+        company=make_company(name="Acme", roles=[{"name": "CEO"}]),
+        event_queue=MemoryEventQueue(),
+    )
+    try:
+        # Asserted BEFORE `start`, deliberately: `node_profile` used to
+        # answer with every role until `start` resolved Tier A, so a
+        # caller asking this question early was told a seats-only node
+        # was an ingress node.
+        assert engine.runs_role(NodeRole.INGRESS) is False
+        await engine.start()
+        assert engine.runs_role(NodeRole.INGRESS) is False
+        # The gate `run()` applies, spelled out: a positive port is not
+        # enough on its own.
+        assert engine._api_port == 8099
+        assert not (engine._api_port > 0 and engine.runs_role(NodeRole.INGRESS))
+    finally:
+        await engine.stop()
+
+
+async def test_an_ingress_node_with_the_same_config_would_bind_it() -> None:
+    """The other half — otherwise the test above passes on a port that
+    is simply never bound by anybody."""
+    from crewlet.seat.placement import NodeRole
+
+    bootstrap = make_bootstrap(node=NodeConfig(id="core-1"))
+    bootstrap.api.port = 8099
+    engine = await make_engine(
+        bootstrap=bootstrap,
+        company=make_company(name="Acme", roles=[{"name": "CEO"}]),
+        event_queue=MemoryEventQueue(),
+    )
+    try:
+        await engine.start()
+        assert engine.runs_role(NodeRole.INGRESS) is True
+        assert engine._api_port > 0 and engine.runs_role(NodeRole.INGRESS)
+    finally:
+        await engine.stop()

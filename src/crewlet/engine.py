@@ -6397,12 +6397,21 @@ class Engine:
 
     @property
     def node_profile(self) -> Any:
-        """What this node is. Never ``None`` — an engine that never
-        resolved Tier A is the all-roles single-process default, which is
-        what a directly-constructed engine has always been."""
+        """What this node is. Never ``None``.
+
+        Resolved from Tier A on demand, not only from ``start``. The
+        fallback below is for an engine that genuinely has no Tier A — a
+        directly-constructed one, which has always been the all-roles
+        single-process default. Applying that fallback to an engine that
+        *has* Tier A merely because it has not started yet answers
+        ``runs_role`` with every role for a node whose config subtracts
+        two of them, which is the opposite of what the operator wrote.
+        """
         from crewlet.seat.placement import NodeProfile
 
         if self._node_profile is None:
+            if getattr(self, "_bootstrap", None) is not None:
+                return self._resolve_node_profile()
             self._node_profile = NodeProfile(node_id=self._node_id)
         return self._node_profile
 
