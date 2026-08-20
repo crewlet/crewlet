@@ -461,13 +461,35 @@ async def test_blank_arguments_are_rejected(store: Any) -> None:
         await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=0)
 
 
-async def test_acquire_fails_closed_on_a_database_error() -> None:
-    """A claim that cannot be verified must not be assumed won — the
-    caller would proceed as owner on unknown state."""
+async def test_acquire_raises_rather_than_reporting_a_peer_holds_it() -> None:
+    """Fails closed, and says WHICH failure it is.
+
+    Both outcomes mean "you are not the owner", so both are safe — but
+    only ``None`` means *somebody else is*, and returning it for an
+    unreachable store made every caller report the wrong thing. A
+    two-second blip had ``_renew_node_presence`` logging "another
+    process holds this node id's presence lease", pointing an operator
+    at a configuration problem that did not exist, while the node
+    silently stopped refreshing its own presence during exactly the
+    outage it is built to ride out — so peers widened their share
+    against a node that was still healthy and still holding every seat.
+
+    ``renew`` and ``release`` have always drawn this line. Acquire now
+    draws it too.
+    """
     sql = _FakeSQL()
     store = LeaseStore(sql)
     sql.fail = True
-    assert await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30) is None
+    with pytest.raises(LeaseError):
+        await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
+
+
+async def test_acquire_still_returns_none_when_a_peer_really_holds_it() -> None:
+    """The other half: a genuine refusal is not an error."""
+    sql = _FakeSQL()
+    store = LeaseStore(sql)
+    assert await store.try_acquire("seat:ceo", owner="node-a", ttl_seconds=30)
+    assert await store.try_acquire("seat:ceo", owner="node-b", ttl_seconds=30) is None
 
 
 async def test_renew_raises_rather_than_reporting_loss_on_a_database_error() -> None:

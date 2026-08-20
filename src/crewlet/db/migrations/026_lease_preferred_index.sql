@@ -3,7 +3,7 @@
 -- ``LeaseStore.preferred_resources`` runs once per sweep on every node —
 -- every 5 seconds, per node — and its predicate is
 -- ``resource LIKE 'seat:%' AND preferred = $node``.  Neither existing
--- index serves it: 017 indexes only ``owner`` and ``expires_at``, and
+-- index serves it: 019 indexes only ``owner`` and ``expires_at``, and
 -- the ``resource`` primary-key btree cannot answer a LIKE prefix under a
 -- non-C collation.  So the query was a sequential scan of the whole
 -- table, and lease rows never shrink — ``release`` expires a row in

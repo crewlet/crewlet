@@ -1,6 +1,6 @@
 """Retention sweeps for the tables that answer "recently" rather than "ever".
 
-Three tables exist to answer a short-horizon question and are written on
+Five tables exist to answer a short-horizon question and are written on
 every event that asks it:
 
 - ``webhook_deliveries`` — "have I already handled this delivery?", one
@@ -17,10 +17,10 @@ every event that asks it:
   abandoned channel is a promise to the requester that a reply may still
   arrive.
 
-The first three were designed to be swept. Both migrations say so in as many
-words (``020_webhook_deliveries.sql``: *"Rows are swept on a TTL rather
+They were all designed to be swept. The migrations say so in as many
+words (``022_webhook_deliveries.sql``: *"Rows are swept on a TTL rather
 than kept: this is a short-horizon 'did I just see this', not an audit
-log"*), and both ship the ``seen_at`` / ``window_start`` index a range
+log"*), and each ships the ``seen_at`` / ``window_start`` index a range
 delete needs. The sweep itself was never built: ``purge`` existed on the
 stores and on their protocols, and **nothing anywhere called it**, so
 every one of those tables grew for the life of the deployment. The event
@@ -58,13 +58,19 @@ logger = get_logger("db.maintenance")
 
 # How often the sweep runs.
 #
-# Fifteen minutes, and the tick interval is deliberately much longer than
-# any table's retention. These are range deletes on indexed columns
-# answering a question nothing reads back, so the only thing a faster
-# tick buys is a slightly smaller table between runs; the only thing it
-# costs is a write burst and a lease round-trip. The tables are sized by
-# their retention, not by the sweep interval, so a node that misses
-# several ticks changes nothing an operator would notice.
+# Fifteen minutes, deliberately SHORTER than every retention below it —
+# the shortest is the delivery-dedupe window at 1200 s, and the longest
+# is seven days. That ordering is the invariant: a tick longer than a
+# retention would let a table sit past its horizon for the difference,
+# and the retention would stop describing the table.
+#
+# It does not need to be much shorter. These are range deletes on
+# indexed columns answering a question nothing reads back, so a faster
+# tick buys only a slightly smaller table between runs and costs a write
+# burst plus a lease round-trip. Tables are sized by their retention,
+# not by this interval, so a node that misses several ticks changes
+# nothing an operator would notice — which is why the value sits well
+# below the floor rather than just under it.
 MAINTENANCE_INTERVAL_SECONDS = 900.0
 
 # Delivery-dedupe rows: garbage collection, NOT expiry.

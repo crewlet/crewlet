@@ -260,9 +260,12 @@ class LeaseStore:
         re-acquire after expiry — see the module docstring for why the
         latter matters.
 
-        A DB error returns ``None``: never proceed as owner on unknown
-        state.  This mirrors ``OnboardingMarkerStore.try_claim_pass``,
-        whose fail-closed behaviour this generalises.
+        A DB error raises :class:`LeaseError`, it does not return
+        ``None``.  Both mean "you are not the owner", so both fail
+        closed — but only one of them means *somebody else is*, and a
+        caller that cannot tell them apart reports the wrong thing and
+        takes the wrong recovery.  ``renew`` and ``release`` draw the
+        same line for the same reason.
 
         Refuses outright — same ``None`` — while ANY live lease is held
         at a lower ``protocol``.  The guard is part of the same statement
@@ -342,9 +345,21 @@ class LeaseStore:
                 bool(gated),
                 json.dumps(meta or {}),
             )
-        except Exception:
+        except Exception as exc:
+            # RAISE, do not return None. ``None`` from this method means
+            # one specific thing — "somebody else holds this" — and
+            # collapsing an unreachable store into it is the same
+            # conflation ``renew`` and ``release`` raise ``LeaseError``
+            # to avoid. It read as a real refusal at every call site: a
+            # two-second database blip made ``_renew_node_presence`` log
+            # "another process holds this node id's presence lease",
+            # pointing an operator at a configuration problem that does
+            # not exist, while the node silently stopped refreshing its
+            # own presence during exactly the outage it is designed to
+            # ride out — so peers began widening their share against a
+            # node that was still healthy and still holding every seat.
             logger.exception("lease_acquire_failed", resource=resource, owner=owner)
-            return None
+            raise LeaseError(f"lease store unreachable for {resource!r}") from exc
         if row is None:
             return None
         lease = _row_to_lease(row)
@@ -528,7 +543,7 @@ class LeaseStore:
         the hint exists for.
 
         One indexed scan per sweep, not one lookup per seat — see the
-        ``leases_preferred_idx`` partial index (migration 024). Without
+        ``leases_preferred_idx`` partial index (migration 026). Without
         it this is a sequential scan of every lease row on every sweep of
         every node, and lease rows never shrink: ``release`` expires them
         in place so the epoch stays monotonic.
