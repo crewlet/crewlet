@@ -234,3 +234,52 @@ async def test_record_apply_is_last_write_wins_per_node() -> None:
     assert len(fleet) == 1
     assert fleet[0]["epoch"] == 2
     assert fleet[0]["status"] == "ok"
+
+
+# ── peer health decays ───────────────────────────────────────────────
+
+
+async def test_a_dead_peers_status_stops_counting_as_a_healthy_peer() -> None:
+    """`peer_health` answers "is there a peer this work could go to?" —
+    and that answer decays.
+
+    `record_apply` upserts on `node_id`, so a node that is scaled in,
+    redeployed or crashed leaves its last `ok` row behind forever;
+    nothing sweeps `config_apply_status` because it is keyed by node,
+    not by event. Counting that ghost inverts a decision: a surviving
+    node that cannot apply the current epoch sees `peers_ok=1`, so
+    `decide_posture` returns SHED — release every seat "so the work can
+    go to a healthy peer" — when the truth is ISOLATED, where a node
+    keeps serving the config it has. The company goes dark instead of
+    degraded, which is exactly what ISOLATED exists to prevent.
+    """
+    from crewlet.db.config_plane import (
+        PEER_STATUS_FRESH_SECONDS,
+        MemoryConfigPlaneStore,
+    )
+
+    plane = MemoryConfigPlaneStore()
+    await plane.record_apply("dead-node", epoch=12, revision_id=None, status="ok")
+    assert await plane.peer_health(12, exclude_node="survivor") == (1, 1)
+
+    # The node is gone; its row is not.
+    plane._status["dead-node"]["reported_at"] -= PEER_STATUS_FRESH_SECONDS * 2
+    assert await plane.peer_health(12, exclude_node="survivor") == (0, 0), (
+        "a terminated node still counted as somewhere work could go"
+    )
+
+
+async def test_the_operator_view_still_shows_a_silent_node() -> None:
+    """Freshness bounds the DECISION, not the display. A node that
+    stopped reporting is precisely what the fleet view has to show."""
+    from crewlet.db.config_plane import (
+        PEER_STATUS_FRESH_SECONDS,
+        MemoryConfigPlaneStore,
+    )
+
+    plane = MemoryConfigPlaneStore()
+    await plane.record_apply("dead-node", epoch=12, revision_id=None, status="ok")
+    plane._status["dead-node"]["reported_at"] -= PEER_STATUS_FRESH_SECONDS * 2
+    rows = await plane.fleet()
+    assert [r["node_id"] for r in rows] == ["dead-node"]
+    assert "reported_at" not in rows[0], "internal bookkeeping leaked to the view"

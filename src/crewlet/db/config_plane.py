@@ -14,6 +14,7 @@ finds itself behind — and the obvious answer is wrong.
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -42,6 +43,29 @@ RECONCILE_INTERVAL_SECONDS = 15.0
 # convergence, which under the shed rule below means delaying the moment
 # a node stops being anomalous.
 RECONCILE_JITTER_FRACTION = 0.2
+
+# How recently a peer must have reported for its status to count as
+# evidence about the fleet RIGHT NOW.
+#
+# ``peer_health`` answers one question — "is there a healthy peer this
+# work could go to?" — and the honest answer decays. ``record_apply``
+# upserts on ``node_id``, so a node that is scaled in, redeployed or
+# crashed leaves its last row behind forever, and nothing sweeps
+# ``config_apply_status``: it is keyed by node, not by event, so it was
+# never in the retention worker's list of short-horizon tables.
+#
+# Unbounded, that ghost row is not merely stale, it inverts a decision.
+# A surviving node that cannot apply the current epoch counts the dead
+# node's ``ok`` as a healthy peer, so ``decide_posture`` returns SHED —
+# release every seat "so the work can go to a healthy peer" — when the
+# truth is ISOLATED, where a node keeps serving the config it has. The
+# company goes dark instead of degraded, which is the precise outcome
+# the ISOLATED branch exists to prevent.
+#
+# Four reconcile intervals: a live node writes its status every tick, so
+# four consecutive misses is already well past a blip and comfortably
+# inside the lease TTL a dead node's presence takes to lapse.
+PEER_STATUS_FRESH_SECONDS = RECONCILE_INTERVAL_SECONDS * 4
 
 # How many consecutive reconcile ticks a node may be behind before its
 # lag counts as anomalous rather than as ordinary propagation.
@@ -282,6 +306,13 @@ class ConfigPlaneStore:
         A peer that reported ``degraded`` counts as reported but NOT as
         ok: its rollback did not restore what it tore down, so it is not
         somewhere work can safely go.
+
+        **Bounded on freshness**, because a row here is a peer's last
+        word and not a liveness signal: ``record_apply`` upserts on
+        ``node_id``, so a node that was scaled in or crashed leaves its
+        ``ok`` behind forever. Counting it makes a diverged survivor
+        shed its seats to a peer that no longer exists — see
+        :data:`PEER_STATUS_FRESH_SECONDS`.
         """
         row = await self._db.fetchrow(
             """
@@ -289,10 +320,13 @@ class ConfigPlaneStore:
                 COUNT(*) FILTER (WHERE status = 'ok')  AS ok,
                 COUNT(*)                               AS reported
             FROM config_apply_status
-            WHERE epoch = $1 AND node_id <> $2
+            WHERE epoch = $1
+              AND node_id <> $2
+              AND updated_at > now() - make_interval(secs => $3)
             """,
             int(epoch),
             exclude_node,
+            float(PEER_STATUS_FRESH_SECONDS),
         )
         if row is None:
             return (0, 0)
@@ -342,19 +376,30 @@ class MemoryConfigPlaneStore:
             "epoch": int(epoch),
             "status": str(status),
             "error": error,
+            # Stamped so the twin can apply the same freshness bound the
+            # SQL does. Without it the twin counts a dead node's `ok`
+            # forever and certifies a SHED the real plane would call
+            # ISOLATED — and the contract suite runs against both.
+            "reported_at": time.monotonic(),
         }
 
     async def peer_health(
         self, epoch: int, *, exclude_node: str = ""
     ) -> tuple[int, int]:
+        cutoff = time.monotonic() - PEER_STATUS_FRESH_SECONDS
         rows = [
             r
             for r in self._status.values()
-            if r["epoch"] == int(epoch) and r["node_id"] != exclude_node
+            if r["epoch"] == int(epoch)
+            and r["node_id"] != exclude_node
+            and float(r.get("reported_at", 0.0)) > cutoff
         ]
         return (sum(1 for r in rows if r["status"] == "ok"), len(rows))
 
     async def fleet(self) -> list[dict[str, Any]]:
+        # Every row, fresh or not: this is the operator view, and a node
+        # that stopped reporting is exactly what it needs to show.
         return [
-            dict(r) for r in sorted(self._status.values(), key=lambda r: r["node_id"])
+            {k: v for k, v in r.items() if k != "reported_at"}
+            for r in sorted(self._status.values(), key=lambda r: r["node_id"])
         ]
