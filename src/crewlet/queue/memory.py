@@ -697,7 +697,41 @@ class MemoryEventQueue:
             return
         assert member.batch_key is not None
         parts = order_partitions_oldest_first(partition_by_key(chunk, member.batch_key))
-        for key, part in parts:
+        # Everything still queued is BEHIND this chunk. Remembered so a
+        # mid-batch quiesce can tell what a deferral pushed back to the
+        # front from what was already there, and slot the undispatched
+        # partitions between them.
+        tail_before = len(sub.events)
+        for index, (key, part) in enumerate(parts):
+            if member.client is not None and member.topic_key in (
+                member.client._quiescing
+            ):
+                # Quiesced — by an earlier partition in this very batch,
+                # or between batches. Stop dispatching and put the rest
+                # back for whoever attaches next. The Pulsar backend
+                # checks exactly here (``_process_batch``), and the twin
+                # not doing so was worse than a missing guard: after one
+                # partition deferred, the loop went on invoking the
+                # handler for partitions 2..N on a seat this node had
+                # just been told it does not own, and each deferral did
+                # ``extendleft`` — so the backlog came back in REVERSE
+                # partition order, which is precisely the reordering
+                # ``DeferDelivery`` exists to prevent. ``tests/test_fleet``
+                # runs against this twin as its "the same suite passes on
+                # the twin" criterion, so it would have certified an
+                # ordering guarantee the real broker does not give.
+                remaining: list[Event] = []
+                for _key, rest in parts[index:]:
+                    remaining.extend(rest)
+                # After the deferring partition, not before it. ``_invoke``
+                # has already pushed that partition back to the front, so
+                # an ``extendleft`` here would put these ahead of it and
+                # reverse the very order this guard exists to keep.
+                queued = list(sub.events)
+                restored = len(queued) - tail_before
+                sub.events.clear()
+                sub.events.extend(queued[:restored] + remaining + queued[restored:])
+                return
             events = list(part)
             await self._invoke(
                 sub,

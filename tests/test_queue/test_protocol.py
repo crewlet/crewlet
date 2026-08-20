@@ -216,6 +216,61 @@ class TestMemoryEventQueue:
         assert q.dead_letters("topic.d", "grp") == []
         await q.stop()
 
+    async def test_a_deferral_stops_the_rest_of_a_batch(self) -> None:
+        """The twin must model the broker, not something kinder.
+
+        ``PulsarEventQueue._process_batch`` checks ``sub.quiescing`` at
+        the top of EVERY partition, so a seat that lost its lease stops
+        dispatching mid-batch. The memory twin's loop had no such check:
+        after one partition deferred it went on invoking the handler for
+        partitions 2..N on a seat this node had just been told it does
+        not own — and each deferral pushed its partition to the FRONT of
+        the backlog, so the queue came back in reverse partition order.
+        That is the exact reordering ``DeferDelivery`` exists to
+        prevent.
+
+        ``tests/test_fleet`` runs against this twin as its "the same
+        suite passes on the twin" criterion, so a twin that is more
+        forgiving than the broker certifies guarantees production does
+        not have.
+        """
+        from crewlet.queue.protocol import BatchOptions, DeferDelivery
+
+        q = MemoryEventQueue()
+        await q.start()
+        seen: list[str] = []
+
+        async def handler(events: list[Event]) -> None:
+            seen.append(str(events[0].payload["k"]))
+            raise DeferDelivery("seat is not owned here")
+
+        await q.subscribe_batch(
+            "topic.b",
+            "grp",
+            handler,
+            batch_key=lambda e: str(e.payload["k"]),
+            options=BatchOptions(),
+        )
+        # Paused while publishing so all three land in ONE batch as three
+        # partitions. Publishing to a live subscription drains inline per
+        # event, and the multi-partition loop this covers never runs.
+        await q.pause_topic("topic.b", "grp", reason="test")
+        for key in ("a", "b", "c"):
+            await q.publish("topic.b", Event(type="x", payload={"k": key}))
+        await q.resume_topic("topic.b", "grp", reason="test")
+
+        assert seen == ["a"], (
+            f"the deferral did not stop the batch — handled {seen} on a "
+            f"seat this node was told it does not own"
+        )
+        # Everything is still queued, and still in partition order.
+        backlog = [str(e.payload["k"]) for e in q.backlog("topic.b", "grp")]
+        assert backlog == ["a", "b", "c"], (
+            f"the backlog came back as {backlog}; deferring partition by "
+            f"partition reversed the conversation"
+        )
+        await q.stop()
+
     async def test_resume_topic_unpaused_is_noop(self) -> None:
         q = MemoryEventQueue()
         await q.start()
