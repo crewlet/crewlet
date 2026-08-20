@@ -140,15 +140,27 @@ not literally break the no-placeholder-screens rule — but it would break its
 purpose. Health has to be seen when you were *not* looking for it, and a
 screen you navigate to is one you open after you already suspect a problem.
 
-Two conditions escalate out of the popover into always-on chrome, because they
-must never wait for a click:
+Three conditions escalate out of the popover into always-on chrome, because
+they must never wait for a click:
 
 | Condition | Chrome |
 |---|---|
 | The socket is down | Red dot, red banner naming how old the state on screen is |
 | No company configuration is active | Amber dot, amber banner — the engine is running and **discarding every inbound webhook** |
+| The engine refused this browser's API token | Amber banner **plus a button**, the only affordance the banner carries |
 
-The second is the one this surface exists for. An unconfigured engine used to
+The last one is checked before "the socket is down", and has to be: a refused
+handshake leaves the socket down, so the outage wording is literally true and
+completely misleading — "retrying" describes a wait that ends by itself, and
+this one ends only when somebody supplies a token. It is the only degraded
+state that resolves for nobody, which is why it is the only one with a button:
+the prompt fires once per rejection on purpose (reconnect backs off to 30 s, and
+a modal that reopens on every attempt is worse than the problem), so dismissing
+it would otherwise leave a permanent notice with no way to act on it. Reads are
+open by default, so most deployments never see any of this; it is what
+`api.auth.allow_anonymous_read: false` looks like from the browser.
+
+The middle one is what this surface exists for. An unconfigured engine used to
 render identically to a correctly-configured idle one: green dot, `status: ok`,
 and every list empty. It now says so in the banner, in the popover, in the
 overview's headline, and in every empty list — `emptyOrPending` in `js/ui.js`

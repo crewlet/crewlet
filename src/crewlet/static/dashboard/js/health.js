@@ -199,7 +199,16 @@ export function renderHealthPopover(health, stream, events, connected) {
 }
 
 /** The always-on banner text, or `""` when there is nothing to say. */
-export function bannerFor(health, connected, events) {
+export function bannerFor(health, connected, events, authRejected) {
+  // Checked before `connected`, and it has to be: a refused handshake
+  // leaves the socket down, so the outage text is literally true and
+  // completely misleading. "Retrying" describes a wait that ends by
+  // itself; this one ends only when somebody supplies a token.
+  // Plain prose, not markdown: this is set with `textContent`, so
+  // backticks would render as backticks.
+  if (authRejected) {
+    return "The engine refused this browser's API token — reads are guarded on this deployment. Set a token matching one of its api.auth.tokens entries.";
+  }
   if (!connected) {
     const last = (events || [])[0];
     return last
@@ -216,7 +225,8 @@ export function bannerFor(health, connected, events) {
 }
 
 /** Which tone the banner takes: an unconfigured engine is not an outage. */
-export function bannerTone(health, connected) {
+export function bannerTone(health, connected, authRejected) {
+  if (authRejected) return "warn";
   if (!connected) return "down";
   return health && health.configured === false ? "warn" : "";
 }

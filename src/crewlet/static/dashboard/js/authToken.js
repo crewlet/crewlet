@@ -52,17 +52,13 @@ export function tokenGate(what) {
     </div>`;
 }
 
-/** Whether an API result is an auth rejection. */
-export function isAuthError(result) {
-  return !!result && result._error === 401;
-}
-
 /**
- * Show a one-time, page-level prompt when the API rejects our token.
+ * Show a one-time, page-level prompt when the engine rejects our token.
  *
- * The whole API is guarded now, so a dashboard opened without a token
- * gets 401s from its very first fetch. Without this it would render an
- * empty shell and look broken rather than unauthenticated.
+ * Called from the socket's close handler, which is the only place that
+ * can tell a refused credential from an unreachable engine. One time,
+ * deliberately: reconnect backs off to 30 s and would otherwise reopen
+ * the modal forever. The banner carries the state after a dismissal.
  */
 let promptedOnce = false;
 export function ensureTokenForApi(onSet) {

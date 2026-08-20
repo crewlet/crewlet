@@ -43,6 +43,12 @@ export class Store {
       schedules: null,
       recentRuns: null,
       connected: false,
+      // Whether the engine REFUSED this browser rather than being
+      // unreachable. Distinct from `connected` because the repair is
+      // different and the reader cannot guess which one they are looking
+      // at: a stopped engine comes back on its own, a rejected token
+      // never does.
+      authRejected: false,
     };
     // slice → Set<fn>
     this._subs = new Map();
@@ -190,6 +196,13 @@ export class Store {
   setConnected(value) {
     this.state.connected = value;
     if (!value) this.state.health = { status: "unknown" };
+    this._emit("health");
+  }
+
+  setAuthRejected(value) {
+    const next = !!value;
+    if (this.state.authRejected === next) return;
+    this.state.authRejected = next;
     this._emit("health");
   }
 

@@ -123,9 +123,22 @@
             <button class="icon-btn" id="theme-btn" title="Toggle theme"></button>
           </div>
         </header>
+        <!--
+          The button is the banner's one affordance, and it exists for a
+          single state: a refused API token. Every other degraded state
+          resolves on its own — the engine comes back, a config is
+          imported — so the banner only reports them. A rejected token
+          resolves for nobody, and the prompt that would ask for one is
+          deliberately one-shot (a 30s reconnect backoff must not reopen
+          a modal forever), so dismissing it would otherwise leave a
+          permanent notice with no way to act on it.
+        -->
         <div class="degraded" id="degraded" hidden>
           <span class="ic sm"><svg><use href="#i-alert" /></svg></span>
           <span id="degraded-text"></span>
+          <button class="btn sm" id="degraded-action" data-action="set-token-chrome" hidden>
+            Set API token
+          </button>
         </div>
         <section class="view" id="view"></section>
       </main>

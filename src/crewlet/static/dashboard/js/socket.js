@@ -13,8 +13,17 @@
 // stops the moment the socket is back.
 
 import { api } from "./api.js";
+import { apiToken, ensureTokenForApi } from "./authToken.js";
 
 const PATH = "/ws/stream";
+// The close code the server sends when it refuses the handshake
+// (``policy violation``). It is the ONLY way this client can tell "your
+// token is wrong" from "the engine is down": a browser exposes no status
+// code for a failed WebSocket upgrade, and every other failure arrives as
+// 1006. Without the distinction a guarded engine looks exactly like a
+// stopped one, and the reader is told to wait for something that is never
+// coming back on its own.
+const CLOSE_UNAUTHORIZED = 1008;
 // Reconnect backoff ceiling. Long enough that a dashboard left open
 // against a stopped engine is not hammering it, short enough that
 // bringing the engine back feels immediate.
@@ -136,9 +145,17 @@ export class LiveSocket {
       return;
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
+    // A `WebSocket` constructor cannot carry an `Authorization` header,
+    // so the token rides the query string — the one place this dashboard
+    // sends it that way, and the server accepts either form. It is sent
+    // on EVERY dial, not only after a rejection: an engine that guards
+    // reads refuses the handshake outright, and a client that waits to be
+    // told would spend a full backoff cycle disconnected on every load.
+    const token = this.token || apiToken();
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
     let sock;
     try {
-      sock = new WebSocket(`${proto}://${location.host}${PATH}`);
+      sock = new WebSocket(`${proto}://${location.host}${PATH}${qs}`);
     } catch {
       this._scheduleReconnect();
       return;
@@ -148,6 +165,7 @@ export class LiveSocket {
     sock.onopen = () => {
       this.opened = true;
       this.attempt = 0;
+      this.store.setAuthRejected(false);
       this.store.setConnected(true);
       clearTimeout(this.reconnectTimer);
       this._stopFallback();
@@ -159,7 +177,7 @@ export class LiveSocket {
       this._flushQueries();
     };
     sock.onmessage = (e) => this._onMessage(e.data);
-    sock.onclose = () => {
+    sock.onclose = (e) => {
       this._stopPing();
       this.sock = null;
       // Queries are NOT failed here: they are reads, and the reconnect
@@ -172,12 +190,37 @@ export class LiveSocket {
       this.store.setConnected(false);
       this._scheduleReconnect();
       this._startFallback();
+      // Last, and deliberately: the prompt inside blocks the thread, and
+      // re-dials on an answer. Running it mid-handler would have that
+      // re-dial race the teardown still finishing around it.
+      if (e && e.code === CLOSE_UNAUTHORIZED) this._authRejected();
     };
     sock.onerror = () => {
       // `onclose` runs next and owns the recovery; just surface the
       // disconnected state so the header stops claiming to be live.
       this.store.setConnected(false);
     };
+  }
+
+  /**
+   * The engine refused this browser's credential.
+   *
+   * Two things happen, and both are needed. The prompt is the repair —
+   * the dashboard is served unauthenticated by design (the page that
+   * asks for a token cannot itself require one), so the browser has no
+   * other moment to learn it needs one. The store flag is what happens
+   * when the reader dismisses that prompt: `ensureTokenForApi` fires
+   * once and only once, deliberately, so that a 30-second reconnect
+   * backoff does not reopen a modal forever — which leaves the page
+   * looking like an outage unless the chrome can say otherwise.
+   */
+  _authRejected() {
+    this.store.setAuthRejected(true);
+    ensureTokenForApi(() => {
+      this.setToken(apiToken());
+      this.store.setAuthRejected(false);
+      this.reconnect();
+    });
   }
 
   _onMessage(raw) {
@@ -278,7 +321,13 @@ export class LiveSocket {
   // ---- degraded mode ----
 
   _startFallback() {
-    if (this.fallbackTimer) return;
+    // The `closed` guard is not decoration. `stop()` clears the timers
+    // and THEN closes the socket, whose own close handler comes back
+    // here — so without it a stopped client left a 5-second fetch loop
+    // hammering the engine for the life of the tab, with no socket and
+    // nothing left to render it into. `_scheduleReconnect` has always
+    // had the same guard; this one was simply missing.
+    if (this.closed || this.fallbackTimer) return;
     this._fallbackFetch();
     this.fallbackTimer = setInterval(() => this._fallbackFetch(), FALLBACK_MS);
   }
