@@ -151,6 +151,20 @@ src/crewlet/          # Main package
                       #   revision is the documented rotation gesture, so
                       #   a payload-only comparison made it rebuild
                       #   nothing. Never persisted or logged
+  work_key.py         # THE work-key grammar — what identifies the unit
+                      #   of work a turn did, shared by the engine (which
+                      #   binds it around a dispatch) and the writers that
+                      #   must not duplicate under it. NOT turn_id: two
+                      #   nodes completing one trigger mint two turn ids,
+                      #   so a key from one RECORDS the duplicate instead
+                      #   of collapsing it — derived from the constituent
+                      #   trigger event ids, the same identity the
+                      #   completion ledger uses. Travels as a contextvar
+                      #   (like providers/llm/scope.py) because the
+                      #   writers sit frames below the dispatch behind
+                      #   functions with no other reason to carry it.
+                      #   Empty = a turn with no ledgerable trigger, which
+                      #   skips the guard: nothing to collapse
   env_refs.py         # THE ${VAR} reference grammar — one compiled pattern
                       #   shared by config.py (substitution), secrets/
                       #   registry.py (skip-pointers-when-masking), org/

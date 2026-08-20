@@ -100,6 +100,7 @@ it.
 | `leases` | Which node runs which seat, which node holds which duty, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config_activations` · `config_apply_status` | Which company revision is current, and which nodes have reached it | [Control Plane](control-plane.md) |
 | `turn_completions` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
+| `episodes.work_key` | Which unit of work an agent's memory already records, so two nodes finishing one turn leave one memory | [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work) |
 | `token_budget_usage` | Org and per-seat spend against the cap. Caps stay config-derived in memory; only *usage* is shared | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 | `webhook_deliveries` | Has this inbound delivery been seen — the dedupe ring that used to be a per-process dict, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |
 | `credential_cooldowns` | Which provider key is cooling after a 429. Per-process `time.monotonic()` values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
@@ -188,12 +189,16 @@ theoretical one:
 - **A wedged-alive zombie can act for up to one LLM round plus one heartbeat
   interval** after losing its lease. Fencing bounds the damage to that window;
   it does not prevent the window.
-- **Fencing does not yet cover every seat-scoped write.** The learning tables
-  (`episodes`, `agent_diary`, counterparty profiles), `token_usage`, and the
-  onboarding markers are written unfenced. See
-  [Fencing: what it protects, and what it cannot](seat-ownership.md#fencing-what-it-protects-and-what-it-cannot)
-  — this is the least visible duplicate the design admits to, and it is
-  outstanding work.
+- **Two seat-scoped writes still duplicate, deliberately.** A
+  differently-worded `agent_diary` entry (identical content already
+  collapses on write) and a `token_usage` row. Nothing can key a reworded
+  memory to its twin — that needs the duplicate *turn* not to happen, which
+  is the completion ledger's job — and `token_usage` is observability on a
+  high-volume path swept on a TTL, where a guard costs more than the skew.
+  Budget *enforcement* is unaffected: it reads the shared
+  `token_budget_usage` counter. `episodes` and the counterparty interaction
+  count are collapsed, and onboarding was already exclusive; see
+  [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work).
 - **Per-company singletons remain singletons.** They sit behind leases so any
   node can host them, but the scheduler tick, the curator, clustering and the
   sandbox waiter are each one logical instance at a time. A fleet does not

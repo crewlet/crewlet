@@ -94,7 +94,33 @@ That also gives the right answer during a database blip. The lease row is untouc
 
 The epoch is threaded into the **sandbox run state** — every mutation on a live `pending_sandbox_run` row carries `WHERE owner_epoch = $epoch` — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
 
-It is **not** yet on every seat-scoped write. The learning tables (`episodes`, `agent_diary`, counterparty profiles), `token_usage`, and the onboarding markers and pass-claims are written unfenced, so a zombie that completes a turn between fence checks can write a second episode and a second diary entry for one human message. That is the least visible duplicate the design admits to and the one worth naming: a doubled Slack post is obvious and recoverable, while doubled agent memory is retrieved by every later turn's episode recall. Closing it is outstanding work.
+It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
+
+| Table | A second writer today |
+|---|---|
+| `episodes` | **Collapsed.** One row per unit of work — see [Keying a write on the work](#keying-a-write-on-the-work) below |
+| `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
+| `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
+| `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
+| `token_usage` | Two rows, skewing the dashboard rollup. **Not** budget enforcement, which reads the shared `token_budget_usage` counter and stays correct |
+
+The last two are deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's. And `token_usage` is observability on a high-volume insert path swept on a TTL; a guard there costs more than the skew it prevents.
+
+## Keying a write on the work
+
+The instinct is to fence these the way `pending_sandbox_run` is fenced, with `WHERE owner_epoch = $epoch`. That works for a mutation of an existing row and fails here twice over: an insert has no prior row to hang the condition on, and a fence **loses data in the case where nothing went wrong** — a node that completes a turn, acks the delivery and only then lapses would have its episode refused. The turn happened; the memory of it is gone.
+
+So the write is keyed on the work rather than fenced on the writer. Every turn dispatched from a ledgerable trigger carries a `work_key` derived from its constituent event ids — the same identity the completion ledger uses, and the one thing that is stable across a re-run (two nodes mint two `turn_id`s, so anything keyed on those records the duplicate instead of collapsing it).
+
+|  | epoch fence | work key |
+|---|---|---|
+| Zombie and owner both complete | one row | one row |
+| Owner completes, acks, *then* lapses | **row lost** | one row |
+| Ledger fails open, turn legitimately re-runs | two rows | one row |
+
+Exclusion is an advisory lock on `(agent_handle, work_key)` plus `INSERT … WHERE NOT EXISTS`, not a unique index — `episodes` is a hypertable partitioned on `ended_at`, so every unique index must contain `ended_at`, and the two duplicate turns end at different times. `WHERE NOT EXISTS` alone is evaluated under the statement's snapshot, so without the lock two concurrent writers both see "not there" and both insert; the lock is what closes that, and the test suite measures it rather than asserting it.
+
+A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a sandbox resume — carries an empty key, skips the guard entirely, and writes exactly as it always did. It has no cross-node duplicate to collapse.
 
 **Fencing protects database state. It cannot protect outbound effects.** `run_sandbox` makes this concrete: it acquires a real, billed sandbox *before* the pending row is written, so no epoch-fenced insert can undo a box that is already pushing commits. The property the design offers is **bounded duplication**, not none — and what bounds it is the in-turn fence.
 
