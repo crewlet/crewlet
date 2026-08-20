@@ -449,6 +449,38 @@ class SeatHost:
             return None
         return held.lease.epoch
 
+    def note_delivery_deferred(self, handle: str) -> None:
+        """Record that this seat's consumer stopped for want of proof.
+
+        Called by the caller that acted on a ``may_start`` refusal by
+        deferring a delivery — which quiesces the attachment. Without
+        this the seat is **permanently deaf on a perfectly healthy
+        node**, and it takes no failure at all to get there:
+        ``may_start`` refuses once the last renew is older than one
+        heartbeat interval, and consecutive renews are exactly one
+        heartbeat apart plus the duration of the pass, so every cycle
+        has a real window where a healthy, renewing seat answers
+        ``None``. A batch landing in that window defers, the queue
+        quiesces, and nothing ever resumes it: ``_note_admission`` is
+        edge-triggered on the set below, the deferral never entered it,
+        so the next successful renew reports "still admitted", short-
+        circuits, and never calls the resume hook.
+
+        Deliberately NOT inside :meth:`may_start`. The in-turn fence
+        calls that too, where a refusal abandons a turn and stops no
+        consumer — marking there would leave the set claiming a seat is
+        quiesced when it is still happily consuming, and the next real
+        store outage would then short-circuit the call that stops it.
+        The state means "the consumer is stopped pending proof", so only
+        the path that stops one may set it.
+
+        No hook fires here: the consumer is already stopping, which is
+        what got us called. This records the edge so the *resume* can
+        fire on the next successful renew.
+        """
+        if handle in self._held or handle in self._undead:
+            self._unproven_admission.add(handle)
+
     def epoch_for(self, handle: str) -> int | None:
         """The fencing token for a seat, or ``None`` if not held here.
 
@@ -820,8 +852,13 @@ class SeatHost:
         for handle in list(self._held):
             if handle not in seats:
                 logger.info("seat_released_role_gone", seat=handle)
-                await self.release(handle, ReleaseReason.ROLE_GONE)
-                released.append(handle)
+                # Only if the release was PROVEN. ``release`` returns
+                # False when teardown could not be confirmed and the seat
+                # went undead — still leased, still renewed, and reported
+                # as released is exactly backwards. ``_shed_to_capacity``
+                # has always checked; these two did not.
+                if await self.release(handle, ReleaseReason.ROLE_GONE):
+                    released.append(handle)
             elif handle not in eligible:
                 # Still a seat, no longer OURS to run: the placement
                 # selector changed under a live apply, or this node's
@@ -836,8 +873,8 @@ class SeatHost:
                     node=self.node_id,
                     placement=self._placement(handle).describe(),
                 )
-                await self.release(handle, ReleaseReason.PLACEMENT)
-                released.append(handle)
+                if await self.release(handle, ReleaseReason.PLACEMENT):
+                    released.append(handle)
 
         if not self._draining:
             released.extend(await self._shed_to_capacity(capacity))
@@ -968,15 +1005,29 @@ class SeatHost:
             async with self._lock_for(handle):
                 if handle in self._held:
                     continue  # re-claimed under us while we waited
-                lease = await self.leases.try_acquire(
-                    seat_resource(handle),
-                    owner=self.owner,
-                    ttl_seconds=self.ttl_seconds,
-                    # The STABLE node id, not the incarnation: the hint
-                    # has to survive this process to be worth anything.
-                    preferred=self.node_id,
-                    protocol=self.protocol,
-                )
+                try:
+                    lease = await self.leases.try_acquire(
+                        seat_resource(handle),
+                        owner=self.owner,
+                        ttl_seconds=self.ttl_seconds,
+                        # The STABLE node id, not the incarnation: the
+                        # hint has to survive this process to be worth
+                        # anything.
+                        preferred=self.node_id,
+                        protocol=self.protocol,
+                    )
+                except LeaseError:
+                    # The store is unreachable, which says nothing about
+                    # who owns what. Stop claiming — never take a seat on
+                    # unknown state — and report what this pass actually
+                    # got. Distinct from ``None``, which is a real
+                    # refusal by a peer and only skips THIS seat.
+                    logger.warning(
+                        "seat_claim_unavailable",
+                        seat=handle,
+                        claimed=len(claimed),
+                    )
+                    break
                 if lease is None:
                     continue
                 self._held[handle] = _Held(
@@ -984,9 +1035,20 @@ class SeatHost:
                     handle=handle,
                     renewed_at=asyncio.get_running_loop().time(),
                 )
-                claimed.append(handle)
                 logger.info("seat_claimed", seat=handle, epoch=lease.epoch)
                 await self._notify_acquire(handle, lease)
+                # Counted only once the seat is ESTABLISHED. The hook
+                # gives a failed takeover straight back (bad MCP command,
+                # a credential resolving to nothing), so appending before
+                # it meant a seat nothing runs still burned one of this
+                # pass's claim slots, still logged as claimed, and — the
+                # part that misleads an operator — still made ``claimed``
+                # non-empty, which suppresses the protocol-block probe
+                # below. A stalled mixed-version upgrade then reported
+                # ``blocked_by_protocol=None`` beside a claim that never
+                # happened.
+                if handle in self._held:
+                    claimed.append(handle)
 
         if claimed:
             return claimed, None
@@ -1146,6 +1208,18 @@ class SeatHost:
     async def _renew_node_presence(self) -> None:
         """Keep this node counted in the fleet size.
 
+        **Not while draining.** ``begin_drain`` drops the presence lease
+        precisely so peers stop reserving capacity for a node that will
+        never claim again — and the heartbeat runs on regardless, so an
+        ungated renew here put the row straight back within one
+        interval. A node shedding on a config posture can stay drained
+        for minutes: with 3 nodes and 10 seats, the two healthy peers
+        each compute ``ceil(10/3) = 4`` and two of the drained node's
+        seats are claimable by nobody for the whole window.
+
+        ``resume_claiming`` is what re-establishes it, and it is the only
+        thing that should.
+
         Uses ``try_acquire`` rather than ``renew`` because it is
         idempotent for a live self-held lease and re-establishes the row
         after a lapse, which is exactly the behaviour presence wants.
@@ -1158,6 +1232,8 @@ class SeatHost:
         either, because the protocol block is only reported on the seat
         path.
         """
+        if self._draining:
+            return
         try:
             lease = await self.leases.try_acquire(
                 node_resource(self.node_id),

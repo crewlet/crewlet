@@ -1395,3 +1395,141 @@ async def test_the_profile_reaches_peers_on_the_presence_lease(leases: Any) -> N
     lease = await leases.get(node_resource("node-a"))
     assert lease is not None
     assert NodeProfile.from_meta("node-a", lease.meta) == host.profile
+
+
+async def test_a_deferred_delivery_is_resumed_by_the_next_healthy_renew(
+    leases: Any,
+) -> None:
+    """A seat that defers on freshness must not go deaf forever.
+
+    This needs no failure at all to reach, which is what makes it worth
+    a test of its own. ``may_start`` refuses once the last renew is
+    older than one heartbeat interval, and consecutive renews are one
+    heartbeat apart PLUS the duration of the pass — so every cycle has
+    a real window where a healthy, successfully-renewing seat answers
+    ``None``. A batch landing in that window raises ``DeferDelivery``
+    and the queue quiesces the attachment.
+
+    Nothing resumed it. ``_note_admission`` is edge-triggered, the
+    deferral never entered the set, so the next successful renew
+    reported "still admitted", short-circuited, and never called the
+    hook. The node kept the lease, kept renewing, stayed attached, and
+    read nothing from that inbox again until the process restarted.
+    """
+    calls: list[tuple[str, bool]] = []
+
+    async def _admission(handle: str, admitted: bool) -> None:
+        calls.append((handle, admitted))
+
+    host = _host(leases, seats=lambda: ["ceo"], on_admission=_admission)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    # The ordinary window: last renew is older than one heartbeat.
+    host._held["ceo"].renewed_at -= host.heartbeat_seconds * 2
+    assert host.may_start("ceo") is None, "the premise — a healthy seat refused"
+    host.note_delivery_deferred("ceo")
+
+    # A perfectly ordinary, SUCCESSFUL heartbeat.
+    await host.heartbeat()
+    assert host.held_handles == ("ceo",)
+    assert host.may_start("ceo") is not None
+    assert calls == [("ceo", True)], (
+        "the deferred consumer was never resumed, so the seat is deaf "
+        "on a healthy node for the life of the process"
+    )
+
+
+async def test_the_in_turn_fence_does_not_claim_a_consumer_stopped(
+    leases: Any,
+) -> None:
+    """``may_start`` has two callers with opposite consequences.
+
+    The delivery path defers and quiesces; the in-turn fence abandons a
+    turn and stops no consumer. Marking the second would leave the set
+    claiming a seat is quiesced while it is still happily consuming —
+    and the next real store outage would then short-circuit the very
+    call that stops it, because that transition is edge-triggered too.
+    """
+    calls: list[tuple[str, bool]] = []
+
+    async def _admission(handle: str, admitted: bool) -> None:
+        calls.append((handle, admitted))
+
+    host = _host(leases, seats=lambda: ["ceo"], on_admission=_admission)
+    await host._renew_node_presence()
+    await host.sweep()
+
+    host._held["ceo"].renewed_at -= host.heartbeat_seconds * 2
+    assert host.may_start("ceo") is None  # the fence trips; no defer call
+    await host.heartbeat()
+    assert calls == [], "a fence trip must not fake a consumer stop"
+    assert "ceo" not in host.unproven_handles
+
+
+async def test_a_draining_node_stays_out_of_the_fleet_count(leases: Any) -> None:
+    """`begin_drain` drops presence for a reason, and the heartbeat put
+    it straight back.
+
+    A draining node in the divisor makes peers reserve capacity for a
+    node that will never claim again. On the posture-shed path — which
+    can last minutes, not seconds — that is real stranded work: with 3
+    nodes and 10 seats the healthy peers each compute `ceil(10/3) = 4`,
+    and 2 of the drained node's seats are claimable by nobody until it
+    comes back.
+    """
+    host = _host(leases, seats=lambda: ["ceo"])
+    await host._renew_node_presence()
+    await host.sweep()
+    assert len(await leases.list_live("node:")) == 1
+
+    await host.begin_drain()
+    assert await leases.list_live("node:") == [], "begin_drain kept presence"
+
+    # The heartbeat loop keeps ticking through a drain — that is what
+    # keeps held seats alive while their turns finish.
+    await host.heartbeat()
+    assert await leases.list_live("node:") == [], (
+        "the heartbeat re-announced a draining node, putting it back in "
+        "every peer's capacity divisor"
+    )
+
+
+async def test_resuming_from_a_shed_announces_the_node_again(leases: Any) -> None:
+    """The other half: a node that shed on divergence and then converged
+    has to rejoin, or it sits out until it restarts."""
+    host = _host(leases, seats=lambda: ["ceo"])
+    await host._renew_node_presence()
+    await host.sweep()
+    await host.begin_drain()
+    assert await leases.list_live("node:") == []
+
+    await host.resume_claiming()
+    assert len(await leases.list_live("node:")) == 1
+
+
+async def test_a_seat_whose_acquire_failed_is_not_reported_as_claimed(
+    leases: Any,
+) -> None:
+    """`claimed` is the pass's ledger, and it counted seats nothing runs.
+
+    The acquire hook gives a failed takeover straight back — a bad MCP
+    command, a credential resolving to nothing — so the seat is released
+    before the sweep returns. Appending before the hook meant it still
+    burned a claim slot, still logged as claimed, and still made
+    `claimed` non-empty, which suppresses the protocol-block probe: a
+    stalled mixed-version upgrade then reported `blocked_by_protocol=None`
+    beside a claim that never happened.
+    """
+
+    async def _boom(handle: str, lease: Any) -> None:
+        raise RuntimeError("no such MCP command")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_acquire=_boom)
+    await host._renew_node_presence()
+    result = await host.sweep()
+
+    assert host.held_handles == (), "the failed seat was given back"
+    assert result.claimed == (), (
+        f"reported {result.claimed} as claimed, but nothing runs those seats"
+    )

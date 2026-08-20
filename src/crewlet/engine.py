@@ -424,6 +424,12 @@ class Engine:
         self._incarnation: str = ""
         self._applied_epoch: int = 0
         self._apply_attempts: int = 0
+        # Which epoch ``_apply_attempts`` is counting. The budget is PER
+        # REVISION: without this it is a per-process budget, and a node
+        # that exhausts it on one bad revision never attempts any later
+        # one — including the fixed revision the operator pushes as the
+        # documented remedy.
+        self._apply_attempts_epoch: int = 0
         self._ticks_behind: int = 0
         self._apply_status: Any = None
         self._posture: Any = None
@@ -1491,6 +1497,26 @@ class Engine:
         if target is None:
             return Posture.SERVE
 
+        # A new revision gets a fresh budget. ``_apply_attempts`` counts
+        # attempts at ONE epoch; carrying it across an activation makes
+        # STUCK terminal for the life of the process, so the operator
+        # does exactly what the runbook says — push a fixed revision —
+        # and the node never tries it, never says why, and stays shed.
+        if target.epoch != self._apply_attempts_epoch:
+            if self._apply_attempts >= MAX_APPLY_ATTEMPTS:
+                logger.info(
+                    "config_apply_attempts_reset",
+                    previous_epoch=self._apply_attempts_epoch,
+                    epoch=target.epoch,
+                    hint=(
+                        "a new revision was activated after this node "
+                        "exhausted its attempts on the previous one; "
+                        "trying again against the new target"
+                    ),
+                )
+            self._apply_attempts = 0
+            self._apply_attempts_epoch = target.epoch
+
         if (
             self._applied_epoch < target.epoch
             and self._apply_attempts < MAX_APPLY_ATTEMPTS
@@ -1573,6 +1599,7 @@ class Engine:
         else:
             self._applied_epoch = target.epoch
             self._apply_attempts = 0
+            self._apply_attempts_epoch = target.epoch
             self._ticks_behind = 0
             logger.info(
                 "config_converged",
@@ -2865,6 +2892,14 @@ class Engine:
             if not self._may_serve_seat(agent.handle):
                 from crewlet.queue.protocol import DeferDelivery
 
+                # Tell the host the consumer is stopping, so the next
+                # successful renew resumes it. Freshness refuses inside
+                # an ordinary heartbeat window on a perfectly healthy
+                # node, so without this a seat goes deaf for the life of
+                # the process the first time a batch lands in that
+                # window. See ``SeatHost.note_delivery_deferred``.
+                if self._seat_host is not None:
+                    self._seat_host.note_delivery_deferred(agent.handle)
                 raise DeferDelivery(f"seat {agent.handle!r} is not owned here")
             # No turn engine yet (booted with zero LLM providers): PARK the
             # events instead of consuming-and-dropping them.  Pause the
