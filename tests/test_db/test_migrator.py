@@ -363,13 +363,13 @@ def test_repair_migration_matches_the_canonical_view_definition() -> None:
         assert match, f"{name} has no learning_health view"
         return " ".join(match.group(0).split())
 
-    assert _view_sql("018_learning_health_repair.sql") == _view_sql(
+    assert _view_sql("020_learning_health_repair.sql") == _view_sql(
         "009_skill_curator.sql"
     )
 
 
 def test_repair_migration_sorts_after_the_definitions_it_repairs() -> None:
     ordered = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
-    assert ordered.index("018_learning_health_repair.sql") > ordered.index(
+    assert ordered.index("020_learning_health_repair.sql") > ordered.index(
         "009_skill_curator.sql"
     )

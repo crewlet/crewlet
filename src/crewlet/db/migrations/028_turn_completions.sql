@@ -32,7 +32,7 @@
 -- could not express at all.
 --
 -- `node` is the process INCARNATION, not the node id — the same identity
--- the lease table holds, for the same reason (see 017_leases.sql).
+-- the lease table holds, for the same reason (see 019_leases.sql).
 -- `owner_epoch` is the fencing token the turn ran under. Neither is read
 -- by the engine: they are here so an operator asking "which node
 -- answered this, and under which claim?" has an answer.

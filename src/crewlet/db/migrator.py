@@ -57,7 +57,7 @@ SECRET_VALUES_MIGRATION = "016_secret_values.sql"
 # the embedding width, and gating it behind one would leave the table
 # absent on exactly the databases (no active revision yet) where two
 # processes are most likely to be racing each other.  Self-contained DDL.
-LEASES_MIGRATION = "017_leases.sql"
+LEASES_MIGRATION = "019_leases.sql"
 
 # The bootstrap phase: the self-contained tables a process needs before
 # it can read config, resolve a secret, or claim a resource.  None is

@@ -89,7 +89,7 @@ operators except the migrator.
 
 ### 1.3 `crewlet.db.leases`
 
-- Migration `017_leases.sql`:
+- Migration `019_leases.sql`:
 
   ```sql
   CREATE TABLE leases (
@@ -130,7 +130,7 @@ operators except the migrator.
   safe, and nothing can guess a width any more. `Engine.apply_config`
   completes the deferred tail once a config declares a width, so the
   unconfigured-bootstrap flow ends with a full schema and no restart.
-- Repair migration `018_learning_health_repair.sql`: re-issues the canonical
+- Repair migration `020_learning_health_repair.sql`: re-issues the canonical
   `learning_health` view definition, healing databases where the
   `005`/`009` `CREATE OR REPLACE VIEW` race applied them out of order.
 - Engine/API boot verifies schema version and fails with a clear "run
@@ -246,7 +246,7 @@ exhausted-check); enforcement never reads it.
 
 ### 3.2 Webhook delivery dedupe
 
-- Migration `020_webhook_deliveries.sql`: `INSERT … ON CONFLICT DO NOTHING`
+- Migration `022_webhook_deliveries.sql`: `INSERT … ON CONFLICT DO NOTHING`
   claims keyed on provider delivery ids (`X-GitHub-Delivery`,
   `X-Gitlab-Event-UUID`, Slack retry headers + event id, Jira/Confluence/
   Plane delivery ids). Replaces the four in-memory rings
@@ -283,7 +283,7 @@ gets built; the original is kept only where the gate endorsed it.
 
 What landed, with the deviations:
 
-- Migration `023_config_plane.sql` + `db/config_plane.py` — the epoch log,
+- Migration `025_config_plane.sql` + `db/config_plane.py` — the epoch log,
   per-node apply status, `decide_posture`, and a memory twin.
 - The activation append runs **inside `CompanyConfigStore`'s own
   transaction** (`ACTIVATION_INSERT_SQL`, one statement shared by both
@@ -707,7 +707,7 @@ Decisions the implementation had to make that the plan left open:
   from *seat* ownership cannot work — a fleet where nobody has claimed
   anything yet reads as zero nodes, and every node then believes it
   should take every seat. The resource shape was already reserved in
-  `017_leases.sql`'s comment.
+  `019_leases.sql`'s comment.
 - **`preferred` orders the attempt and never gates it.** Stated in the
   plan; worth restating because the failure is silent and permanent — the
   hint survives the node that set it, so treating a foreign hint as a
@@ -1868,7 +1868,7 @@ retention delete, both in `MaintenanceWorker` and both tested.
 **Original item, for the record:** the brief rides the inbox wake and
 replies ride a durable response subject, with the in-memory queue kept
 as a same-node fast path behind the same interface; migration
-`027_a2a_channels.sql` for channel bookkeeping; `_handle_a2a` stops
+`029_a2a_channels.sql` for channel bookkeeping; `_handle_a2a` stops
 swallowing unknown channels. Exit criteria: cross-node `a2a_ask`
 integration test; a satellite-profile test (participant reachable only
 via broker + PG); leak test proving channel close tears down all

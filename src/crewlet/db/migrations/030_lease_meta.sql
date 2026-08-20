@@ -9,7 +9,7 @@
 -- `crewlet.seat.placement`.
 --
 -- Additive, which is the only kind of change this table takes (see
--- `017_leases.sql`): an older build never selects the column, so a
+-- `019_leases.sql`): an older build never selects the column, so a
 -- mixed-version fleet keeps working, and `NodeProfile.from_meta` reads a
 -- missing payload as the old behaviour — a node that does everything and
 -- carries no labels.
