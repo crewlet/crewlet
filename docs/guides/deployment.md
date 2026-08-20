@@ -244,8 +244,9 @@ The one thing that is still per-process: `max_concurrent`. The concurrency
 gate is per node, so an org's ceiling becomes N × the configured value.
 Size it per node, not per company.
 
-For the full analysis and the redesign path, see
-[`SCALING.md`](https://github.com/crewlet/crewlet/blob/main/SCALING.md).
+For the model underneath all of this — what a node is, what the fleet shares,
+and where the constants come from — see
+[Scaling Out](../concepts/scaling.md).
 
 ---
 

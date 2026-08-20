@@ -137,6 +137,24 @@ It does, because the **durable subscription** is what retains messages, and the 
 >
 > Under owner-only attachment a seat's subscription has **no connected consumer for as long as the seat is unowned**, so both settings become lossy. Set subscription expiry off (or far above any credible unowned window) and inactive-topic deletion off, or to `delete_when_subscriptions_caught_up`. The repo's `docker-compose.yml` ships the correct values; an operator who upgrades the engine without changing the broker gets a fleet that quietly loses a quiet seat's mail, and nothing in the engine can detect it.
 
+## The wedged node, and why it leaves
+
+Every failure above assumes a node either works or dies. The one that is neither is a process whose **event loop has stalled while the process stays alive** — and it is the worst case, because the two halves of ownership come apart:
+
+- Its seat leases lapse, because nothing is renewing them. Peers take the seats over, correctly.
+- Its **broker session does not lapse.** The Pulsar client answers keepalives from its own IO threads, so the broker goes on treating it as a live consumer and holding its prefetch of those seats' messages — measured at the full unacked-message timeout, roughly **30 minutes** at the engine's setting. The new owner cannot see mail that is already reserved for a corpse.
+
+Nothing can be signalled out of that state: a stalled loop does not run `call_soon_threadsafe` either, so anything a watchdog thread schedules waits behind the very blockage it is reacting to. **What the thread can do unilaterally is end the process** — and that is the whole remedy, because the client dies with the process, the broker sees the session end, and redelivery is immediate (9 ms, measured).
+
+So every node runs an `EventLoopWatchdog`: a beat task in the loop, a daemon thread watching it, and `os._exit(75)` when the lag passes the **lease TTL**. Three things about it are deliberate:
+
+- **The threshold is not a config knob.** It is the same number the lease TTL is. Past it the node is provably not the owner, and letting the two drift is how a process gets to be simultaneously "not the owner" and "still holding the mail".
+- **The exit is the crudest possible one** — no unwinding, no `atexit`, no drain. A process that cannot run its event loop cannot be trusted to run a graceful shutdown, and trying is how a watchdog ends up wedged too. Exit code **75** is distinct from any ordinary failure, so an orchestrator's restart log says what happened.
+- **It is disarmed for the whole of a normal shutdown.** Teardown is the one part of the process that legitimately blocks the loop — reaping MCP subprocesses, joining threads, tearing sandboxes down — and exiting through the middle of it would abandon the seat release that makes a drain graceful. A shutdown that hangs is a `SIGKILL` away; a shutdown that exits without releasing costs every peer a full TTL of dark seats.
+- **A loop that is *gone* is not a loop that is *wedged*.** From the watching thread the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged loop is still alive and still holding a peer's mail, which is the entire reason to exit. A loop that closed took the broker client and its IO threads with it, so there is nothing left to hold. The watchdog therefore records the loop it beats on and stands down (`loop_watchdog_stood_down`) rather than exiting when that loop is closed or no longer running. Without the check, every engine that is abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process.
+
+Single node or fleet, it is armed the same way. With one node nothing is waiting on the prefetch, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
+
 ## Sandbox control is owner-routed
 
 A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
@@ -192,7 +210,10 @@ Two consequences worth stating plainly:
 - **A downgrade across a protocol bump needs a full drain.** An older build has no protocol check at all, so it will happily take over a newer node's expired leases. Stop the whole fleet before rolling back.
 - **The wait is an outage window, and it is the point.** New nodes claim *nothing* until the last old lease lapses or is released — at the shipped 45-second TTL plus however long the old nodes take to drain. Plan the rollout for it rather than being surprised by it: the alternative is two builds disagreeing about what a lease obliges them to do, which is silent and unbounded rather than visible and finite.
 
-The current protocol is **2**. It moved for the completion ledger: after it, holding a seat lease means consulting and settling `turn_completions`, and a v1 node cannot — it takes a seat over, never reads the completion row, and re-runs a turn whose effects already shipped.
+The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
+
+- **v2 — the completion ledger.** Holding a seat lease now means consulting and settling `turn_completions`. A v1 node cannot: it takes a seat over, never reads the completion row, and re-runs a turn whose effects already shipped.
+- **v3 — placement.** Holding a seat lease now means "and this node satisfies the seat's `role.placement`". A v2 node has no such concept, so it claims a seat pinned to a node id or a label it does not carry — and *succeeds*, because the lease is only a mutex and knows nothing about where a seat belongs. The operator's pin is silently violated: the seat runs, on the wrong node, with nothing to see.
 
 ## What ownership looks like from outside
 
@@ -215,6 +236,7 @@ Configure `providers.database.dsn` to run a fleet.
 
 ## See also
 
+- [Scaling Out](scaling.md) — the model this sits inside: what a node is, what the fleet shares, and where these constants were measured
 - [Control Plane](control-plane.md) — how nodes converge on one company config, and the posture a lagging node takes
 - [Event System](event-system.md) — topics, groups, inbox batching
 - [Code Sandbox](code-sandbox.md) — the detached run whose completion this routes

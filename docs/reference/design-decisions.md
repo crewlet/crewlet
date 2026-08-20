@@ -28,16 +28,17 @@ Every persisted event can carry versioning. Schema changes must be **additive on
 
 ---
 
-## Hot Reload: Shared-Memory Propagation
+## Hot Reload: An Activation Epoch, Applied Per Node
 
-Since all agent threads run in the same Engine process, they share memory. Hot reload works as follows:
+A running company takes a new configuration without a restart. **Which** revision is current is a fleet-wide fact; **applying** it is a per-node act.
 
-1. Engine reloads the org model (YAML or API call)
-2. Engine updates the shared `Organization` object (thread-safe via asyncio — single event loop, no data races)
-3. **Removed agents**: Engine cancels their handler and publishes `AgentTerminated`
-4. **New agents**: Engine spawns new instances, subscribes them to inbox topics
-5. **Modified agents**: Engine updates the `AgentDefinition` in place — the agent picks up the new definition on its next turn
-6. **No message-based propagation needed** — agents read from the same `Organization` and `AgentPool` objects in memory
+Within one process, applying a revision is shared-memory work: the engine swaps the `Organization` object, cancels removed agents' handlers and publishes `AgentTerminated`, spawns new ones onto their inbox subscriptions, and updates a modified `AgentDefinition` in place so the agent picks it up on its next turn. Every agent handler is an `asyncio` task on one event loop, so they all read the same objects with no data races and nothing to propagate.
+
+Across processes that is not enough, and the way it failed is worth naming: activation used to be delivered over a competing-consumer subscription, which means **exactly one replica applied a revision and every other node went on running the previous company indefinitely** — with no error anywhere, because from each node's point of view nothing had happened.
+
+So the fleet-wide half is an **append-only activation epoch** in PostgreSQL that every node polls and reconciles against, recording its own outcome (`ok` / `error` / `degraded`) so a stalled rollout is visible rather than silent. The in-process steps above are what a node does once it decides to move. See [Control Plane](../concepts/control-plane.md).
+
+The log is append-only rather than a pointer row for a specific reason: **re-activating an unchanged revision is the documented credential-rotation gesture**, so "the payload did not change" cannot be treated as "nothing to do".
 
 ---
 

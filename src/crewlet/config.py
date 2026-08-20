@@ -804,9 +804,10 @@ class NodeConfig(BaseModel):
     the ``/health`` payload — already the difference between "a config
     apply failed" and "the config apply failed on node-2" once more than
     one process runs, and the only way a caller behind a load balancer
-    can tell which process answered.  It is also the
-    identity every future cross-process mechanism is keyed on (lease
-    owner, per-node subscription name); see ``SCALING.md``.
+    can tell which process answered.  It is also the identity every
+    cross-process mechanism is keyed on (lease owner, per-node
+    subscription name, per-node config apply status); see
+    ``docs/concepts/scaling.md``.
 
     **It must be stable across restarts**, which is why it comes from the
     deployment rather than being generated.  A fresh value per boot would

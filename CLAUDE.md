@@ -458,8 +458,25 @@ src/crewlet/          # Main package
                       #   timeout while its leases lapse and peers take
                       #   over; exiting collapses that to 9 ms. Beat/poll
                       #   are SCALED to the threshold — a beat slower than
-                      #   it makes a healthy loop shoot itself).
-                      #   Constants are MEASURED: SCALING_PLAN.md § Gate (a)
+                      #   it makes a healthy loop shoot itself. A GONE
+                      #   loop is not a WEDGED one — indistinguishable
+                      #   from the thread (the beat just stops), opposite
+                      #   situations: only a live loop still holds a
+                      #   peer's mail. It records its loop and stands
+                      #   down when that loop closed, else every engine
+                      #   abandoned rather than stopped arms a TTL-long
+                      #   suicide timer (it killed this repo's own suite
+                      #   at 63%, exit 75, with zero test failures).
+                      #   Armed by
+                      #   the engine alongside the seat host and DISARMED
+                      #   for the whole of shutdown, which is the one part
+                      #   of the process that legitimately blocks the loop
+                      #   — exiting through it abandons the seat release
+                      #   that makes a drain graceful).
+                      #   Constants are MEASURED:
+                      #   docs/concepts/scaling.md § Where the constants
+                      #   come from; the harness that re-measures them is
+                      #   tests/test_queue/test_broker_behavior.py
   schedule/           # Scheduler — role/unit cron-style recurring work:
                       #   cron.py (5-field evaluator), scheduler.py (tick loop
                       #   + describe_schedules projection for the dashboard

@@ -205,6 +205,9 @@ posture change.
 
 ## See also
 
+- [Scaling out](../concepts/scaling.md) — the model underneath this guide:
+  what a node is, what the fleet shares, and where the constants above
+  (the 45-second TTL, the prefetch cap) were measured
 - [Seat ownership](../concepts/seat-ownership.md) — leases, fencing,
   admission, and what a takeover actually does
 - [Control plane](../concepts/control-plane.md) — how a config revision

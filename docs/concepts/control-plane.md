@@ -192,6 +192,7 @@ One node `error` while peers are `ok` is a per-node problem: a missing env var, 
 
 ## See also
 
+- [Scaling Out](scaling.md) — the model this sits inside, and the other four kinds of coupling a fleet had to resolve
 - [Configuration](configuration.md) — the two-tier split, the apply itself, and rollback
 - [Secret Store](secret-store.md) — where rotated credentials live and how re-activation picks them up
 - [Deployment](../guides/deployment.md) — running more than one node

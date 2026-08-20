@@ -1,7 +1,8 @@
 """Broker measurement harness — the empirical half of the seat-host design.
 
-The takeover story in ``SCALING.md`` rests on three asserted Pulsar
-behaviours, none of which had ever been measured against a real broker:
+The takeover story in ``docs/concepts/seat-ownership.md`` rests on three
+asserted Pulsar behaviours, none of which had ever been measured against a
+real broker:
 
 1. **Session-death timing.** How long after a consumer's process dies
    does the broker redeliver its unacked messages? This is the floor
@@ -33,8 +34,9 @@ Run them against a broker::
 They skip when no broker is reachable, like the rest of
 ``tests/test_queue/test_pulsar.py`` — and skipping is not passing.
 
-Measured on **Pulsar 4.2.4 standalone** (see ``SCALING_PLAN.md`` § Gate
-(a) for what each number decides):
+Measured on **Pulsar 4.2.4 standalone** (see
+``docs/concepts/scaling.md`` § Where the constants come from for what each
+number decides):
 
 ===============================================  ===================
 redelivery after a graceful close                9 ms, nothing lost
@@ -250,7 +252,7 @@ async def test_measure_redelivery_after_consumer_death(queue, client) -> None:
     assert elapsed < _MEASURE_ACK_TIMEOUT_MS / 1000, (
         "a cleanly-closed consumer's messages should not wait out the "
         "ack timeout — if they do, seat handoff is ack-timeout-bound and "
-        "the drain path in SCALING_PLAN 5.8 needs a different story"
+        "releasing each seat as it goes idle buys a drain nothing"
     )
 
 
@@ -523,8 +525,7 @@ async def test_measure_redelivery_count_after_an_ack_timeout(queue, client) -> N
     _report("redelivery_count_after_ack_timeout", count=seen)
     assert seen is not None and seen > 0, (
         "an ack-timeout redelivery did not increment the counter — the "
-        "dead-letter budget rationale in SCALING_PLAN 5.2 item 11 needs "
-        "re-deriving"
+        "dead-letter budget behind _INBOX_MAX_REDELIVER needs re-deriving"
     )
 
 

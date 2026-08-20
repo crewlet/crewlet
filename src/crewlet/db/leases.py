@@ -2,9 +2,10 @@
 
 The primitive every multi-node duty is built on.  A node claims a
 resource (``seat:{handle}``, ``worker:{duty}``), renews it on a heartbeat,
-and loses it by crashing or releasing.  See ``SCALING.md`` for how seat
-ownership uses it, and ``migrations/019_leases.sql`` for why it is a lease
-rather than an advisory lock.
+and loses it by crashing or releasing.  See
+``docs/concepts/seat-ownership.md`` for how seat ownership uses it, and
+``migrations/019_leases.sql`` for why it is a lease rather than an
+advisory lock.
 
 Three rules carry the correctness of everything above:
 

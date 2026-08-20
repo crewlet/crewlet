@@ -1,10 +1,10 @@
 """The one thing a stalled process can still do about itself: leave.
 
-``SCALING.md`` asks for the lease heartbeat on a dedicated OS thread that
-"kills its own seat work" when the event loop stalls. The gate-(c) review
-found it cannot: a stalled loop does not process ``call_soon_threadsafe``
-either, so no cross-thread signal can stop the work. Anything the thread
-schedules waits behind the same blockage it is reacting to.
+The obvious design is a lease heartbeat on a dedicated OS thread that
+"kills its own seat work" when the event loop stalls. It cannot: a
+stalled loop does not process ``call_soon_threadsafe`` either, so no
+cross-thread signal can stop the work. Anything the thread schedules
+waits behind the same blockage it is reacting to.
 
 What the thread *can* do unilaterally is end the process.
 

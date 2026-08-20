@@ -34,7 +34,7 @@ and nothing else.
 final response *is* the reply, so there is no tool for a model to remember to
 call and no channel left open waiting for a second round that never comes. A
 deeper conversation is a follow-up `a2a_ask`, which is another exchange, and
-the [delegation-depth cap](turn-engine.md#invariants) (default 3) bounds how
+the [delegation-depth cap](turn-engine.md#runtime-invariants) (default 3) bounds how
 many of them a single 1:1 can run before the engine stops it — a real ceiling
 worth designing the playbook around.
 
