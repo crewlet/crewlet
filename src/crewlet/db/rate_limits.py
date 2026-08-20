@@ -44,12 +44,20 @@ class PostgresRateLimitStore:
         if limit <= 0:
             return True
         try:
+            # ``limit`` is deliberately NOT a parameter here: the
+            # comparison is done in Python below, so passing it left
+            # ``$2`` bound but unreferenced — and PostgreSQL refuses to
+            # parse a statement whose parameter it cannot type
+            # ("could not determine data type of parameter $2"). Every
+            # call then raised, hit the fail-open beneath, and returned
+            # True: the valve was open on every database-backed
+            # deployment, with one warning line as the only symptom.
             row = await self._db.fetchrow(
                 """
                 INSERT INTO rate_limits (bucket, window_start, count)
                 VALUES (
                     $1,
-                    to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
+                    to_timestamp(floor(extract(epoch FROM now()) / $2) * $2),
                     1
                 )
                 ON CONFLICT (bucket, window_start) DO UPDATE
@@ -57,7 +65,6 @@ class PostgresRateLimitStore:
                 RETURNING count
                 """,
                 bucket,
-                limit,
                 float(window_seconds),
             )
         except Exception:
