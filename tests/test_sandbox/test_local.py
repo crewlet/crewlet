@@ -113,6 +113,165 @@ class TestLayoutAndDefaults:
             await first.close()
             await second.close()
 
+    async def test_a_busy_box_older_than_the_ttl_survives(self, tmp_path):
+        """The reaper must not read "old" off the directory clock.
+
+        A directory's mtime moves only when an entry is added or removed
+        DIRECTLY in it, and every entry in a box root is made at create
+        — so the root mtime is the box's birth time and stays frozen
+        however busy the coding agent inside `workspace/` is. Reaping on
+        it deleted the checkout, the seeded login and `.crewlet/box.pid`
+        of every run that outlasted the TTL, while the process tree kept
+        running: with the pid file gone nothing could ever kill it.
+        """
+        p = provider(tmp_path)
+        box = await p.create(SandboxSpec(timeout_s=900))
+        home = Path(box.home)
+        # The agent has been working for hours — inside workspace/,
+        # which is what a coding job does and what leaves the root
+        # mtime untouched.
+        (home / "workspace" / "src").mkdir(parents=True, exist_ok=True)
+        (home / "workspace" / "src" / "main.py").write_text("print('work')")
+        old = time.time() - 10_000
+        os.utime(home, (old, old))
+        # The waiter has been keeping it alive on every poll.
+        await box.set_timeout(900)
+
+        second = await p.create(SandboxSpec(timeout_s=900))
+        try:
+            assert home.exists(), "the reaper deleted a box that is in use"
+            assert (home / "workspace" / "src" / "main.py").exists()
+        finally:
+            await box.close()
+            await second.close()
+
+    async def test_a_paused_box_survives_on_its_live_process(self, tmp_path):
+        """A SIGSTOPped box stops being heartbeated but is still alive.
+
+        That is the clarification pause: the run parks holding its exact
+        state while a person answers. Bounding THAT wait belongs to the
+        pause TTL, which already owns it — the orphan reaper must not
+        also have an opinion, or it deletes the checkout the answer was
+        going to resume into.
+        """
+        import subprocess
+
+        p = provider(tmp_path)
+        box = await p.create(SandboxSpec(timeout_s=900))
+        home = Path(box.home)
+        proc = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        try:
+            (home / ".crewlet").mkdir(parents=True, exist_ok=True)
+            (home / ".crewlet" / "box.pid").write_text(str(proc.pid))
+            # No heartbeat since it parked, and the directory clock is
+            # long past the TTL.
+            old = time.time() - 10_000
+            os.utime(home / ".crewlet" / "alive", (old, old))
+            os.utime(home, (old, old))
+
+            second = await p.create(SandboxSpec(timeout_s=900))
+            try:
+                assert home.exists(), "the reaper deleted a paused run's box"
+            finally:
+                await second.close()
+        finally:
+            proc.kill()
+            proc.wait()
+
+    async def test_a_dead_box_past_the_ttl_is_still_reaped(self, tmp_path):
+        """The reaper still does its job — nothing running, nothing
+        touching it for a whole TTL."""
+        p = provider(tmp_path)
+        orphan = tmp_path / "sandboxes" / "boxes" / "leftover"
+        (orphan / ".crewlet").mkdir(parents=True)
+        # A pid from a process that is long gone.
+        (orphan / ".crewlet" / "box.pid").write_text("999999")
+        old = time.time() - 10_000
+        os.utime(orphan / ".crewlet" / "alive", (old, old)) if (
+            orphan / ".crewlet" / "alive"
+        ).exists() else None
+        os.utime(orphan, (old, old))
+
+        box = await p.create(SandboxSpec(timeout_s=900))
+        try:
+            assert not orphan.exists()
+        finally:
+            await box.close()
+
+    async def test_a_reconnected_box_writes_its_refreshed_login_back(self, tmp_path):
+        """`connect` is handed an id and nothing else.
+
+        EVERY production teardown goes through a connected box (collect)
+        or through `kill` — the object `create` returned is only closed
+        when the acquire itself failed, i.e. when no run happened and no
+        credential was refreshed. So a box that could not recover its
+        own credential map discarded the rotated OAuth token on every
+        single run, and the fleet logged out at the next expiry.
+        """
+        p = provider(tmp_path)
+        shared = tmp_path / "store" / "auth.json"
+        shared.parent.mkdir(parents=True)
+        shared.write_text('{"token": "original"}')
+
+        box = await p.create(
+            SandboxSpec(credential_files={".cli/auth.json": str(shared)})
+        )
+        # The coding agent refreshes its login mid-run.
+        (Path(box.home) / ".cli" / "auth.json").write_text('{"token": "refreshed"}')
+
+        # The completion path: reconnect by id, then close.
+        reconnected = await p.connect(box.id)
+        await reconnected.close()
+
+        assert shared.read_text() == '{"token": "refreshed"}'
+
+    async def test_a_killed_box_writes_its_refreshed_login_back(self, tmp_path):
+        """`kill` is the pause reaper's primitive and is a teardown too.
+
+        It must not resume the box — but the files are already on disk,
+        so collecting them needs no resume.
+        """
+        p = provider(tmp_path)
+        shared = tmp_path / "store" / "auth.json"
+        shared.parent.mkdir(parents=True)
+        shared.write_text('{"token": "original"}')
+
+        box = await p.create(
+            SandboxSpec(credential_files={".cli/auth.json": str(shared)})
+        )
+        (Path(box.home) / ".cli" / "auth.json").write_text('{"token": "refreshed"}')
+
+        await p.kill(box.id)
+
+        assert shared.read_text() == '{"token": "refreshed"}'
+
+    async def test_a_reaped_box_gives_its_refreshed_login_back(self, tmp_path):
+        """A box the engine abandoned may still hold a rotated token.
+
+        Deleting it without collecting is the same fleet-wide logout as
+        never collecting at all — it just happens on the crash path.
+        """
+        p = provider(tmp_path)
+        shared = tmp_path / "store" / "auth.json"
+        shared.parent.mkdir(parents=True)
+        shared.write_text('{"token": "original"}')
+
+        box = await p.create(
+            SandboxSpec(timeout_s=900, credential_files={".cli/auth.json": str(shared)})
+        )
+        home = Path(box.home)
+        (home / ".cli" / "auth.json").write_text('{"token": "refreshed"}')
+        old = time.time() - 10_000
+        os.utime(home / ".crewlet" / "alive", (old, old))
+        os.utime(home, (old, old))
+
+        second = await p.create(SandboxSpec(timeout_s=900))
+        try:
+            assert not home.exists()
+            assert shared.read_text() == '{"token": "refreshed"}'
+        finally:
+            await second.close()
+
 
 class TestDirectExecution:
     async def test_exec_captures_output_and_exit_code(self, tmp_path):
@@ -513,6 +672,25 @@ class TestContainerMode:
         with pytest.raises(LocalSandboxError, match="outside the sandbox home mount"):
             await box.write_file("/etc/passwd", "x")
 
+    async def test_a_traversal_inside_the_mount_prefix_is_refused(
+        self, tmp_path, runtime
+    ):
+        """A prefix test alone does not keep a write inside the box.
+
+        This is the HOST side of a bind mount, so an escape lands on the
+        engine host — and setup-step file paths are operator config, the
+        same surface `safe_join` already guards everywhere else.
+        """
+        p = provider(tmp_path, containment="container", image="acme/coding:1")
+        box = await p.create(SandboxSpec())
+        outside = tmp_path / "escaped.txt"
+        depth = len(Path(box.home).parts)
+        traversal = "/home/user/" + "../" * (depth + 4) + str(outside).lstrip("/")
+
+        with pytest.raises(LocalSandboxError, match="outside the sandbox home mount"):
+            await box.write_file(traversal, "owned")
+        assert not outside.exists()
+
     async def test_exec_and_background_go_through_the_runtime(self, tmp_path, runtime):
         p = provider(tmp_path, containment="container", image="acme/coding:1")
         box = await p.create(SandboxSpec(env={"K": "v"}))
@@ -520,8 +698,42 @@ class TestContainerMode:
         pid = await box.start_background("long-job")
         assert pid == "4242"
         log = runtime.read_text()
-        assert "-e K=v" in log
+        assert "--env-file" in log
         assert "long-job & echo $!" in log
+
+    async def test_the_run_env_never_reaches_the_command_line(self, tmp_path, runtime):
+        """A process's argv is world-readable on the engine host.
+
+        `/proc/<pid>/cmdline` and every `ps` show it, and this env
+        carries the seat's LLM key plus whatever code-host token
+        `role.sandbox.env` declares — so passing them as `-e KEY=value`
+        published every seat's credentials to any local user.
+        """
+        p = provider(tmp_path, containment="container", image="acme/coding:1")
+        box = await p.create(SandboxSpec(env={"ANTHROPIC_API_KEY": "sk-secret-value"}))
+        await box.exec("echo hi")
+
+        log = runtime.read_text()
+        assert "sk-secret-value" not in log, "a secret reached the runtime argv"
+        env_file = tmp_path / "sandboxes" / "boxes" / box.id / ".crewlet" / "env"
+        assert env_file.read_text() == "ANTHROPIC_API_KEY=sk-secret-value\n"
+        assert env_file.stat().st_mode & 0o777 == 0o600
+
+    async def test_an_env_value_with_a_newline_is_dropped_not_forged(
+        self, tmp_path, runtime
+    ):
+        """`--env-file` is line-oriented with no quoting.
+
+        A newline inside a value would declare a second variable the
+        config never asked for — so the unrepresentable value is
+        dropped and logged rather than silently reinterpreted.
+        """
+        p = provider(tmp_path, containment="container", image="acme/coding:1")
+        box = await p.create(SandboxSpec(env={"BAD": "a\nINJECTED=1", "GOOD": "ok"}))
+        await box.exec("echo hi")
+
+        env_file = tmp_path / "sandboxes" / "boxes" / box.id / ".crewlet" / "env"
+        assert env_file.read_text() == "GOOD=ok\n"
 
     async def test_pause_and_kill_use_the_runtime(self, tmp_path, runtime):
         p = provider(tmp_path, containment="container", image="acme/coding:1")
