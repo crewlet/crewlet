@@ -15,7 +15,13 @@ every event that asks it:
   one row per channel. This one is also CLOSED here when nothing
   finished it, which is a state change rather than a delete: an
   abandoned channel is a promise to the requester that a reply may still
-  arrive.
+  arrive;
+- ``config_apply_status`` — where each node is on the config pointer, one
+  row per node. The odd one out, and the reason it was missed: it is
+  keyed by NODE rather than by event, so it does not look like a
+  short-horizon table. It grows the same way regardless — a node that is
+  scaled in, redeployed or crashed leaves its last row behind, which
+  under pod names is one row per pod that ever ran.
 
 They were all designed to be swept. The migrations say so in as many
 words (``022_webhook_deliveries.sql``: *"Rows are swept on a TTL rather
@@ -51,6 +57,7 @@ from crewlet.a2a.channels import (
     A2A_CHANNEL_IDLE_TIMEOUT_SECONDS,
     A2A_CHANNEL_RETENTION_SECONDS,
 )
+from crewlet.db.config_plane import APPLY_STATUS_RETENTION_SECONDS
 from crewlet.db.deliveries import DEFAULT_DEDUPE_TTL_SECONDS
 from crewlet.db.turn_completions import TURN_COMPLETION_RETENTION_SECONDS
 
@@ -127,6 +134,7 @@ class MaintenanceWorker:
         scheduled_runs: PurgeableStore | None = None,
         turn_completions: PurgeableStore | None = None,
         a2a_channels: PurgeableStore | None = None,
+        apply_status: PurgeableStore | None = None,
         close_idle_a2a: Any = None,
         interval_seconds: float = MAINTENANCE_INTERVAL_SECONDS,
         claim_duty: Any = None,
@@ -155,6 +163,14 @@ class MaintenanceWorker:
         if a2a_channels is not None:
             self._targets.append(
                 ("a2a_channels", a2a_channels, A2A_CHANNEL_RETENTION_SECONDS)
+            )
+        if apply_status is not None:
+            self._targets.append(
+                (
+                    "config_apply_status",
+                    apply_status,
+                    APPLY_STATUS_RETENTION_SECONDS,
+                )
             )
         self._close_idle_a2a = close_idle_a2a
         self._interval = max(1.0, float(interval_seconds))

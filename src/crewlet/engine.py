@@ -5384,6 +5384,7 @@ class Engine:
             scheduled_runs=ScheduledRunStore(self.storage),
             turn_completions=self._turn_completions,
             a2a_channels=a2a_channels,
+            apply_status=self._config_plane(),
             # Closing a channel nothing finished is housekeeping on the
             # same shared table, on the same singleton, for the same
             # reason: N nodes closing the same abandoned channels would

@@ -61,6 +61,8 @@ Each node **re-stamps its row every tick**, not only when it converges, and the 
 
 The bound applies to the **decision**, not to the display: the operator view and the `config_apply_status` query below still show a node that stopped reporting, because that is precisely what an operator needs to see.
 
+The rows themselves are swept on a seven-day retention by the [maintenance worker](../guides/deployment.md), alongside the other tables that answer *recently*. This one is keyed by node rather than by event, which is why it was not in that list to begin with — and why it grew the same way regardless: one row per node id that has ever run, which under pod names is one row per pod. Seven days is chosen for the operator view rather than for the decision (the freshness bound already covers that after a minute): a node that died is exactly what someone reviewing an incident needs to find, and a week outlasts the review. A swept row is recreated the moment that node reports again.
+
 ---
 
 ## Posture: what a lagging node does

@@ -179,6 +179,39 @@ def test_targets_names_the_tables_it_sweeps() -> None:
     )
 
 
+def test_the_apply_status_table_is_swept_too() -> None:
+    """The one keyed by NODE rather than by event, which is why it was
+    missed: it does not look like a short-horizon table, and it grows
+    the same way regardless — one row per node id that has ever run,
+    which under pod names is one row per pod."""
+    worker = MaintenanceWorker(apply_status=_Purgeable())
+    assert worker.targets == ("config_apply_status",)
+
+
+async def test_a_dead_nodes_apply_status_is_eventually_collected() -> None:
+    """Not expiry — the freshness bound already stops a stale row
+    affecting a decision within a minute. This is the growth."""
+    from crewlet.db.config_plane import MemoryConfigPlaneStore
+
+    plane = MemoryConfigPlaneStore()
+    await plane.record_apply("dead-node", epoch=1, revision_id=None, status="ok")
+    assert len(await plane.fleet()) == 1
+
+    assert await plane.purge(older_than_seconds=-1) == 1
+    assert await plane.fleet() == []
+
+
+async def test_a_live_nodes_apply_status_survives_the_sweep() -> None:
+    """A node reporting every tick must not be collected out from under
+    itself — its row is what every peer's health check reads."""
+    from crewlet.db.config_plane import MemoryConfigPlaneStore
+
+    plane = MemoryConfigPlaneStore()
+    await plane.record_apply("live-node", epoch=1, revision_id=None, status="ok")
+    assert await plane.purge(older_than_seconds=3600) == 0
+    assert len(await plane.fleet()) == 1
+
+
 def test_unconfigured_tables_are_absent_not_silently_skipped() -> None:
     worker = MaintenanceWorker(rate_limits=_Purgeable())
     assert worker.targets == ("rate_limits",)

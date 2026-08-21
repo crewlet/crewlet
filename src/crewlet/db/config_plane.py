@@ -86,6 +86,25 @@ LAG_GRACE_TICKS = 3
 # readiness so an operator sees it.
 MAX_APPLY_ATTEMPTS = 3
 
+# How long a node's apply status is kept after it stops reporting.
+#
+# ``config_apply_status`` upserts on ``node_id``, so a node that is
+# scaled in, redeployed or crashed leaves its last row behind — and with
+# pod names as node ids, that is one row per pod that ever existed. It
+# is a small table growing slowly and forever, which is exactly what the
+# retention worker is for; it was simply not in its list, because it is
+# keyed by node rather than by event and so did not look like the other
+# short-horizon tables.
+#
+# Seven days, matching the completion ledger and the scheduled-run
+# ledger. The freshness bound above already stops a stale row affecting
+# any DECISION after a minute, so this length is chosen for the operator
+# view instead: a node that died is exactly what someone reviewing an
+# incident needs to find, and a week outlasts the review. The row is
+# recreated the moment that node reports again, so deleting one is never
+# destructive.
+APPLY_STATUS_RETENTION_SECONDS = 7 * 24 * 3600.0
+
 
 class ApplyStatus(StrEnum):
     """What a node managed to do with an epoch."""
@@ -359,6 +378,24 @@ class ConfigPlaneStore:
             """
         )
 
+    async def purge(self, older_than_seconds: float) -> int:
+        """Drop rows for nodes that stopped reporting. Returns rows removed.
+
+        Not expiry — :data:`PEER_STATUS_FRESH_SECONDS` already stops a
+        stale row affecting a decision within a minute. This is garbage
+        collection on a table that only ever grows: one row per node id
+        that has ever run, which under pod names is one row per pod.
+        """
+        rows = await self._db.execute(
+            """
+            DELETE FROM config_apply_status
+            WHERE updated_at < now() - make_interval(secs => $1)
+            RETURNING node_id
+            """,
+            float(older_than_seconds),
+        )
+        return len(rows)
+
 
 class MemoryConfigPlaneStore:
     """In-memory twin. Single-process, and the default without a database."""
@@ -420,3 +457,14 @@ class MemoryConfigPlaneStore:
             {k: v for k, v in r.items() if k != "reported_at"}
             for r in sorted(self._status.values(), key=lambda r: r["node_id"])
         ]
+
+    async def purge(self, older_than_seconds: float) -> int:
+        cutoff = time.monotonic() - max(older_than_seconds, 0.0)
+        stale = [
+            node_id
+            for node_id, row in self._status.items()
+            if float(row.get("reported_at", 0.0)) < cutoff
+        ]
+        for node_id in stale:
+            del self._status[node_id]
+        return len(stale)

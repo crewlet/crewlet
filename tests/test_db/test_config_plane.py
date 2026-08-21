@@ -15,11 +15,17 @@ and the faster it is, the longer the outage lasts.
 
 from __future__ import annotations
 
+import os
+from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from crewlet.db.config_plane import (
+    APPLY_STATUS_RETENTION_SECONDS,
     LAG_GRACE_TICKS,
     MAX_APPLY_ATTEMPTS,
+    PEER_STATUS_FRESH_SECONDS,
     RECONCILE_INTERVAL_SECONDS,
     ApplyStatus,
     FleetView,
@@ -28,6 +34,8 @@ from crewlet.db.config_plane import (
     decide_posture,
     reconcile_delay,
 )
+
+_TEST_DSN = os.environ.get("CREWLET_TEST_DSN", "")
 
 
 def _view(**kwargs) -> FleetView:
@@ -234,11 +242,94 @@ def test_reconcile_delay_stays_within_a_narrow_band() -> None:
     assert all(d >= 1.0 for d in delays)
 
 
-# ── the memory twin ──────────────────────────────────────────────────
+# ── the store, on both backends ──────────────────────────────────────
+#
+# The Postgres store had NO test of any kind: the twin was exercised and
+# the SQL half — the one every node in a real fleet actually reads to
+# decide whether it serves or sheds — was never run by anything. So this
+# section is parameterised, and the real backend runs whenever
+# CREWLET_TEST_DSN is set (which CI now does).
 
 
-async def test_activation_epochs_are_monotonic() -> None:
-    plane = MemoryConfigPlaneStore()
+class _RealPlane:
+    """ConfigPlaneStore over a real database, one connection per test.
+
+    Per-test because pytest-asyncio gives each test a fresh event loop
+    and an asyncpg pool is bound to the loop that made it — the same
+    shape tests/test_db/test_leases.py explains at length.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._db: Any = None
+        self._store: Any = None
+
+    async def _ready(self) -> Any:
+        if self._store is None:
+            from crewlet.db.client import Database
+            from crewlet.db.config_plane import ConfigPlaneStore
+
+            self._db = await Database.connect(self._dsn)
+            await self._db.execute("DELETE FROM config_apply_status")
+            await self._db.execute("DELETE FROM config_activations")
+            self._store = ConfigPlaneStore(self._db)
+        return self._store
+
+    def __getattr__(self, name: str) -> Any:
+        async def _call(*args: Any, **kwargs: Any) -> Any:
+            store = await self._ready()
+            return await getattr(store, name)(*args, **kwargs)
+
+        return _call
+
+    async def age_status(self, node_id: str, seconds: float) -> None:
+        """Backdate a node's last report, so freshness can be tested."""
+        await self._ready()
+        await self._db.execute(
+            "UPDATE config_apply_status "
+            "SET updated_at = updated_at - make_interval(secs => $2) "
+            "WHERE node_id = $1",
+            node_id,
+            float(seconds),
+        )
+
+    async def aclose(self) -> None:
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
+
+
+class _MemoryPlane(MemoryConfigPlaneStore):
+    """The twin, plus the same ageing hook the real backend exposes."""
+
+    async def age_status(self, node_id: str, seconds: float) -> None:
+        self._status[node_id]["reported_at"] -= seconds
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(_MemoryPlane, id="memory"),
+        pytest.param(
+            lambda: _RealPlane(_TEST_DSN),
+            id="postgres-real",
+            marks=[
+                pytest.mark.integration,
+                pytest.mark.skipif(
+                    not _TEST_DSN,
+                    reason="set CREWLET_TEST_DSN to run against real PG",
+                ),
+            ],
+        ),
+    ]
+)
+async def plane(request: pytest.FixtureRequest) -> Any:
+    built = request.param()
+    yield built
+    if isinstance(built, _RealPlane):
+        await built.aclose()
+
+
+async def test_activation_epochs_are_monotonic(plane: Any) -> None:
     rev = uuid4()
     epochs = [await plane.record_activation(rev) for _ in range(3)]
     assert epochs == sorted(epochs)
@@ -248,26 +339,24 @@ async def test_activation_epochs_are_monotonic() -> None:
     assert target.epoch == epochs[-1]
 
 
-async def test_reactivating_the_same_revision_moves_the_pointer() -> None:
+async def test_reactivating_the_same_revision_moves_the_pointer(plane: Any) -> None:
     """The gesture that picks up a rotated credential.
 
     Re-activating an unchanged revision is documented in
     ``docs/concepts/secret-store.md``; a pointer keyed on the revision id
     could not express it, which is why the log is append-only.
     """
-    plane = MemoryConfigPlaneStore()
     rev = uuid4()
     first = await plane.record_activation(rev)
     second = await plane.record_activation(rev)
     assert second > first
 
 
-async def test_target_is_none_before_any_activation() -> None:
-    assert await MemoryConfigPlaneStore().target() is None
+async def test_target_is_none_before_any_activation(plane: Any) -> None:
+    assert await plane.target() is None
 
 
-async def test_peer_health_excludes_self_and_other_epochs() -> None:
-    plane = MemoryConfigPlaneStore()
+async def test_peer_health_excludes_self_and_other_epochs(plane: Any) -> None:
     rev = uuid4()
     await plane.record_apply("a", epoch=7, revision_id=rev, status=ApplyStatus.OK)
     await plane.record_apply("b", epoch=7, revision_id=rev, status=ApplyStatus.ERROR)
@@ -281,9 +370,8 @@ async def test_peer_health_excludes_self_and_other_epochs() -> None:
     assert (ok, reported) == (1, 2)
 
 
-async def test_record_apply_is_last_write_wins_per_node() -> None:
+async def test_record_apply_is_last_write_wins_per_node(plane: Any) -> None:
     """One row per node: a node reports where it IS, not where it has been."""
-    plane = MemoryConfigPlaneStore()
     rev = uuid4()
     await plane.record_apply("a", epoch=1, revision_id=rev, status=ApplyStatus.ERROR)
     await plane.record_apply("a", epoch=2, revision_id=rev, status=ApplyStatus.OK)
@@ -296,47 +384,59 @@ async def test_record_apply_is_last_write_wins_per_node() -> None:
 # ── peer health decays ───────────────────────────────────────────────
 
 
-async def test_a_dead_peers_status_stops_counting_as_a_healthy_peer() -> None:
+async def test_a_dead_peers_status_stops_counting_as_a_healthy_peer(
+    plane: Any,
+) -> None:
     """`peer_health` answers "is there a peer this work could go to?" —
     and that answer decays.
 
     `record_apply` upserts on `node_id`, so a node that is scaled in,
-    redeployed or crashed leaves its last `ok` row behind forever;
-    nothing sweeps `config_apply_status` because it is keyed by node,
-    not by event. Counting that ghost inverts a decision: a surviving
-    node that cannot apply the current epoch sees `peers_ok=1`, so
-    `decide_posture` returns SHED — release every seat "so the work can
-    go to a healthy peer" — when the truth is ISOLATED, where a node
-    keeps serving the config it has. The company goes dark instead of
-    degraded, which is exactly what ISOLATED exists to prevent.
+    redeployed or crashed leaves its last `ok` row behind forever.
+    Counting that ghost inverts a decision: a surviving node that cannot
+    apply the current epoch sees `peers_ok=1`, so `decide_posture`
+    returns SHED — release every seat "so the work can go to a healthy
+    peer" — when the truth is ISOLATED, where a node keeps serving the
+    config it has. The company goes dark instead of degraded, which is
+    exactly what ISOLATED exists to prevent.
     """
-    from crewlet.db.config_plane import (
-        PEER_STATUS_FRESH_SECONDS,
-        MemoryConfigPlaneStore,
-    )
-
-    plane = MemoryConfigPlaneStore()
     await plane.record_apply("dead-node", epoch=12, revision_id=None, status="ok")
     assert await plane.peer_health(12, exclude_node="survivor") == (1, 1)
 
     # The node is gone; its row is not.
-    plane._status["dead-node"]["reported_at"] -= PEER_STATUS_FRESH_SECONDS * 2
+    await plane.age_status("dead-node", PEER_STATUS_FRESH_SECONDS * 2)
     assert await plane.peer_health(12, exclude_node="survivor") == (0, 0), (
         "a terminated node still counted as somewhere work could go"
     )
 
 
-async def test_the_operator_view_still_shows_a_silent_node() -> None:
+async def test_the_operator_view_still_shows_a_silent_node(plane: Any) -> None:
     """Freshness bounds the DECISION, not the display. A node that
     stopped reporting is precisely what the fleet view has to show."""
-    from crewlet.db.config_plane import (
-        PEER_STATUS_FRESH_SECONDS,
-        MemoryConfigPlaneStore,
-    )
-
-    plane = MemoryConfigPlaneStore()
     await plane.record_apply("dead-node", epoch=12, revision_id=None, status="ok")
-    plane._status["dead-node"]["reported_at"] -= PEER_STATUS_FRESH_SECONDS * 2
+    await plane.age_status("dead-node", PEER_STATUS_FRESH_SECONDS * 2)
     rows = await plane.fleet()
     assert [r["node_id"] for r in rows] == ["dead-node"]
     assert "reported_at" not in rows[0], "internal bookkeeping leaked to the view"
+
+
+# ── retention ────────────────────────────────────────────────────────
+
+
+async def test_a_dead_nodes_row_is_eventually_collected(plane: Any) -> None:
+    """Not expiry — the freshness bound above already stops a stale row
+    affecting a decision within a minute. This is the growth: one row per
+    node id that has ever run, which under pod names is one row per pod,
+    on a table nothing swept because it is keyed by node rather than by
+    event and so did not look short-horizon."""
+    await plane.record_apply("dead-node", epoch=1, revision_id=None, status="ok")
+    await plane.age_status("dead-node", APPLY_STATUS_RETENTION_SECONDS * 2)
+    assert await plane.purge(APPLY_STATUS_RETENTION_SECONDS) == 1
+    assert await plane.fleet() == []
+
+
+async def test_a_live_nodes_row_survives_the_sweep(plane: Any) -> None:
+    """A node reporting every tick must not be collected out from under
+    itself — its row is what every peer's health check reads."""
+    await plane.record_apply("live-node", epoch=1, revision_id=None, status="ok")
+    assert await plane.purge(APPLY_STATUS_RETENTION_SECONDS) == 0
+    assert len(await plane.fleet()) == 1
