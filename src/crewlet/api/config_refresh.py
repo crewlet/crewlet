@@ -4,7 +4,8 @@
 The API holds only serialised state (``app.state.org_data``,
 ``agent_roles``, ``tools_data``, ``github_webhook_secret``,
 ``gitlab_signing_secret``, ``plane_webhook_secret``,
-``slack_signing_secrets``, ``forge_app_id``)
+``confluence_webhook_secret``, ``slack_signing_secrets``,
+``forge_app_id``)
 and a cached ``configured`` flag.  None of it refreshes on its own when
 a ``PUT /config`` writes a new revision — without this the dashboard's
 ``/agents`` and ``/org`` views drift stale until the process restarts,
@@ -370,9 +371,9 @@ def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
 
     ``payload`` is the fully-decrypted config (the whole document is
     decrypted at the read boundary before this runs), so each webhook
-    secret (GitHub / GitLab / Plane) is a plaintext value or a ``${VAR}``
-    reference resolved from the environment — never ciphertext.  The
-    Forge app id is likewise ``${VAR}``-resolved.
+    secret (GitHub / GitLab / Plane / Confluence) is a plaintext value or
+    a ``${VAR}`` reference resolved from the environment — never
+    ciphertext.  The Forge app id is likewise ``${VAR}``-resolved.
     """
     from crewlet.config import _resolve_env_value
 
@@ -383,11 +384,16 @@ def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
     raw_gl_signing = gitlab.get("signing_secret") or ""
     plane = integrations.get("plane") or {}
     raw_plane = plane.get("webhook_secret") or ""
+    confluence = integrations.get("confluence") or {}
+    raw_confluence = confluence.get("webhook_secret") or ""
 
     app.state.github_webhook_secret = str(_resolve_env_value(raw_secret))
     app.state.forge_app_id = str(_resolve_env_value(raw_forge))
     app.state.gitlab_signing_secret = str(_resolve_env_value(raw_gl_signing)) or None
     app.state.plane_webhook_secret = str(_resolve_env_value(raw_plane)) or None
+    app.state.confluence_webhook_secret = (
+        str(_resolve_env_value(raw_confluence)) or None
+    )
     app.state.slack_signing_secrets = _slack_signing_secrets(payload)
 
 

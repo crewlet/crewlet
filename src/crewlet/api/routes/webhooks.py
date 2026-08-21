@@ -951,9 +951,58 @@ async def plane_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+# ``sha256=`` + 64 hex, the Data Center ``X-Hub-Signature`` shape. Same
+# prefilter rationale as ``_PLANE_SIGNATURE_RE``: keeps the compare
+# total, so a header the client made up cannot turn a 401 into a 500.
+_CONFLUENCE_SIGNATURE_RE = re.compile(r"sha256=[0-9a-fA-F]{64}")
+
+
+def _verify_confluence_signature(
+    body_raw: bytes, webhook_secret: str, signature: str
+) -> bool:
+    """``X-Hub-Signature`` = ``sha256=`` + HMAC-SHA256 of the raw body."""
+    if _CONFLUENCE_SIGNATURE_RE.fullmatch(signature) is None:
+        return False
+    expected = (
+        "sha256="
+        + hmac.new(webhook_secret.encode("utf-8"), body_raw, hashlib.sha256).hexdigest()
+    )
+    return hmac.compare_digest(expected, signature)
+
+
 async def confluence_webhook(request: Request) -> JSONResponse:
-    """POST /webhooks/confluence — publish to EventQueue."""
+    """POST /webhooks/confluence — verify then publish to EventQueue.
+
+    Verified HERE, at the route, like GitHub / GitLab / Plane. The
+    ``ConfluenceTransport`` still checks the signature on the consume
+    side, but that is defence in depth rather than the gate: this route
+    is exempt from bearer auth precisely BECAUSE it authenticates by
+    provider HMAC, so the check has to run before the delivery is
+    recorded and published, not after.
+
+    Refuses when no secret is configured, again like its peers — an
+    unconfigured verifier that answers "valid" is not a verifier. Cloud
+    is unaffected: those events arrive through the Forge app on
+    ``/webhooks/forge`` with its own JWT, never here.
+    """
     body_raw = await request.body()
+
+    webhook_secret: str | None = getattr(
+        request.app.state, "confluence_webhook_secret", None
+    )
+    if not webhook_secret:
+        logger.error("confluence_webhook_no_secret_configured")
+        return JSONResponse(
+            {"error": "webhook signature verification not configured"},
+            status_code=500,
+        )
+    signature = request.headers.get("x-hub-signature", "")
+    if not signature or not _verify_confluence_signature(
+        body_raw, webhook_secret, signature
+    ):
+        logger.warning("confluence_webhook_signature_invalid")
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+
     body_data = _parse_json_object(body_raw)
     if body_data is None:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)

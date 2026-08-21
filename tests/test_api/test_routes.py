@@ -1026,6 +1026,128 @@ class TestGitlabWebhook:
         assert resp.status_code == 500
 
 
+class TestConfluenceWebhook:
+    """Confluence Data Center webhook — ``sha256=`` + HMAC-SHA256 of the
+    raw body, carried in ``X-Hub-Signature``.
+
+    Verified at the ROUTE, like GitHub / GitLab / Plane. The route is
+    exempt from bearer auth precisely because it authenticates by
+    provider HMAC, so the check has to run before the delivery is
+    recorded and published rather than further downstream.
+    """
+
+    SECRET = "confluence-webhook-secret"
+
+    @pytest.fixture
+    def confluence_app(
+        self, event_queue: MockEventQueue, event_store: MemoryEventStore
+    ):
+        return create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            confluence_webhook_secret=self.SECRET,
+        )
+
+    @pytest.fixture
+    def confluence_client(self, confluence_app) -> TestClient:
+        return TestClient(confluence_app, raise_server_exceptions=False)
+
+    def _sign(self, body: bytes) -> str:
+        return (
+            "sha256=" + hmac.new(self.SECRET.encode(), body, hashlib.sha256).hexdigest()
+        )
+
+    def _body(self) -> bytes:
+        return json.dumps(
+            {"event": "page_created", "page": {"id": "1", "title": "Spec"}}
+        ).encode()
+
+    def test_valid_signature_publishes(
+        self, confluence_client: TestClient, event_queue: MockEventQueue
+    ):
+        body = self._body()
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": self._sign(body),
+            },
+        )
+        assert resp.status_code == 200
+        assert len(event_queue.published) == 1
+        topic, event = event_queue.published[0]
+        assert topic == "crewlet.notifications.inbound"
+        assert event.source == "confluence"
+
+    def test_a_bad_signature_publishes_nothing(
+        self, confluence_client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=self._body(),
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": "sha256=" + "0" * 64,
+            },
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == [], (
+            "an unverified delivery reached the inbound topic"
+        )
+
+    def test_a_missing_signature_publishes_nothing(
+        self, confluence_client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=self._body(),
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == []
+
+    def test_non_ascii_signature_401(self, confluence_client: TestClient):
+        """Starlette decodes raw header bytes with latin-1 and
+        ``hmac.compare_digest`` raises ``TypeError`` on non-ASCII ``str``
+        operands, so the shape prefilter has to reject the header before
+        the comparison runs — otherwise a made-up header turns an
+        unauthenticated request into a 500."""
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=self._body(),
+            headers={
+                b"content-type": b"application/json",
+                b"x-hub-signature": b"sha256=" + b"\xff" * 64,
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_non_hex_signature_401(self, confluence_client: TestClient):
+        """Wrong alphabet, wrong length, or a missing prefix."""
+        body = self._body()
+        for bad in ("sha256=" + "z" * 64, "sha256=deadbeef", self._sign(body)[7:]):
+            resp = confluence_client.post(
+                "/webhooks/confluence",
+                content=body,
+                headers={
+                    "content-type": "application/json",
+                    "x-hub-signature": bad,
+                },
+            )
+            assert resp.status_code == 401, bad
+
+    def test_no_secret_configured_returns_500(
+        self, client: TestClient, event_queue: MockEventQueue
+    ):
+        """An unconfigured verifier that answers "valid" is not a
+        verifier — same posture as its peers."""
+        resp = client.post("/webhooks/confluence", json={"event": "page_created"})
+        assert resp.status_code == 500
+        assert event_queue.published == []
+
+
 class TestPlaneWebhook:
     """Plane webhook tests — HMAC-SHA256 hexdigest of the raw body,
     carried in ``X-Plane-Signature`` (CE webhook scheme)."""

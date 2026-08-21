@@ -16,7 +16,7 @@ integrations:
     url: "${CONFLUENCE_URL}"                        # Confluence instance URL (Cloud or Data Center)
     token: "${CONFLUENCE_API_TOKEN}"                # API token (admin/service account)
     email: "${CONFLUENCE_EMAIL}"                    # Cloud only — admin email for Basic Auth
-    webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
+    webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center: required, HMAC-SHA256
 
 knowledge:
   confluence_spaces: ["HANDBOOK"]                   # org-wide spaces every agent can search
@@ -135,7 +135,9 @@ Content-Type: application/json
 }
 ```
 
-When `webhook_secret` is configured, inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header.
+Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header, at the route, before the delivery is recorded or published — the same point at which the GitHub, GitLab and Plane webhooks verify theirs. `POST /webhooks/confluence` is exempt from the API's bearer token precisely *because* it authenticates by provider HMAC, so the check belongs there.
+
+`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers `500`, exactly as its peers do, rather than accepting deliveries it cannot verify. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 
 ### Event Deduplication
 
