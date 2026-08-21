@@ -7,6 +7,7 @@ calls the tool, the wrapper delegates to the MCP client transparently.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import Any
 
@@ -338,16 +339,36 @@ class MCPToolBridge:
         self._tools = {k: v for k, v in self._tools.items() if v._client.name != name}
 
     async def stop_all(self) -> None:
-        """Stop all MCP servers."""
-        for name, client in list(self._clients.items()):
+        """Stop every MCP server, concurrently.
+
+        Sequentially, one server that will not die consumed the whole
+        shutdown budget the engine allows this step, and every server
+        after it in the dict was never stopped at all — their
+        subprocesses outlived the engine. They are independent
+        processes, so stopping them together turns "the first slow one
+        strands the rest" into "the slowest one bounds the step", which
+        is what the caller's timeout is actually for.
+        """
+        clients = list(self._clients.items())
+
+        async def _stop(name: str, client: MCPClient | MCPHttpClient) -> None:
             try:
                 await client.stop()
             except Exception as exc:
                 logger.error("server_stop_failed", server=name, error=str(exc))
-            finally:
-                self._remove_server_tools(name)
+
+        # `return_exceptions` covers the cancellation the caller's
+        # timeout delivers: the servers that did stop must still be
+        # dropped from the index, or a restarted bridge would think
+        # they were live.
+        await asyncio.gather(
+            *(_stop(name, client) for name, client in clients),
+            return_exceptions=True,
+        )
+        for name, _client in clients:
+            self._remove_server_tools(name)
         self._clients.clear()
-        logger.info("all_servers_stopped")
+        logger.info("all_servers_stopped", servers=len(clients))
 
     async def stop_server(self, name: str) -> None:
         """Stop a single MCP server by name."""

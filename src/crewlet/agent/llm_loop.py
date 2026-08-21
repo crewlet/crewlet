@@ -852,13 +852,32 @@ async def run_tool_loop(
             # outbound surface unfenced.
             if fence is not None and not _is_known_read(tool_call.name, surface):
                 fence()
-            tool_result = await execute_tool(
-                tool_call.name,
-                tool_call.arguments,
-                context,
-                surface=surface,
-                validators=validators,
-            )
+            # One detached job per turn, enforced BEFORE the call runs.
+            # Honouring only the first suspend (below) was not enough:
+            # the second call still executed, which for `run_sandbox`
+            # meant a second coding agent started in the same box,
+            # writing over the first one's result files — and its
+            # `attach_sandbox` overwrote the row's `command_id`, so the
+            # completion poll watched the second job while the loop
+            # resumed holding the first call's id. Refusing the repeat
+            # unrun is the only point at which nothing has happened yet.
+            if suspended and tool_call.name == pending_tool_name:
+                tool_result = ToolResult(
+                    success=False,
+                    error=(
+                        f"{tool_call.name} is already running for this turn "
+                        "and its result will be delivered when it finishes. "
+                        "Wait for it rather than starting another."
+                    ),
+                )
+            else:
+                tool_result = await execute_tool(
+                    tool_call.name,
+                    tool_call.arguments,
+                    context,
+                    surface=surface,
+                    validators=validators,
+                )
             # Suspend: the tool kicked off detached work whose result lands
             # later (the sandbox tool). Leave THIS call unanswered — the
             # engine appends the real result on resume — and defer only it;
@@ -881,10 +900,31 @@ async def run_tool_loop(
                 )
                 continue
             if tool_result.suspend and not allow_suspend:
+                # The tool parked work this loop cannot wait for, so
+                # whatever it returned is a receipt, not a result.
+                # Passing it through as a success told the model the job
+                # was done — and the job may genuinely be running, keyed
+                # to a turn that is about to finish without it. A
+                # failure is the honest answer: the model can say so
+                # rather than reporting work it never saw the result of.
+                # The launch itself is not undone here; tearing down a
+                # detached run belongs to its coordinator, and the
+                # phases that must never reach this point say so by
+                # denying the tool outright (see
+                # `_SUBAGENT_CONTROL_DENYLIST`).
                 logger.warning(
                     "tool_suspend_ignored_outside_execute",
                     tool=tool_call.name,
                     phase=phase_name,
+                )
+                tool_result = ToolResult(
+                    success=False,
+                    error=(
+                        f"{tool_call.name} parks work for a later result and "
+                        f"can only be used in the Execute phase, not in "
+                        f"{phase_name}. Its result will not arrive here — do "
+                        "not report it as done."
+                    ),
                 )
             if tool_result.success:
                 content = tool_result.output

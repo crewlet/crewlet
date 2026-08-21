@@ -405,3 +405,53 @@ async def test_activate_tool_unknown_name_suggests_discovery(ctx):
     err = result.error or ""
     assert "ghost_tool" in err
     assert "list_mcp_server_tools" in err
+
+
+async def test_a_shared_server_the_catalogue_advertises_is_discoverable(ctx):
+    """The prompt and the discovery tool must see one universe.
+
+    `catalogue_text` renders every server it can see and tells the
+    agent to call `list_mcp_server_tools` for the names. Built from the
+    per-role list alone, this tool knew nothing about `shared: true`
+    servers — whose tools live in the global registry — so an agent
+    following its own instructions got "not configured for this role.
+    Available servers: (none)". Nothing else reveals the names, since
+    the slim catalogue deliberately withholds them, so no tool on any
+    shared server was reachable at all.
+    """
+    from crewlet.agent.plan import _build_meta_tools
+    from crewlet.tools.surface import merge_registry_and_mcp
+
+    registry = ToolRegistry()
+    registry.register(_McpTool("context7_resolve", "context7", "Resolve a library."))
+    registry.register(_McpTool("context7_docs", "context7", "Fetch docs."))
+    # No per-role MCP tools at all — a `shared: true` server is the
+    # whole surface, which is the case that was unreachable.
+    catalogue = merge_registry_and_mcp(registry, [])
+
+    surface = ToolSurface.for_plan(registry, role_mcp_tools=[], meta_tools=[])
+    meta = _build_meta_tools(catalogue, [], [surface])
+    lister = next(t for t in meta if t.name == "list_mcp_server_tools")
+
+    # The prompt advertises the server …
+    assert "context7" in surface.catalogue_mcp_servers()
+    # … so the tool it tells the agent to call must know it.
+    result = await lister.execute({"server": "context7"}, ctx)
+    assert result.success, result.error
+    assert "context7_resolve" in result.output
+    assert "context7_docs" in result.output
+
+
+async def test_a_builtin_without_a_server_is_not_bucketed(ctx):
+    """Passing the merged catalogue is only safe because non-MCP tools
+    are skipped — otherwise every builtin would invent a server."""
+    from crewlet.tools.surface import merge_registry_and_mcp
+
+    registry = ToolRegistry()
+    registry.register(_builtin("escalate"))
+    registry.register(_McpTool("context7_docs", "context7", "Fetch docs."))
+
+    tool = build_list_mcp_server_tools(merge_registry_and_mcp(registry, []))
+    result = await tool.execute({"server": "context7"}, ctx)
+    assert "escalate" not in result.output
+    assert "context7_docs" in result.output

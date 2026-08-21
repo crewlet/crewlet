@@ -534,3 +534,53 @@ async def test_timeouts_reach_the_client_from_the_server_config():
         "startup_timeout_seconds": 7.0,
         "request_timeout_seconds": 11.0,
     }
+
+
+async def test_stop_all_does_not_strand_servers_behind_a_slow_one():
+    """Shutdown budgets the whole step, not each server.
+
+    Stopped in sequence, one server that will not die consumed the
+    entire budget and every server after it in the dict was never
+    stopped at all — its subprocess outlived the engine. They are
+    independent processes, so the slowest one should bound the step,
+    not the first slow one.
+    """
+    import asyncio
+
+    order: list[str] = []
+
+    class _Slow(FakeMCPClient):
+        async def stop(self) -> None:
+            await asyncio.sleep(0.2)
+            order.append(self.name)
+            self.stopped = True
+
+    bridge = MCPToolBridge()
+    # Five servers that each take 0.2 s: 1.0 s in sequence, 0.2 s
+    # together. The engine's shutdown budget is per STEP, so the
+    # sequential shape blew it and left the tail running.
+    clients = [_Slow(f"server-{i}") for i in range(5)]
+    for client in clients:
+        bridge._clients[client.name] = client
+
+    await asyncio.wait_for(bridge.stop_all(), timeout=0.6)
+
+    assert all(c.stopped for c in clients), [c.name for c in clients if not c.stopped]
+    assert bridge.has_client("server-4") is False
+
+
+async def test_stop_all_drops_its_index_even_when_a_server_raises():
+    """A restarted bridge must not believe a failed stop left it live."""
+
+    class _Boom(FakeMCPClient):
+        async def stop(self) -> None:
+            raise RuntimeError("will not die")
+
+    bridge = MCPToolBridge()
+    bridge._clients["boom"] = _Boom("boom")
+    bridge._clients["ok"] = FakeMCPClient("ok")
+
+    await bridge.stop_all()
+
+    assert bridge.has_client("boom") is False
+    assert bridge.has_client("ok") is False

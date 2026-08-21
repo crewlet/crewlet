@@ -79,6 +79,17 @@ _DISCOVERY_PHASES = ("plan", "execute", "subagent", "onboarding")
 _SUBAGENT_CONTROL_DENYLIST: frozenset[str] = frozenset(
     {
         "spawn_subagent",
+        # Launching a detached coding run is engine control, not a tool
+        # call, and it is keyed to the PARENT: the pending row carries
+        # the parent's turn_id and the completion pauses the parent
+        # seat's inbox. A sub-agent runs with `allow_suspend=False`, so
+        # the loop cannot park for the result — the parent turn then
+        # finishes normally, never persisting an `execute_state`, and
+        # the seat stays deaf for the whole coding run until the
+        # completion arrives with nothing to resume into. It carries no
+        # MCP annotations, so the shared-write filter below does not
+        # catch it either.
+        "run_sandbox",
         # Discovery / activation meta-tools: sub-agents run with a
         # fixed parent-chosen surface and must not grow it mid-run.
         "activate_tool",
