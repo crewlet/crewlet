@@ -175,6 +175,25 @@ src/crewlet/          # Main package
                       #   previously caused a redaction leak and a
                       #   mint-into-unreadable-${1} hole; tests/test_env_refs
                       #   fails the build on a new re.compile of the grammar
+  env_file.py         # THE .env assignment grammar — format_assignment /
+                      #   parse_assignment / ASSIGNMENT_RE, shared by
+                      #   provisioning.py (EnvFileSink + PrintSink),
+                      #   slack/envfile.py (EnvStore) and secrets/
+                      #   keygen.py. Imports nothing from crewlet, same
+                      #   reason as env_refs.py. What it guarantees is
+                      #   ROUND-TRIPPING through BOTH readers a
+                      #   credential file has: python-dotenv (which
+                      #   `crewlet run` boots with, and which expands
+                      #   ${...} in every quoting form) and an
+                      #   operator's `source` (where a bare space fails
+                      #   the line AND abandons every credential BELOW
+                      #   it). Slack reasoned the quoting through and
+                      #   refused what it could not represent; the
+                      #   shared sink wrote f"{var}={token}" — so
+                      #   whether a minted token survived depended on
+                      #   which CLI minted it. tests/test_env_file
+                      #   fails the build on a new hand-built
+                      #   assignment line
   provisioning.py     # Integration-agnostic ${VAR}-minting contract shared
                       #   by the provisioning CLIs: TokenSink protocol
                       #   (record/discard/flush are ASYNC — a sink may

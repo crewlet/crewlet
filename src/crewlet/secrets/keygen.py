@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import os
 
+from crewlet.env_file import format_assignment
 from crewlet.secrets.cipher import KEY_BYTES
 
 
@@ -34,7 +35,7 @@ def keygen_snippet(key_id: str, *, env_var: str | None = None) -> str:
     key = generate_key()
     return (
         f"# 1. Export the key material (keep it out of config.yaml):\n"
-        f"#    export {var}={key}\n"
+        f"#    {format_assignment(var, key, export=True)}\n"
         f"# 2. Reference it from Tier A config.yaml:\n"
         f"secrets:\n"
         f"  active_key_id: {key_id}\n"

@@ -39,15 +39,11 @@ import os
 from typing import Any, Protocol
 
 from crewlet._logging import get_logger
+from crewlet.env_file import format_assignment, is_exported, parse_assignment
 from crewlet.env_refs import env_var_reference
 from crewlet.env_refs import referenced_env_vars as _referenced_env_vars
 
 logger = get_logger("provisioning")
-
-#: ``export ``-prefixed assignment lines — the exact shape ``--print``
-#: emits — are valid env-file syntax and must round-trip through
-#: :class:`EnvFileSink`.
-_EXPORT_PREFIX = "export "
 
 #: Owner-only. A minted PAT written with the default umask is
 #: world-readable on a normal Linux box, so the mode is applied when the
@@ -151,28 +147,28 @@ class EnvFileSink:
             with open(path, encoding="utf-8") as fh:
                 self._lines = fh.read().splitlines()
             for i, line in enumerate(self._lines):
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                parsed = parse_assignment(line)
+                if parsed is None:
                     continue
-                key = stripped.split("=", 1)[0].strip()
-                if key.startswith(_EXPORT_PREFIX):
-                    key = key[len(_EXPORT_PREFIX) :].strip()
+                key, _value = parsed
+                if is_exported(line):
                     self._exported.add(key)
                 self._index.setdefault(key, []).append(i)
 
     def existing(self, var: str) -> str:
         for index in reversed(self._index.get(var, [])):
             # Last assignment first: that is the one a shell would apply.
-            value = self._lines[index].split("=", 1)[1].strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                value = value[1:-1]
-            if value:
-                return value
+            parsed = parse_assignment(self._lines[index])
+            if parsed is not None and parsed[1]:
+                return parsed[1]
         return os.environ.get(var, "")
 
     async def record(self, var: str, token: str) -> None:
-        prefix = _EXPORT_PREFIX if var in self._exported else ""
-        line = f"{prefix}{var}={token}"
+        # Quoted per the shared grammar, not interpolated bare: a token
+        # holding a space makes ``source`` fail on the line AND abandon
+        # every credential below it, and one holding ``${...}`` is
+        # rewritten by the python-dotenv reader the engine boots with.
+        line = format_assignment(var, token, export=var in self._exported)
         indexes = self._index.get(var, [])
         if indexes:
             # Write the effective (last) line and DELETE the ones it was
@@ -300,7 +296,7 @@ class PrintSink:
         # running ``--print > secrets.env`` loses every line still in the
         # buffer if the process is killed — exactly the window this sink
         # prints eagerly to close.
-        print(f"export {var}={token}", flush=True)
+        print(format_assignment(var, token, export=True), flush=True)
 
     async def discard(self, var: str) -> None:
         """Print the shell counterpart of the line that was printed.
