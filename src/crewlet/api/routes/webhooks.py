@@ -66,7 +66,8 @@ def _no_secret_response(source: str) -> JSONResponse:
     there the credential really was presented and really was wrong.
     """
     logger.error(
-        f"{source}_webhook_no_secret_configured",
+        "webhook_no_secret_configured",
+        source=source,
         hint=(
             "this route verifies a provider HMAC and has no secret to "
             "verify against, so it cannot accept deliveries. Answering "
@@ -1038,7 +1039,7 @@ def _atlassian_signature_failure(
         return _no_secret_response(source)
     signature = request.headers.get("x-hub-signature", "")
     if not signature or not _verify_atlassian_signature(body_raw, secret, signature):
-        logger.warning(f"{source}_webhook_signature_invalid")
+        logger.warning("webhook_signature_invalid", source=source)
         return JSONResponse({"error": "invalid signature"}, status_code=401)
     return None
 

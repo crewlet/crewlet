@@ -4884,9 +4884,9 @@ class Engine:
         """
         setattr(self, attr_name, new_value)
         if not self._tier_b_done:
-            logger.info(f"{subsystem}_config_updated_pre_cascade")
+            logger.info("config_updated_pre_cascade", subsystem=subsystem)
             return [subsystem]
-        logger.warning(f"{subsystem}_config_restart_required", hint=hint)
+        logger.warning("config_restart_required", subsystem=subsystem, hint=hint)
         return [subsystem]
 
     async def _apply_learning_live(self, old: Any, new: Any) -> list[str]:
