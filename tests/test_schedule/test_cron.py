@@ -153,3 +153,74 @@ def test_next_and_prev_fire():
     # prev_fire is inclusive of the boundary minute.
     boundary = _dt(2026, 6, 8, 9, 0)
     assert prev_fire(cron, at_utc=boundary, tz=UTC) == boundary
+
+
+# ── DST, both directions ─────────────────────────────────────────────
+#
+# The evaluator iterates UTC and matches the LOCAL projection, which is
+# what makes DST unambiguous — every UTC instant has exactly one local
+# time. The two consequences are opposite and both are documented in
+# docs/concepts/scheduling.md; only one of them was pinned by a test.
+
+
+def test_a_repeated_local_hour_yields_two_instants():
+    """Fall-back: the local minute happens twice, so the evaluator
+    reports both UTC instants.
+
+    Collapsing them is the LEDGER's job, not the evaluator's — the fire
+    label is the local wall-clock stamp, so both share one identity and
+    the schedule fires once. That split is deliberate, and this pins the
+    evaluator's half of it: a change here that silently dropped one
+    instant would move DST correctness into a place no test covers.
+    """
+    tz = ZoneInfo("Europe/London")  # 2026-10-25: 02:00 BST -> 01:00 GMT
+    cron = parse_cron("30 1 * * *")
+    fires = iter_fire_times(
+        cron,
+        after_utc=_dt(2026, 10, 25, 0, 0),
+        until_utc=_dt(2026, 10, 25, 12, 0),
+        tz=tz,
+    )
+    assert fires == [_dt(2026, 10, 25, 0, 30), _dt(2026, 10, 25, 1, 30)]
+    # Both are 01:30 local — one wall-clock minute, two instants.
+    assert {f.astimezone(tz).strftime("%H%M") for f in fires} == {"0130"}
+
+
+def test_a_skipped_local_hour_does_not_fire_that_day():
+    """Spring-forward: the local minute does not exist, so nothing
+    matches and the schedule silently misses that day.
+
+    Documented, and the reason the docs tell you to check WHICH hour
+    vanishes in your zone rather than assuming 02:00 — in Europe/London
+    it is 01:00-01:59, so this very ordinary-looking daily schedule is
+    the one that skips.
+    """
+    tz = ZoneInfo("Europe/London")  # 2027-03-28: 01:00 GMT -> 02:00 BST
+    cron = parse_cron("30 1 * * *")
+    fires = iter_fire_times(
+        cron,
+        after_utc=_dt(2027, 3, 26, 12, 0),
+        until_utc=_dt(2027, 3, 30, 12, 0),
+        tz=tz,
+    )
+    days = sorted({f.astimezone(tz).date().isoformat() for f in fires})
+    assert days == ["2027-03-27", "2027-03-29", "2027-03-30"], (
+        "the skipped-hour day should have no fire at all"
+    )
+    assert "2027-03-28" not in days
+
+
+def test_an_hour_outside_the_gap_still_fires_on_the_transition_day():
+    """The skip is confined to the vanished hour — the rest of that day
+    is ordinary."""
+    tz = ZoneInfo("Europe/London")
+    cron = parse_cron("30 5 * * *")
+    fires = iter_fire_times(
+        cron,
+        after_utc=_dt(2027, 3, 26, 12, 0),
+        until_utc=_dt(2027, 3, 30, 12, 0),
+        tz=tz,
+    )
+    days = sorted({f.astimezone(tz).date().isoformat() for f in fires})
+    assert "2027-03-28" in days, "only the vanished hour should be skipped"
+    assert days == ["2027-03-27", "2027-03-28", "2027-03-29", "2027-03-30"]

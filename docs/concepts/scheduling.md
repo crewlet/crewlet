@@ -279,8 +279,14 @@ minute.
 - **Spring-forward (clocks skip an hour):** a cron time in the skipped
   hour has no instant that day, so it **does not run** that day — and
   nothing was "missed" from the window's view, so there's no
-  `skipped_catchup` row. If a daily run is critical, avoid the local
-  02:00–03:00 window or use `timezone: UTC`.
+  `skipped_catchup` row. If a daily run is critical, use `timezone: UTC`,
+  or keep it out of the skipped hour — which is **not the same hour
+  everywhere**: it is 01:00–02:00 in `Europe/London`, 02:00–03:00 across
+  most of the rest of the EU and in the US, and something else again in
+  zones that shift by other amounts or on other dates. Check the hour for
+  the zone you actually set rather than assuming 02:00; a `30 1 * * *`
+  schedule on `Europe/London` is in the gap and silently skips one day a
+  year.
 - **Day-of-week ranges don't wrap:** `sat-sun` is rejected as a
   descending range (Sunday is `0`). Write `6-7`, `sat,sun`, or `0,6`
   for weekends.
