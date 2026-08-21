@@ -394,6 +394,8 @@ What counts as a secret leaf: LLM `api_keys`, embeddings / sandbox `api_key`, Ji
 
 A redacted `GET` → edit a field → full-doc `PUT` round-trips safely: the write path swaps each marker back to the currently-stored (decrypted) value before validating (keep-existing), so a round-trip never clobbers or exposes a secret. To *change* a secret, supply the new value (or a `${VAR}`) at that field.
 
+What counts as a secret leaf is structural, and it covers the untyped surfaces too — `mcp_servers[].env` and `.headers`, `integrations.transports[]`, and a `cli-agent` provider's `cli.auth.token` / `cli.auth.credential_bundle` / `cli.env`. On those, only keys whose *name* signals a credential are masked, so a host, a region or a URL beside the token stays readable in the config view. A field carrying a credential as a literal rather than a `${VAR}` is masked exactly the same way — `${VAR}` is the convention, not what makes redaction work.
+
 `crewlet config export` runs on the host (you already hold the key) and emits the stored payload verbatim — a plaintext `${VAR}` config when unencrypted, or the inert `{"__encrypted__": "enc:v1:…"}` document blob when encrypted (DR-friendly and round-trippable: re-importing decrypts and re-stores it). `crewlet config export --redact` decrypts the structure but masks every secret for a share-safe dump.
 
 ---
