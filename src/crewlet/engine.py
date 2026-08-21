@@ -1567,7 +1567,35 @@ class Engine:
                 ),
             )
         await self._apply_posture(posture)
+        if posture not in (Posture.SHED, Posture.STUCK):
+            await self._ensure_ingress_consuming()
         return posture
+
+    async def _ensure_ingress_consuming(self) -> None:
+        """Un-quiesce the ingress consumer if a shed left it stopped.
+
+        Reconciled on every admitting tick rather than fired on the
+        recovery edge, because the two things involved run on different
+        paths: the notification service refuses (and so quiesces) from
+        the DELIVERY path, while the posture changes on this loop. An
+        edge can therefore fire just before the shed's last in-flight
+        delivery quiesces a consumer that nothing would then restart —
+        and an ingress consumer that never restarts is a node that
+        accepts webhooks and reads none of them, on a company that has
+        otherwise fully recovered.
+
+        Converging on "if I admit work, I am consuming" cannot lose that
+        race: the next tick fixes it. Idempotent and cheap — the call is
+        a no-op when nothing is quiesced, and un-quiescing a topic that
+        is also PAUSED changes nothing, since the pause gates delivery
+        independently.
+        """
+        try:
+            await self.event_queue.unquiesce(
+                "crewlet.notifications.inbound", "notifications"
+            )
+        except Exception:
+            logger.exception("ingress_unquiesce_failed")
 
     async def _heartbeat_apply_status(self, plane: Any) -> None:
         """Re-assert this node's last apply outcome, unchanged.

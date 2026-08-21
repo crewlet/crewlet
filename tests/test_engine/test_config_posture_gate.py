@@ -10,8 +10,9 @@ Three properties, each of which was a bug in an earlier draft:
    rotation does not merely lag; it silently eats its share of the
    fleet's inbound messages.
 2. **Refusal DEFERS: unacked, consumer stopped — never NAK, and never
-   a republish.** Three redeliveries at one second dead-letter a
-   perfectly healthy event, and a shed can last minutes. A republish is
+   a republish.** On the seat inbox and on the ingress topic alike.
+   Three redeliveries at one second dead-letter a perfectly healthy
+   event, and a shed can last minutes. A republish is
    no better: a shed releases this node's seats and a fenced release
    republishes nothing, because sending events to the topic tail while
    the successor replays its prefetched siblings from the head reorders
@@ -421,11 +422,21 @@ async def test_scheduler_tick_is_skipped_while_shedding() -> None:
 # ── the inbound notification path ────────────────────────────────────
 
 
-async def test_inbound_notification_is_requeued_while_shedding() -> None:
+async def test_inbound_notification_is_deferred_while_shedding() -> None:
     """Inbound routing is where a stale node does its most damage:
-    HMAC verification is consume-side, and a failure is a skip + ack."""
+    HMAC verification is consume-side, and a failure is a skip + ack.
+
+    Deferred, not republished. Inbound events are key-partitioned by
+    conversation, so a copy sent to the tail while its prefetched
+    siblings replay from the head reorders that conversation — and the
+    copy lands on a topic this node is still attached to, so if the
+    shed's pause fails (it is caught and logged by design, since one
+    topic must not abort a posture change) the copy comes straight back
+    and is republished again as fast as the broker will serve it.
+    """
     from crewlet.events.types import Event
-    from crewlet.notifications.service import INBOUND_TOPIC, NotificationService
+    from crewlet.notifications.service import NotificationService
+    from crewlet.queue.protocol import DeferDelivery
 
     republished: list[tuple[str, Event]] = []
 
@@ -444,9 +455,46 @@ async def test_inbound_notification_is_requeued_while_shedding() -> None:
     service.set_admission_gate(lambda: False)
 
     event = Event(source="slack", type="raw_webhook", payload={"body": {}})
-    await service._handle_inbound(event)
+    with pytest.raises(DeferDelivery):
+        await service._handle_inbound(event)
 
-    assert republished == [(INBOUND_TOPIC, event)]
+    assert republished == [], "a shed inbound event was put back on the topic"
+
+
+async def test_a_converged_node_starts_reading_inbound_again() -> None:
+    """The deferral quiesces the ingress consumer, and only the reconcile
+    tick starts it again.
+
+    Not the recovery EDGE: the refusal runs on the delivery path while
+    the posture changes on the reconcile loop, so the edge can fire just
+    before the shed's last in-flight delivery quiesces a consumer that
+    nothing would then restart. A node in that state accepts webhooks and
+    reads none of them, while reporting a perfectly healthy config.
+    """
+    engine, queue = await _engine_with_queue()
+    try:
+        # The ingress consumer, as the notification service attaches it.
+        async def _sink(event: Event) -> None: ...
+
+        await queue.subscribe("crewlet.notifications.inbound", "notifications", _sink)
+        assert await queue.quiesce("crewlet.notifications.inbound", "notifications")
+        assert queue.quiescing("crewlet.notifications.inbound", "notifications")
+
+        # Through a real reconcile tick, not the helper: the wiring is
+        # the part that can be missing.
+        from uuid import uuid4
+
+        plane = engine._config_plane()
+        engine._company_config_store = object()
+        engine._applied_epoch = await plane.record_activation(uuid4())
+        assert await engine._reconcile_config_once() is Posture.SERVE
+
+        assert not queue.quiescing("crewlet.notifications.inbound", "notifications"), (
+            "a converged node never started reading inbound webhooks again"
+        )
+    finally:
+        await engine.stop()
+        await queue.stop()
 
 
 async def test_inbound_notification_without_a_gate_is_admitted() -> None:

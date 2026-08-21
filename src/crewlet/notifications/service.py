@@ -23,6 +23,7 @@ from crewlet.notifications.protocol import (
     OutboundMessage,
     Transport,
 )
+from crewlet.queue.protocol import DeferDelivery
 from crewlet.telemetry import restore_context, tracer
 
 if TYPE_CHECKING:
@@ -226,18 +227,34 @@ class NotificationService:
         if not self._running:
             return
 
-        # Config posture: park rather than parse.  Republish-then-ack —
-        # never NAK, which dead-letters a healthy event after three
-        # one-second redeliveries while a shed can last minutes.  The
-        # copy waits on the topic for a node that can read it.
+        # Config posture: park rather than parse.  DEFER — leave it
+        # unacked and stop consuming — never NAK, which dead-letters a
+        # healthy event after three one-second redeliveries while a shed
+        # can last minutes.
+        #
+        # And never a republish, which is what this was. Inbound events
+        # are key-partitioned by conversation, so a copy sent to the
+        # topic's tail while its prefetched siblings replay from the head
+        # reorders that conversation. It also lands on a topic this node
+        # is still attached to: the shed pauses it a moment later, but if
+        # that pause fails — it is caught and logged, by design, so one
+        # topic cannot abort a posture change — the copy comes straight
+        # back, is shed again and republished again, as fast as the
+        # broker will serve it. A deferral cannot spin.
+        #
+        # The engine's reconcile tick un-quiesces this consumer whenever
+        # the posture admits work again, rather than on the recovery
+        # edge: this refusal runs on the DELIVERY path while the posture
+        # changes on the reconcile loop, so an edge can fire just before
+        # the last in-flight delivery quiesces a consumer nothing would
+        # then restart.
         if self._admits is not None and not self._admits():
-            await self._event_queue.publish(INBOUND_TOPIC, event)
             logger.info(
                 "inbound_notification_shed",
                 source=event.source,
                 event_id=str(event.id),
             )
-            return
+            raise DeferDelivery("config posture is shedding")
 
         # Restore OTel context from the incoming event so all
         # downstream events (ExternalNotification, etc.) share the
