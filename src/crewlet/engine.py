@@ -5053,24 +5053,36 @@ class Engine:
         applied: list[str] = []
 
         # LLM providers hold the key inside a constructed client.
+        # In-place mutation of both dicts, not reassignment: TurnEngine
+        # captured them by reference at construction, so replacing the
+        # objects would leave it reading the pre-rotation ones forever.
         try:
-            providers, provider_configs = build_llm_providers(cfg)
+            providers = build_llm_providers(cfg)
             if providers:
                 self._llm_providers.clear()
                 self._llm_providers.update(providers)
+                # The verbatim (``${VAR}``-unresolved) configs the
+                # sandbox backend derives a coding agent's creds from —
+                # same source as every other provider swap.
                 self._llm_provider_configs.clear()
-                self._llm_provider_configs.update(provider_configs)
+                self._llm_provider_configs.update(cfg.providers.llm)
                 applied.append("providers")
         except Exception as exc:
             logger.error("rotation_providers_failed", error=str(exc))
 
         # MCP children baked the resolved env into their spawn
         # environment, so nothing short of a restart picks up a new one.
+        # Shared servers only: a ``shared: false`` entry is a template
+        # with no global instance to restart — its per-role children are
+        # rebuilt by the ``role_mcp`` pass below.
         try:
-            configs = parse_mcp_servers(cfg.mcp_servers)
-            for name in list(configs):
-                await self._mcp_bridge.restart_server(name)
-            if configs:
+            restarted = 0
+            for server_cfg in parse_mcp_servers(cfg.mcp_servers):
+                if not server_cfg.shared:
+                    continue
+                if await self._restart_mcp_server(server_cfg):
+                    restarted += 1
+            if restarted:
                 applied.append("mcp_servers")
         except Exception as exc:
             logger.error("rotation_mcp_failed", error=str(exc))
@@ -5167,49 +5179,70 @@ class Engine:
             )
             if not needs_restart:
                 continue
-            try:
-                if cfg.transport == "http":
-                    # ``restart_server`` would relaunch this as a stdio
-                    # subprocess with an empty command; use the http
-                    # path so the remote connection is re-established.
-                    wrapped = await self.mcp_bridge.restart_http_server(
-                        name=name,
-                        url=cfg.url,
-                        headers=resolve_env_vars(cfg.headers),
-                        tool_prefix=cfg.tool_prefix,
-                        annotation_overrides=cfg.annotation_overrides(),
-                        startup_timeout_seconds=cfg.startup_timeout_seconds,
-                        request_timeout_seconds=cfg.request_timeout_seconds,
-                    )
-                else:
-                    # Resolve ``${VAR}`` env references the same way
-                    # ``_start_mcp_servers`` does — the DB payload keeps
-                    # them verbatim, so passing ``cfg.env`` raw would
-                    # hand the subprocess the literal ``${...}`` string.
-                    resolved_env = resolve_env_vars(cfg.env)
-                    _ensure_atlassian_toolsets(name, resolved_env)
-                    wrapped = await self.mcp_bridge.restart_server(
-                        name=name,
-                        command=cfg.command,
-                        args=cfg.args,
-                        env=resolved_env,
-                        tool_prefix=cfg.tool_prefix,
-                        annotation_overrides=cfg.annotation_overrides(),
-                        startup_timeout_seconds=cfg.startup_timeout_seconds,
-                        request_timeout_seconds=cfg.request_timeout_seconds,
-                    )
-                # Re-register the new wrapped tools with the engine
-                # tool registry so subsequent turns see them.
-                for tool in wrapped:
-                    self.tool_registry.register(tool)
-                logger.info(
-                    "mcp_server_restarted_live",
-                    server=name,
-                    transport=cfg.transport,
-                    tool_count=len(wrapped),
+            await self._restart_mcp_server(cfg)
+
+    async def _restart_mcp_server(self, cfg: Any) -> bool:
+        """Relaunch one shared MCP server from ``cfg``; report success.
+
+        The single restart path, shared by the live config diff and by
+        credential rotation. Rotation had its own three-line version
+        that called ``restart_server(name)`` — the wrong attribute, a
+        list iterated as if it were a mapping, and a required
+        ``command`` argument missing. All three raised inside
+        rotation's ``except``, so it logged ``rotation_mcp_failed`` and
+        moved on: the children kept running with the credential the
+        operator had just rotated away, while the rotation reported the
+        other subsystems as applied. One implementation, so a fix to
+        the restart is a fix everywhere it happens.
+        """
+        if self.mcp_bridge is None:
+            return False
+        name = cfg.name
+        try:
+            if cfg.transport == "http":
+                # ``restart_server`` would relaunch this as a stdio
+                # subprocess with an empty command; use the http
+                # path so the remote connection is re-established.
+                wrapped = await self.mcp_bridge.restart_http_server(
+                    name=name,
+                    url=cfg.url,
+                    headers=resolve_env_vars(cfg.headers),
+                    tool_prefix=cfg.tool_prefix,
+                    annotation_overrides=cfg.annotation_overrides(),
+                    startup_timeout_seconds=cfg.startup_timeout_seconds,
+                    request_timeout_seconds=cfg.request_timeout_seconds,
                 )
-            except Exception as exc:
-                logger.error("mcp_server_restart_failed", server=name, error=str(exc))
+            else:
+                # Resolve ``${VAR}`` env references the same way
+                # ``_start_mcp_servers`` does — the DB payload keeps
+                # them verbatim, so passing ``cfg.env`` raw would
+                # hand the subprocess the literal ``${...}`` string.
+                resolved_env = resolve_env_vars(cfg.env)
+                _ensure_atlassian_toolsets(name, resolved_env)
+                wrapped = await self.mcp_bridge.restart_server(
+                    name=name,
+                    command=cfg.command,
+                    args=cfg.args,
+                    env=resolved_env,
+                    tool_prefix=cfg.tool_prefix,
+                    annotation_overrides=cfg.annotation_overrides(),
+                    startup_timeout_seconds=cfg.startup_timeout_seconds,
+                    request_timeout_seconds=cfg.request_timeout_seconds,
+                )
+        except Exception as exc:
+            logger.error("mcp_server_restart_failed", server=name, error=str(exc))
+            return False
+        # Re-register the new wrapped tools with the engine
+        # tool registry so subsequent turns see them.
+        for tool in wrapped:
+            self.tool_registry.register(tool)
+        logger.info(
+            "mcp_server_restarted_live",
+            server=name,
+            transport=cfg.transport,
+            tool_count=len(wrapped),
+        )
+        return True
 
     async def _apply_notification_transports_live(
         self, new_transports: list[Any]

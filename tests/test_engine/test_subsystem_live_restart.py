@@ -1556,3 +1556,128 @@ async def test_rotation_records_the_new_fingerprint(monkeypatch) -> None:
     await engine.apply_config(company)
 
     assert len(calls) == 1
+
+
+# ── credential rotation restarts MCP children ──────────────────────
+
+
+async def test_credential_rotation_restarts_shared_mcp_servers() -> None:
+    """Rotation's whole point is that the children stop holding the old
+    secret.
+
+    An MCP child bakes its resolved ``${VAR}`` env into its spawn
+    environment, so a rotated credential reaches it only by restart.
+    This is the pass that has to do it — the ordinary config diff
+    cannot, because on the rotation path the payload is byte-identical
+    and every ``old != new`` check is false by construction.
+    """
+    from unittest.mock import AsyncMock as A
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    engine._tier_b_done = True
+    bridge = MagicMock()
+    bridge.restart_server = A(return_value=[])
+    bridge.restart_http_server = A(return_value=[])
+    bridge.stop_server = A()
+    engine.mcp_bridge = bridge
+
+    cfg = CompanyConfig(
+        name="Acme",
+        mcp_servers=[
+            {
+                "name": "calc",
+                "command": "uvx",
+                "args": ["mcp-calc"],
+                "env": {"CALC_TOKEN": "${CALC_TOKEN}"},
+                "shared": True,
+            },
+            {
+                "name": "remote",
+                "transport": "http",
+                "url": "https://mcp.example/mcp",
+                "shared": True,
+            },
+        ],
+    )
+    applied = await engine._apply_credential_rotation(cfg)
+
+    assert "mcp_servers" in applied
+    # The stdio child is relaunched with its full spec, not just a name.
+    stdio = bridge.restart_server.await_args.kwargs
+    assert stdio["name"] == "calc"
+    assert stdio["command"] == "uvx"
+    assert stdio["args"] == ["mcp-calc"]
+    # An http server must go through the http path — restart_server
+    # would relaunch it as a stdio subprocess with an empty command.
+    assert bridge.restart_http_server.await_args.kwargs["name"] == "remote"
+
+
+async def test_credential_rotation_skips_per_role_templates() -> None:
+    """A ``shared: false`` entry names no global instance.
+
+    Its per-role children are ``server::Role`` and are rebuilt by the
+    ``role_mcp`` pass; restarting the bare template name here would
+    stop nothing and then launch a second, unowned global copy.
+    """
+    from unittest.mock import AsyncMock as A
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    engine._tier_b_done = True
+    bridge = MagicMock()
+    bridge.restart_server = A(return_value=[])
+    bridge.restart_http_server = A(return_value=[])
+    engine.mcp_bridge = bridge
+
+    applied = await engine._apply_credential_rotation(
+        CompanyConfig(
+            name="Acme",
+            mcp_servers=[
+                {
+                    "name": "atlassian",
+                    "command": "uvx",
+                    "args": ["mcp-atlassian"],
+                    "shared": False,
+                }
+            ],
+        )
+    )
+
+    bridge.restart_server.assert_not_awaited()
+    assert "mcp_servers" not in applied
+
+
+async def test_credential_rotation_rebuilds_llm_providers() -> None:
+    """A rotated API key lives inside a constructed client.
+
+    ``build_llm_providers`` returns a ``{key: provider}`` mapping.
+    Unpacking it into two names iterates its KEYS, so the rebuild
+    raised for every possible shape — empty, one entry, several — and
+    the ``except`` logged it. The engine went on using the client built
+    from the old key while reporting the rotation applied.
+    """
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    engine._tier_b_done = True
+    before = engine._llm_providers
+    before_configs = engine._llm_provider_configs
+
+    cfg = CompanyConfig(
+        name="Acme",
+        providers={
+            "llm": {
+                "default": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-4-5",
+                    "api_keys": ["rotated-value"],
+                }
+            }
+        },
+    )
+    applied = await engine._apply_credential_rotation(cfg)
+
+    assert "providers" in applied
+    assert "default" in engine._llm_providers
+    # Mutated in place — TurnEngine holds these by reference, so a
+    # rebuild that rebinds them is invisible to every later turn.
+    assert engine._llm_providers is before
+    assert engine._llm_provider_configs is before_configs
+    assert engine._llm_provider_configs["default"].api_keys == ["rotated-value"]
