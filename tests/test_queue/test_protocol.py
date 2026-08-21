@@ -271,6 +271,88 @@ class TestMemoryEventQueue:
         )
         await q.stop()
 
+    async def test_a_publish_during_the_batch_does_not_move_the_splice(
+        self,
+    ) -> None:
+        """The restore point is found by identity, not by arithmetic.
+
+        The obvious way to place the undispatched partitions is a length
+        delta — how much longer is the deque than before the loop. That
+        assumes it only grew at the FRONT, and ``publish`` appends at the
+        tail: a handler that awaits lets one land mid-loop, the delta
+        over-counts, and the splice lands inside the pre-existing tail,
+        reordering the very partitions the guard protects.
+        """
+        from crewlet.queue.protocol import BatchOptions, DeferDelivery
+
+        q = MemoryEventQueue()
+        await q.start()
+        seen: list[str] = []
+
+        async def handler(events: list[Event]) -> None:
+            seen.append(str(events[0].payload["k"]))
+            # A publish lands while this batch is mid-flight, so the
+            # deque grows at the TAIL under the loop. Appended directly
+            # rather than through ``publish``: publishing to the topic
+            # being consumed dispatches inline in this same task, which
+            # would recurse and measure something else entirely. What
+            # matters here is only that the tail grew.
+            q._subs[("topic.c", "grp")].events.append(
+                Event(type="x", payload={"k": "late"})
+            )
+            raise DeferDelivery("seat is not owned here")
+
+        await q.subscribe_batch(
+            "topic.c",
+            "grp",
+            handler,
+            batch_key=lambda e: str(e.payload["k"]),
+            options=BatchOptions(),
+        )
+        await q.pause_topic("topic.c", "grp", reason="test")
+        for key in ("a", "b", "c"):
+            await q.publish("topic.c", Event(type="x", payload={"k": key}))
+        await q.resume_topic("topic.c", "grp", reason="test")
+
+        assert seen == ["a"]
+        backlog = [str(e.payload["k"]) for e in q.backlog("topic.c", "grp")]
+        assert backlog[:3] == ["a", "b", "c"], (
+            f"the undispatched partitions were spliced into the wrong place: {backlog}"
+        )
+        await q.stop()
+
+    async def test_re_attaching_clears_a_stale_quiesce(self) -> None:
+        """A quiesce that outlives its consumer strands the seat forever.
+
+        `detach` clears the flag — but an in-flight handler abandoned by
+        that detach can still raise `DeferDelivery` afterwards, and
+        `_invoke` puts the key straight back. From there nothing is
+        deliverable on that `(topic, group)` and there is no consumer
+        left to un-quiesce it, so the seat's next owner attaches to a
+        subscription that never hands it anything.
+
+        Pulsar quiesces per attachment, so the twin would have been the
+        only one to strand it — and `tests/test_fleet` runs against the
+        twin.
+        """
+        q = MemoryEventQueue()
+        await q.start()
+        seen: list[str] = []
+
+        async def handler(event: Event) -> None:
+            seen.append(event.type)
+
+        # The stale flag, exactly as a late deferral leaves it.
+        q._quiescing.add(("topic.q", "grp"))
+        await q.subscribe("topic.q", "grp", handler)
+        await q.publish("topic.q", Event(type="e1"))
+
+        assert seen == ["e1"], (
+            "a stale quiesce survived the re-attach, so the new owner "
+            "gets nothing and the seat is dark for the whole fleet"
+        )
+        await q.stop()
+
     async def test_resume_topic_unpaused_is_noop(self) -> None:
         q = MemoryEventQueue()
         await q.start()

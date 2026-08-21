@@ -307,6 +307,16 @@ class MemoryEventQueue:
     ) -> None:
         if not self._running:
             raise RuntimeError("MemoryEventQueue is not started")
+        # Attaching is an explicit statement of intent to consume, so it
+        # clears any quiesce on this key — the same reason ``detach``
+        # does. Without it a stale entry strands the subscription
+        # forever: a fenced release detaches (clearing it), an in-flight
+        # handler abandoned by that release then raises ``DeferDelivery``
+        # and ``_invoke`` puts the key straight back, and from there
+        # every future attachment is undeliverable with nothing to
+        # un-quiesce it. Pulsar quiesces per attachment, so the twin
+        # would have been the only one to strand the seat.
+        self._quiescing.discard((topic, group))
         sub = self._ensure(topic, group)
         sub.members.append(
             _Consumer(handler=handler, client=self, topic_key=(topic, group))
@@ -325,6 +335,16 @@ class MemoryEventQueue:
     ) -> None:
         if not self._running:
             raise RuntimeError("MemoryEventQueue is not started")
+        # Attaching is an explicit statement of intent to consume, so it
+        # clears any quiesce on this key — the same reason ``detach``
+        # does. Without it a stale entry strands the subscription
+        # forever: a fenced release detaches (clearing it), an in-flight
+        # handler abandoned by that release then raises ``DeferDelivery``
+        # and ``_invoke`` puts the key straight back, and from there
+        # every future attachment is undeliverable with nothing to
+        # un-quiesce it. Pulsar quiesces per attachment, so the twin
+        # would have been the only one to strand the seat.
+        self._quiescing.discard((topic, group))
         sub = self._ensure(topic, group)
         sub.members.append(
             _Consumer(
@@ -697,11 +717,11 @@ class MemoryEventQueue:
             return
         assert member.batch_key is not None
         parts = order_partitions_oldest_first(partition_by_key(chunk, member.batch_key))
-        # Everything still queued is BEHIND this chunk. Remembered so a
-        # mid-batch quiesce can tell what a deferral pushed back to the
-        # front from what was already there, and slot the undispatched
-        # partitions between them.
-        tail_before = len(sub.events)
+        # Object identities of this chunk, so a mid-batch quiesce can
+        # tell what a deferral pushed back to the FRONT from what was
+        # already queued behind it — and slot the undispatched
+        # partitions between the two.
+        chunk_ids = {id(event) for event in chunk}
         for index, (key, part) in enumerate(parts):
             if member.client is not None and member.topic_key in (
                 member.client._quiescing
@@ -723,12 +743,24 @@ class MemoryEventQueue:
                 remaining: list[Event] = []
                 for _key, rest in parts[index:]:
                     remaining.extend(rest)
-                # After the deferring partition, not before it. ``_invoke``
-                # has already pushed that partition back to the front, so
-                # an ``extendleft`` here would put these ahead of it and
-                # reverse the very order this guard exists to keep.
+                # After the deferring partition, not before it.
+                # ``_invoke`` has already pushed that partition back to
+                # the front, so an ``extendleft`` here would put these
+                # ahead of it and reverse the very order this guard
+                # exists to keep.
+                #
+                # Found by SCANNING the leading run of chunk events, not
+                # by a length delta. A delta assumes the deque only grew
+                # at the front, and ``publish`` appends at the TAIL — a
+                # handler that awaits lets one land mid-loop, and the
+                # splice point then lands inside the pre-existing tail
+                # and reorders exactly what this is protecting.
                 queued = list(sub.events)
-                restored = len(queued) - tail_before
+                restored = 0
+                for event in queued:
+                    if id(event) not in chunk_ids:
+                        break
+                    restored += 1
                 sub.events.clear()
                 sub.events.extend(queued[:restored] + remaining + queued[restored:])
                 return
