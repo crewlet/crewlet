@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
 from typing import Any
 
 from crewlet._logging import get_logger
@@ -36,6 +37,22 @@ from crewlet.learning.synthesized_skill_store import SynthesizedSkillStoreProtoc
 from crewlet.telemetry import set_span_error, tracer
 
 logger = get_logger("learning.skill_scheduler")
+
+
+@dataclass(frozen=True, slots=True)
+class _Seat:
+    """One agent seat this pass may synthesise for.
+
+    Deliberately not an ``AgentInstance``: the pass needs a handle, a
+    role and an agent id, all of which the org derives for any seat in
+    the company — including the ones this node does not run. A
+    fleet-wide singleton that read the local pool clustered only its
+    own seats.
+    """
+
+    handle: str
+    role: Any
+    agent_id: str
 
 
 class SkillClusteringScheduler:
@@ -161,32 +178,83 @@ class SkillClusteringScheduler:
             logger.exception("skill_scheduler_duty_claim_failed")
             return False
 
+    def _seats(self) -> list[_Seat]:
+        """Every agent seat in the COMPANY, not this node's pool.
+
+        This tick is a fleet-wide singleton — it runs on whichever node
+        holds the ``skill-clustering`` duty. Reading the local agent
+        pool meant that node clustered only the seats IT had claimed,
+        so on a three-node fleet six of nine agents never got a
+        scheduled skill pass and every log line read healthy. In the
+        documented split-role shape it is worse: a node started with
+        ``roles: [workers]`` runs no seats at all, so its pool is
+        empty — and it is exactly the node most likely to hold the
+        duty, which means NOBODY gets one.
+
+        The pass only ever needed a handle, a role and an agent id, and
+        the org derives all three for any seat without a live instance
+        (``agent_id_for`` is a uuid5 over org name + handle, which is
+        what lets any node speak for any seat). Falls back to the local
+        pool when the org cannot enumerate — the lightweight stub orgs
+        in tests.
+        """
+        seats: list[_Seat] = []
+        try:
+            roles = list(self._org.all_roles())
+        except Exception:
+            roles = []
+        for role in roles:
+            if getattr(role, "kind", "agent") != "agent":
+                continue
+            handle = role.get_handle()
+            if not handle:
+                continue
+            try:
+                agent_id = self._org.agent_id_for(role)
+            except Exception:
+                agent_id = ""
+            seats.append(_Seat(handle=handle, role=role, agent_id=agent_id))
+        if seats:
+            return seats
+        for agent in getattr(self._agent_pool, "agents", []) or []:
+            handle = getattr(agent, "handle", "") or ""
+            role = _resolve_role(self._org, agent)
+            if handle and role is not None:
+                seats.append(
+                    _Seat(
+                        handle=handle,
+                        role=role,
+                        agent_id=getattr(agent, "id_str", "") or "",
+                    )
+                )
+        return seats
+
     async def tick_once(self) -> int:
-        """Run one pass over every agent, then one per unit.
+        """Run one pass over every agent seat, then one per unit.
 
         Returns the number of skills synthesised (agent + unit
         combined).  Exposed so tests can drive the scheduler without
         waiting on the real interval.
         """
-        agents = list(getattr(self._agent_pool, "agents", []) or [])
+        seats = self._seats()
         with tracer.start_as_current_span(
             "learning.skill_scheduler.tick",
             attributes={
                 "learning.worker": "skill_scheduler",
-                "learning.agent_count": len(agents),
+                "learning.agent_count": len(seats),
                 "learning.promotion_enabled": self._promotion_enabled,
             },
         ) as tick_span:
             synth_count = 0
             agent_synth = 0
-            for agent in agents:
+            for seat in seats:
                 try:
-                    made = await self._tick_agent(agent)
+                    made = await self._tick_agent(seat)
                 except Exception as exc:
                     set_span_error(exc)
                     logger.exception(
                         "skill_scheduler_agent_tick_failed",
-                        agent_handle=getattr(agent, "handle", ""),
+                        agent_handle=seat.handle,
                     )
                     continue
                 agent_synth += made
@@ -196,7 +264,7 @@ class SkillClusteringScheduler:
             if self._promotion_enabled:
                 for unit in _iter_units(self._org):
                     try:
-                        made = await self._tick_unit(unit, agents)
+                        made = await self._tick_unit(unit, seats)
                     except Exception as exc:
                         set_span_error(exc)
                         logger.exception(
@@ -213,14 +281,9 @@ class SkillClusteringScheduler:
             logger.debug("skill_scheduler_tick_complete", synthesised=synth_count)
             return synth_count
 
-    async def _tick_agent(self, agent: Any) -> int:
-        handle = getattr(agent, "handle", "") or ""
-        if not handle:
-            return 0
-        role = _resolve_role(self._org, agent)
-        if role is None:
-            logger.debug("skill_scheduler_skip_no_role", agent_handle=handle)
-            return 0
+    async def _tick_agent(self, seat: _Seat) -> int:
+        handle = seat.handle
+        role = seat.role
 
         episodes = await self._episode_store.list_recent_by_outcome(
             agent_handle=handle,
@@ -271,7 +334,7 @@ class SkillClusteringScheduler:
                         source_episodes=cluster,
                         existing_skill_names=existing_names,
                         trigger="clustered",
-                        agent_id=getattr(agent, "id_str", "") or "",
+                        agent_id=seat.agent_id,
                     )
                 except Exception as exc:
                     worker_span.set_attribute("learning.outcome", "failed")
@@ -310,7 +373,7 @@ class SkillClusteringScheduler:
                     worker_span.set_attribute("learning.outcome", "noop")
         return made
 
-    async def _tick_unit(self, unit: Any, agents: list[Any]) -> int:
+    async def _tick_unit(self, unit: Any, seats: list[_Seat]) -> int:
         """Cross-agent promotion pass for one :class:`OrgUnit`.
 
         Collects every synthesized skill owned by an agent whose
@@ -330,7 +393,7 @@ class SkillClusteringScheduler:
         unit_name = getattr(unit, "name", "") or ""
         if not unit_name:
             return 0
-        member_handles = _member_handles_for_unit(unit, agents, self._org)
+        member_handles = _member_handles_for_unit(unit, seats, self._org)
         if len(member_handles) < self._promotion_min_sibling_count:
             return 0
         store = self._synthesized_skill_store
@@ -529,10 +592,10 @@ def _iter_units(org: Any) -> list[Any]:
         return []
 
 
-def _member_handles_for_unit(unit: Any, agents: list[Any], org: Any) -> list[str]:
-    """Handles of agents whose innermost unit is ``unit``.
+def _member_handles_for_unit(unit: Any, seats: list[_Seat], org: Any) -> list[str]:
+    """Handles of the seats whose innermost unit is ``unit``.
 
-    Derives membership from the agent's ``role_name`` and the unit's
+    Derives membership from the seat's role name and the unit's
     declared ``roles`` list.  Child units are not included — promotion
     operates at a single-unit granularity.
     """
@@ -543,14 +606,11 @@ def _member_handles_for_unit(unit: Any, agents: list[Any], org: Any) -> list[str
             unit_role_names.add(name)
     if not unit_role_names:
         return []
-    handles: list[str] = []
-    for agent in agents:
-        role_name = getattr(agent, "role_name", "") or ""
-        if role_name in unit_role_names:
-            handle = getattr(agent, "handle", "") or ""
-            if handle:
-                handles.append(handle)
-    return handles
+    return [
+        seat.handle
+        for seat in seats
+        if (getattr(seat.role, "name", "") or "") in unit_role_names and seat.handle
+    ]
 
 
 def _representative_role_for_unit(unit: Any, org: Any) -> Any:

@@ -386,13 +386,17 @@ async def test_scheduler_tick_span_records_counts(otel_exporter) -> None:
     from crewlet.learning.skill_scheduler import SkillClusteringScheduler
 
     class _AgentPool:
-        agents = []  # no agents → tick returns 0, but the span still fires
+        agents = []
 
     sched = SkillClusteringScheduler(
         synthesizer=object(),  # type: ignore[arg-type]
         episode_store=object(),  # type: ignore[arg-type]
         agent_pool=_AgentPool(),
-        organization=_mk_org(),
+        # No agent seats in the COMPANY → tick returns 0, but the span
+        # still fires. The work list comes from the org, not the pool:
+        # this pass is a fleet-wide singleton, so an empty pool only
+        # means this node runs no seats.
+        organization=Organization(name="Acme", units=[]),
     )
     made = await sched.tick_once()
     assert made == 0

@@ -33,7 +33,7 @@ node:
 |---|---|
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns |
-| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties) — scheduler tick, sandbox waiter, retention sweep, skill clustering and curation, seat-subscription creation |
+| `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties) — scheduler tick, sandbox waiter, retention sweep, skill clustering and curation, seat-subscription creation. These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local agent pool would cover nothing |
 
 ```mermaid
 flowchart TB

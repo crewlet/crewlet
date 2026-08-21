@@ -232,14 +232,18 @@ def test_cluster_skills_by_jaccard_groups_similar() -> None:
 
 
 def test_member_handles_for_unit_matches_by_role_name() -> None:
+    from crewlet.learning.skill_scheduler import _Seat
+
     org = _mk_org()
     unit = org.units[0]
-    agents = [
-        _AgentStub("alice", "Alice"),
-        _AgentStub("bob", "Bob"),
-        _AgentStub("nobody", "Outsider"),
+    seats = [
+        _Seat(handle="alice", role=Role(name="Alice", handle="alice"), agent_id="a"),
+        _Seat(handle="bob", role=Role(name="Bob", handle="bob"), agent_id="b"),
+        _Seat(
+            handle="nobody", role=Role(name="Outsider", handle="nobody"), agent_id="n"
+        ),
     ]
-    members = _member_handles_for_unit(unit, agents, org)
+    members = _member_handles_for_unit(unit, seats, org)
     assert sorted(members) == ["alice", "bob"]
 
 

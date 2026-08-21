@@ -87,9 +87,18 @@ def _mk_episode(
     )
 
 
-def _mk_org() -> Organization:
-    role = Role(name="Engineer", handle="eng")
-    unit = OrgUnit(name="Eng", type="team", lead="Engineer", roles=[role])
+def _mk_org(handles: tuple[str, ...] = ("alice",)) -> Organization:
+    """A company whose seats are the ones the test drives.
+
+    The pass reads its work list from the ORG, not from this node's
+    agent pool — it is a fleet-wide singleton, so the pool holds only
+    the seats this node happens to have claimed.
+    """
+    roles = [
+        Role(name="Engineer" if i == 0 else f"Engineer{i}", handle=handle)
+        for i, handle in enumerate(handles)
+    ]
+    unit = OrgUnit(name="Eng", type="team", lead="Engineer", roles=roles)
     return Organization(name="Acme", units=[unit])
 
 
@@ -175,7 +184,7 @@ async def test_tick_once_handles_multiple_agents_independently() -> None:
         synthesizer=synth,  # type: ignore[arg-type]
         episode_store=store,  # type: ignore[arg-type]
         agent_pool=_AgentPoolStub([_AgentStub("alice"), _AgentStub("bob")]),
-        organization=_mk_org(),
+        organization=_mk_org(("alice", "bob")),
         cluster_min_size=3,
     )
     made = await scheduler.tick_once()
@@ -260,3 +269,65 @@ async def _always() -> bool:
 
 async def _never() -> bool:
     return False
+
+
+async def test_the_pass_covers_seats_this_node_does_not_run() -> None:
+    """The tick is a fleet-wide singleton.
+
+    It runs on whichever node holds the `skill-clustering` duty, so
+    reading the local agent pool meant that node clustered only the
+    seats IT had claimed — on a three-node fleet, six of nine agents
+    never got a scheduled pass, and every log line read healthy.
+    """
+    eps = [
+        _mk_episode(tool_sequence=["a", "b", "c"], agent_handle="bob", minutes=i)
+        for i in range(3)
+    ]
+
+    class _BobStore(_EpisodeStoreStub):
+        async def list_recent_by_outcome(self, **kwargs):
+            return list(eps) if kwargs.get("agent_handle") == "bob" else []
+
+    synth = _RecordingSynthesizer()
+    scheduler = SkillClusteringScheduler(
+        synthesizer=synth,  # type: ignore[arg-type]
+        episode_store=_BobStore([]),  # type: ignore[arg-type]
+        # This node runs only alice. bob's seat is held by a peer.
+        agent_pool=_AgentPoolStub([_AgentStub("alice")]),
+        organization=_mk_org(("alice", "bob")),
+        cluster_min_size=3,
+    )
+
+    made = await scheduler.tick_once()
+
+    assert made == 1
+    assert [c["agent_handle"] for c in synth.calls] == ["bob"]
+
+
+async def test_a_workers_only_node_still_covers_the_company() -> None:
+    """The documented split-role shape, and the worst case.
+
+    A node started with `roles: [workers]` runs no seats at all, so its
+    pool is empty — and it is exactly the node most likely to hold the
+    duty, which means NOBODY got a scheduled skill pass.
+    """
+    eps = [
+        _mk_episode(tool_sequence=["a", "b", "c"], agent_handle="alice", minutes=i)
+        for i in range(3)
+    ]
+
+    class _AliceStore(_EpisodeStoreStub):
+        async def list_recent_by_outcome(self, **kwargs):
+            return list(eps) if kwargs.get("agent_handle") == "alice" else []
+
+    synth = _RecordingSynthesizer()
+    scheduler = SkillClusteringScheduler(
+        synthesizer=synth,  # type: ignore[arg-type]
+        episode_store=_AliceStore([]),  # type: ignore[arg-type]
+        agent_pool=_AgentPoolStub([]),  # ingress/workers node: no seats
+        organization=_mk_org(("alice",)),
+        cluster_min_size=3,
+    )
+
+    assert await scheduler.tick_once() == 1
+    assert [c["agent_handle"] for c in synth.calls] == ["alice"]

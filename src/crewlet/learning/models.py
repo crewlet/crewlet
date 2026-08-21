@@ -137,6 +137,16 @@ class Episode(BaseModel):
         return self.task_summary or self.plan_summary
 
 
+#: How many observed traits about one counterpart reach a prompt.
+#:
+#: One profiler pass contributes at most 16 keys, but the store merges
+#: passes with a JSONB concat, so the set grows for the life of the
+#: relationship. 24 is a generous half-again over a single pass — it
+#: never truncates what one turn observed — while keeping the block a
+#: reader can actually take in and the prompt a bounded size.
+MAX_RENDERED_TRAITS = 24
+
+
 class CounterpartyProfile(BaseModel):
     """One agent's observed model of one subject.
 
@@ -196,16 +206,30 @@ class CounterpartyProfile(BaseModel):
         appends the block to its agent-info output).  Centralising the
         format here keeps the two call sites from drifting on trait
         rendering or the provenance footer.
+
+        **Bounded.**  Each profiler pass contributes at most 16 keys,
+        but the store merges them with a JSONB concat, so the set only
+        ever grows: a counterpart an agent has worked with for months
+        accumulates traits without limit, and every one of them landed
+        in the Plan prompt of every turn that mentions them. The cap is
+        on the rendering rather than on the record — the observations
+        are worth keeping, the prompt is what has a budget — and it
+        says how many it dropped so a reader is not misled into
+        thinking that is all the agent knows.
         """
         traits = dict(self.traits or {})
         if traits:
             lines: list[str] = ["Observed by you:"]
-            for key, value in traits.items():
+            shown = list(traits.items())[:MAX_RENDERED_TRAITS]
+            for key, value in shown:
                 if isinstance(value, (list, tuple)):
                     rendered = ", ".join(str(v) for v in value)
                 else:
                     rendered = str(value)
                 lines.append(f"  - {key}: {rendered}")
+            dropped = len(traits) - len(shown)
+            if dropped:
+                lines.append(f"  … and {dropped} more observed traits")
         else:
             lines = ["Observed by you: (no traits yet)"]
         lines.append(

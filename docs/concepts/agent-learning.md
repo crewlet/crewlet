@@ -65,7 +65,7 @@ The agent's private observation log. Two kinds:
 | Kind | TTL | Use |
 |---|---|---|
 | `diary_long` | None | Durable preferences and facts (`Stakeholder X prefers digests`). |
-| `diary_short` | Set | Situational state (`Sprint freeze runs through 2026-05-10`, `Opened PR-123 from sandbox run, awaiting review`). Filtered out at read time once the TTL passes; physically deleted in batches by `delete_expired`. |
+| `diary_short` | Set | Situational state (`Sprint freeze runs through 2026-05-10`, `Opened PR-123 from sandbox run, awaiting review`). Excluded by the read's own SQL predicate once the TTL passes — so an expired row never consumes a slot in the recency window — and physically deleted by the [retention sweep](../guides/fleet.md), which runs `delete_expired` on the same fleet-wide singleton tick as the other short-horizon tables. |
 
 Two writers converge: the post-turn `PersistDecider` (above) and the in-flight `reflect_and_persist` LLM-facing builtin. Both go through `AgentDiary.write`, which embeds the content on write so the row is reachable by vector similarity later. The `## Personal memory` prefetch and `refresh_memory` read the diary via **hybrid candidate selection**: `AgentDiary.search_for_agent` (vector top-K matches to the trigger) unioned with `AgentDiary.list_for_agent` (recency top-K), deduped by row id and capped at `DEFAULT_CANDIDATE_POOL_LIMIT` (100), then passed to an aux-LLM relevance filter that picks the final digest. The two halves serve different needs: vector search catches **topical / semantic matches** to the current trigger; recency catches **broadly-applicable operational rules** that may not be a topical match (e.g. "use semantic commit messages on every PR"). The aux filter judges from the merged pool.
 

@@ -514,3 +514,57 @@ async def test_search_for_agent_swallows_db_failure() -> None:
     diary = AgentDiary(_BoomDB(), _EmbeddingStub())  # type: ignore[arg-type]
     out = await diary.search_for_agent("alice-id", query="x")
     assert out == []
+
+
+async def test_expired_rows_do_not_consume_the_recency_window() -> None:
+    """The TTL filter belongs in the WHERE clause, not after the LIMIT.
+
+    Applied in Python afterwards, expired rows still consumed the
+    window: an agent whose newest `limit` entries were all short-lived
+    got an EMPTY memory block while non-expired older ones sat just
+    past the cut. Nothing swept them, so the window filled with them.
+    """
+    captured: dict[str, object] = {}
+
+    class _Db:
+        async def execute(self, sql, *args):
+            captured["sql"] = sql
+            captured["args"] = args
+            # The DB honours the predicate; only the live row comes back.
+            return [
+                {
+                    "id": uuid4(),
+                    "agent_id": "agent-1",
+                    "kind": "diary_long",
+                    "content": "still relevant",
+                    "ttl_until": None,
+                    "source": "s",
+                    "turn_id": None,
+                    "metadata": {},
+                    "retrieval_count": 0,
+                    "last_retrieved_at": None,
+                    "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+                }
+            ]
+
+    diary = AgentDiary(_Db())  # type: ignore[arg-type]
+    docs = await diary.list_for_agent("agent-1", limit=1)
+
+    assert [d["content"] for d in docs] == ["still relevant"]
+    # The predicate is in the SQL, so the LIMIT applies to LIVE rows.
+    assert "ttl_until > now()" in str(captured["sql"])
+    assert captured["args"][2] is False
+
+
+async def test_include_expired_still_returns_expired_rows() -> None:
+    """The flag has to reach the predicate, not just the Python filter."""
+    captured: dict[str, object] = {}
+
+    class _Db:
+        async def execute(self, sql, *args):
+            captured["args"] = args
+            return []
+
+    diary = AgentDiary(_Db())  # type: ignore[arg-type]
+    await diary.list_for_agent("agent-1", limit=5, include_expired=True)
+    assert captured["args"][2] is True

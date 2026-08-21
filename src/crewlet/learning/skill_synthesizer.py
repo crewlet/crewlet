@@ -740,6 +740,16 @@ class PromotionSynthesizer:
         return name, description, body
 
 
+#: Cap on one sibling skill's body inside the promotion prompt.
+#:
+#: The synthesizer is looking for the SHAPE the siblings share, which
+#: the opening of a skill body carries — the name, the description and
+#: the first steps. 4000 characters is roughly a thousand tokens: ample
+#: for that, and small enough that a large cluster still fits with room
+#: for the model to answer.
+_PROMOTION_BODY_CHARS = 4000
+
+
 def _shortest_tool_sequence(sequences: list[list[str]]) -> list[str]:
     """Return the shortest non-empty sequence in ``sequences`` or []."""
     non_empty = [list(seq) for seq in sequences if seq]
@@ -754,8 +764,19 @@ def _build_promotion_user_prompt(
     source_skills: list[SynthesizedSkill],
     existing_skill_names: list[str],
 ) -> str:
+    """Assemble the promotion prompt from a cluster's sibling skills.
+
+    Each sibling's body is clipped. A cluster is unbounded in both
+    directions — how many siblings it holds, and how long each one's
+    body is — so inlining them whole made the prompt a function of how
+    much the team had written, with nothing between it and the
+    provider's context limit but luck.
+    """
     blocks: list[str] = []
     for i, s in enumerate(source_skills):
+        body = s.content
+        if len(body) > _PROMOTION_BODY_CHARS:
+            body = body[:_PROMOTION_BODY_CHARS] + "\n… [truncated]"
         blocks.append(
             "\n".join(
                 [
@@ -763,7 +784,7 @@ def _build_promotion_user_prompt(
                     f"  Name: {s.name}",
                     f"  Description: {s.description}",
                     f"  Tools: {', '.join(s.tool_sequence) or '(none)'}",
-                    f"  Body:\n{s.content}",
+                    f"  Body:\n{body}",
                 ]
             )
         )

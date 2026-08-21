@@ -215,3 +215,43 @@ async def test_a_live_nodes_apply_status_survives_the_sweep() -> None:
 def test_unconfigured_tables_are_absent_not_silently_skipped() -> None:
     worker = MaintenanceWorker(rate_limits=_Purgeable())
     assert worker.targets == ("rate_limits",)
+
+
+async def test_the_sweep_expires_the_agent_diary() -> None:
+    """`agent_diary` rows carry their own TTL and nothing removed them.
+
+    `delete_expired` had no caller outside tests, so the table grew for
+    the life of the deployment while every read still paid to filter
+    rows nothing was deleting. It expires per row rather than on a
+    table retention, so it takes the idle-A2A shape rather than joining
+    the age-purge targets.
+    """
+    calls: list[int] = []
+
+    async def _expire() -> int:
+        calls.append(1)
+        return 7
+
+    worker = MaintenanceWorker(expire_diary=_expire)
+    swept = await worker.tick_once()
+
+    assert calls == [1]
+    assert swept["agent_diary"] == 7
+
+
+async def test_a_failing_diary_expire_does_not_stop_the_sweep() -> None:
+    """One table's failure must not strand the others — the same rule
+    the age purges already follow."""
+
+    class _Store:
+        async def purge(self, older_than_seconds: float) -> int:
+            return 3
+
+    async def _boom() -> int:
+        raise RuntimeError("diary unavailable")
+
+    worker = MaintenanceWorker(expire_diary=_boom, rate_limits=_Store())
+    swept = await worker.tick_once()
+
+    assert "agent_diary" not in swept
+    assert swept["rate_limits"] == 3

@@ -5439,6 +5439,14 @@ class Engine:
                 if self.a2a_service is not None
                 else None
             ),
+            # `agent_diary` rows carry their own `ttl_until`, so they
+            # expire per row rather than on a table retention — same
+            # shape as the idle-A2A close, same singleton, same reason.
+            expire_diary=(
+                self._agent_diary.delete_expired
+                if getattr(self, "_agent_diary", None) is not None
+                else None
+            ),
             claim_duty=lambda: self.claim_worker_duty("maintenance"),
         )
 

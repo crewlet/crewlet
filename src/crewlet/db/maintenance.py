@@ -136,6 +136,7 @@ class MaintenanceWorker:
         a2a_channels: PurgeableStore | None = None,
         apply_status: PurgeableStore | None = None,
         close_idle_a2a: Any = None,
+        expire_diary: Any = None,
         interval_seconds: float = MAINTENANCE_INTERVAL_SECONDS,
         claim_duty: Any = None,
     ) -> None:
@@ -173,6 +174,13 @@ class MaintenanceWorker:
                 )
             )
         self._close_idle_a2a = close_idle_a2a
+        # `agent_diary` expires by each row's OWN `ttl_until`, not by a
+        # table-wide retention age, so it takes the same shape as the
+        # idle-A2A close rather than joining `_targets`. Until it was
+        # wired here `delete_expired` had no caller outside tests: the
+        # table grew for the life of the deployment, and every read
+        # still paid to filter rows nothing removed.
+        self._expire_diary = expire_diary
         self._interval = max(1.0, float(interval_seconds))
         self._claim_duty = claim_duty
         self._running = False
@@ -263,6 +271,14 @@ class MaintenanceWorker:
             else:
                 if closed:
                     deleted["a2a_channels_closed"] = int(closed)
+        if self._expire_diary is not None:
+            try:
+                expired = await self._expire_diary()
+            except Exception:
+                logger.exception("maintenance_diary_expire_failed")
+            else:
+                if expired:
+                    deleted["agent_diary"] = int(expired)
         for name, store, retention in self._targets:
             try:
                 count = await store.purge(retention)
