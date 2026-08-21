@@ -81,6 +81,19 @@ _TERM_GRACE_SECONDS = 5.0
 #: without pasting a whole transcript into every event payload.
 _ERROR_EXCERPT_CHARS = 2000
 
+#: How long a reply may be and still be read as a usage-limit notice.
+#:
+#: Only consulted where the model had no tool surface, so there is no
+#: envelope to settle it structurally — see
+#: :meth:`CLIAgentProvider._looks_like_a_usage_limit`. A vendor's
+#: message is a sentence or two ("Usage limit reached. Resets at 4pm",
+#: and the most verbose shipped form adds a reset timestamp and an
+#: upgrade line — still under 200 characters), while an answer that
+#: merely mentions rate limiting is substantive prose. 500 leaves that
+#: 2.5x of headroom without reaching into the length real answers start
+#: at.
+_LIMIT_MESSAGE_MAX_CHARS = 500
+
 
 class CLIAgentConfigError(ValueError):
     """The CLI backend cannot be constructed as configured."""
@@ -413,6 +426,22 @@ class CLIAgentProvider:
 
     # -- LLMProvider surface -----------------------------------------
 
+    def _looks_like_a_usage_limit(self, text: str) -> bool:
+        """Whether a zero-exit reply is the CLI saying its window is spent.
+
+        Reached only when no tool call was parsed. With a tool surface
+        that already means the CLI ignored the response contract, which
+        the model answering the turn does not do — so the wording is
+        enough. Without one there was no contract to violate, and the
+        only remaining signal is that a vendor's limit notice is SHORT
+        and is the whole reply, where an answer that happens to discuss
+        rate limiting is not.
+        """
+        stripped = text.strip()
+        if not stripped or len(stripped) > _LIMIT_MESSAGE_MAX_CHARS:
+            return False
+        return any(pattern.search(stripped) for pattern in self._rate_limit)
+
     async def complete(
         self,
         messages: list[Message],
@@ -474,30 +503,45 @@ class CLIAgentProvider:
                 provider_key=self.provider_key,
             )
 
-        # A zero exit with limit wording is how these CLIs report a spent
-        # subscription window; without this the phase would consume the
-        # apology as the model's answer instead of falling through to
-        # the next provider in the role's chain.
-        for pattern in self._rate_limit:
-            if pattern.search(text):
-                logger.warning(
-                    "cli_llm_rate_limited",
-                    provider=self.provider_key,
-                    seat=workspace.seat,
-                )
-                raise ProviderCallError(
-                    f"{self.profile.binary} reported a usage limit: "
-                    f"{text.strip()[:_ERROR_EXCERPT_CHARS]}",
-                    ProviderErrorKind.RATE_LIMIT,
-                    provider_key=self.provider_key,
-                )
-
         if tools:
             content, tool_calls = parse_envelope(text, id_prefix=self.provider_key)
         else:
             # No tool surface means no response contract went out, so
             # there is no envelope to look for — the reply IS the answer.
             content, tool_calls = text, []
+
+        # A zero exit with limit wording is how these CLIs report a spent
+        # subscription window; without this the phase would consume the
+        # apology as the model's answer instead of falling through to
+        # the next provider in the role's chain.
+        #
+        # But the wording is ordinary engineering prose — "rate limit",
+        # "429", "overloaded", "too many requests", "resets at" — so
+        # matching it against the model's ANSWER threw away real work.
+        # An agent asked to add rate limiting to a gateway had its plan
+        # discarded as a provider outage, on the fastest path to a
+        # metered bill (RATE_LIMIT is retryable, so a chain falls
+        # through to the paid key) or, on a subscription-only chain, a
+        # failed turn.
+        #
+        # The two are told apart by STRUCTURE, not by keywords. A vendor
+        # CLI reporting a spent window has never seen Crewlet's response
+        # contract, so it cannot produce a valid envelope; the model
+        # answering the turn does. So a parsed envelope settles it, and
+        # the wording is only consulted where there was no contract to
+        # violate — see :func:`_looks_like_a_usage_limit`.
+        if not tool_calls and self._looks_like_a_usage_limit(text):
+            logger.warning(
+                "cli_llm_rate_limited",
+                provider=self.provider_key,
+                seat=workspace.seat,
+            )
+            raise ProviderCallError(
+                f"{self.profile.binary} reported a usage limit: "
+                f"{text.strip()[:_ERROR_EXCERPT_CHARS]}",
+                ProviderErrorKind.RATE_LIMIT,
+                provider_key=self.provider_key,
+            )
         input_tokens = usage.get("input", 0) or estimate_tokens(prompt)
         output_tokens = usage.get("output", 0) or estimate_tokens(text)
         cache_read = usage.get("cache_read", 0)

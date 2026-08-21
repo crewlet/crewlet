@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: Every built-in profile name.  A ``Literal`` (not a free string) so
 #: ``providers.llm.<key>.cli.agent`` rejects a typo at validation time
@@ -253,7 +253,17 @@ class CLIAgentProfile(BaseModel):
 
     passthrough_env: list[str] = Field(default_factory=list)
     """Extra host env var names this CLI needs beyond the shared
-    allowlist in :mod:`crewlet.providers.llm.cli_workspace`."""
+    allowlist in :mod:`crewlet.providers.llm.cli_workspace`.
+
+    **Non-credential only.**  These are forwarded from the engine's own
+    environment unconditionally, before any auth-mode decision is made,
+    so a credential named here reaches every seat whatever ``auth.mode``
+    says — which is exactly the metered-bill-on-a-flat-rate-plan
+    failure the mode exists to prevent.  A CLI's key belongs in
+    :attr:`api_key_env` (passed only in ``api-key`` mode, or picked up
+    from the host in ``inherit-env``) or :attr:`token_env`.  Enforced by
+    :meth:`_validate_passthrough_is_not_a_credential`; a CLI that wants
+    a second spelling of its key overrides ``api_key_env`` in config."""
 
     # ---------------------------------------------------------------
     # Authentication
@@ -317,6 +327,32 @@ class CLIAgentProfile(BaseModel):
     problem (expired login, revoked token) — retryable across the
     chain, and the signal ``crewlet llm doctor`` reports as "log in
     again"."""
+
+    @model_validator(mode="after")
+    def _validate_passthrough_is_not_a_credential(self) -> CLIAgentProfile:
+        """A credential may not ride in on ``passthrough_env``.
+
+        Everything named there is forwarded from the ENGINE's own
+        environment before ``auth.mode`` is consulted, so a key listed
+        there reaches every seat whatever the mode says — the metered
+        bill on a flat-rate plan that the mode exists to prevent. The
+        two shipped profiles that did it (``grok`` forwarding
+        ``XAI_API_KEY``, ``copilot`` forwarding the org's
+        ``GITHUB_TOKEN``) are why this is checked rather than
+        documented: both read as ordinary config until you trace where
+        the value comes from.
+        """
+        credentials = {name for name in (self.api_key_env, self.token_env) if name}
+        leaked = sorted(credentials.intersection(self.passthrough_env))
+        if leaked:
+            msg = (
+                f"profile {self.name!r} lists {', '.join(leaked)} in "
+                "passthrough_env, which forwards the engine's own value "
+                "regardless of auth.mode. A credential belongs in "
+                "api_key_env or token_env."
+            )
+            raise ValueError(msg)
+        return self
 
     def merged(self, overrides: dict[str, Any] | None) -> CLIAgentProfile:
         """Return this profile with ``overrides`` applied field-wise.
@@ -599,7 +635,12 @@ COPILOT_CLI = CLIAgentProfile(
     dir_env={"COPILOT_CONFIG_DIR": ".copilot"},
     credential_paths=[".copilot/config.json"],
     volatile_paths=[".copilot/history-session-state", ".copilot/logs"],
-    passthrough_env=["GITHUB_TOKEN", "GH_TOKEN"],
+    # Copilot authenticates with a GitHub token, so that IS its key —
+    # not passthrough config. In `passthrough_env` it was forwarded from
+    # the engine's environment regardless of `auth.mode`, handing every
+    # seat the org-wide `GITHUB_TOKEN` the GitHub integration sets
+    # instead of the seat's own identity.
+    api_key_env="GITHUB_TOKEN",
     login_args=["/login"],
     status_args=["/user", "show"],
 )
@@ -618,8 +659,12 @@ GROK = CLIAgentProfile(
     output_token_paths=[["usage", "completion_tokens"], ["usage", "output_tokens"]],
     credential_paths=[".grok/auth.json", ".grok/user-settings.json"],
     volatile_paths=[".grok/sessions", ".grok/history"],
+    # `XAI_API_KEY` is the same credential under xAI's older spelling.
+    # It used to sit in `passthrough_env`, which forwards from the
+    # engine's own environment before `auth.mode` is consulted — so an
+    # engine that used xAI as a metered provider elsewhere billed that
+    # account for every seat on the flat-rate plan.
     api_key_env="GROK_API_KEY",
-    passthrough_env=["XAI_API_KEY"],
     login_args=["login"],
     status_args=["status"],
 )
