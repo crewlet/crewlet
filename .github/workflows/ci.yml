@@ -97,13 +97,44 @@ jobs:
 
           asyncio.run(main())
           PY
+      - name: Start Pulsar
+        # A service container cannot supply the command a standalone broker
+        # needs, so it is a plain `docker run` — the runner ships Docker.
+        # Image, command and JVM cap all mirror the compose service, which
+        # is where they are pinned and explained; neither a service image nor
+        # a `docker run` reference is a surface Dependabot watches, so
+        # tracking compose keeps one source of truth.
+        #
+        # What this unskips is the part of the design that is a claim ABOUT
+        # the broker: that a close-driven handoff returns a seat's mail at
+        # `redeliveryCount` 0, that the cursor survives a change of owner,
+        # that a wedged consumer holds its prefetch for the ack timeout.
+        # The memory twin models all three, and a twin agreeing with itself
+        # proves nothing about Pulsar.
+        run: |
+          docker run -d --name pulsar \
+            -p 6650:6650 -p 8080:8080 \
+            -e PULSAR_MEM="-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m" \
+            apachepulsar/pulsar:latest \
+            bin/pulsar standalone --no-functions-worker --no-stream-storage
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/admin/v2/clusters >/dev/null; then
+              echo "broker ready after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Pulsar did not become ready"; docker logs pulsar; exit 1
+      - name: Ensure shellcheck is present
+        # The repo's dev-loop bootstrap scripts are shell, and their lint
+        # test skips silently without it — the last remaining skip in the
+        # suite. The runner image normally ships it, so this only installs
+        # when it does not, and never fails the build for it: a missing
+        # linter costs the skip it always cost, not the run.
+        run: |
+          command -v shellcheck && exit 0
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck || \
+            echo "::warning::shellcheck unavailable — its suite will skip"
       - name: Run tests
-        # Pulsar is deliberately NOT here. The broker-behaviour suite and the
-        # real-broker half of tests/test_fleet still skip in CI: a standalone
-        # broker is a minute of startup and a service container cannot supply
-        # the command it needs, so those stay a `docker compose up -d` run per
-        # CONTRIBUTING. The memory twin models the broker and the same suite
-        # runs against both, which is what keeps that gap bounded.
         run: python -m pytest
 
   package:

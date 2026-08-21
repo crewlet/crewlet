@@ -62,12 +62,19 @@ uv run pytest -m integration -s                         # -s to see measurements
   continuity across a subscription's change of owner, prefetch size) and
   prints the numbers under `-s`. Run it after any Pulsar upgrade: it is
   where a changed broker behaviour should fail, rather than in a
-  production handoff. **CI does not run this one**, nor the real-broker half
-  of `tests/test_fleet`: a standalone broker is a minute of startup and a
-  workflow service container cannot supply the command it needs. The memory
-  twin models the broker and the same suite runs against both, which is what
-  keeps that gap bounded — but a Pulsar upgrade is still something to run
-  locally.
+  production handoff. **CI runs this one too**, along with the real-broker
+  half of `tests/test_fleet`: the `test` job starts a standalone broker with
+  the same image and command the compose file uses. A service container
+  cannot supply that command, so it is a plain `docker run` step.
+
+  Between that and `CREWLET_TEST_DSN`, every backend the suite knows how to
+  exercise is real on every pull request. What that buys is the part of the
+  design that is a *claim about the broker* rather than about our code — a
+  close-driven handoff returning a seat's mail at `redeliveryCount` 0, the
+  cursor surviving a change of owner, a wedged consumer holding its prefetch
+  for the ack timeout. The memory twin models all three, and a twin agreeing
+  with itself proves nothing about Pulsar. Run it locally before a Pulsar
+  upgrade anyway, under `-s`, where the measurements print.
 
 CI also builds the distributions on every pull request, because a packaging
 break is otherwise invisible until the tag that publishes it. If you touched
