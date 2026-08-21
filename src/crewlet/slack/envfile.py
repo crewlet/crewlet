@@ -38,7 +38,6 @@ truncate the previous contents.
 
 from __future__ import annotations
 
-import contextlib
 import os
 from pathlib import Path
 from typing import Any, Protocol
@@ -46,34 +45,13 @@ from typing import Any, Protocol
 from dotenv import dotenv_values
 
 from crewlet._logging import get_logger
-from crewlet.env_file import ASSIGNMENT_RE, format_assignment
+from crewlet.env_file import (
+    ASSIGNMENT_RE,
+    format_assignment,
+    write_secret_file,
+)
 
 logger = get_logger("slack.envfile")
-
-
-def write_secret_file(path: Path, content: str) -> None:
-    """Atomically write *content* to *path* with 0600 permissions.
-
-    The temp file is created with owner-only permissions before any
-    byte is written (no umask window), fsynced, then ``os.replace``d
-    over the target — a crash at any point leaves either the old file
-    or the new one, never a truncated hybrid.  Used for both ``.env``
-    and the ``slack-apps.json`` ledger, whose client secrets Slack
-    hands out exactly once.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
 
 
 def upsert_env_values(path: Path, values: dict[str, str]) -> None:

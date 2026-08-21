@@ -4649,6 +4649,26 @@ async def register_github_accounts_from_org(
     return registered
 
 
+#: The keys of a ``mcp_env.gitlab`` block that can carry a PAT, in
+#: precedence order. THE definition of "which entry here is the
+#: credential", shared by identity resolution (which reads the value)
+#: and by provisioning (which mints into the ``${VAR}`` it references).
+#: The engine forwards the whole block verbatim to the role's MCP
+#: instance and names no tool-specific variable, so a block legitimately
+#: carries other entries — a host, an API url — and treating those as
+#: credentials is how ``--rotate`` came to overwrite a seat's host name
+#: with a PAT.
+GITLAB_TOKEN_KEYS: tuple[str, ...] = (
+    "Private-Token",
+    "PRIVATE-TOKEN",
+    "GITLAB_TOKEN",
+    "GITLAB_PERSONAL_ACCESS_TOKEN",
+)
+
+#: Header carrying ``Bearer <pat>`` rather than the bare token.
+GITLAB_BEARER_KEYS: tuple[str, ...] = ("Authorization", "authorization")
+
+
 def gitlab_token_from_mcp_env(gitlab_env: dict[str, str]) -> str:
     """Extract a GitLab PAT from a role's ``mcp_env.gitlab`` block.
 
@@ -4659,15 +4679,9 @@ def gitlab_token_from_mcp_env(gitlab_env: dict[str, str]) -> str:
     resolved. Returns ``""`` when no token is present or it resolves empty.
     """
     resolved = resolve_env_vars(gitlab_env)
-    token = (
-        resolved.get("Private-Token")
-        or resolved.get("PRIVATE-TOKEN")
-        or resolved.get("GITLAB_TOKEN")
-        or resolved.get("GITLAB_PERSONAL_ACCESS_TOKEN")
-        or ""
-    )
+    token = next((resolved[k] for k in GITLAB_TOKEN_KEYS if resolved.get(k)), "")
     if not token:
-        auth = resolved.get("Authorization") or resolved.get("authorization") or ""
+        auth = next((resolved[k] for k in GITLAB_BEARER_KEYS if resolved.get(k)), "")
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
     return token.strip()
@@ -4796,6 +4810,14 @@ async def register_gitlab_accounts_from_org(
     return registered
 
 
+#: The keys of a ``mcp_env.plane`` block that can carry an API token, in
+#: precedence order — the Plane counterpart of
+#: :data:`GITLAB_TOKEN_KEYS`, and shared with provisioning for the same
+#: reason: the block is forwarded verbatim, so anything else in it is
+#: config, not a credential to mint into.
+PLANE_TOKEN_KEYS: tuple[str, ...] = ("PLANE_API_KEY", "X-API-Key", "x-api-key")
+
+
 def plane_token_from_mcp_env(plane_env: dict[str, str]) -> str:
     """Extract a Plane API token from a role's ``mcp_env.plane`` block.
 
@@ -4806,13 +4828,7 @@ def plane_token_from_mcp_env(plane_env: dict[str, str]) -> str:
     empty.
     """
     resolved = resolve_env_vars(plane_env)
-    token = (
-        resolved.get("PLANE_API_KEY")
-        or resolved.get("X-API-Key")
-        or resolved.get("x-api-key")
-        or ""
-    )
-    return token.strip()
+    return next((resolved[k] for k in PLANE_TOKEN_KEYS if resolved.get(k)), "").strip()
 
 
 async def _resolve_plane_user_id_via_rest(

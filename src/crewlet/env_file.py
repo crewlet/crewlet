@@ -24,7 +24,10 @@ second definition of the grammar.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+from pathlib import Path
 
 #: Matches ``KEY=…`` / ``export KEY=…`` assignment lines.
 ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -88,6 +91,44 @@ def format_assignment(key: str, value: str, *, export: bool = False) -> str:
     return f'{prefix}{key}="{escaped}"'
 
 
+def write_secret_file(path: Path, content: str) -> None:
+    """Atomically write *content* to *path* with 0600 permissions.
+
+    The temp file is created with owner-only permissions before any byte
+    is written (no umask window), fsynced, then ``os.replace``d over the
+    target.  Two properties, both of which a plain truncate-and-write
+    lacks and a secrets file needs:
+
+    - **The mode is the new file's.**  ``os.open(path, …, 0o600)``
+      applies the mode only when it CREATES the file, so writing into
+      an ``.env`` the operator made by hand — 0644 under the usual
+      umask, and the default target of several provisioning CLIs — left
+      every minted token world-readable on the host.  Replacing the
+      inode carries the temp file's 0600 across.
+    - **There is no truncated middle.**  A crash or a full disk during
+      a rewrite of the whole file would otherwise destroy the
+      credentials already minted in the same run, which the API will
+      not issue again.  A reader sees either the old file or the new
+      one.
+
+    Used for ``.env`` files and for the ``slack-apps.json`` ledger,
+    whose client secrets Slack hands out exactly once.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def parse_assignment(line: str) -> tuple[str, str] | None:
     """Split one assignment line into ``(key, value)``, or ``None``.
 
@@ -120,4 +161,5 @@ __all__ = [
     "format_assignment",
     "is_exported",
     "parse_assignment",
+    "write_secret_file",
 ]

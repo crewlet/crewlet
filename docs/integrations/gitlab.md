@@ -63,6 +63,8 @@ roles:
         GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"     # same PAT for the git-auth recipe
 ```
 
+Provisioning mints into the `${VAR}` referenced by the block's **credential** key — `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …`, the same keys boot-time identity resolution reads. Everything else in the block (`GITLAB_HOST`, an API url) is config and is left alone, so two seats may point at one shared `${GITLAB_HOST}` without it being mistaken for a credential they both claim.
+
 The default is the official **`glab` CLI stdio MCP server** (`glab mcp serve`): the engine's MCP bridge spawns one `glab` process per role with that role's `mcp_env.gitlab` env, so the per-agent PAT (`GITLAB_TOKEN`) IS the per-agent identity — no separate server to run. Boot-time identity resolution reads the token from whichever key is present (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, a `Private-Token` header, or `Authorization: Bearer <pat>`), so the http alternative below works too. The engine names **no tool-specific variable** — the whole `mcp_env.gitlab` block is forwarded verbatim to the role's MCP instance — and `GITLAB_TOKEN` is declared in `role.sandbox.env` by the founder exactly as `GITHUB_TOKEN` is (see [Code Sandbox](../concepts/code-sandbox.md)). A role with no `mcp_env.gitlab` gets no GitLab tools.
 
 ---
@@ -153,12 +155,12 @@ Human seats are never created — they carry `contact.gitlab_username` and are r
 Two sinks, chosen by flag:
 
 - **`--secret-store`**: write each minted value into the encrypted [`secret_values`](../concepts/secret-store.md) table under the same `${VAR}` name the config references. The engine consults that table ahead of the environment, so the `source` + restart step disappears entirely. This is the recommended sink once a Tier A keyring is configured.
-- **`--env-file PATH`** (default `.env.gitlab`): append/update `VAR=token` lines — the file the operator feeds the engine. Created `0600` and written through on every mint, so a crash mid-run cannot leave a minted-but-unrecorded credential. A newly minted token is shown once; re-runs never re-print a live token.
+- **`--env-file PATH`** (default `.env.gitlab`): append/update `VAR=token` lines — the file the operator feeds the engine. Written through on every mint, so a crash mid-run cannot leave a minted-but-unrecorded credential, and each write is atomic and leaves the file `0600` — including when you created it yourself, which under the usual umask means `0644`. A newly minted token is shown once; re-runs never re-print a live token.
 - **`--print`**: emit `export VAR=token` lines to stdout for shell `eval` instead of writing a file.
 
 ### Rotation & decommission
 
-- **`--rotate`** re-mints each managed token via GitLab's rotate endpoint, passing an explicit `expires_at` at `--token-expiry-days` (GitLab's bare rotate defaults the new token to one week, so the explicit expiry matters), then updates the chosen sink. On the GitLab.com Free tier — where every PAT expires within 365 days — this is the once-a-year cron candidate.
+- **`--rotate`** re-mints each managed token via GitLab's rotate endpoint, passing an explicit `expires_at` at `--token-expiry-days` (GitLab's bare rotate defaults the new token to one week, so the explicit expiry matters), then updates the chosen sink. A token that has **already expired** cannot be rotated — GitLab's endpoint needs a live one — so it is replaced by a fresh mint instead, and the sink is updated either way: `--rotate` means the seat ends the run holding a working credential, whatever it held before. On the GitLab.com Free tier — where every PAT expires within 365 days — this is the once-a-year cron candidate.
 - **`--decommission-removed`** (explicit, never default) soft-deletes service accounts whose seats left the config (contributions reassigned to the ghost user). It refuses to act unless `provisioning.username_prefix` is set, so it can identify managed accounts without touching un-prefixed ones.
 
 ### Permission matrix — the operator credential

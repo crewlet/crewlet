@@ -667,18 +667,59 @@ async def _run(fake: FakePlane, *, org=None, cfg=None, sink, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def test_seat_token_vars_scans_mcp_env_plane_with_dedup():
+def test_seat_token_vars_scans_only_the_credential_keys():
+    """The block is forwarded verbatim, so most of it is config.
+
+    Treating every reference in it as a token to mint is what made two
+    seats sharing an ordinary var — a workspace slug, a base url — look
+    like two seats claiming one credential, which failed every seat
+    after the first.
+    """
     role = FakeRole(
         "A",
         "a",
         {
             "plane": {
                 "PLANE_API_KEY": "${PLANE_TOKEN_A}",
-                "OTHER": "Bearer ${PLANE_TOKEN_A} + ${PLANE_EXTRA}",
+                "PLANE_WORKSPACE": "${PLANE_WORKSPACE}",
             }
         },
     )
-    assert seat_token_vars(role) == ["PLANE_TOKEN_A", "PLANE_EXTRA"]
+    assert seat_token_vars(role) == ["PLANE_TOKEN_A"]
+
+
+def test_seat_token_vars_accepts_the_header_spelling():
+    """A remote MCP server carries the token as `X-API-Key`.
+
+    Which keys hold one is boot-time identity resolution's question, and
+    the answer is shared — a spelling missing here means a seat's token
+    is silently never minted.
+    """
+    from crewlet.config import PLANE_TOKEN_KEYS
+
+    for key in PLANE_TOKEN_KEYS:
+        role = FakeRole("A", "a", {"plane": {key: "${PLANE_TOKEN_A}"}})
+        assert seat_token_vars(role) == ["PLANE_TOKEN_A"], key
+
+
+def test_two_seats_may_share_a_non_credential_var():
+    """The shared-var check is about credentials, not about the block.
+
+    Each seat gets its own token, so two seats pointing at one token var
+    is a genuine config error — but two seats naming the same workspace
+    is the ordinary case, and it used to abort the second seat.
+    """
+    a = FakeRole(
+        "A",
+        "a",
+        {"plane": {"PLANE_API_KEY": "${PLANE_TOKEN_A}", "W": "${PLANE_WORKSPACE}"}},
+    )
+    b = FakeRole(
+        "B",
+        "b",
+        {"plane": {"PLANE_API_KEY": "${PLANE_TOKEN_B}", "W": "${PLANE_WORKSPACE}"}},
+    )
+    assert set(seat_token_vars(a)) & set(seat_token_vars(b)) == set()
 
 
 def test_seat_token_vars_empty_without_plane_block():

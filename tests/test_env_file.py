@@ -194,6 +194,55 @@ def test_the_sink_creates_the_file_owner_only(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+async def test_a_minted_token_never_lands_in_a_world_readable_file(tmp_path):
+    """The operator almost always made the `.env` first.
+
+    `os.open(path, ..., 0o600)` applies the mode only on CREATION, so
+    writing into a hand-made file (0644 under the usual umask, and the
+    default `--env-file` target of several provisioning CLIs) left every
+    minted PAT readable by any user on the host.
+    """
+    path = tmp_path / ".env"
+    path.write_text("EXISTING=value\n")
+    path.chmod(0o644)
+
+    sink = EnvFileSink(str(path))
+    await sink.record("PLANE_API_KEY", "minted-secret")
+
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert dotenv_values(path)["EXISTING"] == "value"
+
+
+async def test_a_failed_write_cannot_destroy_already_minted_credentials(tmp_path):
+    """The whole file is rewritten on every `record`.
+
+    A crash or a full disk partway through a truncate-and-write would
+    leave a half-file — losing credentials minted earlier in the same
+    run, which the API will not issue again. The write is atomic, so a
+    reader sees the old file or the new one.
+    """
+    import os as _os
+
+    path = tmp_path / ".env"
+    sink = EnvFileSink(str(path))
+    await sink.record("FIRST_TOKEN", "first-value")
+
+    real_replace = _os.replace
+
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+
+    _os.replace = boom
+    try:
+        with pytest.raises(OSError):
+            await sink.record("SECOND_TOKEN", "second-value")
+    finally:
+        _os.replace = real_replace
+
+    assert dotenv_values(path)["FIRST_TOKEN"] == "first-value"
+    assert not list(tmp_path.glob(".*.tmp")), "the temp file was left behind"
+
+
 # ── one grammar, structurally ──
 
 

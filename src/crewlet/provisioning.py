@@ -36,19 +36,20 @@ from __future__ import annotations
 
 import bisect
 import os
+from pathlib import Path
 from typing import Any, Protocol
 
 from crewlet._logging import get_logger
-from crewlet.env_file import format_assignment, is_exported, parse_assignment
+from crewlet.env_file import (
+    format_assignment,
+    is_exported,
+    parse_assignment,
+    write_secret_file,
+)
 from crewlet.env_refs import env_var_reference
 from crewlet.env_refs import referenced_env_vars as _referenced_env_vars
 
 logger = get_logger("provisioning")
-
-#: Owner-only. A minted PAT written with the default umask is
-#: world-readable on a normal Linux box, so the mode is applied when the
-#: file is *created*, never chmod'd after the first byte is on disk.
-_SECRET_FILE_MODE = 0o600
 
 
 def referenced_env_vars(mapping: dict[str, str]) -> list[str]:
@@ -242,28 +243,26 @@ class EnvFileSink:
         self._write()
 
     def _write(self) -> None:
-        """Rewrite the file, holding it at ``0600``.
+        """Rewrite the file — owner-only, atomically.
 
-        ``os.open`` with the mode applies it at creation; a plain
-        ``open()`` + later ``chmod`` would leave the secrets
-        world-readable for the window in between.
+        Two properties, and neither came free.
 
-        The ``fchmod`` is the other half, and it is the one that matters
-        in practice: ``O_CREAT`` without ``O_EXCL`` ignores the mode
-        argument for a file that already exists, so an ``.env`` the
-        operator created by hand — ``touch``, an editor, ``0644`` under
-        the default umask — kept that mode while every minted personal
-        access token was written into it. Done on the descriptor, not the
-        path, so nothing can be swapped underneath it.
+        **The mode is the new file's.** ``O_CREAT`` without ``O_EXCL``
+        ignores the mode argument for a file that already exists, so an
+        ``.env`` the operator made by hand — ``touch``, an editor,
+        ``0644`` under the default umask, and this sink's default target
+        — kept that mode while every minted token was written into it.
+
+        **There is no truncated middle.** The whole file is rewritten on
+        every ``record``, so a crash or a full disk part-way through
+        destroyed the credentials already minted in the same run, which
+        the API will not issue again.
+
+        Replacing the inode carries both: the new file is created 0600
+        before a byte is written, and a reader sees either the old file
+        or the new one. See :func:`crewlet.env_file.write_secret_file`.
         """
-        fd = os.open(
-            self._path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            _SECRET_FILE_MODE,
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            os.fchmod(fh.fileno(), _SECRET_FILE_MODE)
-            fh.write("\n".join(self._lines) + "\n")
+        write_secret_file(Path(self._path), "\n".join(self._lines) + "\n")
 
 
 class PrintSink:
