@@ -41,7 +41,6 @@ from crewlet.agent.execute_sandbox import (
     teardown_sandbox_run,
 )
 from crewlet.agent.instance import AgentInstance, AgentState
-from crewlet.agent.llm_loop import redact_secrets
 from crewlet.events.types import (
     Event,
     SandboxClarificationRequested,
@@ -56,6 +55,7 @@ from crewlet.queue.topics import (
     agent_inbox_group,
     agent_inbox_topic,
 )
+from crewlet.redaction import redact_secrets
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
 from crewlet.sandbox.protocol import CodingAgentResult

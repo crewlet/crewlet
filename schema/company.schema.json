@@ -2000,6 +2000,12 @@
           "default": "",
           "title": "Brief",
           "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 600.0,
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
         }
       },
       "required": [

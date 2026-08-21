@@ -49,7 +49,19 @@ from collections.abc import Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from crewlet._logging import get_logger
+from crewlet.redaction import redact_secrets
 from crewlet.sandbox.protocol import Sandbox
+
+#: Default budget for one setup command.
+#:
+#: Anchored to what provisioning actually is: a cold dependency install
+#: (``apt-get install``, ``npm ci``, ``uv sync``) over a network is
+#: typically one to five minutes, and a large monorepo clone or an image
+#: pull can reach ten. Ten minutes covers those while still failing well
+#: inside the box TTL (``default_timeout_seconds``, 900 s), so a wedged
+#: command surfaces as a named setup failure rather than as a box the
+#: provider reaps out from under the run.
+DEFAULT_SETUP_TIMEOUT_SECONDS = 600.0
 
 logger = get_logger("sandbox.setup")
 
@@ -88,6 +100,17 @@ class SandboxSetupStep(BaseModel):
     brief: str = ""
     """Environment-context paragraph for the coding agent's brief — what
     this step made true about the box (empty = nothing to tell)."""
+    timeout_seconds: float = Field(default=DEFAULT_SETUP_TIMEOUT_SECONDS, gt=0)
+    """How long each of this step's commands may run.
+
+    Provisioning is not a control-plane call. Without its own budget
+    these commands inherited the backend's control timeout — sized for
+    a ``mkdir`` or a ``docker exec``, not for work — so any real
+    provisioning step (a dependency install, a cold image pull, a large
+    clone) was killed and failed the whole acquisition. Raise it for a
+    step you know is slow; lower it for one that should be instant, so
+    a hung command surfaces as a setup failure rather than eating the
+    turn."""
 
 
 def setup_env(steps: Sequence[SandboxSetupStep]) -> dict[str, str]:
@@ -120,13 +143,22 @@ async def apply_setup(
     for step in steps:
         for path, content in step.files.items():
             await sandbox.write_file(path, content)
-        for cmd in step.commands:
-            res = await sandbox.exec(cmd, env=env or {})
+        for index, cmd in enumerate(step.commands):
+            res = await sandbox.exec(cmd, env=env or {}, timeout_s=step.timeout_seconds)
             if res.exit_code != 0:
+                # NOT the command text. `${VAR}` references in commands
+                # are resolved before they get here (see
+                # `config.resolve_setup_step_content`), so a recipe that
+                # pipes a token into a login carries that token verbatim
+                # in `cmd` — and this message is logged AND handed back
+                # to the LLM. The step name plus the command's position
+                # identifies it precisely, and the operator has the
+                # config; stderr is redacted for the same reason a
+                # coding-agent transcript is.
+                detail = redact_secrets(res.stderr.strip())
                 raise SandboxSetupError(
-                    f"setup step {step.name!r} command failed "
-                    f"(exit {res.exit_code}): {cmd}"
-                    + (f" — {res.stderr.strip()}" if res.stderr.strip() else "")
+                    f"setup step {step.name!r} command #{index + 1} failed "
+                    f"(exit {res.exit_code})" + (f" — {detail}" if detail else "")
                 )
         logger.debug(
             "sandbox_setup_step_applied",

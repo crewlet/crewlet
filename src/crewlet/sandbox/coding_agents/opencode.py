@@ -28,6 +28,7 @@ from typing import Any
 
 from crewlet.sandbox.coding_agents._detached import PR_RE, DetachedFileRunner
 from crewlet.sandbox.protocol import (
+    DEFAULT_SANDBOX_HOME,
     CodingAgentLLM,
     CodingAgentResult,
     RunLimits,
@@ -45,9 +46,24 @@ __all__ = [
     "to_opencode_provider",
 ]
 
-# OpenCode reads its global config here (its home in E2B's opencode
-# template); writing the scoped MCP there avoids polluting the checkout.
-OPENCODE_CONFIG_PATH = "/home/user/.config/opencode/opencode.json"
+# OpenCode reads its global config from ``$XDG_CONFIG_HOME/opencode``;
+# writing the scoped MCP there avoids polluting the checkout.
+#
+# This module constant is the DEFAULT-home value, kept because it is the
+# E2B path and is re-exported. The runner itself derives the path from
+# ``sandbox.home`` (:func:`opencode_config_path`) for the same reason
+# every other artefact path is derived — a local backend runs many boxes
+# on one filesystem, and a hardcoded ``/home/user`` is not even inside
+# the box: ``DirectSandbox`` refuses to write outside its own root, so
+# every ``run_sandbox`` call on ``containment: direct`` died here.
+OPENCODE_CONFIG_PATH = f"{DEFAULT_SANDBOX_HOME}/.config/opencode/opencode.json"
+
+
+def opencode_config_path(sandbox: Sandbox) -> str:
+    """Where THIS box's OpenCode config lives."""
+    home = (getattr(sandbox, "home", "") or DEFAULT_SANDBOX_HOME).rstrip("/")
+    return f"{home}/.config/opencode/opencode.json"
+
 
 # The id of the custom provider we declare for the role's LLM endpoint.
 # Models are then addressed as ``crewlet/<model>``.
@@ -370,8 +386,10 @@ class OpenCodeRunner(DetachedFileRunner):
             config["provider"] = to_opencode_provider(llm)
         if mcp_servers:
             config["mcp"] = to_opencode_mcp(mcp_servers)
-        await sandbox.exec("mkdir -p /home/user/.config/opencode")
-        await sandbox.write_file(OPENCODE_CONFIG_PATH, json.dumps(config, indent=2))
+        config_path = opencode_config_path(sandbox)
+        parent = config_path.rsplit("/", 1)[0]
+        await sandbox.exec(f"mkdir -p {parent}")
+        await sandbox.write_file(config_path, json.dumps(config, indent=2))
         return ""  # auto-loaded; not passed on the CLI
 
     def _parse_result(self, stdout: str) -> CodingAgentResult:

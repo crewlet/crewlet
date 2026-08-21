@@ -53,53 +53,14 @@ from crewlet.events.types import (
 )
 from crewlet.providers.llm.protocol import LLMProvider, Message
 from crewlet.queue.protocol import EventQueue
+from crewlet.redaction import redact_secrets
 from crewlet.tools.protocol import AgentContext, ToolResult, ToolResultValidator
 
 logger = get_logger("agent.llm_loop")
 
-# Patterns that indicate secrets/credentials in tool output.  Keeping
-# the list here (rather than per-phase) ensures every phase uses the
-# same redaction.
-_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"sk-proj-[A-Za-z0-9_-]{20,}"), "[REDACTED:api-key]"),
-    (re.compile(r"sk-[A-Za-z0-9_-]{20,}"), "[REDACTED:api-key]"),
-    (re.compile(r"xoxb-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
-    (re.compile(r"xoxp-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
-    (re.compile(r"xoxs-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
-    (re.compile(r"AKIA[A-Z0-9]{16}"), "[REDACTED:aws-key]"),
-    (re.compile(r"ghp_[A-Za-z0-9]{36,}"), "[REDACTED:github-token]"),
-    (re.compile(r"gho_[A-Za-z0-9]{36,}"), "[REDACTED:github-token]"),
-    (re.compile(r"glpat-[A-Za-z0-9_-]{20,}"), "[REDACTED:gitlab-token]"),
-    (re.compile(r"plane_api_[A-Za-z0-9_-]{20,}"), "[REDACTED:plane-token]"),
-    (re.compile(r"plane_wh_[A-Za-z0-9_-]{20,}"), "[REDACTED:plane-webhook-secret]"),
-    (
-        re.compile(
-            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
-            r"[\s\S]*?"
-            r"-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
-        ),
-        "[REDACTED:private-key]",
-    ),
-    (re.compile(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+"), "[REDACTED:password]"),
-]
-
-
 # ---------------------------------------------------------------------------
 # Tool-output sanitization + validation
 # ---------------------------------------------------------------------------
-
-
-def redact_secrets(text: str) -> str:
-    """Replace known secret / credential patterns with redaction markers.
-
-    The single redaction implementation, shared by tool-result validation
-    and any other surface that ships free text to the dashboard / event
-    store (e.g. a sandbox coding-agent transcript, which can echo a cloned
-    repo URL's token or a printed key). Idempotent.
-    """
-    for pattern, replacement in _SECRET_PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text
 
 
 def sanitize_tool_output(output: str) -> str:

@@ -31,7 +31,6 @@ from crewlet._logging import get_logger
 from crewlet.agent.llm_loop import (
     LoopResult,
     publish_phase_completed,
-    redact_secrets,
 )
 from crewlet.agent.phase_model import resolve_phase_provider
 from crewlet.agent.plan import ExecutionPlan
@@ -44,6 +43,7 @@ from crewlet.events.types import SandboxRunStarted
 from crewlet.providers.llm.protocol import LLMProvider, Message
 from crewlet.queue.protocol import EventQueue
 from crewlet.queue.topics import agent_control_topic
+from crewlet.redaction import redact_secrets
 from crewlet.sandbox.coding_agents._detached import clear_run_artifacts
 from crewlet.sandbox.coding_agents.ask import ask_brief_instruction
 from crewlet.sandbox.credentials import build_sandbox_env, cli_credential_files

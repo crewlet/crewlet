@@ -175,6 +175,15 @@ src/crewlet/          # Main package
                       #   previously caused a redaction leak and a
                       #   mint-into-unreadable-${1} hole; tests/test_env_refs
                       #   fails the build on a new re.compile of the grammar
+  redaction.py        # THE secret-redaction pass for free text leaving
+                      #   the engine — tool results, coding-agent
+                      #   transcripts, setup-step failures. A denylist of
+                      #   credential SHAPES, so it is the last line, not
+                      #   the first. Imports nothing from crewlet: it
+                      #   lived in agent/llm_loop.py, which meant the
+                      #   sandbox layer imported the agent layer to
+                      #   redact a string, and one more such import
+                      #   closed a cycle through crewlet/__init__
   env_file.py         # THE .env assignment grammar — format_assignment /
                       #   parse_assignment / ASSIGNMENT_RE, shared by
                       #   provisioning.py (EnvFileSink + PrintSink),
