@@ -138,6 +138,24 @@ omission: a manifest Dependabot has not been told about simply never produces
 a pull request, which is indistinguishable from one that has nothing to
 update.
 
+### An extra carries its own surface's requirements
+
+`crewlet[all]` is the union of the runtime extras, and `tests/test_packaging`
+asserts that. What the union *cannot* tell you is whether each extra carries
+what its own surface needs, because a package can reach `all` through some
+other extra while the one that actually needs it still lacks it — and the
+union check passes either way.
+
+That is not hypothetical. `crewlet[api]` served a dashboard whose entire data
+plane is a WebSocket while pinning no WebSocket implementation: `websockets`
+reached `all` through the `mattermost` extra, so nothing failed. Bare
+`uvicorn` answered the upgrade with a 404, the dashboard fell back to polling
+`/stream/snapshot` every five seconds, and every `crewlet[api]` install ran
+in degraded mode indefinitely with nothing on screen to say so.
+
+So when an extra's surface needs a package to work at all, name it in that
+extra — and pin the requirement with a test, since the union check will not.
+
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
 neither the weekly schedule nor Dependabot's default release cooldown.

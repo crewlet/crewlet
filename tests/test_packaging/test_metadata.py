@@ -124,6 +124,36 @@ class TestExtras:
         }
         assert set(extras["all"]) == runtime
 
+    def test_api_extra_ships_a_websocket_implementation(
+        self, pyproject: dict[str, Any]
+    ) -> None:
+        """``crewlet[api]`` must be able to serve ``/ws/stream``.
+
+        The dashboard's data plane is a WebSocket, and bare ``uvicorn``
+        ships no WebSocket implementation — it answers the upgrade with a
+        404.  The dashboard survives that by falling back to a 5-second
+        ``/stream/snapshot`` poll, which is exactly why the gap went
+        unnoticed: every ``crewlet[api]`` install ran the whole dashboard
+        in degraded mode, silently and forever.
+
+        The union check below cannot catch this on its own.  ``websockets``
+        already reached ``crewlet[all]`` through the ``mattermost`` extra,
+        so the union held while the extra that actually serves the socket
+        still lacked it.
+        """
+        api = pyproject["project"]["optional-dependencies"]["api"]
+        # uvicorn auto-detects either of these; naming both keeps the
+        # assertion about the capability rather than about one package.
+        implementations = ("websockets", "wsproto")
+        assert any(
+            requirement.split("[")[0].split(">")[0].split("=")[0].strip()
+            in implementations
+            for requirement in api
+        ), (
+            "crewlet[api] serves /ws/stream but pins no WebSocket "
+            f"implementation ({implementations}); got {api}"
+        )
+
     def test_no_empty_extras(self, pyproject: dict[str, Any]) -> None:
         """An extra with no requirements installs nothing but advertises a
         capability toggle that does not exist.

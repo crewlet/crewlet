@@ -76,7 +76,15 @@ Issues = "https://github.com/crewlet/crewlet/issues"
 
 [project.optional-dependencies]
 postgresql = ["asyncpg>=0.29"]
-api = ["uvicorn>=0.30", "starlette>=0.37"]
+# The dashboard's data plane is a WebSocket: `/ws/stream` carries its
+# snapshot, its live events and every read it makes. Bare `uvicorn` ships no
+# WebSocket implementation and answers the upgrade with a 404, which the
+# dashboard survives only by falling back to a 5-second `/stream/snapshot`
+# poll — so a plain `crewlet[api]` install ran the whole dashboard in
+# degraded mode, silently and forever. `websockets` is the pure-Python
+# implementation uvicorn auto-detects; `uvicorn[standard]` would also pull
+# httptools, uvloop and watchfiles, none of which the engine needs.
+api = ["uvicorn>=0.30", "starlette>=0.37", "websockets>=13.0"]
 forge = ["pyjwt[crypto]>=2.8"]
 # There is no `observability` extra: the OpenTelemetry SDK and OTLP exporter
 # are core dependencies (the engine always builds spans), so the extra existed

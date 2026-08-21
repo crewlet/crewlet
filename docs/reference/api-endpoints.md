@@ -2,7 +2,9 @@
 
 The Crewlet API is a Starlette app served by any node with the `ingress` role (`api.port > 0` in the Tier A config). By default a node has every role, so it runs alongside the agents in one process; a node with `--roles ingress` serves only these routes and talks to the rest of the fleet over Pulsar. The routes below are identical either way.
 
-Install with the `api` extra: `pip install "crewlet[api]"`
+Install with the `api` extra: `pip install "crewlet[api]"` — which pins a
+WebSocket implementation alongside `uvicorn`, because the dashboard's data
+plane is a WebSocket (see [`WS /ws/stream`](#ws-wsstream)).
 
 ---
 
@@ -384,6 +386,14 @@ never arrives.
 
 Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 `{"kind": "...", "data": ..., "ts": "<iso8601>"}`.
+
+> **The `api` extra pins a WebSocket implementation on purpose.** Bare
+> `uvicorn` ships none and answers the upgrade with a 404. The dashboard
+> survives that — it falls back to polling `/stream/snapshot` every five
+> seconds — which is exactly what made the gap easy to miss: nothing looked
+> broken, the whole dashboard was just permanently in degraded mode. So
+> `crewlet[api]` installs `websockets` alongside `uvicorn`, and
+> `tests/test_packaging` asserts it stays that way.
 
 **Server → client kinds**
 
