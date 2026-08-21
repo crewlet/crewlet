@@ -181,6 +181,17 @@ _PUBLISH_RETRY_BASE_DELAY = 0.5
 # responsive to ``pause_delivery`` / ``stop`` between fetches.
 _RECEIVE_TIMEOUT_MS = 1000
 
+# How long a consume loop waits after an unexpected error before its next
+# receive.
+#
+# The loop is guarded so one bad message cannot end a seat's inbox, and a
+# guard with no pause is its own hazard: a failure that recurs on every
+# iteration becomes a hot loop against the broker with a log line per
+# turn of it. One second is long enough that a persistent fault costs a
+# line a second rather than thousands, and short enough to be invisible
+# against the single transient this is actually for.
+_CONSUME_ERROR_BACKOFF_SECONDS = 1.0
+
 # Zero-linger drain ``receive`` timeout for batch subscriptions.  After
 # the first message of a batch, a single drain pass collects whatever
 # the consumer has already fetched into its local receiver queue; the
@@ -845,14 +856,29 @@ class PulsarEventQueue:
 
         async def _consume() -> None:
             while self._running and not sub.quiescing:
-                msg = await self._receive_one(sub, loop)
-                if msg is None:
-                    continue
-                if sub.quiescing:
-                    # Fetched in the race where quiesce landed mid-receive.
-                    # Leave it unacked for the successor rather than NAK.
-                    continue
-                await self._process_message(sub, msg, handler)
+                # Guarded like the broadcast-stream loop further down,
+                # and for a sharper reason: this loop IS a seat's inbox.
+                # An exception escaping it ends the task, and nothing
+                # restarts one — the node keeps the lease, keeps the
+                # attachment, and reads nothing from the seat ever again,
+                # while every health surface reports it as served.
+                try:
+                    msg = await self._receive_one(sub, loop)
+                    if msg is None:
+                        continue
+                    if sub.quiescing:
+                        # Fetched in the race where quiesce landed
+                        # mid-receive. Leave it unacked for the successor
+                        # rather than NAK.
+                        continue
+                    await self._process_message(sub, msg, handler)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "consume_loop_error", topic=sub.topic, group=sub.group
+                    )
+                    await asyncio.sleep(_CONSUME_ERROR_BACKOFF_SECONDS)
 
         sub.run = _consume
         sub.task = asyncio.create_task(_consume())
@@ -883,36 +909,54 @@ class PulsarEventQueue:
             consumer=consumer, executor=executor, topic=topic, group=group
         )
 
+        async def _one_round() -> None:
+            """Receive, collect and dispatch one batch. Returns to loop."""
+            msg = await self._receive_one(sub, loop)
+            if msg is None:
+                return
+            # The dispatch budget is measured from THIS instant — the
+            # first message's broker ack-timeout clock started at its
+            # receive, so the linger window spent collecting must
+            # count against the budget, not reset it.
+            received_at = time.monotonic()
+            msgs = [msg]
+            msgs.extend(await self._collect_batch(sub, loop, options))
+            if sub.quiescing:
+                # Quiesced mid-collection.  Leave the whole batch
+                # unacked — a handoff that closes its consumer
+                # returns these at ``redeliveryCount`` 0, whereas
+                # NAKing them here would spend the dead-letter
+                # budget on messages nothing was wrong with.
+                return
+            # ``pause_delivery`` may have fired while we lingered.
+            # NAK the whole collected batch so the next engine
+            # subscription gets it promptly.
+            if self._paused or not self._running:
+                for m in msgs:
+                    with contextlib.suppress(Exception):
+                        consumer.negative_acknowledge(m)
+                return
+            await self._process_batch(
+                sub, msgs, handler, batch_key, received_at=received_at
+            )
+
         async def _consume() -> None:
             while self._running and not sub.quiescing:
-                msg = await self._receive_one(sub, loop)
-                if msg is None:
-                    continue
-                # The dispatch budget is measured from THIS instant — the
-                # first message's broker ack-timeout clock started at its
-                # receive, so the linger window spent collecting must
-                # count against the budget, not reset it.
-                received_at = time.monotonic()
-                msgs = [msg]
-                msgs.extend(await self._collect_batch(sub, loop, options))
-                if sub.quiescing:
-                    # Quiesced mid-collection.  Leave the whole batch
-                    # unacked — a handoff that closes its consumer
-                    # returns these at ``redeliveryCount`` 0, whereas
-                    # NAKing them here would spend the dead-letter
-                    # budget on messages nothing was wrong with.
-                    continue
-                # ``pause_delivery`` may have fired while we lingered.
-                # NAK the whole collected batch so the next engine
-                # subscription gets it promptly.
-                if self._paused or not self._running:
-                    for m in msgs:
-                        with contextlib.suppress(Exception):
-                            consumer.negative_acknowledge(m)
-                    continue
-                await self._process_batch(
-                    sub, msgs, handler, batch_key, received_at=received_at
-                )
+                # One round per iteration, guarded — see the note on
+                # ``subscribe``'s loop. This one carries a seat's batched
+                # inbox, so an exception escaping it leaves the node
+                # holding the lease and the attachment while reading
+                # nothing, and every health surface still reporting the
+                # seat as served.
+                try:
+                    await _one_round()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "consume_loop_error", topic=sub.topic, group=sub.group
+                    )
+                    await asyncio.sleep(_CONSUME_ERROR_BACKOFF_SECONDS)
 
         sub.run = _consume
         sub.task = asyncio.create_task(_consume())
@@ -1207,7 +1251,8 @@ class PulsarEventQueue:
                         error=str(exc),
                     )
                     for msg, _ in part:
-                        consumer.negative_acknowledge(msg)
+                        with contextlib.suppress(Exception):
+                            consumer.negative_acknowledge(msg)
 
     async def _defer_partitions(
         self,
@@ -1418,7 +1463,13 @@ class PulsarEventQueue:
                     event_type=event.type,
                     error=str(exc),
                 )
-                consumer.negative_acknowledge(msg)
+                # Suppressed for the same reason the cancellation branch
+                # above suppresses it: a NAK on a consumer that a
+                # concurrent detach just closed raises, and letting that
+                # escape would take down the consume loop over a message
+                # the broker will redeliver anyway.
+                with contextlib.suppress(Exception):
+                    consumer.negative_acknowledge(msg)
 
 
 def _resolve(future: asyncio.Future[None], value: None) -> None:

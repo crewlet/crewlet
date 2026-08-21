@@ -107,6 +107,59 @@ async def test_process_message_acks_on_success(queue: PulsarEventQueue) -> None:
     assert queue._idle_event.is_set()
 
 
+async def test_a_failing_nak_does_not_escape_the_dispatch(
+    queue: PulsarEventQueue,
+) -> None:
+    """A NAK on a consumer a concurrent detach just closed raises.
+
+    The cancellation branch has always suppressed that; the ordinary
+    failure branch did not, so a handler error arriving during a seat
+    handoff turned into an exception out of the consume loop — and that
+    loop is a seat's inbox. Nothing restarts one: the node keeps the
+    lease, keeps the attachment, and reads nothing from the seat again,
+    while every health surface still reports it as served.
+    """
+
+    class _ClosedConsumer(_FakeConsumer):
+        def negative_acknowledge(self, _msg: object) -> None:
+            raise RuntimeError("consumer is closed")
+
+    consumer = _ClosedConsumer()
+
+    async def handler(_e: Event) -> None:
+        raise RuntimeError("handler blew up")
+
+    # No raise: the message is the broker's problem now, not the loop's.
+    await queue._process_message(
+        _sub(consumer, "topic", "group"), _FakeMsg(Event(type="t", source="s")), handler
+    )
+    assert queue._in_flight == 0
+
+
+async def test_a_failing_batch_nak_does_not_escape_the_dispatch(
+    queue: PulsarEventQueue,
+) -> None:
+    """The same asymmetry, in the batched path."""
+
+    class _ClosedConsumer(_FakeConsumer):
+        def negative_acknowledge(self, _msg: object) -> None:
+            raise RuntimeError("consumer is closed")
+
+    consumer = _ClosedConsumer()
+
+    async def handler(_events: list[Event]) -> None:
+        raise RuntimeError("handler blew up")
+
+    msgs = [_FakeMsg(Event(type="t", source="s"))]
+    await queue._process_batch(
+        _sub(consumer, "topic", "group"),
+        msgs,
+        handler,
+        lambda e: "k",
+    )
+    assert queue._in_flight == 0
+
+
 async def test_process_message_naks_on_handler_exception(
     queue: PulsarEventQueue,
 ) -> None:
