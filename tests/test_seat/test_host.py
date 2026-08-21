@@ -749,6 +749,92 @@ async def test_an_unproven_seat_is_not_re_claimed_or_double_counted(
     assert host.unproven_handles == ("ceo",)
 
 
+async def test_an_unproven_teardown_is_retried_and_recovers(leases: Any) -> None:
+    """The reason undead is a state and not a grave.
+
+    The causes of an unproven teardown are overwhelmingly transient — a
+    consumer mid-delivery, an MCP child that has not finished dying — and
+    without a retry the FIRST one stranded the seat for the life of the
+    process: out of ``_held`` so this node never ran it, leased so no
+    peer could claim it, counted against this node's capacity forever,
+    and announced exactly once in a log line that then rotated away.
+    """
+    failures = [True]
+    calls: list[ReleaseReason] = []
+
+    async def _wont_die_once(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        calls.append(reason)
+        if failures.pop() if failures else False:
+            raise SeatReleaseError("the consumer would not close")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_wont_die_once)
+    await host._renew_node_presence()
+    await host.sweep()
+    await host.release("ceo", ReleaseReason.PLACEMENT)
+    assert host.unproven_handles == ("ceo",)
+
+    await host.heartbeat()
+
+    assert host.unproven_handles == (), "an undead seat was never retried"
+    assert calls == [ReleaseReason.PLACEMENT, ReleaseReason.PLACEMENT], (
+        "the retry told the hook a different reason than the release did"
+    )
+    # And the lease is gone, so the fleet can run the seat again.
+    assert await leases.get(seat_resource("ceo")) is None or (
+        await leases.try_acquire(seat_resource("ceo"), owner="peer", ttl_seconds=30)
+        is not None
+    )
+
+
+async def test_a_retry_that_fails_keeps_the_seat_and_ages(leases: Any) -> None:
+    """The only safe answer is still to hold it — but visibly.
+
+    ``unproven_ages`` is what an alert reads: existence is normal for a
+    moment, duration never is.
+    """
+
+    async def _wont_die(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        raise SeatReleaseError("still consuming")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_wont_die, ttl_seconds=30)
+    await host._renew_node_presence()
+    await host.sweep()
+    await host.release("ceo")
+
+    await host.heartbeat()
+    await host.heartbeat()
+
+    assert host.unproven_handles == ("ceo",)
+    assert host._undead["ceo"].attempts == 3, "the retry did not run every heartbeat"
+    assert set(host.unproven_ages()) == {"ceo"}
+    assert host.unproven_ages()["ceo"] >= 0.0
+    lease = await leases.get(seat_resource("ceo"))
+    assert lease is not None and lease.owner == host.owner
+
+
+async def test_a_recovered_seat_can_be_claimed_again_by_this_node(
+    leases: Any,
+) -> None:
+    """Recovery has to return the seat to the FLEET, not just to the
+    dictionary it was parked in — which means releasing the lease."""
+    failures = [True]
+
+    async def _wont_die_once(handle: str, lease: Lease, reason: ReleaseReason) -> None:
+        if failures:
+            failures.pop()
+            raise SeatReleaseError("the consumer would not close")
+
+    host = _host(leases, seats=lambda: ["ceo"], on_release=_wont_die_once)
+    await host._renew_node_presence()
+    await host.sweep()
+    await host.release("ceo")
+    await host.heartbeat()
+
+    result = await host.sweep()
+    assert "ceo" in result.claimed
+    assert host.held_handles == ("ceo",)
+
+
 async def test_an_unexpected_release_failure_also_fails_closed(leases: Any) -> None:
     """A hook that raises something unexpected is no more proof of
     teardown than one that raises the documented error."""

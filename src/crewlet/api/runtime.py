@@ -91,11 +91,16 @@ class NodeRuntime(Protocol):
 
             {"held": ["ceo", "eng"], "capacity": 3, "live_nodes": 2,
              "last_claimed": [...], "last_lost": [...],
-             "unproven": [...], "blocked_by_protocol": 1 | None}
+             "unproven": [...], "unproven_seconds": {"ceo": 612.4},
+             "blocked_by_protocol": 1 | None}
 
-        ``unproven`` is the one to alert on: each entry is a seat whose
-        teardown could not be proven, so this node holds a lease no peer
-        can take while possibly still consuming the seat.
+        ``unproven_seconds`` is the one to alert on: each entry is a seat
+        whose teardown could not be proven, so this node holds a lease no
+        peer can take while possibly still consuming the seat. Alert on
+        the DURATION rather than on ``unproven`` itself — a teardown that
+        fails once and succeeds on the next heartbeat retry is a working
+        system, and a seat that is still stranded minutes later is a seat
+        nothing in the fleet is running.
         ``blocked_by_protocol`` names the fleet's protocol floor when a
         rolling upgrade has stalled — without it, a node refusing to
         claim looks identical to one whose peers hold every seat.
@@ -176,6 +181,7 @@ class EngineNodeRuntime:
             return {
                 "held": list(host.held_handles),
                 "unproven": list(host.unproven_handles),
+                "unproven_seconds": host.unproven_ages(),
                 "capacity": int(last.capacity) if last is not None else 0,
                 "live_nodes": int(last.live_nodes) if last is not None else 0,
                 "last_claimed": list(last.claimed) if last is not None else [],

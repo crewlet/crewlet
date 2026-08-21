@@ -170,6 +170,20 @@ SEAT_CLAIM_LIMIT_PER_SWEEP = 4
 # permanent: the cause is often config, and config changes.
 SEAT_ACQUIRE_BACKOFF_SECONDS = SEAT_LEASE_TTL_SECONDS
 
+# How often a seat stranded by an unproven teardown re-raises its alarm.
+#
+# The teardown is retried on every heartbeat, so nothing here changes
+# what the host DOES — this is purely how long a stranded seat is allowed
+# to be quiet. It used to log once, at the moment it happened, and then
+# never again: a seat could be out of service for a week with the only
+# evidence a single line that had long since rotated out.
+#
+# Twenty heartbeats. Frequent enough that the alarm outlives log
+# rotation and that a stranded seat is still visible to whoever comes on
+# shift next; rare enough that one stuck seat cannot fill a log with its
+# own retries.
+UNDEAD_ALARM_INTERVAL_SECONDS = SEAT_HEARTBEAT_INTERVAL_SECONDS * 20
+
 # How many seats one sweep may hand back to rebalance.
 #
 # The mirror of the claim limit, sized the same way and for the same
@@ -281,6 +295,30 @@ class _Held:
 
 
 @dataclass
+class _Undead:
+    """A seat whose teardown could not be proven, and what is being done.
+
+    Held out of ``_held`` so nothing new starts on it, renewed so no peer
+    can take it, and **retried on every heartbeat** — the usual causes (a
+    consumer mid-delivery, an MCP child that has not finished dying) are
+    transient, and without a retry the very first one stranded the seat
+    for the life of the process.
+    """
+
+    held: _Held
+    reason: ReleaseReason
+    """What the release was FOR. A retry is a continuation of the same
+    release, so the hook must see the same reason — a drain that failed
+    once is still a drain, and telling the hook otherwise would change
+    how it tears the seat down."""
+    since: float
+    """Monotonic time the seat went undead. This is the number to alert
+    on: existence is normal for a second, duration never is."""
+    attempts: int = 0
+    last_alarm: float = 0.0
+
+
+@dataclass
 class SeatHost:
     """Claims, holds and releases the seats this node runs.
 
@@ -371,11 +409,11 @@ class SeatHost:
 
     The edge-detector behind :attr:`on_admission` — membership changes
     at most once per outage, not once per heartbeat."""
-    _undead: dict[str, _Held] = field(default_factory=dict, init=False)
+    _undead: dict[str, _Undead] = field(default_factory=dict, init=False)
     """Seats whose teardown could not be proven, kept OUT of ``_held``
     (so nothing new starts on them) but still renewed (so no peer takes a
-    seat this process may still be serving). See
-    :meth:`_release_locked`."""
+    seat this process may still be serving), and retried every heartbeat
+    until one succeeds. See :meth:`_release_locked`."""
     _node_lease: Lease | None = field(default=None, init=False)
     _tasks: list[asyncio.Task[Any]] = field(default_factory=list, init=False)
     _running: bool = field(default=False, init=False)
@@ -654,8 +692,21 @@ class SeatHost:
         permission to run the agent concurrently, which is the single
         failure ownership exists to prevent.
 
-        Undead seats are not held forever: the watchdog's remedy applies
-        if they cannot be closed within the TTL (see :meth:`heartbeat`).
+        Undead is a *state*, not a grave. :meth:`heartbeat` retries the
+        teardown on every tick and releases the lease the moment one
+        succeeds, because the usual causes are transient — a consumer
+        mid-delivery, an MCP child that has not finished dying. Without
+        that retry the first failure stranded the seat for the life of
+        the process: out of ``_held`` so this node never ran it, leased
+        so no peer could, counted against this node's capacity forever,
+        and announced exactly once.
+
+        A retry that keeps failing keeps the seat, which is the only safe
+        answer, and re-raises its alarm every
+        ``UNDEAD_ALARM_INTERVAL_SECONDS`` with the elapsed time — the
+        signal to alert on. Only an operator can weigh restarting this
+        process (which frees the seat, since its lease then lapses)
+        against the healthy seats that restart would also move.
         """
         held = self._held.pop(handle, None)
         # Whatever happens next, this seat's admission is no longer a
@@ -667,7 +718,10 @@ class SeatHost:
         try:
             await self._notify_release(handle, held.lease, reason)
         except SeatReleaseError as exc:
-            self._undead[handle] = held
+            now = asyncio.get_running_loop().time()
+            self._undead[handle] = _Undead(
+                held=held, reason=reason, since=now, attempts=1, last_alarm=now
+            )
             logger.error(
                 "seat_release_unproven",
                 seat=handle,
@@ -677,7 +731,8 @@ class SeatHost:
                 hint=(
                     "keeping the lease and renewing it: this node may still "
                     "be consuming the seat, and releasing now would let a "
-                    "peer run the same agent concurrently"
+                    "peer run the same agent concurrently. Teardown is "
+                    "retried every heartbeat"
                 ),
             )
             return False
@@ -690,6 +745,100 @@ class SeatHost:
             # own. Nothing here is worth failing a drain.
             logger.warning("seat_release_unavailable", seat=handle)
             return False
+
+    async def _retry_undead_teardown(self, handle: str) -> bool:
+        """Try again to close a seat whose teardown was never proven.
+
+        Returns ``True`` when the seat was finally released. Called once
+        per heartbeat, which is the whole rate limit it needs: the hook
+        is the expensive part and a seat that could not close 15 s ago is
+        not helped by being asked again in 15 ms.
+
+        Never raises. This runs inside the heartbeat, and an exception
+        here would stop every OTHER seat on this node from being renewed
+        — trading one stranded seat for all of them.
+        """
+        async with self._lock_for(handle):
+            entry = self._undead.get(handle)
+            if entry is None:
+                return False
+            entry.attempts += 1
+            now = asyncio.get_running_loop().time()
+            try:
+                await self._notify_release(handle, entry.held.lease, entry.reason)
+            except SeatReleaseError as exc:
+                self._alarm_undead(handle, entry, str(exc), now)
+                return False
+            except Exception as exc:  # pragma: no cover - defence in depth
+                self._alarm_undead(handle, entry, repr(exc), now)
+                return False
+            self._undead.pop(handle, None)
+            # The seat is genuinely closed now, so a future re-claim must
+            # start with a clean admission state — a leftover flag would
+            # suppress the resume after the next store blip.
+            self._unproven_admission.discard(handle)
+            logger.info(
+                "seat_release_recovered",
+                seat=handle,
+                epoch=entry.held.lease.epoch,
+                attempts=entry.attempts,
+                stranded_seconds=round(now - entry.since, 1),
+            )
+            try:
+                await self.leases.release(
+                    entry.held.lease.resource,
+                    owner=self.owner,
+                    epoch=entry.held.lease.epoch,
+                )
+            except LeaseError:
+                # Torn down locally either way; the row lapses on its own.
+                logger.warning("seat_release_unavailable", seat=handle)
+            return True
+
+    def _alarm_undead(
+        self, handle: str, entry: _Undead, error: str, now: float
+    ) -> None:
+        """Re-raise a stranded seat's alarm, at most once per interval.
+
+        The failure itself is not news — it is the same failure as last
+        heartbeat — so logging it every tick would bury the fleet's other
+        signals under one seat. What IS news is that it is *still*
+        happening, which is why the elapsed time is the payload.
+        """
+        if now - entry.last_alarm < UNDEAD_ALARM_INTERVAL_SECONDS:
+            return
+        entry.last_alarm = now
+        logger.error(
+            "seat_still_unproven",
+            seat=handle,
+            epoch=entry.held.lease.epoch,
+            reason=str(entry.reason),
+            attempts=entry.attempts,
+            stranded_seconds=round(now - entry.since, 1),
+            error=error,
+            hint=(
+                "this seat has been out of service since it failed to tear "
+                "down: this node will not run it and no peer can claim it. "
+                "Restarting this process frees it — weigh that against the "
+                "healthy seats the restart would also move"
+            ),
+        )
+
+    def unproven_ages(self) -> dict[str, float]:
+        """Seconds each unproven seat has been stranded, for ``/health``.
+
+        Existence is normal for a moment — a release that fails once and
+        succeeds on the next heartbeat is a working system. Duration
+        never is, so this is what an alert should read.
+        """
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:  # pragma: no cover - no loop, no ages
+            return {}
+        return {
+            handle: round(now - entry.since, 1)
+            for handle, entry in sorted(self._undead.items())
+        }
 
     # ── the loops ────────────────────────────────────────────────────
 
@@ -725,7 +874,8 @@ class SeatHost:
         loop = asyncio.get_running_loop()
         # The undead are renewed alongside the living: their teardown was
         # never proven, so a peer must not be able to claim them.
-        for handle, held in [*self._held.items(), *self._undead.items()]:
+        undead = [(handle, entry.held) for handle, entry in self._undead.items()]
+        for handle, held in [*self._held.items(), *undead]:
             # Read the clock PER SEAT, not once before the loop. A single
             # pre-loop timestamp is assigned to every seat's renewed_at,
             # so with many seats and a slow store the later ones record a
@@ -781,9 +931,18 @@ class SeatHost:
                     # new epoch while we awaited, and writing here would
                     # stamp an orphaned object while the live one keeps
                     # the older timestamp.
-                    current = self._held.get(handle) or self._undead.get(handle)
+                    entry = self._undead.get(handle)
+                    current = self._held.get(handle) or (
+                        entry.held if entry is not None else None
+                    )
                     if current is held:
                         held.renewed_at = now
+                if handle in self._undead:
+                    # Still ours, so try again to close it. This is the
+                    # only way an undead seat ever returns to the fleet
+                    # short of restarting the process.
+                    await self._retry_undead_teardown(handle)
+                    continue
                 await self._note_admission(handle, admitted=True)
                 continue
             if handle in self._undead:

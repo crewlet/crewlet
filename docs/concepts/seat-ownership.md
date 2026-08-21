@@ -70,7 +70,11 @@ Releasing has **two modes**, because losing a lease and choosing to let go are o
 
 Fenced release never republishes. A peer may already be running the seat; republishing hands it a second copy of work it is already doing, and sends those messages to the topic tail while the successor replays its prefetched siblings from the head — which reorders the conversation.
 
-**A teardown that cannot be proven does not release the lease.** If the consumer will not close, the node keeps renewing and retries. A lease held too long costs latency; one released too early costs correctness.
+**A teardown that cannot be proven does not release the lease.** A lease held too long costs latency; one released too early costs correctness. So a seat whose `on_release` hook raises goes *undead*: out of the held set, so this node starts nothing new on it, and still renewed, so no peer can take a seat this process may still be consuming.
+
+Undead is a state, not a grave. The teardown is retried on **every heartbeat**, and the lease is released the instant one succeeds — the usual causes are transient (a consumer mid-delivery, an MCP child that has not finished dying), and the retry is what returns the seat to the fleet. A retry that keeps failing keeps the seat, and re-raises its alarm every twenty heartbeats with the elapsed time, because the failure itself is not news but *still failing* is.
+
+Only a restart of that process can free a seat whose teardown never succeeds — its leases lapse at the TTL and peers pick them up. That is an operator's call rather than an automatic one: it also moves every healthy seat on the node, which is the wrong trade for one stuck MCP child and the right one for a process that has stopped being able to close anything.
 
 ## Deferring a delivery
 
@@ -245,7 +249,7 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 `GET /health` reports a `seats` block per node: seats held, the computed capacity, the live node count, the last claim, the last loss, and the protocol floor when an older peer is blocking claims. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
 
-`unproven_handles` is the number to watch: each one is a seat this process may still be consuming while holding a lease no peer can take.
+`unproven_seconds` is the number to watch — a map of seat to how long its teardown has been failing. Alert on the **duration**, not on `unproven` itself: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running.
 
 ## Single node
 
