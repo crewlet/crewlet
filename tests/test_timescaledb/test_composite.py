@@ -697,3 +697,101 @@ async def test_get_agent_llm_history_dedup_by_timestamp(
     timestamps = sorted(h["timestamp"] for h in hist)
     assert timestamps[0].startswith("2026-04-12T12:00:00")
     assert timestamps[1].startswith("2026-04-12T12:01:00")
+
+
+async def test_token_totals_are_summed_by_the_database() -> None:
+    """This runs on every `/agents` read and every dashboard refresh.
+
+    It used to pull every `agent_turn_completed` row in a 30-day window
+    — full JSONB payload and all — over the wire, parse each one, and
+    add three integers. A company doing a few thousand turns a day paid
+    a tens-of-thousands-of-rows scan per request to produce one number
+    per seat.
+    """
+    calls: dict[str, object] = {}
+
+    class _Persistent(MemoryEventStore):
+        async def sum_token_usage_by_role(
+            self, *, since_days=30, exclude_event_ids=None
+        ):
+            calls["excluded"] = list(exclude_event_ids or [])
+            return {
+                "Developer": {
+                    "input_tokens": 900,
+                    "output_tokens": 90,
+                    "total_tokens": 990,
+                }
+            }
+
+        async def list_token_usage_events(self, *, since_days=30):
+            raise AssertionError("the row scan must not run when SQL can sum")
+
+    persistent = _Persistent()
+    memory = MemoryEventStore()
+    for store in (persistent, memory):
+        await store.start()
+    composite = CompositeEventStore(persistent, memory)
+
+    await persistent.write_event(
+        event_type="agent_spawned",
+        actor="Developer",
+        source="Developer",
+        payload={},
+        category="agent",
+    )
+    # One event still only in the satellite leg.
+    await memory.write_event(
+        event_id="not-yet-flushed",
+        event_type="agent_turn_completed",
+        actor="Developer",
+        source="Developer",
+        tags={"agent_role": "Developer"},
+        payload={"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+        category="agent",
+    )
+
+    states = await composite.get_agent_states(["Developer"])
+
+    assert states["Developer"]["total_tokens"] == 990 + 11
+    # The satellite's ids are excluded from the SQL sum, so nothing is
+    # counted twice and nothing is dropped.
+    assert calls["excluded"] == ["not-yet-flushed"]
+
+
+async def test_a_store_without_the_rollup_still_reports_tokens() -> None:
+    """Fall back to the row scan rather than reporting zero."""
+    persistent = MemoryEventStore()
+    memory = MemoryEventStore()
+    for store in (persistent, memory):
+        await store.start()
+    composite = CompositeEventStore(persistent, memory)
+
+    await persistent.write_event(
+        event_type="agent_spawned",
+        actor="Developer",
+        source="Developer",
+        payload={},
+        category="agent",
+    )
+    await persistent.write_event(
+        event_id="flushed",
+        event_type="agent_turn_completed",
+        actor="Developer",
+        source="Developer",
+        tags={"agent_role": "Developer"},
+        payload={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+        category="agent",
+    )
+    # The same event, still in the satellite: it must count once.
+    await memory.write_event(
+        event_id="flushed",
+        event_type="agent_turn_completed",
+        actor="Developer",
+        source="Developer",
+        tags={"agent_role": "Developer"},
+        payload={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+        category="agent",
+    )
+
+    states = await composite.get_agent_states(["Developer"])
+    assert states["Developer"]["total_tokens"] == 7

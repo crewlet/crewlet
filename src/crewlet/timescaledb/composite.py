@@ -163,8 +163,15 @@ class CompositeEventStore:
         # for cross-session aggregation.  Fall back to the index only
         # for rows whose event carried no ``role`` attribute (empty
         # ``agent_role``).
-        token_events = await self.list_token_usage_events()
-        for ev in token_events:
+        # The satellite leg first, in full: it is capped in memory, it
+        # carries the events not yet flushed, and its ids are what the
+        # persistent rollup must not count twice.
+        memory_events = await self._memory.list_token_usage_events()
+        counted_ids: list[str] = []
+        for ev in memory_events:
+            event_id = str(ev.get("event_id", "") or "")
+            if event_id:
+                counted_ids.append(event_id)
             role = ev.get("agent_role", "") or self._id_to_role.get(
                 ev.get("agent_id", ""), ""
             )
@@ -174,6 +181,46 @@ class CompositeEventStore:
             state["input_tokens"] += ev.get("input_tokens", 0)
             state["output_tokens"] += ev.get("output_tokens", 0)
             state["total_tokens"] += ev.get("total_tokens", 0)
+
+        # The persistent leg is summed BY THE DATABASE. This runs on
+        # every `/agents` read and every dashboard refresh, and it used
+        # to pull every `agent_turn_completed` row in a 30-day window —
+        # full JSONB payload included — to add three integers per row.
+        # Where the store cannot do that, fall back to the row scan
+        # rather than reporting no tokens at all.
+        summed = False
+        roll_up = getattr(self._persistent, "sum_token_usage_by_role", None)
+        if roll_up is not None:
+            try:
+                totals = await roll_up(exclude_event_ids=counted_ids)
+            except Exception:
+                logger.warning("token_rollup_sql_failed", exc_info=True)
+            else:
+                summed = True
+                for role, sums in totals.items():
+                    state = merged.get(role)
+                    if state is None:
+                        continue
+                    state["input_tokens"] += sums.get("input_tokens", 0)
+                    state["output_tokens"] += sums.get("output_tokens", 0)
+                    state["total_tokens"] += sums.get("total_tokens", 0)
+        if not summed:
+            seen = set(counted_ids)
+            persistent_events: list[dict[str, Any]] = []
+            with contextlib.suppress(Exception):
+                persistent_events = await self._persistent.list_token_usage_events()
+            for ev in persistent_events:
+                if str(ev.get("event_id", "") or "") in seen:
+                    continue
+                role = ev.get("agent_role", "") or self._id_to_role.get(
+                    ev.get("agent_id", ""), ""
+                )
+                if not role or role not in merged:
+                    continue
+                state = merged[role]
+                state["input_tokens"] += ev.get("input_tokens", 0)
+                state["output_tokens"] += ev.get("output_tokens", 0)
+                state["total_tokens"] += ev.get("total_tokens", 0)
 
         return merged
 
