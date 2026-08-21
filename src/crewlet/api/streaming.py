@@ -454,9 +454,14 @@ class StreamService:
         """
         if not self._tokens_dirty or not self._clients:
             return
+        # Aggregate BEFORE clearing the flag: an aggregation that raises
+        # would otherwise consume the burst it failed on, so the rollup
+        # would stay stale until the next phase completed rather than
+        # being retried on the next tick.
+        rollup = self.token_rollup()
         self._tokens_pushed_at = time.monotonic()
         self._tokens_dirty = False
-        self._fan_out("tokens", self.token_rollup())
+        self._fan_out("tokens", rollup)
 
     def token_rollup(self) -> dict[str, Any]:
         """The live spend rollup, with each role's handle attached."""
@@ -548,15 +553,23 @@ class StreamService:
         while True:
             await asyncio.sleep(_TOKENS_PUSH_INTERVAL_SECONDS)
             elapsed += _TOKENS_PUSH_INTERVAL_SECONDS
-            self._flush_tokens()
-            if elapsed < self._health_interval:
-                continue
-            elapsed = 0.0
-            if self._health_fn is None:
-                continue
+            # One guard around the whole tick, like every other loop in
+            # the engine. This is the service's ONLY background timer, it
+            # is started once and nothing restarts it, so an exception
+            # escaping here does not skip a tick — it ends health pushes
+            # and spend rollups for the life of the process. The socket
+            # stays open throughout, so a dashboard shows the last health
+            # it received and goes on looking healthy: exactly the lie
+            # the health surface is built to avoid.
             try:
-                body = self._health_fn()
-            except Exception:  # pragma: no cover - defensive
-                logger.exception("health_tick_failed")
-                continue
-            await self.broadcast("health", body)
+                self._flush_tokens()
+                if elapsed < self._health_interval:
+                    continue
+                elapsed = 0.0
+                if self._health_fn is None:
+                    continue
+                await self.broadcast("health", self._health_fn())
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("stream_health_tick_failed")

@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import pytest
 from starlette.testclient import TestClient
 
+from crewlet.api import streaming
 from crewlet.api.streaming import (
     StreamService,
     build_health_envelope,
@@ -558,6 +559,84 @@ class TestDerivedPushes:
 # ---------------------------------------------------------------------------
 # Query channel
 # ---------------------------------------------------------------------------
+
+
+class TestHealthTickSurvivesAFailure:
+    """The service has exactly ONE background timer, started once.
+
+    Nothing restarts it, so an exception escaping its body does not skip
+    a tick — it ends health pushes and spend rollups for the life of the
+    process. And the socket stays open throughout, so a dashboard keeps
+    rendering the last health it received and goes on looking healthy:
+    exactly the lie the health surface exists to prevent.
+    """
+
+    async def test_a_failing_rollup_does_not_kill_the_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(streaming, "_TOKENS_PUSH_INTERVAL_SECONDS", 0.001)
+        service = StreamService(health_interval=0.0)
+        service.register()  # a client, so the flush path is taken
+        service._tokens_dirty = True
+        calls: list[int] = []
+
+        def _explodes() -> dict:
+            calls.append(1)
+            raise RuntimeError("aggregation is broken")
+
+        service.token_rollup = _explodes  # type: ignore[method-assign]
+        service.start_health_tick(lambda: {"status": "ok"})
+        try:
+            for _ in range(200):
+                await asyncio.sleep(0.005)
+                if len(calls) >= 2:
+                    break
+            assert len(calls) >= 2, (
+                "the tick died on the first failure and never ran again"
+            )
+            task = service._health_task
+            assert task is not None and not task.done()
+        finally:
+            await service.stop_health_tick()
+
+    async def test_a_failing_health_fn_does_not_kill_the_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(streaming, "_TOKENS_PUSH_INTERVAL_SECONDS", 0.001)
+        service = StreamService(health_interval=0.0)
+        calls: list[int] = []
+
+        def _explodes() -> dict:
+            calls.append(1)
+            raise RuntimeError("health is broken")
+
+        service.start_health_tick(_explodes)
+        try:
+            for _ in range(200):
+                await asyncio.sleep(0.005)
+                if len(calls) >= 2:
+                    break
+            assert len(calls) >= 2
+            task = service._health_task
+            assert task is not None and not task.done()
+        finally:
+            await service.stop_health_tick()
+
+    async def test_a_failed_flush_is_retried_rather_than_consumed(self) -> None:
+        """The dirty flag is cleared only once the rollup is built. Clearing
+        it first would eat the burst it failed on, leaving the panel stale
+        until some later phase happened to complete."""
+        service = StreamService()
+        service.register()
+        service._tokens_dirty = True
+
+        def _explodes() -> dict:
+            raise RuntimeError("aggregation is broken")
+
+        service.token_rollup = _explodes  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError):
+            service._flush_tokens()
+        assert service._tokens_dirty is True
 
 
 class TestStreamQueries:
