@@ -194,6 +194,95 @@ async def put_budgets(request: Request) -> JSONResponse:
 # ── /config/llm-providers (CRUD) ──────────────────────────────────────
 
 
+# ---------------------------------------------------------------------
+# Reading entities without a Request
+# ---------------------------------------------------------------------
+# The dashboard's Configuration room reads these collections, and every
+# read it makes goes over the websocket — a view with its own HTTP client
+# has a failure mode the shell knows nothing about, which is exactly how
+# the Fleet view once shipped dead. The route handlers below need a
+# ``Request`` (path params, headers); the query channel has none, so the
+# extraction each one performs lives here and both call it.
+
+
+def _entity_names(payload: dict[str, Any], kind: str) -> list[str]:
+    """The ids in one collection, sorted."""
+    if kind == "roles":
+        from crewlet.api.config_summaries import _flat_role_handles
+
+        return sorted(_flat_role_handles(payload))
+    if kind == "units":
+        names: list[str] = []
+
+        def walk(units: list[dict[str, Any]]) -> None:
+            for unit in units or []:
+                name = str(unit.get("name") or "")
+                if name:
+                    names.append(name)
+                walk(unit.get("children") or [])
+
+        walk(payload.get("units") or [])
+        return sorted(names)
+    if kind == "llm-providers":
+        llm = (payload.get("providers") or {}).get("llm", {}) or {}
+        return sorted(llm.keys())
+    if kind == "mcp-servers":
+        return sorted(
+            str(m.get("name") or "")
+            for m in (payload.get("mcp_servers") or [])
+            if m.get("name")
+        )
+    raise KeyError(kind)
+
+
+def _entity_body(payload: dict[str, Any], kind: str, entity_id: str) -> Any:
+    """One entity's fragment, as the editor round-trips it."""
+    if kind == "roles":
+        container, idx = _find_role_index(payload, entity_id)
+        return container[idx]
+    if kind == "units":
+        found = _find_unit(payload, entity_id)
+        if found is None:
+            raise KeyError(entity_id)
+        container, idx = found
+        return container[idx]
+    if kind == "llm-providers":
+        llm = (payload.get("providers") or {}).get("llm", {}) or {}
+        if entity_id not in llm:
+            raise KeyError(entity_id)
+        return llm[entity_id]
+    if kind == "mcp-servers":
+        for server in payload.get("mcp_servers") or []:
+            if str(server.get("name") or "") == entity_id:
+                return server
+        raise KeyError(entity_id)
+    raise KeyError(kind)
+
+
+async def config_entities(app: Any, kind: str, entity_id: str = "") -> dict[str, Any]:
+    """A collection's ids, or one entity's body, from the active revision.
+
+    Raises :class:`KeyError` for an unknown kind or a missing entity, and
+    :class:`LookupError` when no revision is active.
+    """
+    from crewlet.secrets import redact_config
+
+    store = getattr(app.state, "company_config_store", None)
+    if store is None:
+        raise LookupError("no_config_store")
+    rev = await store.get_active()
+    if rev is None:
+        raise LookupError("no_active_revision")
+    payload = redact_config(rev.payload, getattr(app.state, "secret_cipher", None))
+    if entity_id:
+        return {
+            "kind": kind,
+            "id": entity_id,
+            "entity": _entity_body(payload, kind, entity_id),
+        }
+    return {"kind": kind, "ids": _entity_names(payload, kind)}
+
+
 async def list_llm_providers(request: Request) -> JSONResponse:
     """GET /config/llm-providers — list keys in the active config."""
     rev = await _store(request).get_active()

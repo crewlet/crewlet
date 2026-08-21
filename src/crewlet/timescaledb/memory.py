@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -83,8 +83,6 @@ class MemoryEventStore:
         parent_span_id: str = "",
         tags: dict[str, str] | None = None,
     ) -> None:
-        from datetime import UTC
-
         if not event_id:
             event_id = str(uuid4())
         if event_id in self._seen_ids:
@@ -150,6 +148,51 @@ class MemoryEventStore:
         # naive and aware encodings ``write_event`` accepts.
         ordered = sorted(results, key=row_key, reverse=True)
         return [self._light(e) for e in ordered[:limit]]
+
+    async def count_events_by_source(
+        self, *, since_hours: int = 24
+    ) -> list[dict[str, Any]]:
+        """Per (source, type) counts over the ring.
+
+        The twin of the persistent store's GROUP BY, and bounded by the
+        ring like everything else here: on a store-less deployment this
+        describes the last ``max_events``, not the last ``since_hours``.
+        That is the same limit every other read on this backend carries.
+        """
+        # Compared through ts_key for the same reason every other read
+        # here is: the ring holds both naive and aware encodings of the
+        # same instant, and comparing those lexicographically orders one
+        # after the other.
+        cutoff = ts_key(
+            (datetime.now(UTC) - timedelta(hours=int(since_hours))).isoformat()
+        )
+        buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for event in self._events:
+            at = ts_key(str(event.get("timestamp") or ""))
+            if at and at < cutoff:
+                continue
+            source = str(event.get("source") or "")
+            if not source:
+                continue
+            key = (
+                source,
+                str(event.get("type") or ""),
+                str(event.get("category") or ""),
+            )
+            bucket = buckets.setdefault(
+                key,
+                {
+                    "source": key[0],
+                    "event_type": key[1],
+                    "category": key[2],
+                    "count": 0,
+                    "last_at": None,
+                },
+            )
+            bucket["count"] += 1
+            if at and (bucket["last_at"] is None or at > bucket["last_at"]):
+                bucket["last_at"] = at
+        return list(buckets.values())
 
     @staticmethod
     def _light(event: dict[str, Any]) -> dict[str, Any]:

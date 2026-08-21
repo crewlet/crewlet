@@ -445,6 +445,45 @@ class TimescaleDBEventStore:
             )
         return results
 
+    async def count_events_by_source(
+        self, *, since_hours: int = 24
+    ) -> list[dict[str, Any]]:
+        """Per (source, type) event counts in a window, counted BY THE DATABASE.
+
+        The dashboard's Integrations room asks two questions that are
+        the same GROUP BY: how much traffic has arrived from each
+        external surface, and what the routing did with it (routed /
+        skipped / coalesced). Both are counts over indexed columns
+        (``source``, ``event_type``, ``event_time``).
+
+        Counting these in the client is not an option that produces the
+        right answer: the browser holds a bounded live ring of 400
+        events, which a busy org fills in minutes, so a client-side
+        tally silently describes the last few minutes while claiming to
+        describe a day.
+
+        ``last_at`` rides along because "no traffic in 26 hours" is the
+        finding, and it cannot be derived from a count of zero.
+        """
+        rows = await self._db.execute(
+            "SELECT source, event_type, category, COUNT(*) AS n, "
+            "MAX(event_time) AS last_at "
+            f"FROM {EVENTS_TABLE} "
+            f"WHERE event_time >= now() - INTERVAL '{int(since_hours)} hours' "
+            "AND source <> '' "
+            "GROUP BY source, event_type, category"
+        )
+        return [
+            {
+                "source": str(row.get("source") or ""),
+                "event_type": str(row.get("event_type") or ""),
+                "category": str(row.get("category") or ""),
+                "count": int(row.get("n") or 0),
+                "last_at": row.get("last_at"),
+            }
+            for row in rows
+        ]
+
     async def sum_token_usage_by_role(
         self,
         *,

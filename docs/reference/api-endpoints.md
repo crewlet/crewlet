@@ -27,13 +27,16 @@ plane is a WebSocket (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
-| `GET` | `/tools` | Registered tools (builtins + discovered MCP tools) |
+| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin`, `custom` (`Engine(tools=[...])`), `extension:<name>`, or `mcp:<server>` (see [Tool origins](../guides/extensions.md#tool-origins)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch |
+| `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable `pending_sandbox_run` row (see [below](#get-sandbox-runs)) |
+| `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
+| `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -48,10 +51,12 @@ plane is a WebSocket (see [`WS /ws/stream`](#ws-wsstream)).
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 
 Read-side handlers live in the `crewlet.api.routes` package (one module
-per domain — `agents`, `events`, `tokens`, `org`, `stream`,
-`webhooks`, `dashboard`, `health`); `webhooks` and `/config/*` keep a
-stable external contract, while the read/stream surface is free to
-evolve since the dashboard is its only consumer.
+per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
+`sandbox_runs`, `budgets`, `integrations`, `stream`, `webhooks`,
+`dashboard`, `health`);
+`webhooks` and `/config/*` keep a stable external contract, while the
+read/stream surface is free to evolve since the dashboard is its only
+consumer.
 
 ### `/config/*` — live config management (auth-gated)
 
@@ -84,8 +89,7 @@ All `/config/*` routes require `Authorization: Bearer <token>` matching one of t
 | `GET`/`PUT`/`DELETE` | `/config/llm-providers[/{key}]` | CRUD provider entries |
 | `PUT` | `/config/embeddings` | Replace embedding provider |
 | `GET`/`POST`/`PUT`/`DELETE` | `/config/mcp-servers[/{name}]` | CRUD MCP servers |
-| `PUT` | `/config/integrations/{jira\|confluence\|slack\|github\|gitlab\|plane}` | Replace one integration block |
-| `GET`/`POST`/`DELETE` | `/config/notification-transports[/{name}]` | CRUD outbound transports |
+| `PUT` | `/config/integrations/{jira\|confluence\|slack\|mattermost\|github\|gitlab\|plane}` | Replace one integration block. Any other `kind` returns `404 unknown_integration` |
 | `PUT` | `/config/turn-engine` | Replace `TurnEngineConfig` |
 | `PUT` | `/config/learning` | Replace `LearningConfig` |
 | `PUT` | `/config/budgets` | Replace org `token_budget` |
@@ -409,7 +413,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unauthorized`, `unknown_query`, `no_event_store`, `query_failed`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -431,6 +435,10 @@ REST route calls, so the two surfaces cannot diverge:
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}` |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |
+| `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
+| `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
+| `budgets` | — | `GET /budgets` |
+| `integrations` | — | `GET /integrations` |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | `GET /config/audit` *(operator token required)* |
@@ -523,7 +531,7 @@ Returns 404 when no role with the given `id` is configured.
 
 ---
 
-## Schedules
+## Fleet, Sandbox Runs & Schedules
 
 ### `GET /fleet`
 
@@ -564,6 +572,157 @@ failing.
   "this_node": "core-1"
 }
 ```
+
+### `GET /sandbox-runs`
+
+Every detached [coding run](../concepts/code-sandbox.md) the engine still
+holds, oldest first — `running`, `awaiting_clarification`, `reseed`, and
+`resumed` rows of the `pending_sandbox_run` table.
+
+Read from the durable row rather than from the live projection, which is
+the wrong source for this question twice over: it is in-memory, so it
+starts empty after a restart, and it sweeps an entry after twelve hours
+while a run parked on a question can legitimately wait days for a person
+to answer. The states that most need somebody were therefore the ones
+least likely to be on screen, and a `reseed` run (pause expired, box
+reclaimed, work preserved on a pushed branch) had no surface at all — it
+looked exactly like work that had finished.
+
+```json
+{
+  "runs": [
+    {
+      "turn_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
+      "status": "awaiting_clarification", "coding_agent": "claude-code",
+      "task_description": "Add retry to the webhook client",
+      "question": "Which backoff ceiling should I use?", "audience": "founder",
+      "branch": "crewlet/eng/retry", "trace_id": "<hex>", "owner": "core-1:8f2a",
+      "box_exists": true, "paused_at": "2026-06-08T07:30:02+00:00",
+      "pause_ttl_seconds": 3600,
+      "started_at": "2026-06-08T07:12:44+00:00",
+      "updated_at": "2026-06-08T07:30:02+00:00",
+      "answerable_in_chat": true
+    }
+  ]
+}
+```
+
+`box_exists` and `paused_at` stand in for the sandbox id: a board wants to
+know that a box exists and that it is currently paused (and being billed
+for as a snapshot), not which box it is. `answerable_in_chat` is `false`
+for a run whose turn was triggered by something other than an inbound
+message — a schedule tick, a task assignment, an A2A wake — because the
+resume path matches an inbound conversation key by exact equality, and
+those runs stored a key no chat message can reproduce. Telling somebody to
+"reply in the thread" would send them to a thread that does not exist.
+
+`execute_state` — the serialised Execute-loop conversation — is
+deliberately not returned: it is the largest column in the row and every
+prompt in it is already reachable through the event store.
+
+Without a database the engine cannot park a run at all, so that
+deployment gets `{"runs": [], "degraded": "..."}` rather than an error;
+a store that is configured and unreadable answers `503`.
+
+### `GET /budgets`
+
+Backs the dashboard's **Spend** room. Three numbers describe a token
+budget and they cover three different spans, which is why any surface
+mixing them can only be wrong:
+
+- the **cap** is configuration, from the active company revision;
+- **durable usage** is the shared counter in `token_budget_usage`, written
+  by every process running the company and surviving restarts. It is what
+  the engine actually enforces against;
+- the **live meter** is per engine *run*. It is pushed to the dashboard as
+  `budget_reported` and resets when the process does.
+
+Only the meter and the cap share a span, which is why a seat card can draw
+a bar and this room mostly cannot. What it could never show before is the
+more useful picture — "this seat has burned 94% of its cap across two
+restarts" — because the durable half was reachable only from
+`crewlet budgets show`.
+
+```json
+{
+  "durable": true,
+  "org": {
+    "max_tokens": 5000000, "durable_used": 1284410,
+    "durable_updated_at": "2026-06-08T07:30:02+00:00",
+    "live_used": 91200, "live_max": 5000000, "refused_at": ""
+  },
+  "seats": [
+    {
+      "agent_id": "<uuid>", "role": "Engineer", "handle": "eng",
+      "max_tokens": 100000, "durable_used": 99120,
+      "durable_updated_at": "2026-06-08T07:29:51+00:00",
+      "live_used": 41000, "live_max": 100000,
+      "refused_at": "2026-06-08T07:29:51+00:00"
+    }
+  ]
+}
+```
+
+Two fields carry the honesty. `durable` is `false` when the shared counter
+could not be read — a counter that cannot be read is not a counter that
+reads zero, and without the flag a database blip renders every seat at the
+bottom of its cap, which is the most reassuring possible picture drawn at
+the moment nothing is known. `live_used` / `live_max` are `null`, never
+`0`, on a node with no engine in the process: zero would let a client draw
+an empty bar and call it "nothing spent this run", a claim about a run
+that is not happening.
+
+Exhaustion is `refused_at`, the moment a charge was turned away — never
+`used >= max`. `TokenBudget` refuses a charge that would exceed the cap
+and increments nothing, so a seat charged in 3k-token rounds against a
+100k cap stalls near 99k and never compares equal to its own maximum. A
+ratio test shows a permanently blocked seat at 99% and calls it healthy.
+
+### `GET /integrations`
+
+Backs the dashboard's **Integrations** room: how each external surface is
+wired, and what has come through it over the last 24 hours.
+
+Integrations had close to no surface at all before this. The dashboard
+branded an event once it had already been accepted and routed, so every
+failure mode an operator actually hits was invisible — a Mattermost
+`SiteURL` that blinds every browser while agents keep working, a revoked
+bot token, a mis-pasted webhook secret. Rejected deliveries are
+deliberately never written to the event store (verification runs before
+the row is logged, which is correct), so a signature mismatch left no
+trace anywhere except the provider's own delivery UI.
+
+```json
+{
+  "traffic_known": true,
+  "window_hours": 24,
+  "integrations": [
+    {
+      "key": "slack", "configured": true, "enabled": true,
+      "url": "", "workspace": "",
+      "inbound_kind": "webhook", "inbound_path": "/webhooks/slack/{handle}",
+      "secret_present": true, "seats": ["eng", "pm"],
+      "inbound": 128, "routed": 96, "skipped": 30, "coalesced": 2,
+      "last_at": "2026-06-08T07:31:10+00:00"
+    }
+  ]
+}
+```
+
+`secret_present` is three-valued because the cases mean opposite things:
+`null` — this surface does not use one (Mattermost authenticates its
+websocket with the bot's own token); `false` — it does, and none is
+configured, which means the webhook route answers `503` to every delivery.
+That last one is a real, silent outage and must not render like "not
+applicable". Only the boolean is ever returned; the value never leaves the
+process.
+
+**Health is deliberately not inferred.** An idle Slack and a 401-ing Slack
+are indistinguishable in the event store, so silence is reported as "no
+traffic seen" — never as healthy, never as down. `traffic_known` is
+`false` on a deployment whose event store cannot group by source, so the
+zeros below it are absence of measurement rather than measurement of
+absence.
 
 ### `GET /schedules`
 

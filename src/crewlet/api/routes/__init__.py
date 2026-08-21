@@ -12,11 +12,14 @@ from __future__ import annotations
 from starlette.routing import Route, WebSocketRoute
 
 from crewlet.api.routes.agents import get_agent, get_agent_memory, list_agents
+from crewlet.api.routes.budgets import get_budgets
 from crewlet.api.routes.dashboard import dashboard, root, static_file
 from crewlet.api.routes.events import get_event, list_events, list_trace
 from crewlet.api.routes.fleet import get_fleet
 from crewlet.api.routes.health import health, ready
+from crewlet.api.routes.integrations import get_integrations
 from crewlet.api.routes.org import get_org, get_schedules, list_tools
+from crewlet.api.routes.sandbox_runs import get_sandbox_runs
 from crewlet.api.routes.stream import stream_snapshot, stream_websocket
 from crewlet.api.routes.tokens import get_tokens_breakdown
 from crewlet.api.routes.webhooks import (
@@ -48,6 +51,9 @@ def build_routes() -> list[Route | WebSocketRoute]:
         Route("/agents/{id}/memory", get_agent_memory, methods=["GET"]),
         Route("/org", get_org, methods=["GET"]),
         Route("/fleet", get_fleet, methods=["GET"]),
+        Route("/sandbox-runs", get_sandbox_runs, methods=["GET"]),
+        Route("/budgets", get_budgets, methods=["GET"]),
+        Route("/integrations", get_integrations, methods=["GET"]),
         Route("/schedules", get_schedules, methods=["GET"]),
         Route("/tokens/breakdown", get_tokens_breakdown, methods=["GET"]),
         Route("/events", list_events, methods=["GET"]),

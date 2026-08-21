@@ -289,6 +289,27 @@ class CompositeEventStore:
             merged.append(ev)
         return merged
 
+    async def count_events_by_source(
+        self, *, since_hours: int = 24
+    ) -> list[dict[str, Any]]:
+        """Per (source, type) counts, from whichever leg can answer.
+
+        Not merged across the two legs, and deliberately so: every write
+        goes to BOTH, so adding their counts would double every event.
+        The persistent leg holds the complete set within its window, so
+        it answers alone; the memory leg is the fallback for a
+        deployment that has no persistent store at all.
+        """
+        for leg in (self._persistent, self._memory):
+            counter = getattr(leg, "count_events_by_source", None)
+            if counter is None:
+                continue
+            try:
+                return await counter(since_hours=since_hours)
+            except Exception:
+                logger.warning("event_source_counts_failed", exc_info=True)
+        return []
+
     async def get_agent_llm_history(
         self, agent_id: str, *, limit: int = 50
     ) -> list[dict[str, Any]]:
