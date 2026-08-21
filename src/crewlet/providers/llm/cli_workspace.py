@@ -492,10 +492,19 @@ class CLIWorkspaceManager:
                 self._seed_files(home)
                 await self.seed_credentials(home)
             state.in_flight += 1
-        _mkdir(work)
-        _mkdir(work / ".tmp")
 
+        # NOTHING between the increment and the ``try`` may raise: the
+        # matching decrement lives in the ``finally``, so an exception
+        # in the gap leaks the count for the life of the process.  A
+        # seat stuck above zero never sees ``in_flight == 0`` again,
+        # which silently disables both ends of the generation protocol
+        # — its conversation state is never pruned (turn N+1 inherits
+        # turn N) and a refreshed login is never written back (the
+        # fleet logs out at the next expiry).  ``_mkdir`` raises on a
+        # full or read-only disk, so it belongs inside.
         try:
+            _mkdir(work)
+            _mkdir(work / ".tmp")
             yield SeatWorkspace(
                 seat=seat, home=home, work=work, env=self.build_env(home, work)
             )

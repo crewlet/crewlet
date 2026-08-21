@@ -328,8 +328,8 @@ entirely.
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
 | `opencode` | `opencode` | Anthropic / Copilot / any | `opencode auth login`; the one built-in profile with a credential login. |
 | `cursor-agent` | `cursor-agent` | Cursor seat | `cursor-agent login`. |
-| `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. |
-| `grok` | `grok` | xAI | Also accepts `GROK_API_KEY` via `auth.mode: api-key`. |
+| `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
+| `grok` | `grok` | xAI | Accepts `GROK_API_KEY` (or `XAI_API_KEY`, via an `api_key_env` override) through `auth.mode: api-key`. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 ### CLI flags drift — and that's a config edit, not a release
@@ -404,6 +404,16 @@ errors. Raise it on a large host with a plan that permits it.
 purpose: a backend that silently picked up a stray `ANTHROPIC_API_KEY`
 would bill the metered account while you believed you were on a flat-rate
 plan.
+
+**A profile's `passthrough_env` may not name a credential**, and the
+engine refuses one that does. Everything listed there is forwarded from
+the engine's own environment *before* `auth.mode` is consulted, so a key
+named there would reach every seat whatever the mode says — the same
+metered-bill-on-a-flat-rate-plan failure the mode exists to prevent. Use
+it for genuine non-secret configuration (`GOOGLE_CLOUD_PROJECT`, a
+region); a CLI's key belongs in `api_key_env` or `token_env`, and
+`auth.mode: inherit-env` is the deliberate way to let the host's value
+through.
 
 ---
 

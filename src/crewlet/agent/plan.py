@@ -346,7 +346,10 @@ def _build_meta_tools(
         iteration=iteration,
     )
     list_servers = build_list_mcp_server_tools(
-        role_mcp_tools,
+        # The MERGED universe, not the per-role list: the catalogue
+        # advertises every shared server too, and this is what the
+        # agent is told to call for its tool names.
+        catalogue_tools,
         availability_filter=availability_filter,
     )
 

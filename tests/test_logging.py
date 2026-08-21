@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import pytest
 import structlog
@@ -72,3 +73,40 @@ class TestConfigureLogging:
         output = re.sub(r"\x1b\[[0-9;]*m", "", captured.out + captured.err)
         assert "hello_world" in output
         assert "key" in output and "val" in output
+
+
+# ── the event name is a constant, not a template ─────────────────────
+
+
+def test_no_event_name_is_built_from_a_variable() -> None:
+    """``logger.x(f"{thing}_happened")`` defeats the point of structlog.
+
+    The convention is that an event name is a short, machine-parsable
+    constant and every varying part rides in a keyword argument. A name
+    assembled from a variable inverts that: there is no single string to
+    alert on or group by, so "a webhook route has no secret" becomes one
+    rule per source instead of one rule with a ``source`` field — and
+    the cardinality lands in the place least able to carry it.
+
+    Four call sites did this. Scanned rather than reviewed because a
+    fifth is one f-string away, and nothing else would notice: the log
+    still emits, still parses, and reads fine to a human.
+    """
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    # ``logger.<level>(`` followed by an f-string, across a line break or
+    # not — the multiline form is how three of the four were written.
+    pattern = re.compile(
+        r"""logger\.(?:debug|info|warning|error|exception|critical)\(\s*f["']""",
+        re.MULTILINE,
+    )
+    offenders = [
+        str(path.relative_to(root))
+        for path in (root / "src" / "crewlet").rglob("*.py")
+        if pattern.search(path.read_text())
+    ]
+    assert offenders == [], (
+        f"event names built from a variable: {offenders} — put the "
+        f"varying part in a keyword argument instead"
+    )

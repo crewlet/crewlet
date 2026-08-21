@@ -22,7 +22,7 @@ See the [Configuration concept doc](../concepts/configuration.md) for the two-ti
 
 ## Option 1 — Single full-document PUT (recommended for bootstrap)
 
-The simplest path. Send the whole `company.yaml` in one request; the engine validates, persists as a new revision, publishes `crewlet.config.revision_activated`, and spawns the whole company.
+The simplest path. Send the whole `company.yaml` in one request; the engine validates, persists as a new revision, appends an activation epoch, and spawns the whole company. Every node in the deployment converges on that epoch — see [Control Plane](../concepts/control-plane.md).
 
 ```bash
 curl -X PUT $CREWLET_URL/config \

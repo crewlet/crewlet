@@ -325,3 +325,84 @@ class TestSharedStateDir:
             async with after.acquire("a"):
                 assert live.exists()
             assert live.exists()
+
+
+class TestGenerationCounterSurvivesFailure:
+    """The in-flight count must be released on every exit, not just the
+    happy one.
+
+    It is the *only* thing that says a generation is open, and it is
+    process-lifetime state. Leak it once and the seat never sees
+    ``in_flight == 0`` again, which silently disables both ends of the
+    protocol: conversation state stops being pruned (turn N+1 inherits
+    turn N — the isolation this module exists for) and a refreshed
+    login stops being written back (the fleet logs out at the next
+    token expiry). Neither failure raises; both just start happening.
+    """
+
+    def setup_method(self):
+        from crewlet.providers.llm.cli_workspace import reset_shared_state
+
+        reset_shared_state()
+
+    async def test_a_failed_workdir_does_not_wedge_the_seat(
+        self, tmp_path, monkeypatch
+    ):
+        from crewlet.providers.llm import cli_workspace
+
+        manager = make_manager(tmp_path)
+        real_mkdir = cli_workspace._mkdir
+
+        def fail_on_work(path):
+            # A full or read-only disk: the seat root already exists,
+            # the per-call work directory is what cannot be made.
+            if "work" in path.parts:
+                raise OSError(28, "No space left on device")
+            real_mkdir(path)
+
+        monkeypatch.setattr(cli_workspace, "_mkdir", fail_on_work)
+        with pytest.raises(OSError):
+            async with manager.acquire("sarah-chen"):
+                pytest.fail("acquire should not have yielded")
+        monkeypatch.undo()
+
+        # The generation must be closed, so the next call prunes.
+        stale = manager.seat_home("sarah-chen") / ".testcli" / "sessions" / "last.json"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("previous turn")
+        async with manager.acquire("sarah-chen"):
+            assert not stale.exists(), (
+                "a leaked in-flight count left the generation open, so the "
+                "previous turn's session was never pruned"
+            )
+
+    async def test_a_failed_workdir_still_writes_a_refreshed_login_back(
+        self, tmp_path, monkeypatch
+    ):
+        """The other half of the generation protocol, which fails just
+        as silently: ``collect_credentials`` runs only when the count
+        reaches zero."""
+        from crewlet.providers.llm import cli_workspace
+
+        manager = make_manager(tmp_path)
+        manager.ensure_layout()
+        shared = manager.credential_dir / ".testcli" / "auth.json"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text('{"token": "original"}')
+
+        real_mkdir = cli_workspace._mkdir
+
+        def fail_on_work(path):
+            if "work" in path.parts:
+                raise OSError(30, "Read-only file system")
+            real_mkdir(path)
+
+        monkeypatch.setattr(cli_workspace, "_mkdir", fail_on_work)
+        with pytest.raises(OSError):
+            async with manager.acquire("sarah-chen"):
+                pytest.fail("acquire should not have yielded")
+        monkeypatch.undo()
+
+        async with manager.acquire("sarah-chen") as ws:
+            (ws.home / ".testcli" / "auth.json").write_text('{"token": "refreshed"}')
+        assert shared.read_text() == '{"token": "refreshed"}'

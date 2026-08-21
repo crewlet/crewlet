@@ -226,10 +226,45 @@ def _emit_providers(payload: Mapping[str, Any], out: list[str]) -> None:
         for key, provider in llm.items():
             if not isinstance(provider, Mapping):
                 continue
+            base = f"/providers/llm/{_escape(str(key))}"
             api_keys = provider.get("api_keys")
             if isinstance(api_keys, list):
                 for i in range(len(api_keys)):
-                    out.append(f"/providers/llm/{_escape(str(key))}/api_keys/{i}")
+                    out.append(f"{base}/api_keys/{i}")
+            # The `cli-agent` block carries credentials of its own, and
+            # nothing pointed at them: a subscription token or an
+            # exported credential bundle pasted here as a literal (the
+            # fields take one — `${VAR}` is a convention, not a
+            # constraint) rendered in the clear through GET /config, the
+            # dashboard's config view and `config export --redact`,
+            # while the `api_keys` entry beside it was masked. The
+            # bundle is the worse of the two: it is the whole CLI login
+            # archive, and `--redact` is a command whose entire purpose
+            # is not printing it.
+            cli = provider.get("cli")
+            if isinstance(cli, Mapping):
+                auth = cli.get("auth")
+                if isinstance(auth, Mapping):
+                    # Presence, not type, exactly as the typed
+                    # integration emitters do: on the REDACTED payload
+                    # the value is a marker dict, and a pointer missing
+                    # there is a credential the write-back cannot
+                    # restore.
+                    for field in ("token", "credential_bundle"):
+                        if field in auth:
+                            out.append(f"{base}/cli/auth/{field}")
+                # `cli.env` is free-form operator env for the child
+                # process, exactly like `mcp_servers[].env`, so it is
+                # masked by the same key-name rule rather than wholesale
+                # — the non-secret entries stay readable.
+                _emit_free_form_secrets(cli.get("env"), f"{base}/cli/env", out)
+                overrides = cli.get("overrides")
+                if isinstance(overrides, Mapping):
+                    # `overrides` replaces profile fields wholesale, and
+                    # one of them is the profile's own fixed `env`.
+                    _emit_free_form_secrets(
+                        overrides.get("env"), f"{base}/cli/overrides/env", out
+                    )
     for name in ("embeddings", "sandbox"):
         section = providers.get(name)
         if isinstance(section, Mapping) and "api_key" in section:
@@ -248,7 +283,17 @@ def _emit_free_form_secrets(dct: Any, base: str, out: list[str]) -> None:
     if not isinstance(dct, Mapping):
         return
     for key, value in dct.items():
-        if _looks_secret(str(key)) and isinstance(value, str):
+        if not _looks_secret(str(key)):
+            continue
+        # A string OR a marker. ``restore_redacted`` walks the pointers
+        # of the REDACTED payload, where every masked value is a marker
+        # dict — so gating on ``str`` alone emitted nothing there, the
+        # restore had no pointer to swap back, and the marker was stored
+        # as the credential. That is the corruption this module's own
+        # docstring warns about, and it hit every free-form surface:
+        # `mcp_servers[].env`, `.headers`, `integrations.transports[]`.
+        # One dashboard save replaced every shared MCP server's key.
+        if isinstance(value, str) or is_redaction_marker(value):
             out.append(f"{base}/{_escape(str(key))}")
 
 

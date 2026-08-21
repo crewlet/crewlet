@@ -29,6 +29,9 @@ import asyncio
 import hashlib
 import time
 from dataclasses import dataclass, field
+from typing import Any
+
+from crewlet._logging import get_logger
 
 # Cap on the exponential-backoff multiplier for repeated AUTH failures
 # on one key. A genuinely-bad key (typo'd credential) would otherwise
@@ -63,6 +66,9 @@ class CredentialEntry:
     via :func:`short_hash` -- 12 hex characters of SHA-256, ample
     entropy to disambiguate keys without leaking the value or
     enabling a substring attack against short keys."""
+
+
+logger = get_logger("providers.credential")
 
 
 def short_hash(value: str) -> str:
@@ -118,6 +124,13 @@ class CredentialPool:
 
     entries: list[CredentialEntry]
     cooldowns: CooldownPolicy = field(default_factory=CooldownPolicy)
+    cooldown_sync: Any = None
+    """Optional :class:`~crewlet.db.credentials.CooldownSync` sharing
+    cooldowns across processes. ``None`` keeps them process-local, which
+    is correct for one node and defeats key rotation on several: only the
+    replica that saw the 429 would rotate away, and once a pool looks
+    fully cooled the fallback chain moves the seat to another model."""
+
     _lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False, compare=False
     )
@@ -136,11 +149,19 @@ class CredentialPool:
         Increments ``use_count`` and ``in_flight``; the caller must
         :meth:`release` when the call completes.
         """
+        await self._sync_peer_cooldowns()
         async with self._lock:
             wall = now_seconds()
             live = [e for e in self.entries if e.cooldown_until <= wall]
             if not live:
-                return None
+                # Every key looks cooled, and the caller is about to fall
+                # through to another provider (a different MODEL for this
+                # seat). Worth one forced read: a peer may have recorded
+                # a shorter cooldown, or ours may be stale.
+                await self._sync_peer_cooldowns(force=True)
+                live = [e for e in self.entries if e.cooldown_until <= now_seconds()]
+                if not live:
+                    return None
             entry = min(live, key=lambda e: e.in_flight)
             entry.use_count += 1
             entry.in_flight += 1
@@ -186,6 +207,45 @@ class CredentialPool:
                 )
                 base *= 2**doublings
             entry.cooldown_until = now_seconds() + base
+            hint, cooled_for = entry.hint, base
+
+        # Outside the lock: the write is remote, and a slow database must
+        # not serialize every other caller behind it.
+        if self.cooldown_sync is not None and cooled_for > 0:
+            try:
+                await self.cooldown_sync.cool(
+                    hint, cooled_for, "auth" if is_auth else "rate_limit"
+                )
+            except Exception:
+                # The local cooldown already applies; the fleet learns
+                # late rather than the call failing.
+                logger.warning("credential_cooldown_share_failed", hint=hint)
+
+    async def _sync_peer_cooldowns(self, *, force: bool = False) -> None:
+        """Fold peer cooldowns into this pool's local view.
+
+        Throttled by :class:`~crewlet.db.credentials.CooldownSync`, so a
+        steady stream of calls costs one small query per interval rather
+        than one per call.
+        """
+        if self.cooldown_sync is None:
+            return
+        try:
+            peers = await self.cooldown_sync.peer_cooldowns(force=force)
+        except Exception:
+            logger.warning("credential_cooldown_sync_failed")
+            return
+        if not peers:
+            return
+        async with self._lock:
+            wall = now_seconds()
+            for entry in self.entries:
+                remaining = peers.get(entry.hint)
+                if remaining is None:
+                    continue
+                # Never shorten a local cooldown: this process may have
+                # seen a fresher error than the one the peer recorded.
+                entry.cooldown_until = max(entry.cooldown_until, wall + remaining)
 
 
 __all__ = [

@@ -369,3 +369,75 @@ class TestSecretsKeygen:
         from crewlet.cli import main
 
         assert main(["secrets"]) == 0
+
+
+class TestNodeRoles:
+    """``crewlet run`` IS the node; what it runs is a config value.
+
+    ``crewlet run api`` was a second process shape with its own wiring —
+    the app, the stream service and the config refresher built by hand,
+    in the same order as the engine's embedded path but never provably
+    the same way. An ingress-only node is the standalone API, on one code
+    path.
+    """
+
+    def _bootstrap(self, tmp_path: Path, body: str = "") -> Path:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            "providers:\n"
+            "  queue: {url: 'pulsar://localhost:6650'}\n"
+            "  database: {dsn: ''}\n"
+            "api: {auth: {disabled: true}}\n" + body
+        )
+        return path
+
+    def test_roles_flag_overrides_the_tier_a_file(self, tmp_path: Path) -> None:
+        """Applied to the bootstrap object, not threaded past it — the
+        engine reads Tier A, and an override it could not see would be
+        invisible to the presence lease that tells the fleet."""
+        from crewlet.config import load_bootstrap_config
+        from crewlet.seat.placement import NodeRole
+
+        path = self._bootstrap(tmp_path, "node: {id: n1, roles: [seats]}\n")
+        assert load_bootstrap_config(path).node.roles == [NodeRole.SEATS]
+
+        from crewlet.cli import _parse_role_flag
+
+        assert _parse_role_flag("ingress,workers") == [
+            NodeRole.INGRESS,
+            NodeRole.WORKERS,
+        ]
+
+    def test_an_unknown_role_is_rejected_not_dropped(self) -> None:
+        """A typo that silently subtracted a role would leave a fleet
+        with a job nobody does."""
+        from crewlet.cli import _parse_role_flag
+
+        with pytest.raises(ValueError, match="ingress, seats, workers"):
+            _parse_role_flag("seat")
+        with pytest.raises(ValueError):
+            _parse_role_flag("")
+
+    def test_run_api_is_deprecated_and_maps_onto_run(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch
+    ) -> None:
+        from crewlet import cli
+
+        seen: dict = {}
+
+        def _fake_run(args) -> int:
+            seen.update(vars(args))
+            return 0
+
+        monkeypatch.setattr(cli, "cmd_run", _fake_run)
+        path = self._bootstrap(tmp_path)
+        assert cli.main(["run", "api", str(path), "--port", "9000"]) == 0
+
+        err = capsys.readouterr().err
+        assert "deprecated" in err
+        assert "--roles ingress" in err
+        assert seen["roles"] == "ingress"
+        assert seen["api_port"] == 9000
+        assert seen["api_host"] == "0.0.0.0"
+        # And it must not carry the import flags into the run path.
+        assert seen["import_company"] is None

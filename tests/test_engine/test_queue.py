@@ -16,6 +16,7 @@ from crewlet.providers.llm.protocol import (
     ToolDef,
 )
 from crewlet.queue.memory import MemoryEventQueue
+from crewlet.queue.topics import agent_inbox_group, agent_inbox_topic
 
 
 class MockLLM:
@@ -91,11 +92,11 @@ class TestEngineSubscribesHandlers:
         try:
             agent_handles = {a.handle for a in engine.agent_pool.agents}
             # Agent inboxes use the batched per-conversation subscription.
-            subscribed_topics = {s.topic for s in queue._batch_subscriptions}
+            attached = {topic for topic, _group in queue.attachments()}
 
             for handle in agent_handles:
-                expected_topic = f"crewlet.agent.{handle}.inbox"
-                assert expected_topic in subscribed_topics, (
+                expected_topic = agent_inbox_topic(handle)
+                assert expected_topic in attached, (
                     f"Missing subscription for {expected_topic}"
                 )
         finally:
@@ -108,10 +109,10 @@ class TestEngineSubscribesHandlers:
 
         await engine.start()
         try:
-            for sub in queue._batch_subscriptions:
-                if sub.topic.startswith("crewlet.agent."):
-                    handle = sub.topic.split(".")[2]
-                    assert sub.group == f"agent-{handle}"
+            for topic, group in queue.attachments():
+                if topic.startswith("crewlet.agent."):
+                    handle = topic.split(".")[2]
+                    assert group == agent_inbox_group(handle)
         finally:
             await engine.stop()
 
@@ -129,7 +130,7 @@ class TestTaskAssignedTriggersExecuteTurn:
         try:
             # Pick any agent
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             # Patch execute_turn to track calls
             assert engine.turn_engine is not None
@@ -180,7 +181,7 @@ class TestTaskAssignedTriggersExecuteTurn:
         await engine.start()
         try:
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             assert engine.turn_engine is not None
             execute_calls: list[Event] = []
@@ -305,7 +306,7 @@ class TestNotificationTriggersExecuteTurn:
         await engine.start()
         try:
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             assert engine.turn_engine is not None
             execute_calls: list[Event | None] = []
@@ -355,7 +356,7 @@ class TestExecutorEventParameter:
         try:
             assert engine.turn_engine is not None
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
 
             event = Event(
                 type="task_assigned",
@@ -519,7 +520,7 @@ class TestInboxCoalescing:
         await engine.start()
         try:
             agent = engine.agent_pool.agents[0]
-            topic = f"crewlet.agent.{agent.handle}.inbox"
+            topic = agent_inbox_topic(agent.handle)
             assert engine.turn_engine is not None
             turn_events: list[Event] = []
 

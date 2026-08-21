@@ -16,7 +16,7 @@ integrations:
     url: "${CONFLUENCE_URL}"                        # Confluence instance URL (Cloud or Data Center)
     token: "${CONFLUENCE_API_TOKEN}"                # API token (admin/service account)
     email: "${CONFLUENCE_EMAIL}"                    # Cloud only — admin email for Basic Auth
-    webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
+    webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center: required, HMAC-SHA256
 
 knowledge:
   confluence_spaces: ["HANDBOOK"]                   # org-wide spaces every agent can search
@@ -135,7 +135,9 @@ Content-Type: application/json
 }
 ```
 
-When `webhook_secret` is configured, inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header.
+Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header, at the route, before the delivery is recorded or published — the same point at which the GitHub, GitLab and Plane webhooks verify theirs. `POST /webhooks/confluence` is exempt from the API's bearer token precisely *because* it authenticates by provider HMAC, so the check belongs there.
+
+`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 
 ### Event Deduplication
 
@@ -238,6 +240,8 @@ Routing follows the same watcher-based pattern as Jira, adapted for Confluence's
 1. **Watchers** — The transport fetches page watchers via the Confluence REST API. Confluence **auto-adds users as watchers when they edit a page** — this includes the page creator, so there is no separate "page creator" routing step. Agents who have edited a page will automatically receive notifications about subsequent activity on it.
 2. **@mentions** — When a comment contains `@mention` markup (`<ri:user ri:account-id="..."/>`), the mentioned agents receive the notification. The Confluence UI does not allow mentioning service accounts, but **the API can insert mention markup** — so agents commenting via MCP tools can direct notifications to other agents. Mentioned agents are **automatically added as page watchers** so they receive future events on that page.
 3. **Space leads** — If no watchers or mentions resolved to a known agent (steps 1-2), all unit leads mapped to the space key receive the notification — **except the agent that triggered the event**. Multiple units can share the same space key.
+
+"Resolved to a known agent" means the account maps to an **agent seat in the org**, not to an agent running in the node that received the webhook — a watcher owned by another node is routed to normally, since the notification is addressed by handle and consumed by whichever node owns that seat. Human watchers deliberately resolve to nothing here: Confluence already notified them natively, and counting one as a delivered recipient would suppress the space-lead fallback in favour of a notification the engine then skips.
 4. **Standard resolution** — If no space mapping exists, the notification is returned for generic handle/email resolution.
 
 When specific recipients are found (steps 1-2), space leads are **not** notified — this prevents leads from being flooded with events that already have a clear recipient.

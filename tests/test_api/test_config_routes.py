@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -12,10 +15,10 @@ import pytest
 import yaml
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.config import ApiAuthConfig, ApiAuthTokenConfig, ApiConfig, BootstrapConfig
 from crewlet.db.company_config import CompanyConfigRevision
 from crewlet.events.types import ConfigRevisionActivated, Event
+from tests.test_api.helpers import create_app
 
 
 class _MockQueue:
@@ -31,6 +34,15 @@ class _MockQueue:
         group: str,
         handler: Callable[[Event], Awaitable[None]],
     ) -> None: ...
+
+    async def subscribe_stream(
+        self,
+        topic_pattern: str,
+        handler: Callable[[Event], Awaitable[None]],
+    ) -> Callable[[], Awaitable[None]]:
+        async def _unsubscribe() -> None: ...
+
+        return _unsubscribe
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
@@ -507,7 +519,8 @@ def test_health_flips_to_true_after_priming(
     revision; once primed, /health reports True."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
 
     store.get_active.return_value = _make_revision({"name": "Acme"})
     app = create_app(
@@ -523,37 +536,79 @@ def test_health_flips_to_true_after_priming(
 # ── webhook unconfigured early-out ───────────────────────────────────
 
 
-def test_jira_webhook_dropped_when_unconfigured(client: TestClient) -> None:
-    """Jira webhook returns 200-and-drop when engine has no active config."""
-    resp = client.post(
-        "/webhooks/jira",
-        json={"webhookEvent": "jira:issue_created", "issue": {}},
+_JIRA_SECRET = "jira-webhook-secret"
+
+
+def _signed_jira(body: dict) -> tuple[bytes, dict[str, str]]:
+    """A correctly-signed Jira delivery.
+
+    The signature check runs at the route, ahead of the unconfigured
+    gate — deliberately, and the same order the Plane route documents.
+    So a test about the CONFIG gate has to get past the signature first,
+    or it asserts 503 while actually receiving a 500 about a missing
+    secret.
+    """
+    raw = json.dumps(body).encode()
+    signature = (
+        "sha256=" + hmac.new(_JIRA_SECRET.encode(), raw, hashlib.sha256).hexdigest()
     )
-    assert resp.status_code == 200
+    return raw, {"content-type": "application/json", "x-hub-signature": signature}
+
+
+def test_jira_webhook_rejected_when_unconfigured(
+    queue: _MockQueue, store: MagicMock
+) -> None:
+    """An unconfigured process answers 503 so the sender RETRIES.
+
+    The old 200-and-drop told Jira the delivery had been accepted while
+    discarding it — survivable when "unconfigured" meant the whole
+    deployment, and silent unrecoverable loss the moment one process of
+    several has simply not caught up yet.
+    """
+    app = create_app(
+        event_queue=queue,
+        bootstrap=_bootstrap(),
+        company_config_store=store,
+        jira_webhook_secret=_JIRA_SECRET,
+    )
+    raw, headers = _signed_jira({"webhookEvent": "jira:issue_created", "issue": {}})
+    resp = TestClient(app).post("/webhooks/jira", content=raw, headers=headers)
+    assert resp.status_code == 503
     body = resp.json()
-    assert body["status"] == "dropped"
+    assert body["status"] == "unavailable"
     assert body["reason"] == "unconfigured"
+    assert resp.headers["retry-after"]
 
 
 def test_webhook_passes_through_after_configured(
     queue: _MockQueue, store: MagicMock
 ) -> None:
-    """Once primed, webhook routes process normally (no drop)."""
+    """Once primed, webhook routes process normally (no drop).
+
+    The revision carries the Jira webhook secret, so this also covers the
+    projection that puts it on ``app.state``: the route verifies against
+    whatever the active config resolved, and a secret the refresher
+    failed to project would surface here as a 500.
+    """
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
 
-    store.get_active.return_value = _make_revision({"name": "Acme"})
+    store.get_active.return_value = _make_revision(
+        {
+            "name": "Acme",
+            "integrations": {"jira": {"webhook_secret": _JIRA_SECRET}},
+        }
+    )
     app = create_app(
         event_queue=queue,
         bootstrap=_bootstrap(),
         company_config_store=store,
     )
     asyncio.new_event_loop().run_until_complete(attach_config_refresh(app))
-    resp = TestClient(app).post(
-        "/webhooks/jira",
-        json={"webhookEvent": "jira:issue_created", "issue": {}},
-    )
+    raw, headers = _signed_jira({"webhookEvent": "jira:issue_created", "issue": {}})
+    resp = TestClient(app).post("/webhooks/jira", content=raw, headers=headers)
     assert resp.status_code == 200
     assert resp.json().get("status") != "dropped"
 
@@ -573,15 +628,20 @@ def test_attach_config_refresh_is_idempotent(
     twice on every revision activation."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
 
     store.get_active.return_value = None  # unconfigured
     subscribe_calls: list[str] = []
 
-    async def _record_subscribe(topic: str, group: str, handler) -> None:
-        subscribe_calls.append(topic)
+    async def _record_stream(topic_pattern: str, handler):
+        subscribe_calls.append(topic_pattern)
 
-    queue.subscribe = _record_subscribe  # type: ignore[assignment]
+        async def _unsubscribe() -> None: ...
+
+        return _unsubscribe
+
+    queue.subscribe_stream = _record_stream  # type: ignore[assignment]
 
     app = create_app(
         event_queue=queue,
@@ -589,10 +649,59 @@ def test_attach_config_refresh_is_idempotent(
         company_config_store=store,
     )
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(attach_config_refresh(app))
+    first_refresher = loop.run_until_complete(attach_config_refresh(app))
     first = list(subscribe_calls)
-    loop.run_until_complete(attach_config_refresh(app))
+    again = loop.run_until_complete(attach_config_refresh(app))
     assert subscribe_calls == first  # no new subscriptions on 2nd call
+    assert again is first_refresher
+
+
+def test_config_refresh_uses_broadcast_not_a_consumer_group(
+    queue: _MockQueue, store: MagicMock
+) -> None:
+    """The API's config subscriptions must be BROADCAST, never a group.
+
+    They used to be durable competing-consumer subscriptions (group
+    ``api-config``).  With more than one API process that meant exactly
+    one of them ever refreshed its cached state, and the rest served the
+    previous company — including its previous webhook signing secret —
+    indefinitely.  A regression here is invisible in a single-process
+    test run, so it is asserted directly.
+    """
+    import asyncio
+
+    from crewlet.api.app import attach_config_refresh
+    from tests.test_api.helpers import create_app
+
+    store.get_active.return_value = None
+    group_subscribes: list[str] = []
+    stream_subscribes: list[str] = []
+
+    async def _record_subscribe(topic: str, group: str, handler) -> None:
+        group_subscribes.append(topic)
+
+    async def _record_stream(topic_pattern: str, handler):
+        stream_subscribes.append(topic_pattern)
+
+        async def _unsubscribe() -> None: ...
+
+        return _unsubscribe
+
+    queue.subscribe = _record_subscribe  # type: ignore[assignment]
+    queue.subscribe_stream = _record_stream  # type: ignore[assignment]
+
+    app = create_app(
+        event_queue=queue,
+        bootstrap=_bootstrap(),
+        company_config_store=store,
+    )
+    asyncio.new_event_loop().run_until_complete(attach_config_refresh(app))
+
+    assert group_subscribes == []
+    assert set(stream_subscribes) == {
+        "crewlet.config.revision_activated",
+        "crewlet.config.revision_applied",
+    }
 
 
 # ── TOCTOU concurrency conflict path ────────────────────────────────
@@ -660,15 +769,20 @@ def test_configured_flips_back_to_false_after_apply_error_unconfigured(
     honest and the webhook unconfigured drop keeps firing."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
     from crewlet.events.types import ConfigRevisionApplied
+    from tests.test_api.helpers import create_app
 
     handlers: dict[str, Any] = {}
 
-    async def _record_subscribe(topic: str, group: str, handler) -> None:
-        handlers[topic] = handler
+    async def _record_stream(topic_pattern: str, handler):
+        handlers[topic_pattern] = handler
 
-    queue.subscribe = _record_subscribe  # type: ignore[assignment]
+        async def _unsubscribe() -> None: ...
+
+        return _unsubscribe
+
+    queue.subscribe_stream = _record_stream  # type: ignore[assignment]
 
     # Initial state: configured (we primed it).
     store.get_active = AsyncMock(side_effect=[_make_revision({"name": "X"}), None])
@@ -686,13 +800,14 @@ def test_configured_flips_back_to_false_after_apply_error_unconfigured(
     applied_handler = handlers["crewlet.config.revision_applied"]
     loop.run_until_complete(
         applied_handler(
+            "crewlet.config.revision_applied",
             ConfigRevisionApplied(
                 source="engine",
                 revision_id=str(uuid4()),
                 status="error",
                 applied_subsystems=[],
                 error="something blew up",
-            )
+            ),
         )
     )
     assert app.state.configured is False
@@ -706,15 +821,20 @@ def test_configured_stays_true_after_apply_error_when_db_still_has_active(
     DB still has an active revision."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.app import attach_config_refresh
     from crewlet.events.types import ConfigRevisionApplied
+    from tests.test_api.helpers import create_app
 
     handlers: dict[str, Any] = {}
 
-    async def _record_subscribe(topic: str, group: str, handler) -> None:
-        handlers[topic] = handler
+    async def _record_stream(topic_pattern: str, handler):
+        handlers[topic_pattern] = handler
 
-    queue.subscribe = _record_subscribe  # type: ignore[assignment]
+        async def _unsubscribe() -> None: ...
+
+        return _unsubscribe
+
+    queue.subscribe_stream = _record_stream  # type: ignore[assignment]
 
     rev = _make_revision({"name": "Y"})
     store.get_active = AsyncMock(return_value=rev)
@@ -730,38 +850,33 @@ def test_configured_stays_true_after_apply_error_when_db_still_has_active(
     applied_handler = handlers["crewlet.config.revision_applied"]
     loop.run_until_complete(
         applied_handler(
+            "crewlet.config.revision_applied",
             ConfigRevisionApplied(
                 source="engine",
                 revision_id=str(uuid4()),
                 status="error",
                 applied_subsystems=["budgets"],
                 error="boom",
-            )
+            ),
         )
     )
     assert app.state.configured is True
 
 
-def test_revision_activated_event_refreshes_app_state(
-    queue: _MockQueue, store: MagicMock
-) -> None:
-    """End-to-end: app starts unconfigured, ``revision_activated`` fires
-    via the queue, the cached ``app.state.org_data`` / ``agent_roles``
-    / ``configured`` flag refresh from the new revision's payload.
+def test_activation_refreshes_app_state(queue: _MockQueue, store: MagicMock) -> None:
+    """End-to-end: app starts unconfigured, an activation moves the
+    pointer, and one reconcile tick refreshes the cached
+    ``app.state.org_data`` / ``agent_roles`` / ``configured`` flag from
+    the new revision's payload.
 
     This is the contract a real engine relies on when it PUTs a config
     and expects the API process's dashboard reads to reflect it."""
     import asyncio
 
-    from crewlet.api.app import attach_config_refresh, create_app
+    from crewlet.api.config_refresh import ConfigStateRefresher
     from crewlet.db.agents import derive_agent_id
-
-    handlers: dict[str, Any] = {}
-
-    async def _record_subscribe(topic: str, group: str, handler) -> None:
-        handlers[topic] = handler
-
-    queue.subscribe = _record_subscribe  # type: ignore[assignment]
+    from crewlet.db.config_plane import MemoryConfigPlaneStore
+    from tests.test_api.helpers import create_app
 
     # Boot unconfigured.
     store.get_active = AsyncMock(return_value=None)
@@ -770,12 +885,14 @@ def test_revision_activated_event_refreshes_app_state(
         bootstrap=_bootstrap(),
         company_config_store=store,
     )
+    plane = MemoryConfigPlaneStore()
+    refresher = ConfigStateRefresher(app, store, plane)
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(attach_config_refresh(app))
+    assert loop.run_until_complete(refresher.refresh_if_changed()) is False
     assert app.state.configured is False
     assert app.state.agent_roles == []
 
-    # Operator PUTs a config; the activated event fires.
+    # Operator PUTs a config; the activation appends an epoch.
     activated_rev = _make_revision(
         {
             "name": "Acme",
@@ -784,17 +901,8 @@ def test_revision_activated_event_refreshes_app_state(
         }
     )
     store.get_revision = AsyncMock(return_value=activated_rev)
-    activated_handler = handlers["crewlet.config.revision_activated"]
-    loop.run_until_complete(
-        activated_handler(
-            ConfigRevisionActivated(
-                source="api",
-                revision_id=str(activated_rev.revision_id),
-                revision_summary="bootstrap",
-                created_by="founder",
-            )
-        )
-    )
+    loop.run_until_complete(plane.record_activation(activated_rev.revision_id))
+    assert loop.run_until_complete(refresher.refresh_if_changed()) is True
 
     # State refreshed end to end.
     assert app.state.configured is True
@@ -807,3 +915,44 @@ def test_revision_activated_event_refreshes_app_state(
     # silent bug before Commit F (api used NAMESPACE_DNS, engine used
     # AGENT_ID_NAMESPACE).
     assert role["id"] == str(derive_agent_id("Acme", "engineer"))
+
+    # A second tick with the pointer unmoved is a no-op — the whole
+    # point of keying on the epoch rather than re-deriving every tick.
+    assert loop.run_until_complete(refresher.refresh_if_changed()) is False
+
+
+def test_reactivating_the_same_revision_still_refreshes(
+    queue: _MockQueue, store: MagicMock
+) -> None:
+    """Re-activating an UNCHANGED revision must move the pointer.
+
+    That gesture is the documented way to make a running deployment pick
+    up a rotated credential (``docs/concepts/secret-store.md``), and the
+    webhook signing secrets on ``app.state`` are exactly the kind of
+    value it rotates.  A pointer keyed on the revision id could never
+    express it — hence an append-only epoch log.
+    """
+    import asyncio
+
+    from crewlet.api.config_refresh import ConfigStateRefresher
+    from crewlet.db.config_plane import MemoryConfigPlaneStore
+    from tests.test_api.helpers import create_app
+
+    rev = _make_revision({"name": "Acme"})
+    store.get_active = AsyncMock(return_value=rev)
+    store.get_revision = AsyncMock(return_value=rev)
+    app = create_app(
+        event_queue=queue,
+        bootstrap=_bootstrap(),
+        company_config_store=store,
+    )
+    plane = MemoryConfigPlaneStore()
+    refresher = ConfigStateRefresher(app, store, plane)
+    loop = asyncio.new_event_loop()
+
+    loop.run_until_complete(plane.record_activation(rev.revision_id))
+    assert loop.run_until_complete(refresher.refresh_if_changed()) is True
+
+    # Same revision, activated again.
+    loop.run_until_complete(plane.record_activation(rev.revision_id))
+    assert loop.run_until_complete(refresher.refresh_if_changed()) is True

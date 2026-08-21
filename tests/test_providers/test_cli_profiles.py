@@ -123,3 +123,50 @@ class TestOverrides:
         assert isinstance(merged, CLIAgentProfile)
         assert merged.binary == "my-llm"
         assert merged.text_paths == [["answer"]]
+
+
+def test_a_credential_may_not_ride_in_on_passthrough_env():
+    """`passthrough_env` forwards from the ENGINE's own environment.
+
+    It is applied before `auth.mode` is consulted, so a key named there
+    reaches every seat whatever the mode says — the metered bill on a
+    flat-rate plan the mode exists to prevent. Two shipped profiles did
+    exactly this (`grok` forwarding `XAI_API_KEY`, `copilot` forwarding
+    the org's `GITHUB_TOKEN`), which is why it is checked rather than
+    documented.
+    """
+    import pytest
+
+    from crewlet.providers.llm.cli_profiles import CLIAgentProfile
+
+    with pytest.raises(ValueError, match="passthrough_env"):
+        CLIAgentProfile(
+            name="leaky",
+            binary="leaky",
+            api_key_env="VENDOR_API_KEY",
+            passthrough_env=["VENDOR_API_KEY"],
+        )
+    with pytest.raises(ValueError, match="passthrough_env"):
+        CLIAgentProfile(
+            name="leaky",
+            binary="leaky",
+            token_env="VENDOR_OAUTH_TOKEN",
+            passthrough_env=["VENDOR_OAUTH_TOKEN"],
+        )
+    # Non-credential config is exactly what the field is for.
+    CLIAgentProfile(
+        name="fine",
+        binary="fine",
+        api_key_env="VENDOR_API_KEY",
+        passthrough_env=["VENDOR_REGION"],
+    )
+
+
+def test_no_shipped_profile_forwards_its_own_credential():
+    """The invariant, on the profiles actually shipped."""
+    from crewlet.providers.llm.cli_profiles import _BUILTIN
+
+    assert _BUILTIN, "no profiles to check"
+    for name, profile in _BUILTIN.items():
+        credentials = {n for n in (profile.api_key_env, profile.token_env) if n}
+        assert credentials.isdisjoint(profile.passthrough_env), name

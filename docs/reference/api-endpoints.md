@@ -1,6 +1,6 @@
 # API Endpoints
 
-The Crewlet API is a Starlette app. By default it runs **inside** the engine process (`api.port > 0` in the Tier A config); it can also run on its own (`crewlet run api`), talking to the engine over Pulsar. The routes below are identical either way.
+The Crewlet API is a Starlette app served by any node with the `ingress` role (`api.port > 0` in the Tier A config). By default a node has every role, so it runs alongside the agents in one process; a node with `--roles ingress` serves only these routes and talks to the rest of the fleet over Pulsar. The routes below are identical either way.
 
 Install with the `api` extra: `pip install "crewlet[api]"`
 
@@ -10,7 +10,17 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)) |
+> **Auth.** Writes and every `/config` route require
+> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside `/config`)
+> serve without one unless `api.auth.allow_anonymous_read: false` is set, at
+> which point they need the same token — `/ws/stream` included, and it accepts
+> `?token=…` too since browsers cannot set headers on a WebSocket. Never
+> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the
+> dashboard shell (`/`, `/dashboard`, `/static/*`). See
+> [Configuration § Auth](../concepts/configuration.md#auth).
+
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
+| `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
@@ -21,6 +31,7 @@ Install with the `api` extra: `pip install "crewlet[api]"`
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -504,6 +515,46 @@ Returns 404 when no role with the given `id` is configured.
 
 ## Schedules
 
+### `GET /fleet`
+
+Backs the dashboard's **Fleet** view — the questions `/health` cannot
+answer, because it answers about the node that served it and a load
+balancer sends the next refresh somewhere else.
+
+Read from the lease table, so every node gives the same answer: node
+presence carries each node's `node.roles` and `node.labels`, seat and
+worker leases name their holder, and the per-node config epoch comes from
+the control plane's apply status. In-flight turn counts are per process
+and stay on `/health` — leases say who *holds* a seat, not what that node
+is doing with it.
+
+Two fields report the failures that are otherwise invisible, because
+their only symptom is an absence: `unmanned_roles` lists roles no live
+node performs, and `unplaceable` lists seats whose `role.placement`
+matches no live node. Without a database configured there is no lease
+table and no fleet; the response says so in `degraded` rather than
+failing.
+
+```json
+{
+  "nodes": [
+    {
+      "id": "core-1", "roles": ["ingress", "seats", "workers"], "labels": {},
+      "owner": "core-1:8f2a", "protocol": 3, "seats": 4, "expires_in": 41.2,
+      "config_epoch": 7, "config_status": "ok", "config_error": ""
+    }
+  ],
+  "seats": [
+    {"handle": "ceo", "node": "core-1", "owner": "core-1:8f2a",
+     "epoch": 4, "expires_in": 41.2}
+  ],
+  "duties": [{"duty": "maintenance", "node": "core-1", "expires_in": 41.2}],
+  "unplaceable": [{"handle": "gpu-eng", "placement": "labels=gpu=true"}],
+  "unmanned_roles": [],
+  "this_node": "core-1"
+}
+```
+
 ### `GET /schedules`
 
 Backs the dashboard's **Schedules** view. Returns every configured
@@ -682,7 +733,7 @@ Webhook senders enforce delivery deadlines and abort requests that respond too s
 ## Running
 
 ```bash
-crewlet run api config.yaml --host 0.0.0.0    # binds port 8000 by default
+crewlet run config.yaml --roles ingress --api-host 0.0.0.0 --api-port 8000
 ```
 
 The API is read-only against the database and publishes commands/notifications to Pulsar. It does not run agents — the engine process handles that.

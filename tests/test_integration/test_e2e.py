@@ -1,8 +1,7 @@
 """End-to-end integration test — validates the full event flow.
 
 Uses only in-memory implementations (MemoryEventQueue,
-MemoryA2ABus, MemoryKnowledgeProvider) so no external dependencies are
-required.
+MemoryKnowledgeProvider) so no external dependencies are required.
 
 Validates the event flow from docs/concepts/agent-runtime.md:
   1. TaskCreated published to event queue
@@ -14,12 +13,13 @@ Validates the event flow from docs/concepts/agent-runtime.md:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
-from crewlet.a2a.memory import MemoryA2ABus
 from crewlet.engine import Engine
 from crewlet.events.types import (
+    Event,
     TaskAssigned,
     TaskCompleted,
     TaskCreated,
@@ -109,13 +109,11 @@ async def test_e2e_task_lifecycle():
     org = _make_org()
     mock_llm = MockLLM()
     event_queue = MemoryEventQueue()
-    a2a_bus = MemoryA2ABus()
 
     engine = Engine(
         organization=org,
         llm_providers={"default": mock_llm},
         event_queue=event_queue,
-        a2a_bus=a2a_bus,
     )
 
     await engine.start()
@@ -184,32 +182,61 @@ async def test_e2e_task_lifecycle():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_e2e_a2a_bus_lifecycle():
-    """Verify A2A bus channel create/send/receive/close lifecycle."""
-    a2a_bus = MemoryA2ABus()
-    await a2a_bus.start()
+async def test_e2e_a2a_channel_lifecycle():
+    """Ask, answer, close — driven by nothing but the ask.
 
-    from crewlet.a2a.messages import ChannelMessage
+    This used to exercise ``MemoryA2ABus`` directly: create a channel,
+    push a message into its ``asyncio.Queue``, read it back out. That
+    proved a queue works, not that A2A does — and it could not have
+    caught the thing that was actually broken, which is that the answer
+    had no way back to the asker at all.
 
-    # Create a channel between two agents
-    await a2a_bus.create_channel("ch-1", ["agent-a", "agent-b"])
-
-    # Send a message from agent-a to agent-b
-    msg = ChannelMessage(
-        channel="ch-1",
-        sender="agent-a",
-        content="Hello from A",
+    Now it drives the real path: the ask wakes the target through its
+    inbox, the answering turn's final text is published back as the
+    reply, and the channel closes. The lifecycle events are what an
+    operator sees on the dashboard, so they are what is asserted.
+    """
+    org = _make_org()
+    engine = Engine(
+        organization=org,
+        llm_providers={"default": MockLLM()},
+        event_queue=MemoryEventQueue(),
     )
-    await a2a_bus.send("ch-1", "agent-a", msg)
+    await engine.start()
+    try:
+        opened: list[Event] = []
+        sent: list[Event] = []
+        closed: list[Event] = []
+        for topic, sink in (
+            ("crewlet.events.a2a_channel_opened", opened),
+            ("crewlet.events.a2a_message_sent", sent),
+            ("crewlet.events.a2a_channel_closed", closed),
+        ):
 
-    # Receive on agent-b's side
-    received = []
-    async for m in a2a_bus.receive("ch-1", "agent-b"):
-        received.append(m)
-        # Close the channel to break the loop
-        await a2a_bus.close_channel("ch-1")
+            async def _handler(event: Event, _sink: list[Event] = sink) -> None:
+                _sink.append(event)
 
-    assert len(received) == 1
-    assert received[0].content == "Hello from A"
+            await engine.event_queue.subscribe(topic, "test-e2e", _handler)
 
-    await a2a_bus.stop()
+        async def _answer(agent: Any, **kwargs: Any) -> str:
+            return f"{agent.handle}: ack"
+
+        engine.turn_engine.run_turn = _answer  # type: ignore[method-assign]
+
+        assert engine.a2a_service is not None
+        channel_id = await engine.a2a_service.request_channel(
+            "dev-a", "dev-b", brief="can you take the migration?"
+        )
+
+        assert [e.channel_id for e in opened] == [channel_id]  # type: ignore[attr-defined]
+        # The brief and the answer — both on the durable path.
+        assert [e.content for e in sent] == [  # type: ignore[attr-defined]
+            "can you take the migration?",
+            "dev-b: ack",
+        ]
+        assert [e.channel_id for e in closed] == [channel_id]  # type: ignore[attr-defined]
+
+        channel = await engine.a2a_service.channels.get(channel_id)
+        assert channel is not None and not channel.is_open
+    finally:
+        await engine.stop()

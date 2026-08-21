@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -13,6 +14,9 @@ from pydantic import BaseModel
 from crewlet._logging import get_logger
 
 logger = get_logger("concurrency")
+
+if TYPE_CHECKING:
+    from crewlet.db.budgets import SpendOutcome
 
 
 class RateLimiter:
@@ -124,6 +128,16 @@ class TokenBudget(BaseModel):
         self.used_tokens += tokens
         return True
 
+    def mark_refused(self) -> None:
+        """Stamp a refusal that the SHARED counter made.
+
+        ``refused_at`` is what "the cap is biting" means, and the check
+        that sets it moved into the store — so the mirror has to be told,
+        or a fleet-refused budget renders as merely busy.
+        """
+        if not self.refused_at:
+            self.refused_at = datetime.now(UTC).isoformat()
+
     def record(self, tokens: int) -> bool:
         """Record tokens that were ALREADY spent, whatever the cap says.
 
@@ -196,13 +210,28 @@ class ConcurrencyController:
 
 
 class BudgetManager:
-    """Manages token budgets for the org and per-agent.
+    """Token budgets for the org and per-agent.
 
-    Keyed by ``AgentInstance.id_str``.  The counters live only here, in
-    memory, for the lifetime of this object -- which is the lifetime of
-    the engine process.  ``meter_id`` names that lifetime so a consumer
-    can tell a restarted meter (every counter legitimately back at zero)
-    from a meter that dropped, and never carries a value across the two.
+    A budget has two halves and they live in different places.
+
+    The **caps** are config: every process derives the same numbers from
+    the same active revision, so they stay here in memory and the setters
+    stay synchronous. The **usage counter** is shared state — "has the
+    company spent its 500k" is a question about the company, not about a
+    process — so spending goes through a
+    :class:`~crewlet.db.budgets.BudgetUsageStore`, which checks and
+    increments in one statement. Held in memory, an org cap of 500k
+    silently became N x 500k the moment a second process ran.
+
+    ``org_budget`` / :meth:`get_agent_budget` expose a **local mirror** of
+    usage, refreshed on every spend this process makes. Callers use them
+    for advisory work — sizing a sub-agent's slice, skipping reflection
+    when the budget looks spent — where a value that may lag a peer's
+    spend by one call is fine. Enforcement never reads the mirror.
+
+    ``meter_id`` names this process's mirror, so a consumer can tell a
+    restarted meter (every local counter legitimately back at zero) from
+    one that dropped, and never compares figures across two of them.
     """
 
     def __init__(
@@ -211,6 +240,7 @@ class BudgetManager:
         agent_budgets: dict[str, int] | None = None,
         *,
         on_change: Callable[[str], None] | None = None,
+        usage_store: Any = None,
     ) -> None:
         self.org_budget = TokenBudget(max_tokens=org_budget)
         self._agent_budgets: dict[str, TokenBudget] = {}
@@ -223,8 +253,21 @@ class BudgetManager:
         # under ``self._lock`` on the engine's hot path, so the only
         # correct implementation sets a flag for someone else to read.
         self._on_change = on_change
+        from crewlet.db.budgets import MemoryBudgetUsageStore
+
+        self._usage = (
+            usage_store if usage_store is not None else MemoryBudgetUsageStore()
+        )
         for agent_id, budget in (agent_budgets or {}).items():
             self._agent_budgets[agent_id] = TokenBudget(max_tokens=budget)
+
+    @property
+    def usage_store(self) -> Any:
+        return self._usage
+
+    def set_usage_store(self, store: Any) -> None:
+        """Swap the authoritative counter (engine boot, once a DB exists)."""
+        self._usage = store
 
     def set_on_change(self, on_change: Callable[[str], None] | None) -> None:
         """Attach (or detach) the change hook after construction."""
@@ -266,34 +309,54 @@ class BudgetManager:
         self._agent_budgets.pop(agent_id, None)
         self._changed(agent_id)
 
-    async def consume(self, agent_id: str, tokens: int) -> bool:
-        """Consume tokens from both agent and org budgets.
+    def agent_budget_ids(self) -> list[str]:
+        """Every agent id that currently carries a per-agent cap.
 
-        Returns True if tokens were available, False if any budget exhausted.
+        Lets a caller reconcile the cap set against a new org — the
+        caps are config, so they are a projection of the active
+        revision rather than an accumulation.
+        """
+        return list(self._agent_budgets)
+
+    async def spend(self, agent_id: str, tokens: int) -> SpendOutcome:
+        """Charge ``tokens`` to the org and this agent, atomically.
+
+        The check and the increment are one statement in the store, so
+        two nodes cannot both see room for the last of a cap. The local
+        budgets are a mirror updated from the outcome — never the thing
+        enforcement reads.
+
+        Returns the outcome, which names the refusing scope and its
+        used/limit when it refuses, so a caller can report *which* budget
+        stopped it without a follow-up read a peer could have changed
+        underneath.
         """
         logger.debug("budget_consuming", tokens=tokens, agent_id=agent_id)
+        agent_budget = self._agent_budgets.get(agent_id)
         async with self._lock:
-            # Check org budget first
-            if not self.org_budget.consume(tokens):
+            outcome = await self._usage.spend(
+                agent_id=agent_id,
+                tokens=tokens,
+                org_limit=self.org_budget.max_tokens,
+                agent_limit=agent_budget.max_tokens if agent_budget else None,
+            )
+            if outcome.ok:
+                self.org_budget.used_tokens = outcome.org_used
+                if agent_budget is not None:
+                    agent_budget.used_tokens = outcome.agent_used
+            elif outcome.rejected_scope == "org":
                 logger.warning("budget_exhausted_org")
-                self._changed(agent_id)
-                return False
-
-            # Check agent budget
-            agent_budget = self._agent_budgets.get(agent_id)
-            if agent_budget is not None and not agent_budget.consume(tokens):
-                # Roll back org consumption (atomic under lock)
+                self.org_budget.mark_refused()
+            else:
                 logger.warning("budget_exhausted_agent", agent_id=agent_id)
-                logger.debug(
-                    "budget_rollback",
-                    tokens=tokens,
-                )
-                self.org_budget.used_tokens -= tokens
-                self._changed(agent_id)
-                return False
-
+                if agent_budget is not None:
+                    agent_budget.mark_refused()
             self._changed(agent_id)
-            return True
+            return outcome
+
+    async def consume(self, agent_id: str, tokens: int) -> bool:
+        """Back-compatible boolean form of :meth:`spend`."""
+        return (await self.spend(agent_id, tokens)).ok
 
     async def record_spend(self, agent_id: str, tokens: int) -> bool:
         """Account tokens that were already spent.
@@ -302,13 +365,38 @@ class BudgetManager:
         nothing -- a collected sandbox run.  Both budgets are moved
         unconditionally; the return says whether that put either over
         its cap, which the caller should surface rather than swallow.
+
+        Uncapped against the SHARED counter, not just the local mirror:
+        the tokens left the company's account whatever this process
+        thinks, and a spend recorded only here reads low on every other
+        node — precisely while the cap is binding.
         """
         async with self._lock:
+            await self._usage.spend(
+                agent_id=agent_id, tokens=tokens, org_limit=0, agent_limit=None
+            )
             over_org = self.org_budget.record(tokens)
             agent_budget = self._agent_budgets.get(agent_id)
             over_agent = agent_budget.record(tokens) if agent_budget else False
             self._changed(agent_id)
         return over_org or over_agent
+
+    async def refresh_mirror(self, agent_id: str = "") -> None:
+        """Re-read usage from the store into the local mirror.
+
+        The mirror only moves on this process's own spends, so a
+        long-idle node's advisory reads drift behind its peers. Callers
+        that care — a dashboard render, a fresh turn's slice computation
+        — pull the current values.
+        """
+        from crewlet.db.budgets import ORG_SCOPE, agent_scope
+
+        self.org_budget.used_tokens = await self._usage.usage(ORG_SCOPE)
+        if agent_id:
+            budget = self._agent_budgets.get(agent_id)
+            if budget is not None:
+                budget.used_tokens = await self._usage.usage(agent_scope(agent_id))
+        self._changed(agent_id)
 
     def get_agent_budget(self, agent_id: str) -> TokenBudget | None:
         return self._agent_budgets.get(agent_id)

@@ -18,6 +18,9 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 ```yaml
 debug: false
 
+node:
+  id: "node-0"          # optional; see below
+
 providers:
   queue:
     type: pulsar
@@ -38,6 +41,63 @@ api:
         token: "${CREWLET_API_TOKEN_OPS}"
 ```
 
+#### `node.id`
+
+Names *this process* within the company. It labels every log line and the
+`/health` payload — the difference between "a config apply failed" and "the
+config apply failed on `node-2`" the moment more than one process is
+running, and the only way a caller behind a load balancer can tell which
+process answered.
+
+Resolution order: `node.id` (`${VAR}` references work here like anywhere
+in Tier A) → the `CREWLET_NODE_ID` environment variable → `node-0`. You do
+not need to set it to run a single engine.
+
+It must be **stable across restarts**, which is why it comes from the
+deployment rather than being generated per boot: anything the process
+registers under its identity would otherwise be orphaned on every restart.
+In Kubernetes use the pod name — a StatefulSet ordinal is ideal; under
+systemd, the host name.
+
+#### `node.roles`
+
+What this process is willing to do. Three roles, and the default is all
+three — one process running a whole company, which is every single-node
+deployment:
+
+```yaml
+node:
+  id: "${CREWLET_NODE_ID}"
+  roles: [seats]              # a satellite: agents only
+  labels:
+    zone: eu
+```
+
+| Role | What it does | What a fleet loses without it |
+|---|---|---|
+| `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
+| `seats` | Claims seat leases and runs agents | Every trigger queues up unread |
+| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, skill clustering and curation, seat-subscription creation | Nothing fires on a schedule, no sandbox run is collected, no table is swept |
+
+Subtracting a role subtracts it from **this node, never from the
+company**, so the fleet as a whole still needs every role somewhere. That
+is a shape no single node's config is wrong for, and every symptom of
+getting it wrong is an absence — so the engine checks it against live
+node presence and logs `fleet_role_unmanned` when nobody is doing a job.
+A node that does not run seats is also left out of the denominator its
+peers divide the seats by; counting it would strand the difference.
+
+#### `node.labels`
+
+Free-form facts about where this process runs, matched by a seat's
+[`role.placement`](../guides/fleet.md#placement) selector. Values are
+strings and are compared exactly. They are advertised to peers on this
+node's presence lease, so a label change takes effect one heartbeat after
+the restart that made it — not at the next config activation.
+
+Nothing here means anything to the engine on its own: the org decides
+what to select on.
+
 ### Tier B example (`company.yaml`)
 
 Everything that defines the company — see [examples/nimbus.company.yaml](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) for a complete reference.
@@ -51,9 +111,9 @@ The engine boots in this order:
 1. Read `config.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
 2. `configure_logging(level)`
 3. Connect to Pulsar + PostgreSQL
-4. Run migrations in two phases: first apply only the `company_config` table, read the active revision's `providers.embeddings.dimensions`, then apply the remaining migrations with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model rather than a hardcoded default. (`crewlet config import` sizes them from the config being imported.)
+4. Run migrations in two phases, serialized behind a PostgreSQL advisory lock so concurrent processes wait rather than race: first apply the self-contained bootstrap tables (`company_config`, `secret_values`, `leases`), read the active revision's `providers.embeddings.dimensions`, then apply the rest with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model. The width is **never guessed** — with no active revision the run stops before those migrations and they apply later, when a config declares one (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)). A company bootstrapped through the unconfigured state gets them applied as part of its first `apply_config`.
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
-6. Subscribe the engine to `crewlet.config.revision_activated` on Pulsar
+6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 7. `SELECT payload FROM company_config WHERE is_active = TRUE`
    - **Row present**: call `apply_config(payload)` which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
@@ -76,7 +136,7 @@ curl -X PUT https://crewlet.example.com/config \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: initial bootstrap" \
   --data-binary @company.yaml
-# Engine receives crewlet.config.revision_activated and spawns the
+# Every node reconciles onto the new activation epoch and spawns the
 # company in place — no restart needed.
 ```
 
@@ -91,41 +151,46 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 **What stays running:**
 
 - The Tier A connections — Pulsar, PostgreSQL, the API socket — all up.
-- The API's `/config/*` routes and the engine's `revision_activated` subscriber.
+- The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - Structlog with `state=unconfigured` so the unconfigured posture is obvious in logs and on the dashboard.
 
 **What returns degraded responses:**
 
 | Route | Behaviour while unconfigured |
 |-------|------------------------------|
-| `GET /health` | `200 {"status": "unconfigured", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
+| `GET /health` | `200 {"status": "unconfigured", "node": "node-0", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
+| `GET /ready` | `503 {"ready": false, "configured": false}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation |
 | `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
 | Per-entity routes (`POST /config/roles`, etc.) | `409 Conflict` — operator must initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
-| `POST /webhooks/...` | Signature check still runs; body logged at WARNING; returns `200 {"status": "dropped", "reason": "unconfigured"}` to avoid retry storms |
+| `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first `crewlet.config.revision_activated` arrives → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
 
 ---
 
 ## Live Propagation
 
-When a new revision is activated (via `PUT /config`, per-entity write, revert, or `crewlet config import`), the API publishes `crewlet.config.revision_activated` on Pulsar. Both the engine (consumer group `engine-config`) and the API process (consumer group `api-config`) subscribe; each handler does independent work.
+When a new revision is activated (via `PUT /config`, per-entity write, revert, or `crewlet config import`), the write appends an **activation epoch** in the same transaction. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
 
-### Engine subscriber
+This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-config`, `api-config`) under which exactly one process applied any given revision and the rest ran the previous company indefinitely. The full mechanism — the epoch log, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
 
-The engine handler runs `await self.apply_config(payload)`, which:
+### The engine half
 
-1. Acquires `self._apply_lock` (serialises CLI + Pulsar callers).
-2. Validates the payload as `CompanyConfig` (defence in depth).
-3. **No-op short-circuit:** if the new payload equals the current active config, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes.
+Converging runs `await self.apply_config(payload)`, which:
+
+1. Acquires `self._apply_lock` (serialises the CLI path, the reconcile loop, and tests).
+2. Re-reads the secret store, then validates the payload as `CompanyConfig` (defence in depth).
+3. **No-op short-circuit:** if the new payload equals the current active config **and** its [resolution fingerprint](control-plane.md#rotation) is unchanged, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes. Same payload with a *moved* fingerprint is a credential rotation, not a no-op: the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild and the rest is skipped.
 4. Snapshots in-memory state for rollback (including `_scheduling_config` so a rollback after `_apply_scheduling_live` restores the prior scheduler settings).
 5. Dispatches per-subsystem diff handlers in order:
-   - **`org`** — spawn new roles (seeding the per-role `token_budget`), terminate removed (dropping their budget + stopping their per-role MCP subprocesses), swap `AgentDefinition` for changed roles, apply a changed role's per-role `token_budget` in place, and re-seed the running notification transports' fall-through routing maps (Jira project / Confluence space / Plane project → unit lead) from the new org — the freshly built map is always pushed, so removing the last `integrations.*` identity *clears* live routing rather than leaving the stale map until restart
+   - **`org`** — spawn new roles, terminate removed (stopping their per-role MCP subprocesses), swap `AgentDefinition` for changed roles, re-derive the per-seat `token_budget` caps from the new org, and re-seed the running notification transports' fall-through routing maps (Jira project / Confluence space / Plane project → unit lead) from the new org — the freshly built map is always pushed, so removing the last `integrations.*` identity *clears* live routing rather than leaving the stale map until restart
    - **`budgets`** — update org `token_budget` (per-role caps are applied by the `org` branch above, since they live on `Role`)
+
+   > **Per-seat caps are a projection of the active org, not an accumulation.** Every org swap re-derives the whole cap set: each agent seat with a positive `token_budget` gets its cap (usage history preserved), and every cap whose seat is gone — role removed, flipped to human, budget dropped to `0` (= unlimited) — is dropped. Crucially the caps cover **every seat in the company on every node**, not just the seats a node happens to be running: caps are config while only *usage* is shared, and a missing local cap is read as "unlimited", so a node that seeded selectively would run a seat with no cap the moment it took that seat over.
    - **`turn_engine`** — push new settings into `TurnEngineSettings` cell; in-flight turns finish on the prior snapshot
    - **`providers`** — re-instantiate LLM providers and swap dict entries in place (preserves dict identity so `TurnEngine` sees the swap). The **embeddings** provider is *not* live-rewired: it is wired deeply into the diary / episode store / reflect engine at boot (and fixes the pgvector column width at migration time), so a change stores the new provider and logs a restart-required WARNING — the running learning subsystem keeps the prior provider until the next restart.
    - **`scalars`** — `integrations.forge_app_id`, `notification_rate_limit` (the rate limit is propagated onto the running `NotificationService` so it takes effect on the next notification), and `notification_coalesce_window_seconds` / `notification_coalesce_max_batch` (mutated in place on the shared `BatchOptions` the inbox batch consume loops read every cycle — takes effect on the next batch, no re-subscription; see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing))
@@ -133,11 +198,19 @@ The engine handler runs `await self.apply_config(payload)`, which:
 6. Refreshes derived state (`DelegationHandler`).
 7. Publishes `crewlet.config.revision_applied` with `status`, `applied_subsystems`, optional `error`.
 
-On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-seeds the running transports' routing maps from the rolled-back org, so a failed apply never leaves live webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The Pulsar `revision_activated` handler unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list.
+On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-derives both the per-seat token caps and the running transports' routing maps from the rolled-back org, so a failed apply never leaves live spend limits or webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The converge path unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in `config_apply_status` so peers can see it.
 
-### API subscriber
+Rollback **restarts** the transports it restores, routing them through the same swap the apply used, so a failed apply cannot leave the node with a live config and a dead inbound path.
 
-The API handler refreshes `app.state.org_data`, `agent_roles`, `tools_data`, `github_webhook_secret`, `forge_app_id`, `configured` from the new payload. Without this, `GET /agents` / `/org` / `/health` would drift stale until the API restarts.
+What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. `ConfigApplyError` therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
+
+### The API half
+
+The API's cached projection refreshes `app.state.org_data`, `agent_roles`, `tools_data`, `github_webhook_secret`, `forge_app_id`, `configured` from the new payload. Without this, `GET /agents` / `/org` / `/health` would drift stale — and, far worse, a rotated webhook signing secret would never be picked up, so inbound HMAC verification would fail against every delivery.
+
+It follows the same activation pointer, and deliberately follows the **pointer rather than the local apply outcome**: these fields decide whether inbound verification succeeds, and refusing deliveries because an apply failed would drop events the queue could otherwise have held. Keeping a stale node from *processing* work is the posture gate's job, not the receiver's.
+
+A merged node (one that runs both `ingress` and `seats`) drives that refresh from the engine's own reconcile tick rather than a second loop, so the two halves can never disagree about which epoch they are on. An ingress-only node runs the loop itself.
 
 ---
 
@@ -169,11 +242,81 @@ A revert creates a *new* revision whose payload equals a prior one — the audit
 
 ## Auth
 
-Every `/config/*` route requires `Authorization: Bearer <token>`. Tokens are listed in Tier A under `api.auth.tokens` and resolved from env vars at API startup. The matched token's `id` is recorded as `created_by` on each revision the request produces, so revision history carries meaningful attribution (`alice`, `ci-pipeline`, `ops`) rather than generic strings.
+**Writes and the whole `/config` surface require `Authorization: Bearer
+<token>`. Reads serve without one by default.** Tokens are listed in Tier A
+under `api.auth.tokens` and resolved from env vars at API startup. The matched
+token's `id` is recorded as `created_by` on each revision the request produces,
+so revision history carries meaningful attribution (`alice`, `ci-pipeline`,
+`ops`) rather than generic strings.
 
-The auth middleware uses `hmac.compare_digest` for constant-time comparison. Failed attempts log at WARNING (never the candidate token value); successes log at DEBUG with `operator_id` + `route`.
+Reading is what a dashboard does, and the page that would prompt for a token is
+itself served unauthenticated — the page that asks for a credential cannot
+require one — so a guarded-by-default read surface puts a modal in front of
+every first load. Be clear-eyed about what open reads expose, though: `/events`,
+`/agents/{id}/memory` and `/ws/stream` carry full LLM transcripts — prompts,
+tool arguments, diary entries — to anyone who can reach the port. One line
+closes them:
 
-For local development: `api.auth.disabled: true` opts out (loud WARNING at startup, attribution becomes `"anonymous"`). Never use in production.
+```yaml
+api:
+  auth:
+    allow_anonymous_read: false   # every route needs a token
+    tokens:
+      - {id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}"}
+```
+
+With reads closed the dashboard authenticates its own socket and prompts for a
+token when the engine refuses it — including a banner that says *refused*
+rather than *disconnected*, since a rejected credential is not an outage that
+resolves itself.
+
+The API states which posture it took at startup, on `api_anonymous_read_enabled`
+— at `WARNING` when `api.host` is not loopback, at `INFO` when it is. A laptop
+and an internet-facing bind are not the same decision, and a warning that fires
+identically for both is one nobody reads by the third deployment.
+
+Served **without** a token in either posture, because they authenticate by other
+means or must be reachable to obtain one:
+
+| Path | Why |
+|------|-----|
+| `/health`, `/ready` | Probes. An orchestrator has no token, and a liveness check that 401s is a liveness check that fails |
+| `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
+| `/otlp/*` | The signed per-run token in the path *is* the credential |
+| `/`, `/dashboard`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch |
+
+`/ws/stream` follows the same rule as every other read. When reads are closed it
+needs a credential like anything else — and browsers can't set headers on a
+`WebSocket`, so it accepts `?token=…` as well as the `Authorization` header.
+Prefer the header where a client can send one, since query strings tend to land
+in proxy access logs.
+
+| Setting | Effect |
+|---------|--------|
+| `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
+| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config` serve without a token; writes and the whole `/config` surface still require one |
+| `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
+| `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
+
+Two combinations are worth calling out:
+
+- **No tokens at all** is a legitimate posture, not a misconfiguration: reads
+  serve and writes are refused outright, because no token can ever match an
+  empty list. A deployment that never writes config through the API therefore
+  has no credential to manage — strictly safer than minting one it will not use.
+- **`allow_anonymous_read: false` with no tokens** is refused at boot. It guards
+  every route behind a credential that does not exist, which is not a strict
+  posture but an outage whose only symptom is a uniform `401` that reads exactly
+  like a wrong token.
+
+**CORS** defaults to same-origin. The dashboard is served by this process so it
+needs no entry; list any other browser origin explicitly in
+`api.auth.allowed_origins`. The previous `*` default let any site a logged-in
+operator happened to visit read every endpoint.
+
+The auth middleware uses `hmac.compare_digest` for constant-time comparison.
+Failed attempts log at WARNING (never the candidate token value); successes log
+at DEBUG with `operator_id` + `route`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 
@@ -250,6 +393,8 @@ Every HTTP read path **redacts** secrets behind a `{"encrypted": true, "key_id":
 What counts as a secret leaf: LLM `api_keys`, embeddings / sandbox `api_key`, Jira/Confluence/GitHub/GitLab/Plane tokens + webhook/signing secrets, every per-agent `mcp_env` value and per-role Slack cred, and — for the shared `mcp_servers[].env` / `.headers` dicts — any value whose key name signals a secret (a `*_TOKEN` env var, an `Authorization` header). (Org-level `integrations.slack` carries no secrets — it is an empty enable-marker.) Non-secret structure (URLs, hosts, ports, flags, model names) stays visible. The key-name match errs toward **over**-masking — a non-secret key that happens to contain `token`/`authorization` (e.g. `max_tokens`) is masked too — deliberately, so a real secret is never missed. A value that is still a `${VAR}` reference is left **visible** on reads: it is an inert pointer (the real secret lives in the environment or the encrypted [secret store](secret-store.md), never in this payload), so it is neither ciphertext nor a secret-at-rest — masking it would hide the useful variable name and falsely flag it as encrypted. "Is a reference" uses the engine's own grammar (`crewlet.env_refs`), i.e. *substitution would actually change this value*; a literal secret merely containing brace syntax the resolver ignores (`${line#host=}`) is a literal, and is masked.
 
 A redacted `GET` → edit a field → full-doc `PUT` round-trips safely: the write path swaps each marker back to the currently-stored (decrypted) value before validating (keep-existing), so a round-trip never clobbers or exposes a secret. To *change* a secret, supply the new value (or a `${VAR}`) at that field.
+
+What counts as a secret leaf is structural, and it covers the untyped surfaces too — `mcp_servers[].env` and `.headers`, `integrations.transports[]`, and a `cli-agent` provider's `cli.auth.token` / `cli.auth.credential_bundle` / `cli.env`. On those, only keys whose *name* signals a credential are masked, so a host, a region or a URL beside the token stays readable in the config view. A field carrying a credential as a literal rather than a `${VAR}` is masked exactly the same way — `${VAR}` is the convention, not what makes redaction work.
 
 `crewlet config export` runs on the host (you already hold the key) and emits the stored payload verbatim — a plaintext `${VAR}` config when unencrypted, or the inert `{"__encrypted__": "enc:v1:…"}` document blob when encrypted (DR-friendly and round-trippable: re-importing decrypts and re-stores it). `crewlet config export --redact` decrypts the structure but masks every secret for a share-safe dump.
 

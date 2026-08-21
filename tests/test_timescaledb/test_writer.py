@@ -130,21 +130,65 @@ async def test_actor_written_from_event_property(
     assert events[0]["actor"] == "Developer"
 
 
-async def test_all_category_map_entries_tracked() -> None:
-    """Verify that the category map covers the expected event types."""
-    assert len(_CATEGORY_MAP) >= 23
-    assert "org_started" in _CATEGORY_MAP
-    assert "agent_turn_completed" in _CATEGORY_MAP
-    # New turn-engine events must be persisted or the dashboard can't
-    # show per-phase detail / prompt-size telemetry.
-    assert "agent_phase_completed" in _CATEGORY_MAP
-    assert "execute.missing_tool" in _CATEGORY_MAP
-    # phase.tool_activated fires when Plan or Execute promotes
-    # a catalogue tool into its active surface — high Execute rates
-    # signal plan incompleteness.
-    assert "phase.tool_activated" in _CATEGORY_MAP
-    assert "prompt.size" in _CATEGORY_MAP
-    assert "turn.guard_breach" in _CATEGORY_MAP
+#: Event types deliberately NOT persisted. Each needs a reason, because
+#: the default for a new type is that it belongs in the map — see the
+#: comment above ``_CATEGORY_MAP``.
+_NOT_PERSISTED = {
+    # A live in-flight progress ping. Persisting it would multiply the
+    # event table by rounds-per-turn to store a value that is stale the
+    # moment it lands.
+    "agent_turn_progress": "live progress ping, superseded within the turn",
+    # A snapshot of live in-memory meters whose values mean nothing
+    # outside the run that produced them; a dashboard hydrating them
+    # would render a dead process's counters as the current ones.
+    "budget_reported": "in-memory meter snapshot, run-scoped",
+}
+
+
+def _declared_event_types() -> dict[str, str]:
+    """Every ``type`` an ``Event`` subclass declares → its class name."""
+    import inspect
+
+    from crewlet.events import types as event_types
+    from crewlet.events.types import Event
+
+    declared: dict[str, str] = {}
+    for name, obj in vars(event_types).items():
+        if not inspect.isclass(obj) or not issubclass(obj, Event) or obj is Event:
+            continue
+        field = obj.model_fields.get("type")
+        default = getattr(field, "default", None)
+        if isinstance(default, str) and default:
+            declared[default] = name
+    return declared
+
+
+async def test_every_event_type_is_persisted_or_deliberately_excluded() -> None:
+    """The guard the writer's comment says exists.
+
+    A type missing from ``_CATEGORY_MAP`` is dropped SILENTLY, which is
+    how the sandbox panel came to show rows that vanished on reload.
+    The test that stood here asserted a hand-maintained list of names
+    and ``len >= 23`` — so a newly declared event type passed it
+    without ever being written, which is exactly the case it was
+    supposed to catch.
+    """
+    declared = _declared_event_types()
+    assert len(declared) > 40, "the reflection found nothing — did the module move?"
+
+    unmapped = sorted(set(declared) - set(_CATEGORY_MAP) - set(_NOT_PERSISTED))
+    assert unmapped == [], (
+        "these event types are declared but not in _CATEGORY_MAP, so the "
+        f"writer drops them silently: {[(t, declared[t]) for t in unmapped]}. "
+        "Add them to the map, or to _NOT_PERSISTED with a reason."
+    )
+
+    # The exclusions must stay excluded — an entry added to the map for
+    # one of them would start persisting it without anyone revisiting
+    # the reason it was left out.
+    for event_type, reason in _NOT_PERSISTED.items():
+        assert event_type not in _CATEGORY_MAP, f"{event_type}: {reason}"
+        assert event_type in declared, f"{event_type} no longer exists — drop it here"
 
 
 async def test_on_publish_persists_agent_phase_completed(

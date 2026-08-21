@@ -26,6 +26,29 @@ BatchHandler = Callable[[list[Event]], Awaitable[None]]
 BatchKey = Callable[[Event], str]
 
 
+class DeferDelivery(Exception):
+    """Raised by a handler to leave its delivery unacked and stop consuming.
+
+    A handler has exactly two ordinary outcomes: returning acknowledges
+    the message, raising negatively-acknowledges it.  Neither is right
+    for work this process has lost the right to do — a seat whose lease
+    moved to another node.  Acking claims work it will not perform;
+    NAKing spends the message's dead-letter budget on a message nothing
+    is wrong with, and a healthy event eventually dies after enough
+    handoffs.
+
+    So this is the third outcome: the message stays unacked and the
+    subscription quiesces.  When the consumer closes, the broker returns
+    the message to whoever attaches next **in order and at
+    ``redeliveryCount`` 0** (measured — see
+    ``tests/test_queue/test_broker_behavior.py``).  Republishing instead
+    would send it to the topic tail while its prefetched siblings replay
+    from the head, reordering the conversation.
+
+    The exception message is logged as the deferral reason.
+    """
+
+
 @dataclass
 class BatchOptions:
     """Mutable knobs for :meth:`EventQueue.subscribe_batch` delivery.
@@ -210,16 +233,80 @@ class EventQueue(Protocol):
         """
         ...
 
-    async def unsubscribe(self, topic: str, group: str) -> None:
-        """Tear down the durable group consumer(s) for ``topic``/``group``.
+    async def quiesce(self, topic: str, group: str) -> bool:
+        """Stop taking NEW work on ``topic``/``group``, keep serving old.
 
-        Stops the consume loop(s) this process created for that pair AND
-        deletes the broker-side subscription, so retained messages for the
-        group are dropped — the semantics a decommissioned role needs (its
-        inbox must not accumulate undeliverable events forever). Idempotent:
-        unknown pairs are a no-op. Only affects consumers created by
-        :meth:`subscribe` / :meth:`subscribe_batch`; broadcast stream
-        subscriptions return their own unsubscribe callable.
+        The consumer stays attached and any handler already running runs
+        to completion; nothing new is fetched or dispatched. Used by the
+        voluntary seat-release path, where an in-flight turn should
+        finish before the seat moves. Returns whether an attachment
+        existed. Idempotent.
+        """
+        ...
+
+    async def unquiesce(self, topic: str, group: str) -> bool:
+        """Resume an attachment that was quiesced. Returns whether it was.
+
+        The inverse of :meth:`quiesce`, and it exists because quiescing
+        is not always followed by a detach. A node whose lease store
+        blipped keeps its seats — the row is untouched — but stops
+        admitting new turns until it can prove ownership again, and a
+        delivery arriving inside that window quiesces the attachment via
+        :class:`DeferDelivery`. Without an inverse, the node would hold
+        the seat, stay attached, and consume nothing for the rest of its
+        life: owned, attached, and silently deaf.
+
+        Does NOT touch pause holds — a seat resuming from a stale-renew
+        window may still be legitimately paused for a running sandbox,
+        and clearing that would deliver into a suspended turn.
+        """
+        ...
+
+    async def detach(self, topic: str, group: str) -> bool:
+        """Close this process's consumer(s), leaving the subscription.
+
+        **Non-destructive.** The durable subscription and its cursor
+        survive, so unacked messages return to whoever attaches next —
+        in order, with no accrued redeliveries — and messages published
+        while nothing is attached are retained rather than dropped. That
+        is what makes a seat handoff free, and what makes an unowned
+        seat safe.
+
+        Returns whether an attachment existed. Idempotent. Any pause
+        holds for the pair are released: a hold is state about *this*
+        attachment, and one that outlived a detach would leave a node
+        that re-attached later silently deaf.
+        """
+        ...
+
+    async def ensure_subscription(self, topic: str, group: str) -> bool:
+        """Create the durable subscription if absent, with NO consumer.
+
+        The subscription must exist whether or not anything is attached,
+        or the first publish to a never-subscribed topic is dropped on
+        the floor — no dead letter, no producer error. Created at the
+        **earliest** message: one created at the latest would exist and
+        still discard everything published before its first consumer.
+
+        Returns whether this call created it; creating an existing
+        subscription is success, not an error.
+        """
+        ...
+
+    async def delete_subscription(self, topic: str, group: str) -> bool:
+        """Delete the durable subscription, dropping any retained mail.
+
+        **Destructive**, and the semantics a decommissioned role needs:
+        its inbox must not accumulate undeliverable events forever.
+        Detaches locally first if this process holds the consumer, but
+        does not require it — role removal must not depend on which node
+        happened to run the seat.
+
+        Returns whether this call deleted it; deleting an absent
+        subscription is success. Only affects subscriptions created by
+        :meth:`subscribe` / :meth:`subscribe_batch` /
+        :meth:`ensure_subscription`; broadcast stream subscriptions
+        return their own unsubscribe callable.
         """
         ...
 
@@ -303,8 +390,10 @@ class EventQueue(Protocol):
         """
         ...
 
-    async def pause_topic(self, topic: str) -> None:
-        """Pause delivery of ONE topic's messages to its handlers.
+    async def pause_topic(
+        self, topic: str, group: str, *, reason: str = "default"
+    ) -> None:
+        """Pause delivery of ONE subscription's messages to its handlers.
 
         Used by the sandbox subsystem to keep an agent "busy" while a
         detached coding job runs: the agent's inbox
@@ -312,15 +401,31 @@ class EventQueue(Protocol):
         backlog / in-memory buffer) instead of starting a fresh turn
         mid-job. Unlike :meth:`pause_delivery` this is per-topic and
         reversible via :meth:`resume_topic`. Idempotent.
+
+        **Pauses are reason-scoped and a topic stays paused while ANY
+        reason holds it.** Two independent subsystems gate the same
+        inbox — the sandbox busy gate and the config-divergence shed —
+        and with one flat set the sandbox resuming its own run would
+        un-gate a node that is serving a stale company, on a completely
+        ordinary code path.
+
+        Holds are keyed by the ``(topic, group)`` **pair** and released
+        by :meth:`detach`. They are process-local facts about one
+        attachment: keyed by topic alone they both outlived the
+        attachment — so a node that re-acquired a seat attached into a
+        still-paused topic — and gated every group on shared subjects
+        like ``crewlet.events.*``.
         """
         ...
 
-    async def resume_topic(self, topic: str) -> None:
-        """Resume a topic paused by :meth:`pause_topic`; flush its backlog.
+    async def resume_topic(
+        self, topic: str, group: str, *, reason: str = "default"
+    ) -> None:
+        """Release ONE reason's hold on a subscription; flush if none remain.
 
         Buffered (in-memory) / queued (broker) messages are delivered to
-        the topic's handlers again. Idempotent — resuming a topic that
-        was never paused is a no-op.
+        the topic's handlers again once no reason holds it. Idempotent —
+        releasing a hold that was never taken is a no-op.
         """
         ...
 

@@ -54,6 +54,13 @@ class SkillCuratorWorker:
         interval_hours: int = 24,
         stale_after_days: int = 30,
         archive_after_days: int = 90,
+        # Fleet-wide singleton gate. The curator TRANSITIONS rows —
+        # active to stale to archived — and publishes a lifecycle event
+        # per transition, so N nodes produce N event streams for one
+        # set of changes and race each other's writes. Supplied by the
+        # engine as a callable that claims ``worker:skill-curator``;
+        # ``None`` means "no fleet".
+        claim_duty: Any = None,
     ) -> None:
         self._store = store
         self._event_queue = event_queue
@@ -63,6 +70,7 @@ class SkillCuratorWorker:
         self._interval_seconds = max(1.0, float(interval_hours) * 3600.0)
         self._stale_after_days = max(1, int(stale_after_days))
         self._archive_after_days = max(self._stale_after_days, int(archive_after_days))
+        self._claim_duty = claim_duty
         self._running = False
         self._task: asyncio.Task[None] | None = None
 
@@ -70,7 +78,7 @@ class SkillCuratorWorker:
         if self._running:
             return
         self._running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run_loop(), name="skill-curator")
         logger.info(
             "skill_curator_started",
@@ -101,6 +109,8 @@ class SkillCuratorWorker:
                 if not self._running:
                     return
                 try:
+                    if not await self._may_tick():
+                        continue
                     await self.tick_once()
                 except asyncio.CancelledError:
                     return
@@ -108,6 +118,23 @@ class SkillCuratorWorker:
                     logger.exception("skill_curator_tick_failed")
         finally:
             self._running = False
+
+    async def _may_tick(self) -> bool:
+        """Whether this node holds this duty for this tick.
+
+        Re-claimed every tick rather than held: the duty lease is short,
+        so a node that dies mid-pass releases it by lapsing and a peer
+        takes over on its next tick, with no handoff protocol. ``None``
+        means "no fleet" — the single-node case, where there is nothing
+        to be a singleton within.
+        """
+        if self._claim_duty is None:
+            return True
+        try:
+            return bool(await self._claim_duty())
+        except Exception:
+            logger.exception("skill_curator_duty_claim_failed")
+            return False
 
     async def tick_once(self, *, now: datetime | None = None) -> dict[str, int]:
         """Run one pass: scan candidates, apply transitions, publish

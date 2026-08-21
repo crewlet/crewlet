@@ -7,10 +7,10 @@ from collections.abc import Awaitable, Callable
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.events.types import Event
 from crewlet.org.models import Organization, OrgUnit, Role, Schedule
 from crewlet.schedule import describe_schedules
+from tests.test_api.helpers import create_app
 
 
 class MockEventQueue:

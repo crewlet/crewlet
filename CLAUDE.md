@@ -144,6 +144,27 @@ src/crewlet/          # Main package
   _env.py             # Shared .env loader for CLI entry points (run, api,
                       #   confluence/plane import + resync, gitlab/plane
                       #   provision) — load_env_file
+  config_resolution.py # Resolution FINGERPRINT — a keyed, per-process
+                      #   digest of what a payload's ${VAR} references
+                      #   currently resolve to. Half of apply_config's
+                      #   no-op check: re-activating an unchanged
+                      #   revision is the documented rotation gesture, so
+                      #   a payload-only comparison made it rebuild
+                      #   nothing. Never persisted or logged
+  work_key.py         # THE work-key grammar — what identifies the unit
+                      #   of work a turn did, shared by the engine (which
+                      #   binds it around a dispatch) and the writers that
+                      #   must not duplicate under it. NOT turn_id: two
+                      #   nodes completing one trigger mint two turn ids,
+                      #   so a key from one RECORDS the duplicate instead
+                      #   of collapsing it — derived from the constituent
+                      #   trigger event ids, the same identity the
+                      #   completion ledger uses. Travels as a contextvar
+                      #   (like providers/llm/scope.py) because the
+                      #   writers sit frames below the dispatch behind
+                      #   functions with no other reason to carry it.
+                      #   Empty = a turn with no ledgerable trigger, which
+                      #   skips the guard: nothing to collapse
   env_refs.py         # THE ${VAR} reference grammar — one compiled pattern
                       #   shared by config.py (substitution), secrets/
                       #   registry.py (skip-pointers-when-masking), org/
@@ -154,6 +175,34 @@ src/crewlet/          # Main package
                       #   previously caused a redaction leak and a
                       #   mint-into-unreadable-${1} hole; tests/test_env_refs
                       #   fails the build on a new re.compile of the grammar
+  redaction.py        # THE secret-redaction pass for free text leaving
+                      #   the engine — tool results, coding-agent
+                      #   transcripts, setup-step failures. A denylist of
+                      #   credential SHAPES, so it is the last line, not
+                      #   the first. Imports nothing from crewlet: it
+                      #   lived in agent/llm_loop.py, which meant the
+                      #   sandbox layer imported the agent layer to
+                      #   redact a string, and one more such import
+                      #   closed a cycle through crewlet/__init__
+  env_file.py         # THE .env assignment grammar — format_assignment /
+                      #   parse_assignment / ASSIGNMENT_RE, shared by
+                      #   provisioning.py (EnvFileSink + PrintSink),
+                      #   slack/envfile.py (EnvStore) and secrets/
+                      #   keygen.py. Imports nothing from crewlet, same
+                      #   reason as env_refs.py. What it guarantees is
+                      #   ROUND-TRIPPING through BOTH readers a
+                      #   credential file has: python-dotenv (which
+                      #   `crewlet run` boots with, and which expands
+                      #   ${...} in every quoting form) and an
+                      #   operator's `source` (where a bare space fails
+                      #   the line AND abandons every credential BELOW
+                      #   it). Slack reasoned the quoting through and
+                      #   refused what it could not represent; the
+                      #   shared sink wrote f"{var}={token}" — so
+                      #   whether a minted token survived depended on
+                      #   which CLI minted it. tests/test_env_file
+                      #   fails the build on a new hand-built
+                      #   assignment line
   provisioning.py     # Integration-agnostic ${VAR}-minting contract shared
                       #   by the provisioning CLIs: TokenSink protocol
                       #   (record/discard/flush are ASYNC — a sink may
@@ -178,7 +227,14 @@ src/crewlet/          # Main package
                       #   integration's module
   org/                # Organization model (hierarchy, roles; Role.kind
                       #   agent|human — human seats are addressable,
-                      #   never spawned; see docs/concepts/humans-in-the-org.md)
+                      #   never spawned; see docs/concepts/humans-in-the-org.md.
+                      #   models.py also owns SEAT IDENTITY —
+                      #   agent_id_for / agent_seat_by_handle /
+                      #   agent_seat_by_id: derive_agent_id is a uuid5 over
+                      #   (org name, handle), so any node recovers any seat
+                      #   from an id with no DB and no live instance. That
+                      #   derivation + its inverse is what lets routing
+                      #   address a seat this process is not running)
   agent/              # Agent runtime (definition, instance, pool, turn engine)
                       #   definition.py, instance.py, pool.py, memory.py,
                       #   turn.py (TurnEngine; resume_state re-enters Execute
@@ -238,13 +294,128 @@ src/crewlet/          # Main package
                       #     guard.py — required-skill load-before-use guard;
                       #     publish CLIs live in confluence/ + plane/)
   queue/              # EventQueue protocol (Pulsar + memory; subscribe_batch +
-                      #   BatchOptions — batched key-partitioned inbox delivery;
-                      #   unsubscribe(topic, group) tears down a durable group
-                      #   consumer + its broker subscription — used by live
-                      #   role decommission)
-  a2a/                # Agent-to-agent bus (protocol, memory, service)
+                      #   BatchOptions — batched key-partitioned inbox delivery.
+                      #   ATTACHMENT LIFECYCLE is four verbs, not one:
+                      #   quiesce (stop taking new work, stay attached) /
+                      #   unquiesce (its inverse — a store blip keeps the
+                      #   seat, so a quiesce that is never followed by a
+                      #   detach must be reversible or the node is owned,
+                      #   attached and deaf forever; on Pulsar it restarts
+                      #   the consume loop AND asks the prefetch back, else
+                      #   the fetched-unacked messages wait out the 30-min
+                      #   ack timeout) / detach (non-destructive, keeps the
+                      #   subscription + its mail) / delete_subscription
+                      #   (destructive, needs NO local consumer — role
+                      #   decommission must not depend on which node ran
+                      #   the seat). `unsubscribe` is gone: its name never
+                      #   said which one it was. DeferDelivery is the third
+                      #   handler outcome beside ack-on-return and
+                      #   NAK-on-raise: leave it unacked, stop consuming;
+                      #   admin.py (BrokerAdmin + PulsarBrokerAdmin —
+                      #   subscription lifecycle over the admin v2 REST API,
+                      #   because creating one by SUBSCRIBING joins a Shared
+                      #   subscription a peer owns and steals its traffic,
+                      #   measured);
+                      #   memory.py is a BROKER + N CLIENTS, not one object:
+                      #   _Broker holds subs/mail/DLQ, each MemoryEventQueue
+                      #   is a node (client() mints a peer). Conflating them
+                      #   meant one node's detach dropped its peer's consumer
+                      #   and one node's pause gated the whole subscription;
+                      #   topics.py — THE subject
+                      #   grammar: agent_inbox_topic(handle) is the one
+                      #   definition of crewlet.agent.{handle}.inbox,
+                      #   which nine call sites used to f-string by hand.
+                      #   A producer and a consumer that disagree about a
+                      #   topic name never raise — the publish lands in a
+                      #   topic nobody reads. Imports nothing from crewlet;
+                      #   tests/test_queue/test_topics fails the build on a
+                      #   new hand-built f-string, in src/ AND in tests/)
+  a2a/                # Agent-to-agent channels over the DURABLE queue.
+                      #   The A2ABus (an asyncio.Queue per channel) is
+                      #   GONE: it was a second delivery path beside the
+                      #   seat inbox that carried the wake, and a path
+                      #   that only works in one process cannot be a
+                      #   fast path for a fleet — the target woke on the
+                      #   node owning ITS seat and found the queue
+                      #   empty. channels.py = A2AChannelStore (Postgres
+                      #   + memory twin) — the participants and open/
+                      #   closed state every authorization decision
+                      #   reads; service.py carries the brief ON the
+                      #   wake event and REPLIES by publishing the
+                      #   answering turn's final text back (there was no
+                      #   reply path at all: the prompt named
+                      #   send_a2a_message, a tool that is not
+                      #   registered and that tests assert is absent).
+                      #   One ask, one answer, then closed — which is
+                      #   what stops a volley; a2a_ask charges the
+                      #   delegation cap, the reply does not
   db/                 # Database layer (asyncpg, migrations, token_usage,
                       #   deterministic agent-id derivation in agents.py;
+                      #   client.py — Database.acquire()/transaction()/
+                      #   advisory_lock() hold ONE connection, which is what
+                      #   makes session-scoped state work (asyncpg's pool
+                      #   reset runs pg_advisory_unlock_all on release, so a
+                      #   pool-path advisory lock is a silent no-op);
+                      #   budgets.py / deliveries.py / credentials.py /
+                      #   rate_limits.py — the SHARED COUNTERS: token
+                      #   budget usage (caps stay config-derived in
+                      #   memory, only usage is shared), inbound webhook
+                      #   dedupe (GitHub/GitLab had none at all),
+                      #   fleet-wide credential cooldowns, and the
+                      #   notification valve. Each ships a Postgres store
+                      #   + a memory twin under one contract suite;
+                      #   turn_completions.py — the COMPLETION LEDGER:
+                      #   "has this trigger already been worked?", read
+                      #   before a turn and written after one. NOT a
+                      #   claim — no in_progress, no expiry, no
+                      #   supersede rule: the seat lease is already the
+                      #   mutual exclusion, so a claim's only honest
+                      #   disposition for a stale row is "re-run", which
+                      #   is what you do with no row. Keyed on
+                      #   CONSTITUENT event ids because a coalesced
+                      #   digest is minted fresh every time. BOTH
+                      #   directions fail open — not knowing whether
+                      #   work was done has one safe answer, and it is
+                      #   the pre-ledger one;
+                      #   maintenance.py — MaintenanceWorker, the
+                      #   retention sweep for the five tables that
+                      #   answer "recently" and are written on every
+                      #   event that asks (webhook_deliveries,
+                      #   rate_limits, scheduled_runs, turn_completions,
+                      #   a2a_channels — plus the idle-close of A2A
+                      #   channels no turn ever answered). Both migrations
+                      #   always SAID rows were swept on a TTL and both
+                      #   ship the index for it; `purge` existed on the
+                      #   stores and on their protocols and NOTHING
+                      #   called it, so all three grew for the life of
+                      #   the deployment. One retention per table, tied
+                      #   to what that table is for — the ledger's floor
+                      #   is catchup_max_seconds, because deleting a row
+                      #   a tick could still evaluate lets that fire run
+                      #   twice;
+                      #   leases.py — LeaseStore/MemoryLeaseStore, the
+                      #   cross-process ownership primitive: TTL lease +
+                      #   monotonic `epoch` fencing token, owner = a process
+                      #   INCARNATION (config.resolve_node_incarnation),
+                      #   release expires in place so the epoch never resets;
+                      #   config_plane.py — THE CONTROL PLANE (replaces the
+                      #   competing-consumer `engine-config`/`api-config`
+                      #   groups, under which exactly ONE process applied a
+                      #   revision and the rest ran the old company forever):
+                      #   config_activations = append-only epoch pointer
+                      #   (appended INSIDE CompanyConfigStore's own
+                      #   activation transaction via ACTIVATION_INSERT_SQL,
+                      #   and append-only because re-activating an UNCHANGED
+                      #   revision is the documented rotation gesture) +
+                      #   config_apply_status = per-node outcome, three-valued
+                      #   (ok | error | degraded — degraded = failed AFTER a
+                      #   restart-required subsystem was mutated, so rollback
+                      #   could not restore it; never counted as converged) +
+                      #   decide_posture (serve|wait|shed|isolated|stuck).
+                      #   The rule: lag alone NEVER sheds — every successful
+                      #   rollout produces lag, so shedding on it makes the
+                      #   fastest node the cause of a fleet-wide outage.
+                      #   See docs/concepts/control-plane.md;
                       #   secret_values.py — SecretValueStore over the
                       #   encrypted secret store (per-row AAD binds the var
                       #   name; keyring REQUIRED, no plaintext mode) +
@@ -277,11 +448,90 @@ src/crewlet/          # Main package
                       #   docs/concepts/configuration.md#secrets and
                       #   docs/concepts/secret-store.md
   task/               # Task engine (models, tracker, escalation)
+  seat/               # SEAT OWNERSHIP — which node runs which agent.
+                      #   See docs/concepts/seat-ownership.md and
+                      #   docs/guides/fleet.md.
+                      #   placement.py — THE vocabulary node.roles /
+                      #   node.labels / role.placement share with the
+                      #   host; imports nothing from crewlet so config.py
+                      #   and host.py can both depend on it. Owns the
+                      #   capacity math, which is the part that is easy
+                      #   to get wrong: placement is NOT a filter over a
+                      #   fleet-wide fair share — 9 seats pinned to one
+                      #   node and 1 free over 3 nodes gives ceil(10/3)=4
+                      #   and strands 5 forever while every sweep reads
+                      #   healthy. Share is per placement GROUP, over the
+                      #   nodes eligible for it, summed; a node that does
+                      #   not run seats is not in the denominator.
+                      #   host.py (SeatHost: converge on
+                      #   ceil(seats/live nodes) in BOTH directions —
+                      #   claiming alone only converges for a fleet that
+                      #   SHRINKS, so a node that booted alone would hold
+                      #   every seat and scaling out would do nothing until
+                      #   something died; the share is a ceiling, which is
+                      #   what makes the give-back settle instead of
+                      #   oscillating. `node:{id}` presence
+                      #   leases as THE membership read — inferring the
+                      #   count from seat ownership reads an unclaimed
+                      #   fleet as zero nodes and every node then takes
+                      #   every seat; claim/release rate limits because a
+                      #   move costs an MCP spawn, not a lease (attach is
+                      #   5 ms, measured); `preferred` ORDERS the claim and
+                      #   never gates it — the hint outlives the node that
+                      #   set it, so gating strands a dead node's seats
+                      #   forever, and it cannot rank a node's OWN seats
+                      #   (it names the last claimer) so the shed order is
+                      #   plain sorted; may_start() is FRESHNESS not
+                      #   membership — a renew at t proves exclusivity
+                      #   through t+ttl, and a membership snapshot can be a
+                      #   full TTL stale, i.e. exactly the window the check
+                      #   exists to close; on_release carries a REASON
+                      #   (voluntary quiesce-then-detach vs fenced
+                      #   detach-first-abandon) and an unproven teardown
+                      #   KEEPS the lease; on_admission fires on the renew
+                      #   EDGE so the owner's consumer stops and restarts
+                      #   with the store blip; renew()==False drops the seat
+                      #   NOW, LeaseError keeps it — conflating them tears a
+                      #   healthy company down over a DB blip);
+                      #   watchdog.py (EventLoopWatchdog — a stalled loop
+                      #   can't be signalled, so the thread's only real
+                      #   move is os._exit: a wedged-but-alive node holds
+                      #   its broker prefetch for the full 30-min ack
+                      #   timeout while its leases lapse and peers take
+                      #   over; exiting collapses that to 9 ms. Beat/poll
+                      #   are SCALED to the threshold — a beat slower than
+                      #   it makes a healthy loop shoot itself. A GONE
+                      #   loop is not a WEDGED one — indistinguishable
+                      #   from the thread (the beat just stops), opposite
+                      #   situations: only a live loop still holds a
+                      #   peer's mail. It records its loop and stands
+                      #   down when that loop closed, else every engine
+                      #   abandoned rather than stopped arms a TTL-long
+                      #   suicide timer (it killed this repo's own suite
+                      #   at 63%, exit 75, with zero test failures).
+                      #   Armed by
+                      #   the engine alongside the seat host and DISARMED
+                      #   for the whole of shutdown, which is the one part
+                      #   of the process that legitimately blocks the loop
+                      #   — exiting through it abandons the seat release
+                      #   that makes a drain graceful).
+                      #   Constants are MEASURED:
+                      #   docs/concepts/scaling.md § Where the constants
+                      #   come from; the harness that re-measures them is
+                      #   tests/test_queue/test_broker_behavior.py
   schedule/           # Scheduler — role/unit cron-style recurring work:
                       #   cron.py (5-field evaluator), scheduler.py (tick loop
                       #   + describe_schedules projection for the dashboard
                       #   /schedules view), store.py (scheduled_runs ledger)
-  events/             # Event types, routing (subscriptions via EventQueue)
+  events/             # Event types, routing (subscriptions via EventQueue).
+                      #   subscriptions.py resolves every recipient from
+                      #   the ORG — role name or derived agent id → seat →
+                      #   inbox — never from the local agent pool. Each
+                      #   crewlet.events.* topic has ONE fleet-wide
+                      #   consumer group, so the node that wins a delivery
+                      #   is rarely the node running the recipient, and a
+                      #   pool miss was a terminal drop (warn + ack), not
+                      #   a retry
   knowledge/          # Shared-knowledge read — protocol.py (KnowledgeSearcher
                       #   Protocol + KnowledgeHit + AUTO_DRAFTED_PARENT/
                       #   AUTO_DRAFT_TITLE_PREFIX, the one seam the Plan
@@ -613,7 +863,25 @@ src/crewlet/          # Main package
                       #   like GitLab; see docs/integrations/plane.md
   mcp/                # MCP integration (stdio + HTTP/SSE)
   timescaledb/        # TimescaleDB event store (observability, in main PG)
-  api/                # Standalone REST API + dashboard (Starlette) —
+  api/                # REST API + dashboard (Starlette). ONE wiring for
+                      #   embedded and standalone: state comes from the
+                      #   active config revision (config_refresh) and
+                      #   events from subscribe_stream — never a
+                      #   boot-time snapshot or a publish listener.
+                      #   runtime.py — NodeRuntime, the single seam for
+                      #   facts only a co-located engine can answer
+                      #   (in-flight turns, drain state, live MCP tools,
+                      #   config posture + applied epoch);
+                      #   config_refresh.py — ConfigStateRefresher, the
+                      #   cached projection's reconciler over the
+                      #   activation pointer (refresh_if_changed = one tick,
+                      #   run() = the loop). A MERGED node passes poll=False
+                      #   and the engine drives the tick from its own
+                      #   reconcile loop, so one process polls once and its
+                      #   two halves can't disagree about the epoch;
+                      #   auth guards EVERY route bar probes, webhooks
+                      #   (HMAC), /otlp (signed token) and the dashboard
+                      #   shell —
                       #   routes/ (per-domain handlers: agents, events,
                       #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
                       #     GitLab/Plane/Confluence/Forge inbound, incl.
@@ -736,11 +1004,16 @@ src/crewlet/          # Main package
                       #   re-verify before changing one.
                       #   Screens: Dashboard, Company (Overview / People
                       #   Directory / Org Chart / Audit log), Agents,
-                      #   Activity, Tokens, Tools, Schedules, Configuration.
+                      #   Activity, Tokens, Tools, Schedules, Fleet,
+                      #   Configuration.
                       #   A seat's raw event list belongs to Activity ALONE
                       #   (#/events?actor=<role> seeds its actor filter);
                       #   the agent page links there rather than rendering
                       #   a second copy below its turns.
+                      #   Fleet reads the LEASE TABLE, not a fan-out of
+                      #   /health probes: /health answers about the node
+                      #   that served it, so behind a load balancer a
+                      #   refresh tells a different story.
                       #   EVERY nav entry is backed by a real endpoint — no
                       #   placeholder screens. org.js flattens the /org tree
                       #   into SEATS (unit chain + effective lead + inherited
@@ -750,20 +1023,32 @@ src/crewlet/          # Main package
                       #   deriving "what it is doing" from live state only.
                       #   See docs/reference/dashboard-design.md
   extensions/         # Extension system
-tests/                # Mirror structure of src/crewlet/.
-                      #   test_dashboard/ is the exception: the dashboard
-                      #   is JavaScript, so its suites are ES modules under
-                      #   test_dashboard/js/ (a three-function harness +
-                      #   a vendored DOM, no npm and no build step) run
-                      #   under whatever `node` is on PATH by a pytest
-                      #   wrapper that SKIPS when there is none.
-                      #   test_scripts/ is the other: scripts/ is shell,
-                      #   so its suites EXTRACT the pure helper functions
-                      #   and source them into a real bash, and assert the
-                      #   rest (what may never reach argv, what mode a
-                      #   file is created with) against the source — the
-                      #   same static shape tests/test_examples/
-                      #   test_local_stack.py uses for the Plane bootstrap
+tests/                # Mirror structure of src/crewlet/, plus three that
+                      #   are exceptions. test_dashboard/ mirrors the
+                      #   dashboard, which is JavaScript, so its suites
+                      #   are ES modules under test_dashboard/js/ (a
+                      #   three-function harness + a vendored DOM, no npm
+                      #   and no build step) run under whatever `node` is
+                      #   on PATH by a pytest wrapper that SKIPS when
+                      #   there is none. test_scripts/ mirrors scripts/,
+                      #   which is shell, so its suites EXTRACT the pure
+                      #   helper functions and source them into a real
+                      #   bash, and assert the rest (what may never reach
+                      #   argv, what mode a file is created with) against
+                      #   the source — the same static shape
+                      #   tests/test_examples/test_local_stack.py uses
+                      #   for the Plane bootstrap. tests/test_fleet/
+                      #   mirrors nothing: it runs TWO Engines against
+                      #   one broker and one lease table and gates the
+                      #   seat-ownership exit criteria (handoff preserves
+                      #   order; a node that lost its lease starts no
+                      #   turn while still attached; a completion reaches
+                      #   only the owner; an unclaimed seat's mail
+                      #   survives). Parametrized over the memory twin
+                      #   AND a real Pulsar — "the same suite passes on
+                      #   the twin" is itself a criterion, so a twin that
+                      #   models the broker wrongly fails there instead
+                      #   of certifying the bug in CI
 examples/             # Working examples (the Nimbus example org:
                       #   nimbus.config.yaml + nimbus.company.yaml +
                       #   nimbus-docs/ + tool-skills/). The MINIMAL
@@ -856,7 +1141,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 4. **Task Engine** — ExecutionTracker, external PM tool integration
 5. **Decision Framework** — DACI behavioral guidance (via Slack channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL or Plane page search, one backend per org) + per-agent `agent_diary` (pgvector)
-7. **Communication** — external chat (Slack or Mattermost, or both) + ephemeral A2A Bus
+7. **Communication** — external chat (Slack or Mattermost, or both) + ephemeral A2A channels
 8. **Notification Service** — EventQueue-based, outbound-only transports
 9. **Provider Layer** — pluggable LLM, embeddings. Includes the `cli-agent` LLM type: a locally installed coding CLI driven on the operator's subscription instead of an API key, with per-seat filesystem isolation and an in-prompt tool-call envelope (see `docs/concepts/subscription-llm-backends.md`)
 10. **Database** — PostgreSQL (token_usage, agent_diary + episodes via pgvector)

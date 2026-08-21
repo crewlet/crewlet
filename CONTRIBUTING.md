@@ -30,6 +30,52 @@ CI runs exactly these three commands — please make sure all of them pass
 before opening a pull request. `ruff check --fix` and `ruff format` fix most
 issues automatically.
 
+### Integration tests, and why a skip is not a pass
+
+Some suites need real infrastructure and **skip silently without it** — a
+green run on a laptop with nothing up has simply not exercised them:
+
+```bash
+docker compose up -d                                    # Pulsar + PostgreSQL
+export CREWLET_TEST_DSN=postgresql://crewlet@localhost/crewlet
+uv run pytest -m integration -s                         # -s to see measurements
+```
+
+- **`CREWLET_TEST_DSN`** adds a third parameterisation to the storage
+  contract suites, running them against a real PostgreSQL alongside the
+  memory twin and the SQL fake. The fake can only confirm that SQL means
+  what its author thought; it cannot catch a statement PostgreSQL rejects.
+  **CI runs this one**: the `test` job brings up the same PostgreSQL image
+  the compose file uses, applies the migrations and sets the variable, so a
+  statement the server rejects fails the pull request rather than the
+  deployment. Setting it locally still matters — it is how you find that out
+  before pushing.
+
+  A new store belongs in that parameterisation from its first commit.
+  Asserting that a statement *contains* some text, or that a fake returns
+  what the test put in it, proves the author's intent and nothing about the
+  server: it cannot tell a correct statement from one PostgreSQL refuses to
+  parse, and it cannot test exclusivity at all — an at-most-once claim is a
+  property of the statement, not of the dict standing in for it.
+- **`tests/test_queue/test_broker_behavior.py`** measures the broker
+  behaviours the multi-node design rests on (redelivery timing, cursor
+  continuity across a subscription's change of owner, prefetch size) and
+  prints the numbers under `-s`. Run it after any Pulsar upgrade: it is
+  where a changed broker behaviour should fail, rather than in a
+  production handoff. **CI runs this one too**, along with the real-broker
+  half of `tests/test_fleet`: the `test` job starts a standalone broker with
+  the same image and command the compose file uses. A service container
+  cannot supply that command, so it is a plain `docker run` step.
+
+  Between that and `CREWLET_TEST_DSN`, every backend the suite knows how to
+  exercise is real on every pull request. What that buys is the part of the
+  design that is a *claim about the broker* rather than about our code — a
+  close-driven handoff returning a seat's mail at `redeliveryCount` 0, the
+  cursor surviving a change of owner, a wedged consumer holding its prefetch
+  for the ack timeout. The memory twin models all three, and a twin agreeing
+  with itself proves nothing about Pulsar. Run it locally before a Pulsar
+  upgrade anyway, under `-s`, where the measurements print.
+
 CI also builds the distributions on every pull request, because a packaging
 break is otherwise invisible until the tag that publishes it. If you touched
 `pyproject.toml`, `README.md`, or anything under `src/crewlet/` that is not a

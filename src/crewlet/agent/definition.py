@@ -452,7 +452,7 @@ def build_human_colleagues_note(definition: AgentDefinition) -> list[str]:
         "of them:",
         "- Reach them where humans read: an @-mention on the team's "
         "chat, or a comment on the issue / doc where the work lives. "
-        "They are NOT on the A2A bus.",
+        "They are NOT on A2A.",
         "- They reply asynchronously (think hours, not seconds). Put "
         "the full context they need into your message, then finish "
         "your turn — their reply re-triggers you. Never wait or poll.",

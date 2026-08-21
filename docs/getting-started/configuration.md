@@ -260,8 +260,14 @@ providers:
   queue:
     type: pulsar
     url: "pulsar://localhost:6650"
-    # tenant: public                  # optional — must already exist; the engine never
-    # namespace: default              #   calls the admin API (see Deployment guide)
+    # admin_url: ""                   # optional — admin HTTP endpoint; empty derives it from
+    #                                 #   `url` (pulsar://host:6650 -> http://host:8080).
+    #                                 #   Used to create and delete each seat's durable
+    #                                 #   subscription, which needs no consumer. Set it when
+    #                                 #   the admin endpoint is not on the broker's host at
+    #                                 #   the default port
+    # tenant: public                  # optional — must already exist; tenants and namespaces
+    # namespace: default              #   are never auto-created (see Deployment guide)
     # auth_token: "${CREWLET_PULSAR_TOKEN}"   # optional — JWT for token auth; the token's role
     #                                 #   should be granted only this engine's namespace
     # tls_trust_certs_path: ""        # optional — CA bundle for pulsar+ssl:// URLs
@@ -541,9 +547,37 @@ mcp_servers:
     url: "https://api.githubcopilot.com/mcp/"
     tool_prefix: ""                     # optional — prefix tool names
     tool_annotations: {}                # optional — behavioural-hint overrides (see Tool Capabilities)
+    startup_timeout_seconds: 120        # optional — connect + handshake + discovery
+    request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `tool_prefix`, `tool_annotations`.
+Full field reference: `name` (required), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
+
+### Timeouts
+
+An MCP server is another program, and the failure that matters is not an
+error but a *silence* — a server that launches and never completes the
+handshake, or answers discovery and then never returns from a tool call,
+raises nothing at all. The engine starts MCP servers on the
+seat-acquisition path, so a silent one does not merely lose its own
+tools: it holds up every seat behind it, for the life of the process.
+Both deadlines therefore always apply.
+
+- **`startup_timeout_seconds`** (default `120`) bounds launching the
+  process (or opening the HTTP session), the protocol handshake, and the
+  first `tools/list`. The default suits a `uvx` / `npx` server whose
+  package is not yet in the local cache — the slow case for a *healthy*
+  server. Lower it for a server you launch from a local checkout.
+- **`request_timeout_seconds`** (default `300`) bounds one tool call. It
+  matches the MCP SDK's own SSE-friendly HTTP read default, so a tool
+  behaves the same over stdio and over HTTP. Raise it for a server whose
+  tools genuinely run long (a large code search, a slow report); lower it
+  for one that should always answer quickly, so a wedged call reaches the
+  agent as a failed tool result it can react to instead of a turn that
+  never ends.
+
+A server that exceeds either deadline is logged and skipped; the rest of
+the company still starts.
 
 ---
 
@@ -558,7 +592,7 @@ extensions:
 Each entry names an extension module and its settings — see
 [Extensions](../guides/extensions.md) for the loader contract and the hook
 surface. (The REST API is not an extension; run it embedded via `api.port`
-or standalone via `crewlet run api`.)
+or on its own node via `crewlet run --roles ingress`.)
 
 ---
 

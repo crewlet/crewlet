@@ -291,6 +291,62 @@ print(json.dumps({"result": "Usage limit reached. Resets at 4pm."}))
             await provider.complete([Message(role="user", content="x")], None)
         assert classify(excinfo.value) is ProviderErrorKind.RATE_LIMIT
 
+    async def test_an_answer_about_rate_limiting_is_not_a_rate_limit(
+        self, tmp_path, monkeypatch
+    ):
+        """The wording these CLIs use is ordinary engineering prose.
+
+        "rate limit", "429", "overloaded", "too many requests", "resets
+        at" — an engineering agent company discusses all of them. Matched
+        against the model's ANSWER, a plan to add rate limiting to a
+        gateway was discarded as a provider outage: RATE_LIMIT is
+        retryable, so a chain fell through to the metered key and a
+        subscription-only chain failed the turn outright.
+        """
+        script = """
+import json, sys
+sys.stdin.read()
+envelope = {"message": "here is the plan", "tool_calls": [
+    {"name": "submit_plan",
+     "arguments": {"steps": ["Add rate limiting to the gateway (429 + backoff)"]}}]}
+print(json.dumps({"result": "```json\\n" + json.dumps(envelope) + "\\n```"}))
+"""
+        monkeypatch.setenv("PATH", write_script(tmp_path, "fakecli", script))
+        provider = make_provider(tmp_path)
+
+        completion = await provider.complete(
+            [Message(role="user", content="plan it")], [TOOL]
+        )
+
+        assert [c.name for c in completion.tool_calls] == ["submit_plan"]
+        assert completion.tool_calls[0].arguments["steps"] == [
+            "Add rate limiting to the gateway (429 + backoff)"
+        ]
+
+    async def test_a_long_answer_mentioning_limits_is_not_a_rate_limit(
+        self, tmp_path, monkeypatch
+    ):
+        """The no-tool-surface path, where no envelope can settle it.
+
+        A vendor's limit notice is a sentence; a Review summary or a
+        chat answer explaining the team's rate-limit strategy is not.
+        """
+        answer = (
+            "We hit the gateway's rate limit during the load test. "
+            "The 429s came from the shared bucket, not from the client, "
+            "so the fix is a per-tenant quota rather than more retries. "
+        ) * 3
+        script = f"""
+import json
+print(json.dumps({{"result": {answer!r}}}))
+"""
+        monkeypatch.setenv("PATH", write_script(tmp_path, "fakecli", script))
+        provider = make_provider(tmp_path)
+
+        completion = await provider.complete([Message(role="user", content="x")], None)
+
+        assert completion.content.startswith("We hit the gateway's rate limit")
+
     async def test_timeout_kills_the_process_and_classifies(
         self, tmp_path, monkeypatch
     ):

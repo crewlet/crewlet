@@ -50,22 +50,48 @@ _HOOK_EVENTS = {
 }
 
 
+#: The ``role.sandbox.env`` key the git-auth recipe reads. Unlike the
+#: MCP block, the sandbox env is a general-purpose env for the coding
+#: agent, so only the conventional key is a GitLab PAT.
+SANDBOX_TOKEN_KEY = "GITLAB_TOKEN"
+
+
 def seat_token_vars(role: object) -> list[str]:
     """The ``${VAR}`` token references to mint for one seat, deduped.
 
     A seat's GitLab PAT is referenced in ``mcp_env.gitlab`` (the MCP
-    tool credential) and, by convention, again as ``GITLAB_TOKEN`` in
-    ``role.sandbox.env`` (the git-auth recipe) — usually the *same*
-    ``${VAR}``. Scanning both means a sandbox-authoring seat with no MCP
-    tool surface still gets its token minted. Only the conventional
-    ``GITLAB_TOKEN`` sandbox key is scanned, never the whole sandbox env,
-    so an unrelated secret var there is never turned into a GitLab PAT.
+    tool credential) and, by convention, again in ``role.sandbox.env``
+    (the git-auth recipe) — usually the *same* ``${VAR}``. Scanning both
+    means a sandbox-authoring seat with no MCP tool surface still gets
+    its token minted.
+
+    **Only the credential-bearing keys are scanned, in both blocks.**
+    The engine forwards the whole ``mcp_env.gitlab`` block verbatim to
+    the role's MCP instance and names no tool-specific variable, so a
+    block legitimately carries other entries — ``GITLAB_HOST``, an API
+    url. Sweeping up every reference in it treated those as tokens to
+    mint: a seat that writes ``GITLAB_HOST: "${GITLAB_HOST}"`` beside
+    its token had ``--rotate`` overwrite its host name with a PAT, and a
+    var two seats legitimately share reads as two seats claiming one
+    credential.
+
+    Which keys carry a PAT is not this module's to decide — it is the
+    same question boot-time identity resolution answers, so the answer
+    comes from there (:data:`crewlet.config.GITLAB_TOKEN_KEYS`). A
+    second list here would drift, and a key missing from it means a
+    seat's token is never minted at all.
     """
-    scan: dict[str, str] = dict(role.mcp_env.get("gitlab") or {})
+    from crewlet.config import GITLAB_BEARER_KEYS, GITLAB_TOKEN_KEYS
+
+    scan: dict[str, str] = {}
+    mcp_env = dict(role.mcp_env.get("gitlab") or {})
+    for key in (*GITLAB_TOKEN_KEYS, *GITLAB_BEARER_KEYS):
+        if mcp_env.get(key):
+            scan[f"__mcp__{key}"] = mcp_env[key]
     sandbox = getattr(role, "sandbox", None)
     sandbox_env = getattr(sandbox, "env", None) if sandbox is not None else None
-    if isinstance(sandbox_env, dict) and sandbox_env.get("GITLAB_TOKEN"):
-        scan["__sandbox_gitlab_token__"] = sandbox_env["GITLAB_TOKEN"]
+    if isinstance(sandbox_env, dict) and sandbox_env.get(SANDBOX_TOKEN_KEY):
+        scan["__sandbox_gitlab_token__"] = sandbox_env[SANDBOX_TOKEN_KEY]
     return referenced_env_vars(scan)
 
 
@@ -196,7 +222,15 @@ async def _ensure_token(
             tokens = await client.list_user_tokens(user_id)
         else:
             tokens = await client.list_group_service_account_tokens(group, user_id)
-        managed = [t for t in tokens if t.get("name") == token_name and t.get("active")]
+        # `active` only tells you whether GitLab will still accept the
+        # token — an EXPIRED one comes back inactive, and that is
+        # precisely the state the yearly `--rotate` cron exists to get
+        # out of. Filtering it out here dropped the rotation into the
+        # mint path below, which is gated on the var being empty; the
+        # var still held the dead token, so the run reported "skipped"
+        # and exited 0 having renewed nothing.
+        named = [t for t in tokens if t.get("name") == token_name]
+        managed = [t for t in named if t.get("active")]
         if managed:
             if mode == "instance":
                 rotated = await client.rotate_token(
@@ -210,10 +244,23 @@ async def _ensure_token(
                 await sink.record(var, rotated.get("token", ""))
             result.token_action = "rotated"
             return
-        # No managed token to rotate → fall through to minting.
+        # Nothing live to rotate: GitLab's rotate endpoint needs an
+        # active token. An expired one is already inert, so the
+        # replacement is a fresh mint — which is why the gate below
+        # does not apply to a rotation.
 
-    # Mint only when the referenced var has no value yet (idempotent).
-    needs = [var for var in token_vars if not sink.existing(var)]
+    # Mint only when the referenced var has no value yet (idempotent) —
+    # except under `--rotate`, where the var holding a value is the
+    # whole reason to be here. Gating a rotation on emptiness made the
+    # documented yearly renewal a silent no-op the moment the PAT it
+    # was meant to renew had expired: `active` was false, so nothing
+    # rotated, and the var still held the dead token, so nothing
+    # minted. The run reported "skipped" and exited 0.
+    needs = (
+        list(token_vars)
+        if rotate
+        else [var for var in token_vars if not sink.existing(var)]
+    )
     if not needs:
         result.token_action = "skipped"
         return

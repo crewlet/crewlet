@@ -5,15 +5,14 @@ via a colleague-surface tool, the event that wakes B must carry
 ``delegation_depth = A.delegation_depth + 1`` and
 ``delegation_chain = [*A.chain, A.handle]``.
 
-Most straightforward path: A2A, because the A2AService runs in-process
-and the a2a_ask tool has direct access to A's TurnContext.
+Most straightforward path: A2A, because the a2a_ask tool has direct
+access to A's TurnContext.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from crewlet.a2a.memory import MemoryA2ABus
 from crewlet.a2a.service import A2AService
 from crewlet.agent.turn_context import TurnContext
 from crewlet.events.types import Event
@@ -49,8 +48,7 @@ async def test_a2a_request_event_carries_depth_and_chain():
             handler=_handler,
         )
 
-        bus = MemoryA2ABus()
-        a2a = A2AService(bus, queue)
+        a2a = A2AService(queue)
 
         registry = ToolRegistry()
         register_colleague_tools(registry)
@@ -110,8 +108,7 @@ async def test_a2a_request_with_no_turn_context_uses_defaults():
             group="g-bob",
             handler=_handler,
         )
-        bus = MemoryA2ABus()
-        a2a = A2AService(bus, queue)
+        a2a = A2AService(queue)
         registry = ToolRegistry()
         register_colleague_tools(registry)
         tool = registry.get("a2a_ask")

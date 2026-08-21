@@ -711,6 +711,73 @@ async def test_spawn_subagent_batch_isolates_per_child_failure():
     assert batched and batched[-1].successes == 2 and batched[-1].failures == 1
 
 
+async def test_a_batch_timeout_keeps_the_children_that_already_finished():
+    """The deadline cancels the ``gather``, which discards the return
+    value of every child — including the ones that had already FINISHED.
+
+    Reporting those as timed-out with empty text throws away work that
+    completed and was paid for: the tokens are spent either way, and the
+    planner is told a child produced nothing when it produced an answer.
+    A batch where one task is quick and one is pathological is the common
+    shape of this, not an exotic one.
+    """
+    import asyncio
+
+    from crewlet.agent.subagent import SubagentTask, spawn_subagent_batch
+    from crewlet.agent.turn_context import TurnContext
+
+    agent = _mk_agent()
+    parent_turn = TurnContext(agent=agent, org=agent.definition.org)
+
+    class _OneSlowProvider:
+        """Answers the first task at once and hangs on the second."""
+
+        model = "mixed"
+
+        def __init__(self) -> None:
+            self._seen = 0
+
+        async def complete(self, messages, tools=None, **_):
+            self._seen += 1
+            if self._seen > 1:
+                await asyncio.sleep(5.0)
+            return Completion(content="quick answer")
+
+    queue = _QueueStub()
+    ctx = AgentContext(
+        agent_id="a",
+        agent_handle="eng",
+        role="Engineer",
+        event_queue=queue,
+    )
+
+    results = await spawn_subagent_batch(
+        parent_turn=parent_turn,
+        tasks=[
+            SubagentTask(task_prompt="quick", system_prompt="S1"),
+            SubagentTask(task_prompt="slow", system_prompt="S2"),
+        ],
+        tool_names=["web_search"],
+        parent_tool_names=["web_search"],
+        provider=_OneSlowProvider(),
+        provider_key="mixed",
+        registry=_mk_registry(),
+        role_mcp_tools=[],
+        agent_context=ctx,
+        event_queue=queue,
+        max_parallel=1,  # serial, so the first genuinely settles first
+        batch_timeout_seconds=0.3,
+    )
+
+    assert len(results) == 2
+    assert results[0].text == "quick answer", (
+        "a child that finished before the deadline was reported as a timeout "
+        "with its answer discarded"
+    )
+    assert not results[0].timed_out
+    assert results[1].timed_out
+
+
 async def test_spawn_subagent_batch_aggregate_timeout_returns_timeout_results():
     """A pathological batch exceeding ``batch_timeout_seconds`` returns
     a TimeoutError synthetic result per task -- siblings don't carry

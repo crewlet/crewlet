@@ -25,9 +25,13 @@ A few things worth knowing when deploying Crewlet:
   identities (Plane/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
-- **The API is bearer-token gated.** Anything beyond `GET /health` requires a
-  token from `api.auth.tokens`. Never expose the API publicly with a
-  dev-literal token.
+- **The API's read surface is open by default.** Writes and every `/config`
+  route require a token from `api.auth.tokens`; reads do not, so `/events`,
+  `/agents/{id}/memory` and `/ws/stream` serve full LLM transcripts to anyone
+  who can reach the port. That is a reasonable default for a laptop and a
+  decision to make deliberately anywhere else — set
+  `api.auth.allow_anonymous_read: false` to require a token for reads too, and
+  never expose the API publicly with a dev-literal token.
 - **Config encryption at rest** is available and recommended when your
   company config carries secrets — see
   `docs/concepts/configuration.md#secrets`.

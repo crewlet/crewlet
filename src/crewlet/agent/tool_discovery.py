@@ -39,16 +39,16 @@ from crewlet.tools.registry import SimpleTool
 logger = get_logger("agent.tool_discovery")
 
 
-def _tools_by_server(role_mcp_tools: Iterable[Tool]) -> dict[str, list[Tool]]:
-    """Bucket the role's MCP tools by their ``server_name`` attribute.
+def _tools_by_server(tools: Iterable[Tool]) -> dict[str, list[Tool]]:
+    """Bucket tools by their ``server_name`` attribute.
 
-    Tools without ``server_name`` (non-MCP tools that slipped in by
-    mistake) are skipped. The result is sorted by server, then by
+    Tools without ``server_name`` — the builtins that come with the
+    merged catalogue — are skipped. The result is sorted by server, then by
     tool name within each server, so the prompt rendering and the
     ``list_mcp_server_tools`` output are byte-stable across turns.
     """
     buckets: dict[str, list[Tool]] = {}
-    for tool in role_mcp_tools:
+    for tool in tools:
         server = getattr(tool, "server_name", "")
         if not server:
             continue
@@ -67,16 +67,31 @@ def _first_line(text: str) -> str:
 
 
 def build_list_mcp_server_tools(
-    role_mcp_tools: Iterable[Tool],
+    catalogue_tools: Iterable[Tool],
     *,
     availability_filter: set[str] | None = None,
 ) -> SimpleTool:
     """Build the ``list_mcp_server_tools`` meta-tool.
 
     The returned tool closes over a sorted server→tools mapping
-    derived from the role's MCP tool list. Calling it with a server
-    name returns one ``- name: first-line-of-description`` line per
-    tool on that server.
+    derived from the tools it is given. Calling it with a server name
+    returns one ``- name: first-line-of-description`` line per tool on
+    that server.
+
+    **Give it the same universe the prompt catalogue advertises** —
+    the MERGED registry + per-role MCP list, not the per-role list
+    alone. `catalogue_text` renders every server it can see and tells
+    the agent to call this tool for the names, so a server present in
+    one and missing from the other is a server the prompt advertises
+    and this tool denies. That is what happened to every
+    `shared: true` MCP server: its tools live in the global registry,
+    the catalogue listed it, and the agent following its own
+    instructions got "not configured for this role. Available servers:
+    (none)". Nothing else reveals the tool names — the slim catalogue
+    deliberately withholds them — so no tool on any shared server was
+    reachable unless the model guessed a name exactly. Non-MCP tools
+    in the merged list are skipped by :func:`_tools_by_server`, which
+    is why passing the whole catalogue is safe.
 
     ``availability_filter``: when provided, MCP tools whose
     name is not in the set are excluded from the discovery buckets.
@@ -90,10 +105,10 @@ def build_list_mcp_server_tools(
     # off this turn" -- two failure modes the LLM has to act on
     # differently (the second is fixable mid-turn by activating a
     # specific gated tool; the first is not).
-    unfiltered_buckets = _tools_by_server(role_mcp_tools)
+    unfiltered_buckets = _tools_by_server(catalogue_tools)
     if availability_filter is not None:
-        role_mcp_tools = [t for t in role_mcp_tools if t.name in availability_filter]
-    buckets = _tools_by_server(role_mcp_tools)
+        catalogue_tools = [t for t in catalogue_tools if t.name in availability_filter]
+    buckets = _tools_by_server(catalogue_tools)
     server_names = sorted(buckets)
 
     async def _list_tools(params: dict[str, Any], _ctx: AgentContext) -> ToolResult:

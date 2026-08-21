@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.config import (
     ApiAuthConfig,
     ApiAuthTokenConfig,
@@ -27,6 +26,7 @@ from crewlet.config import (
 )
 from crewlet.events.types import Event
 from crewlet.timescaledb.memory import MemoryEventStore
+from tests.test_api.helpers import create_app
 
 # ---------------------------------------------------------------------------
 # Mock infrastructure
@@ -441,32 +441,33 @@ class TestAgentEndpoints:
         assert resp.status_code == 200
         assert resp.json()["name"] == "Lead"
 
-    def test_cmd_api_event_store_aggregates_tokens(self) -> None:
-        """``cmd_api`` must wrap the
+    def test_the_event_store_aggregates_tokens(self) -> None:
+        """``cmd_run`` must wrap the
         persistent leg in a ``CompositeEventStore`` so ``/agents`` returns
         non-zero token totals.
 
         The per-store ``get_agent_states`` leaves token counters at
         zero — aggregation is done at the composite layer via
-        ``list_token_usage_events``.  Wiring
-        ``BufferedEventStore(TimescaleDBEventStore(...))`` directly would
-        make the standalone API dashboard report zero tokens for every
-        agent.  This test calls the real ``_build_api_event_store``
-        helper to gate the wiring end-to-end.
+        ``list_token_usage_events``.  Wiring a
+        ``TimescaleDBEventStore`` in directly would make the dashboard
+        report zero tokens for every agent.  This
+        test calls the real ``_build_engine_event_store`` helper to gate
+        the wiring end-to-end — one helper now, because an ingress-only
+        node is an engine and there is no second process shape with its
+        own store wiring to keep in step.
         """
         from datetime import UTC, datetime
 
-        from crewlet.cli import _build_api_event_store
+        from crewlet.cli import _build_engine_event_store
+        from crewlet.timescaledb import MemoryEventStore
 
         async def _seed() -> object:
-            # db=None → helper returns a CompositeEventStore with two
-            # MemoryEventStore legs (the "no persistent store" fallback).
-            # This still exercises the composite wrapping that the
-            # TimescaleDB path also relies on.  Writing through the
-            # top-level store exercises whatever write path the helper
-            # actually produces, so this test fails cleanly if the
-            # helper stops returning a composite.
-            store = _build_api_event_store(None)
+            # No persistent leg → the helper still returns a composite,
+            # which is what the aggregation depends on. Writing through
+            # the top-level store exercises whatever write path the
+            # helper actually produces, so this test fails cleanly if it
+            # stops returning one.
+            store = _build_engine_event_store(MemoryEventStore(), None)
             await store.start()
             now = datetime.now(UTC)
             await store.write_event(
@@ -797,12 +798,42 @@ class TestEventEndpoints:
 
 
 class TestJiraWebhook:
+    """Jira Data Center webhook — the same ``X-Hub-Signature`` scheme as
+    Confluence, verified at the route ahead of the work."""
+
+    SECRET = "jira-webhook-secret"
+
+    @pytest.fixture
+    def jira_app(self, event_queue: MockEventQueue, event_store: MemoryEventStore):
+        return create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            jira_webhook_secret=self.SECRET,
+        )
+
+    @pytest.fixture
+    def jira_client(self, jira_app) -> TestClient:
+        return TestClient(jira_app, raise_server_exceptions=False)
+
+    def _sign(self, body: bytes) -> str:
+        digest = hmac.new(self.SECRET.encode(), body, hashlib.sha256).hexdigest()
+        return "sha256=" + digest
+
+    def _headers(self, body: bytes) -> dict[str, str]:
+        return {
+            "content-type": "application/json",
+            "x-hub-signature": self._sign(body),
+        }
+
     def test_jira_webhook_publishes(
-        self, client: TestClient, event_queue: MockEventQueue
+        self, jira_client: TestClient, event_queue: MockEventQueue
     ):
-        resp = client.post(
-            "/webhooks/jira",
-            json={"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-1"}},
+        body = json.dumps(
+            {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-1"}}
+        ).encode()
+        resp = jira_client.post(
+            "/webhooks/jira", content=body, headers=self._headers(body)
         )
         assert resp.status_code == 200
 
@@ -815,13 +846,40 @@ class TestJiraWebhook:
         assert "body_raw_b64" in event.payload
         assert event.payload["body"]["issue"]["key"] == "PROJ-1"
 
-    def test_jira_webhook_invalid_json(self, client: TestClient):
-        resp = client.post(
-            "/webhooks/jira",
-            content=b"not json",
-            headers={"content-type": "application/json"},
+    def test_jira_webhook_invalid_json(self, jira_client: TestClient):
+        body = b"not json"
+        resp = jira_client.post(
+            "/webhooks/jira", content=body, headers=self._headers(body)
         )
         assert resp.status_code == 400
+
+    def test_a_bad_signature_publishes_nothing(
+        self, jira_client: TestClient, event_queue: MockEventQueue
+    ):
+        body = json.dumps({"webhookEvent": "jira:issue_updated"}).encode()
+        resp = jira_client.post(
+            "/webhooks/jira",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": "sha256=" + "0" * 64,
+            },
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == [], (
+            "an unverified delivery reached the inbound topic"
+        )
+
+    def test_no_secret_configured_holds_the_delivery(
+        self, client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = client.post("/webhooks/jira", json={"webhookEvent": "x"})
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
+        assert event_queue.published == []
 
 
 class TestSlackWebhook:
@@ -939,6 +997,30 @@ class TestGithubWebhook:
         )
         assert resp.status_code == 401
 
+    def test_no_secret_configured_holds_the_delivery(
+        self,
+        client: TestClient,
+    ):
+        """No secret means nothing to verify against, so the delivery is
+        HELD, not discarded.
+
+        503 and not 4xx: a 4xx tells the sender its request was bad and
+        must not be sent again, and the request is fine — what is missing
+        is on this side. Discarding it would be the silent, unretried
+        loss the unconfigured-config path was rewritten to stop. 503 with
+        ``Retry-After`` says "not yet", so the delivery waits at the
+        provider and flows once somebody sets the secret.
+        """
+        resp = client.post(
+            "/webhooks/github",
+            json={"action": "opened"},
+        )
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
+
 
 class TestGitlabWebhook:
     """GitLab webhook tests — signing-token (19.1+ Standard-Webhooks) only."""
@@ -1001,7 +1083,7 @@ class TestGitlabWebhook:
         resp = signing_client.post("/webhooks/gitlab", content=body, headers=headers)
         assert resp.status_code == 401
 
-    def test_no_secret_configured_500(
+    def test_no_secret_configured_holds_the_delivery(
         self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
         app = create_app(
@@ -1011,18 +1093,145 @@ class TestGitlabWebhook:
         )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/webhooks/gitlab", json={"object_kind": "issue"})
-        assert resp.status_code == 500
-
-    def test_no_secret_configured_returns_500(
-        self,
-        client: TestClient,
-    ):
-        """When no secret is configured, the endpoint rejects with 500."""
-        resp = client.post(
-            "/webhooks/github",
-            json={"action": "opened"},
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
         )
-        assert resp.status_code == 500
+
+
+class TestConfluenceWebhook:
+    """Confluence Data Center webhook — ``sha256=`` + HMAC-SHA256 of the
+    raw body, carried in ``X-Hub-Signature``.
+
+    Verified at the ROUTE, like GitHub / GitLab / Plane. The route is
+    exempt from bearer auth precisely because it authenticates by
+    provider HMAC, so the check has to run before the delivery is
+    recorded and published rather than further downstream.
+    """
+
+    SECRET = "confluence-webhook-secret"
+
+    @pytest.fixture
+    def confluence_app(
+        self, event_queue: MockEventQueue, event_store: MemoryEventStore
+    ):
+        return create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            confluence_webhook_secret=self.SECRET,
+        )
+
+    @pytest.fixture
+    def confluence_client(self, confluence_app) -> TestClient:
+        return TestClient(confluence_app, raise_server_exceptions=False)
+
+    def _sign(self, body: bytes) -> str:
+        return (
+            "sha256=" + hmac.new(self.SECRET.encode(), body, hashlib.sha256).hexdigest()
+        )
+
+    def _body(self) -> bytes:
+        return json.dumps(
+            {"event": "page_created", "page": {"id": "1", "title": "Spec"}}
+        ).encode()
+
+    def test_valid_signature_publishes(
+        self, confluence_client: TestClient, event_queue: MockEventQueue
+    ):
+        body = self._body()
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": self._sign(body),
+            },
+        )
+        assert resp.status_code == 200
+        assert len(event_queue.published) == 1
+        topic, event = event_queue.published[0]
+        assert topic == "crewlet.notifications.inbound"
+        assert event.source == "confluence"
+
+    def test_a_bad_signature_publishes_nothing(
+        self, confluence_client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=self._body(),
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": "sha256=" + "0" * 64,
+            },
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == [], (
+            "an unverified delivery reached the inbound topic"
+        )
+
+    def test_a_missing_signature_publishes_nothing(
+        self, confluence_client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=self._body(),
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == []
+
+    def test_non_ascii_signature_401(self, confluence_client: TestClient):
+        """Starlette decodes raw header bytes with latin-1 and
+        ``hmac.compare_digest`` raises ``TypeError`` on non-ASCII ``str``
+        operands, so the shape prefilter has to reject the header before
+        the comparison runs — otherwise a made-up header turns an
+        unauthenticated request into a 500."""
+        resp = confluence_client.post(
+            "/webhooks/confluence",
+            content=self._body(),
+            headers={
+                b"content-type": b"application/json",
+                b"x-hub-signature": b"sha256=" + b"\xff" * 64,
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_non_hex_signature_401(self, confluence_client: TestClient):
+        """Wrong alphabet, wrong length, or a missing prefix."""
+        body = self._body()
+        for bad in ("sha256=" + "z" * 64, "sha256=deadbeef", self._sign(body)[7:]):
+            resp = confluence_client.post(
+                "/webhooks/confluence",
+                content=body,
+                headers={
+                    "content-type": "application/json",
+                    "x-hub-signature": bad,
+                },
+            )
+            assert resp.status_code == 401, bad
+
+    def test_no_secret_configured_holds_the_delivery(
+        self, client: TestClient, event_queue: MockEventQueue
+    ):
+        """No secret means nothing to verify against, so the delivery is
+        HELD, not discarded.
+
+        503 and not 4xx: a 4xx tells the sender its request was bad and
+        must not be sent again, and the request is fine — what is missing
+        is on this side. Discarding it would be the silent, unretried
+        loss the unconfigured-config path was rewritten to stop. 503 with
+        ``Retry-After`` says "not yet", so the delivery waits at the
+        provider and flows once somebody sets the secret.
+        """
+        resp = client.post("/webhooks/confluence", json={"event": "page_created"})
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
+        assert event_queue.published == []
 
 
 class TestPlaneWebhook:
@@ -1095,7 +1304,7 @@ class TestPlaneWebhook:
         )
         assert resp.status_code == 401
 
-    def test_no_secret_configured_500(
+    def test_no_secret_configured_holds_the_delivery(
         self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
         app = create_app(
@@ -1105,8 +1314,11 @@ class TestPlaneWebhook:
         )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/webhooks/plane", json={"event": "issue"})
-        assert resp.status_code == 500
-        assert resp.json() == {"error": "webhook verification not configured"}
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
 
     def test_invalid_json_400(self, plane_client: TestClient):
         """A valid signature over non-JSON bytes still 400s."""
@@ -1165,12 +1377,13 @@ class TestPlaneWebhook:
         assert resp.status_code == 400
         assert resp.json() == {"error": "invalid JSON"}
 
-    def test_unconfigured_drop_200(
+    def test_unconfigured_rejected_503(
         self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
-        """A verified delivery to an unconfigured engine is dropped with
-        a 200 AFTER signature verification, protecting Plane's five-retry
-        auto-disable counter without accepting forgeries.
+        """A verified delivery to an unconfigured process gets a 503, AFTER
+        signature verification — so a forgery is still rejected as a
+        forgery, and a genuine delivery is retried rather than silently
+        discarded behind a 200.
 
         ``create_app`` without a ``company_config_store`` defaults
         ``configured`` to True, so the test flips it explicitly."""
@@ -1184,8 +1397,9 @@ class TestPlaneWebhook:
         client = TestClient(app, raise_server_exceptions=False)
         body = json.dumps({"event": "issue", "action": "created"}).encode()
         resp = client.post("/webhooks/plane", content=body, headers=self._headers(body))
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "dropped", "reason": "unconfigured"}
+        assert resp.status_code == 503
+        assert resp.json() == {"status": "unavailable", "reason": "unconfigured"}
+        assert resp.headers["retry-after"]
         assert event_queue.published == []
 
         # A forgery is still rejected even while unconfigured.
@@ -1391,13 +1605,26 @@ class TestForgeWebhook:
         )
         assert resp.status_code == 401
 
-    def test_forge_no_app_id_configured_rejects(self, client: TestClient):
-        """When no forge_app_id configured, endpoint rejects with 500."""
+    def test_forge_no_app_id_holds_the_delivery(self, client: TestClient):
+        """No secret means nothing to verify against, so the delivery is
+        HELD, not discarded.
+
+        503 and not 4xx: a 4xx tells the sender its request was bad and
+        must not be sent again, and the request is fine — what is missing
+        is on this side. Discarding it would be the silent, unretried
+        loss the unconfigured-config path was rewritten to stop. 503 with
+        ``Retry-After`` says "not yet", so the delivery waits at the
+        provider and flows once somebody sets the secret.
+        """
         resp = client.post(
             "/webhooks/forge",
             json={"event": "avi:confluence:created:page", "context": {}},
         )
-        assert resp.status_code == 500
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
 
 
 class TestClientDisconnect:
@@ -1524,11 +1751,26 @@ class TestClientDisconnect:
 
 class TestWebhookPersistence:
     def test_jira_webhook_persists_event(
-        self, client: TestClient, event_store: MemoryEventStore
+        self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
-        client.post(
+        secret = "persist-test-secret"
+        app = create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            jira_webhook_secret=secret,
+        )
+        body = json.dumps({"webhookEvent": "jira:issue_created"}).encode()
+        signature = (
+            "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        )
+        TestClient(app, raise_server_exceptions=False).post(
             "/webhooks/jira",
-            json={"webhookEvent": "jira:issue_created"},
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": signature,
+            },
         )
         loop = asyncio.new_event_loop()
         events = loop.run_until_complete(event_store.list_events())

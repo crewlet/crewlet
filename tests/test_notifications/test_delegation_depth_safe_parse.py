@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from crewlet.events.types import Event, ExternalNotification
+from crewlet.queue.topics import agent_inbox_topic
 
 
 @dataclass
@@ -24,31 +25,40 @@ class _QueueStub:
         self.published.append((topic, event))
 
 
-class _HandleStub:
-    """Minimal stand-in for an AgentInstance."""
+class _PartyStub:
+    """Minimal stand-in for a ResolvedParty.
 
-    def __init__(self, handle: str = "bob", id_str: str = "id-bob") -> None:
+    Deliberately carries no ``agent``: the inbound path resolves seats
+    from the org and must route on the handle and the derived id alone,
+    so a stub with no live instance is the honest shape here.
+    """
+
+    def __init__(self, handle: str = "bob", agent_id: str = "id-bob") -> None:
         self.handle = handle
-        self.id_str = id_str
+        self.name = handle
+        self.agent_id = agent_id
+        self.is_human = False
+        self.is_local = False
+        self.inbox_topic = agent_inbox_topic(handle)
 
 
 class _HandleRegistryStub:
     """Matches the real HandleRegistry surface used by the inbound
-    path: ``resolve_handle`` returns an agent (or None)."""
+    path: ``resolve_party*`` returns a party (or None)."""
 
     def __init__(self) -> None:
-        self._agent = _HandleStub()
+        self._party = _PartyStub()
 
-    def resolve_handle(self, handle: str) -> _HandleStub | None:
-        return self._agent if handle == "bob" else None
+    def resolve_party(self, handle: str) -> _PartyStub | None:
+        return self._party if handle == "bob" else None
 
-    def resolve_email_address(self, email: str) -> _HandleStub | None:
+    def resolve_party_email(self, email: str) -> _PartyStub | None:
         return None
 
-    def resolve_external_id(self, source: str, ext_key: str) -> _HandleStub | None:
+    def resolve_party_external(self, source: str, ext_key: str) -> _PartyStub | None:
         return None
 
-    def resolve_role(self, role_name: str) -> _HandleStub | None:
+    def resolve_handle(self, handle: str) -> None:
         return None
 
     def all_transports(self) -> list[str]:

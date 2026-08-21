@@ -13,7 +13,6 @@ from uuid import uuid4
 
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.config import (
     ApiAuthConfig,
     ApiAuthTokenConfig,
@@ -22,6 +21,7 @@ from crewlet.config import (
 )
 from crewlet.secrets import KeyringCipher, is_encrypted_document, load_config
 from crewlet.secrets.keygen import generate_key
+from tests.test_api.helpers import create_app
 
 _AUTH_PUT = {"Authorization": "Bearer secret-1", "X-Summary": "test"}
 

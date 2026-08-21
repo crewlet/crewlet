@@ -268,6 +268,13 @@ class AgentDiary:
         if not agent_id:
             return []
         try:
+            # The TTL filter belongs in the WHERE clause, not after the
+            # LIMIT. Applied in Python afterwards, expired rows still
+            # consumed the recency window: an agent whose newest `limit`
+            # entries were all short-lived got an EMPTY memory block
+            # while non-expired older ones sat just past the cut. They
+            # accumulate (nothing swept them until the maintenance pass
+            # added below), so the window filled with them over time.
             rows = await self._db.execute(
                 """
                 SELECT id, agent_id, kind, content, ttl_until,
@@ -275,11 +282,13 @@ class AgentDiary:
                        retrieval_count, last_retrieved_at, created_at
                 FROM agent_diary
                 WHERE agent_id = $1
+                  AND ($3 OR ttl_until IS NULL OR ttl_until > now())
                 ORDER BY created_at DESC
                 LIMIT $2
                 """,
                 agent_id,
                 int(limit),
+                bool(include_expired),
             )
         except Exception:
             logger.exception("agent_diary_list_failed", agent_id=agent_id)
@@ -513,10 +522,12 @@ class AgentDiary:
     async def delete_expired(self) -> int:
         """Drop all ``diary_short`` rows whose TTL is in the past.
 
-        Returns the number of rows deleted.  Idempotent.  Not
-        scheduled today; called manually / by tests.  A future
-        operational task may call this from a daily cron when the
-        diary grows large enough to need it.
+        Returns the number of rows deleted.  Idempotent.  Run by the
+        :class:`~crewlet.db.maintenance.MaintenanceWorker` sweep on the
+        same tick as the other retention tables — for a long time it
+        had no caller outside tests, so ``agent_diary`` grew for the
+        life of the deployment while every read still paid to filter
+        the rows nothing was removing.
         """
         try:
             rows = await self._db.execute(

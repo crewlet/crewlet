@@ -59,7 +59,7 @@ flowchart TD
     subgraph proc["crewlet run — one process by default"]
         direction TB
         API["<b>API + dashboard</b><br/>webhook routes · REST · /config/* · live event stream"]
-        ENG["<b>Engine</b><br/>Agent handlers (one turn engine per seat)<br/>Notification SVC (inbound routing + outbound sends)<br/>A2A service (agent-to-agent bus)<br/>———<br/>Organization model — hierarchy, roles, DACI decisions<br/>Provider layer — LLM · embeddings · sandbox<br/>Tool registry — builtins · per-role MCP · A2A"]
+        ENG["<b>Engine</b><br/>Agent handlers (one turn engine per seat)<br/>Notification SVC (inbound routing + outbound sends)<br/>A2A service (agent-to-agent channels)<br/>———<br/>Organization model — hierarchy, roles, DACI decisions<br/>Provider layer — LLM · embeddings · sandbox<br/>Tool registry — builtins · per-role MCP · A2A"]
         API --- ENG
     end
     PULSAR["<b>Apache Pulsar</b><br/>crewlet.agent.*.inbox<br/>crewlet.notifications<br/>crewlet.config.*"]
@@ -72,7 +72,9 @@ flowchart TD
 
 **Infrastructure**: Apache Pulsar + PostgreSQL with TimescaleDB and pgvector extensions (one database for operational state, the per-agent diary vector store, the episodic vector store, and the event store). OpenTelemetry for distributed tracing.
 
-**One process, or two**: by default `crewlet run` serves the API and dashboard inside the engine process — that is the whole stack. The API can also run as its own process (`crewlet run api`) when you want to restart the engine without dropping webhooks, or put the two on different hosts. The halves communicate only through Pulsar, so the split is a deployment choice, not a code change. The engine itself is a **single instance**: agents are stateful seats, not interchangeable workers.
+**One node type**: `crewlet run` is the node, and what it does is a config value — `node.roles` picks from `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all three: one process serving the API and the dashboard and running every agent, which is the whole stack. Splitting the API off is the same command with `--roles ingress`, so both topologies are the same code path rather than two wirings that have to be kept in step.
+
+**One node is enough, and more than one is supported.** Agents are stateful seats, not interchangeable workers, so which node runs which seat is decided by a lease — see [Seat ownership](seat-ownership.md). Scale up (a bigger host, a higher `max_concurrent`) before scaling out: a single engine handles many concurrent turns, and one node is the design's degenerate case rather than a lesser path. Run a fleet when a node's failure is not acceptable downtime, when traffic has to terminate separately from the agents, or when some seats must run somewhere specific — [Running a Fleet](../guides/fleet.md) covers all three, and [Scaling Out](scaling.md) is the model underneath them.
 
 ---
 
@@ -144,7 +146,7 @@ src/crewlet/
 │                         #   prompts, turn_context, phase_model, llm_loop,
 │                         #   skills/ — knowledge-base-sourced tool-skill registry)
 ├── queue/                # EventQueue protocol (Pulsar + memory)
-├── a2a/                  # Agent-to-agent bus (protocol, memory, service)
+├── a2a/                  # Agent-to-agent channels (durable state, service)
 ├── db/                   # Database layer (asyncpg, migrations, token_usage,
 │                         #   deterministic agent-id derivation)
 ├── secrets/              # Company-config encryption at rest (SecretCipher,

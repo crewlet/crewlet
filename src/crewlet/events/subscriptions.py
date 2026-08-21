@@ -11,6 +11,17 @@ Routing rules:
 - TaskDelegated   → target agent's inbox
 - ExternalNotification → resolved agent's inbox
 
+Routing is an **org** function, not a process-local one.  Every handler
+here resolves its recipient from the live organization — a role name or
+a derived agent id to a seat, and a seat to its inbox subject — never
+from the agent pool.  Each of these topics has ONE fleet-wide consumer
+group, so whichever node wins a delivery is the node that has to route
+it; resolving through the pool made that node's answer depend on which
+agents happened to be running in it, which is correct only while every
+agent runs in every process.  The failure was terminal, not a retry:
+the handler logged ``*_not_found`` / ``*_unroutable`` and returned, and
+the event was acked and gone.
+
 These internal events route only to **agent** seats — they exist to
 wake an agent into a turn, and a human has no turn to wake.  When a
 resolved recipient is a human seat the event is skipped gracefully:
@@ -35,7 +46,6 @@ Slack channel and MCP tools to discuss and decide.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.events.types import (
@@ -49,30 +59,25 @@ from crewlet.events.types import (
 from crewlet.org.hierarchy import get_manager
 from crewlet.org.models import Organization
 from crewlet.queue.protocol import EventQueue
+from crewlet.queue.topics import agent_inbox_topic
 
 logger = get_logger("events.subscriptions")
 
 
-def _inbox_topic(agent: Any) -> str:
-    """Return the inbox topic for an agent instance."""
-    handle = agent.handle or agent.id_str
-    return f"crewlet.agent.{handle}.inbox"
-
-
 async def setup_subscriptions(
     queue: EventQueue,
-    agent_pool: Any,
     org_provider: Callable[[], Organization],
 ) -> Callable[[], None]:
     """Set up event subscriptions that route to agent inbox topics.
 
-    All handlers publish to the target agent's inbox topic on the
-    EventQueue (or, for human seats, through the outbound notification
-    pipeline).  The Engine's per-agent handler (subscribed to that
-    inbox) processes the event.
+    All handlers publish to the target seat's inbox topic on the
+    EventQueue; human seats are skipped (see the module docstring).
+    The Engine's per-agent handler (subscribed to that inbox) processes
+    the event on whichever node owns the seat.
 
     ``org_provider`` is called per event — never cache the org here,
-    or hot reloads would route against a stale hierarchy.
+    or hot reloads would route against a stale hierarchy.  It is also
+    the *only* dependency: routing needs the org and nothing else.
 
     Returns a no-op cleanup callback (kept for API compatibility).
     """
@@ -95,13 +100,12 @@ async def setup_subscriptions(
             for role in org.all_roles():
                 if role.is_human or get_manager(role, org) is not None:
                     continue
-                for agent in agent_pool.get_all_for_role(role.name):
-                    logger.debug(
-                        "task_created_to_top_manager",
-                        task_id=event.task_id,
-                        agent=agent.role_name,
-                    )
-                    await queue.publish(_inbox_topic(agent), event)
+                logger.debug(
+                    "task_created_to_top_manager",
+                    task_id=event.task_id,
+                    agent=role.name,
+                )
+                await queue.publish(agent_inbox_topic(role.get_handle()), event)
             return
 
         # Find the manager (team lead) for the target role
@@ -117,34 +121,32 @@ async def setup_subscriptions(
         manager_role = get_manager(role, org)
         # The lead that would triage is an agent: route to it.  When the
         # lead is a human (or there is none), fall through to the target
-        # role's own agents — there is no agent turn to run for a human
+        # role's own seat — there is no agent turn to run for a human
         # lead, and the human sees the task in the PM tool.
         if manager_role is not None and not manager_role.is_human:
-            manager_agents = agent_pool.get_all_for_role(manager_role.name)
-            if manager_agents:
-                for mgr in manager_agents:
-                    logger.debug(
-                        "task_created_to_lead",
-                        task_id=event.task_id,
-                        lead=mgr.role_name,
-                    )
-                    await queue.publish(_inbox_topic(mgr), event)
-                return
-            logger.warning(
-                "task_created_no_agents_for_manager_role",
+            logger.debug(
+                "task_created_to_lead",
                 task_id=event.task_id,
-                manager_role=manager_role.name,
+                lead=manager_role.name,
             )
+            await queue.publish(agent_inbox_topic(manager_role.get_handle()), event)
+            return
 
         # No agent lead to triage (human lead, or none) — send directly
-        # to the target role's own agents, if it has any.
-        for agent in agent_pool.get_all_for_role(target_role):
+        # to the target seat, when that seat is itself an agent.
+        if role.is_human:
             logger.debug(
-                "task_created_to_self",
+                "task_created_human_skipped",
                 task_id=event.task_id,
-                agent=agent.role_name,
+                seat=role.name,
             )
-            await queue.publish(_inbox_topic(agent), event)
+            return
+        logger.debug(
+            "task_created_to_self",
+            task_id=event.task_id,
+            agent=role.name,
+        )
+        await queue.publish(agent_inbox_topic(role.get_handle()), event)
 
     await queue.subscribe(
         "crewlet.events.task_created", "subscriptions", _on_task_created
@@ -158,33 +160,41 @@ async def setup_subscriptions(
         if not isinstance(event, TaskAssigned):
             return
 
-        agent = agent_pool.get_by_id(event.agent_id)
-        if agent is None:
-            # A human seat carries no agent id.  Human assignment is the
-            # PM tool's job (and notifies them natively), so an event
-            # naming a human is skipped quietly rather than warned.
-            org = org_provider()
-            seat = org.get_role(event.role) if event.role else None
-            if seat is not None and seat.is_human:
-                logger.debug(
-                    "task_assigned_human_skipped",
-                    task_id=event.task_id,
-                    seat=seat.name,
-                )
-                return
+        org = org_provider()
+        # The agent id is authoritative when it resolves — it names one
+        # seat exactly.  ``role`` is the fallback, and it is the ONLY
+        # field that can name a human seat, since a human has no agent
+        # id to carry.
+        seat = org.agent_seat_by_id(event.agent_id) if event.agent_id else None
+        if seat is None and event.role:
+            seat = org.get_role(event.role)
+
+        if seat is None:
             logger.warning(
-                "task_assigned_agent_not_found",
+                "task_assigned_seat_not_found",
                 task_id=event.task_id,
                 agent_id=event.agent_id,
+                role=event.role,
+            )
+            return
+
+        if seat.is_human:
+            # A human seat runs no turn.  Human assignment is the PM
+            # tool's job (and notifies them natively), so an event
+            # naming a human is skipped quietly rather than warned.
+            logger.debug(
+                "task_assigned_human_skipped",
+                task_id=event.task_id,
+                seat=seat.name,
             )
             return
 
         logger.debug(
             "task_assigned_to_inbox",
             task_id=event.task_id,
-            agent=agent.role_name,
+            agent=seat.name,
         )
-        await queue.publish(_inbox_topic(agent), event)
+        await queue.publish(agent_inbox_topic(seat.get_handle()), event)
 
     await queue.subscribe(
         "crewlet.events.task_assigned", "subscriptions", _on_task_assigned
@@ -198,41 +208,44 @@ async def setup_subscriptions(
         if not isinstance(event, TaskCompleted):
             return
 
-        # Resolve the manager to notify from the completing agent's role.
+        # Resolve the manager to notify from the completing agent's seat.
         org = org_provider()
-        notified = False
-        manager_is_human = False
-        agent = agent_pool.get_by_id(event.agent_id)
-        if agent is not None:
-            role = org.get_role(agent.role_name)
-            if role is not None:
-                manager_role = get_manager(role, org)
-                if manager_role is not None and manager_role.is_human:
-                    # A human manager has no inbox; they see the agent's
-                    # work natively on Slack/Jira.  Not unroutable —
-                    # intentionally not pushed.
-                    manager_is_human = True
-                    logger.debug(
-                        "task_completed_human_manager_skipped",
-                        task_id=event.task_id,
-                        manager=manager_role.name,
-                    )
-                elif manager_role is not None:
-                    for mgr in agent_pool.get_all_for_role(manager_role.name):
-                        logger.debug(
-                            "task_completed_to_manager",
-                            task_id=event.task_id,
-                            manager=mgr.role_name,
-                        )
-                        await queue.publish(_inbox_topic(mgr), event)
-                        notified = True
+        seat = org.agent_seat_by_id(event.agent_id) if event.agent_id else None
+        if seat is None:
+            if event.agent_id:
+                logger.warning(
+                    "task_completed_unroutable",
+                    task_id=event.task_id,
+                    agent_id=event.agent_id,
+                )
+            return
 
-        if not notified and not manager_is_human and event.agent_id:
+        manager_role = get_manager(seat, org)
+        if manager_role is None:
             logger.warning(
                 "task_completed_unroutable",
                 task_id=event.task_id,
                 agent_id=event.agent_id,
             )
+            return
+
+        if manager_role.is_human:
+            # A human manager has no inbox; they see the agent's work
+            # natively on Slack/Jira.  Not unroutable — intentionally
+            # not pushed.
+            logger.debug(
+                "task_completed_human_manager_skipped",
+                task_id=event.task_id,
+                manager=manager_role.name,
+            )
+            return
+
+        logger.debug(
+            "task_completed_to_manager",
+            task_id=event.task_id,
+            manager=manager_role.name,
+        )
+        await queue.publish(agent_inbox_topic(manager_role.get_handle()), event)
 
     await queue.subscribe(
         "crewlet.events.task_completed",
@@ -254,7 +267,14 @@ async def setup_subscriptions(
 
         org = org_provider()
         seat = org.get_role(target_role)
-        if seat is not None and seat.is_human:
+        if seat is None:
+            logger.warning(
+                "task_delegated_unknown_role",
+                child_task_id=event.child_task_id,
+                target_role=target_role,
+            )
+            return
+        if seat.is_human:
             # Delegating to a human is done by the agent on a colleague
             # surface (Jira/Slack) with an @-mention, not by an engine
             # push — skip the internal routing event quietly.
@@ -265,14 +285,12 @@ async def setup_subscriptions(
             )
             return
 
-        agents = agent_pool.get_all_for_role(target_role)
-        for agent in agents:
-            logger.debug(
-                "task_delegated_to_agent",
-                child_task_id=event.child_task_id,
-                agent=agent.role_name,
-            )
-            await queue.publish(_inbox_topic(agent), event)
+        logger.debug(
+            "task_delegated_to_agent",
+            child_task_id=event.child_task_id,
+            agent=seat.name,
+        )
+        await queue.publish(agent_inbox_topic(seat.get_handle()), event)
 
     await queue.subscribe(
         "crewlet.events.task_delegated",
@@ -288,20 +306,21 @@ async def setup_subscriptions(
         if not isinstance(event, ExternalNotification):
             return
 
-        agent = agent_pool.get_by_id(event.agent_id) if event.agent_id else None
-        if agent is None:
+        org = org_provider()
+        seat = org.agent_seat_by_id(event.agent_id) if event.agent_id else None
+        if seat is None:
             logger.warning(
-                "external_notification_no_agent",
+                "external_notification_no_seat",
                 agent_id=event.agent_id,
             )
             return
 
         logger.debug(
             "external_notification_to_inbox",
-            agent=agent.role_name,
+            agent=seat.name,
             source=event.notification_source,
         )
-        await queue.publish(_inbox_topic(agent), event)
+        await queue.publish(agent_inbox_topic(seat.get_handle()), event)
 
     await queue.subscribe(
         "crewlet.events.external_notification",

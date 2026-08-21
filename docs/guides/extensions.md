@@ -33,7 +33,7 @@ Every hook receives the same context object exposing the engine's subsystems:
 | Field | What it gives you |
 |---|---|
 | `ctx.event_queue` | Publish/subscribe engine events (the full [EventQueue](../concepts/event-system.md) surface) |
-| `ctx.agent_pool` | Query and manage live agent instances |
+| `ctx.agent_pool` | Live agent instances **on this node** — see [The agent pool is per-node](#the-agent-pool-is-per-node) |
 | `ctx.execution_tracker` | Agent ↔ issue mappings and the dependency graph |
 | `ctx.tool_registry` | Register custom agent tools (`ctx.tool_registry.register(tool)`) |
 | `ctx.role_mcp_tools` | Per-role MCP tool maps |
@@ -42,6 +42,63 @@ Every hook receives the same context object exposing the engine's subsystems:
 | `ctx.org` | The in-memory `Organization` model |
 | `ctx.observability` | Token/turn metrics (`ObservabilityManager`) |
 | `ctx.debug` | Engine debug flag |
+
+---
+
+## The agent pool is per-node
+
+`ctx.agent_pool` holds the agents **this process is running**, which is not the
+same as the agents the company has. An engine spawns an `AgentInstance` only for
+the seats whose lease it holds (see
+[Seat ownership](../concepts/seat-ownership.md)), so in a fleet each node's pool
+is a slice of the org, and at `on_engine_start` it is typically **empty** — seats
+are claimed after the subsystems come up.
+
+Two rules follow, and both matter even on a single node, because a single node is
+just a fleet of one that may not stay that way:
+
+- **Never resolve a recipient through the pool.** Address a seat by handle. Its
+  inbox topic and its agent id are both derivable from the org, which every node
+  has in full: `crewlet.queue.topics.agent_inbox_topic(handle)` for the topic,
+  and `ctx.org.agent_seat_by_handle(handle)` + `ctx.org.agent_id_for(seat)` for
+  the id. A pool lookup answers "is this agent here?", and a miss means "not on
+  this node" — not "does not exist".
+- **Never treat pool membership as company membership.** `ctx.org` is the
+  company; the pool is this process's share of it. Iterating the pool to count
+  seats, build a colleague list, or decide whether a role exists gives an answer
+  that changes with placement.
+
+Use the pool for what it is for: inspecting or acting on a turn that is running
+*here* — state, current task, in-flight work.
+
+## Company-wide work needs a claim
+
+`on_engine_start` fires in **every** process, so an extension that polls an
+external API, writes a daily digest, or reconciles a remote system does it once
+per node unless it asks first:
+
+```python
+async def tick(self, ctx: ExtensionContext) -> None:
+    if ctx.claim_duty and not await ctx.claim_duty("acme-digest"):
+        return          # a peer is doing it this round
+    await self.write_digest()
+```
+
+The same primitive the engine's own [singleton
+duties](../concepts/seat-ownership.md#singleton-duties) use — the scheduler
+tick, the retention sweep, the sandbox waiter — and it takes any duty string, so
+two extensions never collide.
+
+**Claim per tick, never once at start.** A claim is a short lease, so holding one
+from `on_engine_start` gives the job to whichever node booted first for the life
+of that process, including after it stops being able to do it. Asking each time
+you are about to act means a node that dies mid-duty hands it back by lapsing,
+with no handoff protocol to write.
+
+`ctx.claim_duty` is `None` when the engine did not wire one (a bare
+`ExtensionContext` in a test) — treat that as yes, because a fleet of one is what
+an unwired engine is. `ctx.node_id` names the process, matching the logs,
+`/health`, and the lease table.
 
 ---
 

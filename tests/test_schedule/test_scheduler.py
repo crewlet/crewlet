@@ -5,28 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from crewlet.db.agents import derive_agent_id
 from crewlet.events.types import ScheduledTaskFired, TaskAssigned
 from crewlet.org.models import Organization, OrgUnit, Role, Schedule
 from crewlet.schedule import MemoryScheduledRunStore, Scheduler
 from crewlet.schedule.scheduler import count_schedules, has_schedules
 
 # --- fakes -----------------------------------------------------------------
-
-
-@dataclass
-class _Agent:
-    handle: str
-    role_name: str
-    id_str: str
-
-
-class _Pool:
-    def __init__(self, agents: list[_Agent]) -> None:
-        self._by_handle = {a.handle: a for a in agents}
-
-    def get_by_handle(self, handle: str) -> _Agent | None:
-        return self._by_handle.get(handle)
 
 
 @dataclass
@@ -44,13 +31,6 @@ class _Queue:
         ]
 
 
-def _agents_for(org: Organization) -> list[_Agent]:
-    return [
-        _Agent(handle=r.get_handle(), role_name=r.name, id_str=f"id-{r.get_handle()}")
-        for r in org.all_roles()
-    ]
-
-
 def _build(
     org: Organization,
     *,
@@ -61,7 +41,6 @@ def _build(
     store = MemoryScheduledRunStore()
     scheduler = Scheduler(
         event_queue=queue,
-        agent_pool=_Pool(_agents_for(org)),
         org_provider=lambda: holder[0],
         store=store,
         default_timezone="UTC",
@@ -126,7 +105,9 @@ async def test_role_schedule_fires_to_own_inbox():
     assert event.payload["scheduled"] is True
     assert event.payload["schedule_name"] == "smoke"
     assert event.payload["timeout_seconds"] == 180
-    assert event.agent_id == "id-qa"
+    # The id is DERIVED from (org name, handle) — the same value every
+    # node computes, and the same one the seat's turn runs under.
+    assert event.agent_id == str(derive_agent_id("Acme", "qa"))
     # Lifecycle event emitted too.
     assert any(isinstance(e, ScheduledTaskFired) for _, e in queue.published)
 
@@ -188,13 +169,19 @@ async def test_unit_target_lead():
 
 
 async def test_each_member_failure_does_not_block_siblings():
-    # Pool is missing 'qa-dev' (e.g. role not spawned); 'qa-lead' still fires.
+    # A publish that fails for one member must not abort the fan-out.
     org = _unit_org("each")
     holder = [org]
-    queue = _Queue()
+
+    class _FlakyQueue(_Queue):
+        async def publish(self, topic: str, event: Any) -> None:
+            if topic == "crewlet.agent.qa-dev.inbox":
+                raise RuntimeError("broker refused the publish")
+            await super().publish(topic, event)
+
+    queue = _FlakyQueue()
     scheduler = Scheduler(
         event_queue=queue,
-        agent_pool=_Pool([_Agent("qa-lead", "QA Lead", "id-qa-lead")]),
         org_provider=lambda: holder[0],
         store=MemoryScheduledRunStore(),
         default_timezone="UTC",
@@ -203,6 +190,38 @@ async def test_each_member_failure_does_not_block_siblings():
     fired = await scheduler.tick_once(now=_at(9, 0, s=30))
     assert fired == 1
     assert [t for t, _ in queue.inbox_tasks()] == ["crewlet.agent.qa-lead.inbox"]
+
+
+async def test_seat_absent_from_this_node_still_fires():
+    # The runner seat is not running in this process — under owner-only
+    # seats that is the NORMAL case, since the node whose tick wins the
+    # claim is rarely the node that owns the seat.  The fire is addressed
+    # to the seat's inbox and the owning node consumes it.
+    scheduler, queue, _store, _ = _build(_role_org())
+    scheduler._last_tick_utc = _at(8, 59, s=30)
+    assert await scheduler.tick_once(now=_at(9, 0, s=30)) == 1
+    topic, event = queue.inbox_tasks()[0]
+    assert topic == "crewlet.agent.qa.inbox"
+    assert event.agent_id == str(derive_agent_id("Acme", "qa"))
+
+
+async def test_handle_naming_no_seat_does_not_claim():
+    # A handle that names no agent seat in the current org (decommissioned
+    # role, config edit mid-tick) must not burn the claim — a later tick
+    # against a corrected org should still be able to fire.
+    org = _role_org()
+    scheduler, queue, store, _ = _build(org)
+    ok = await scheduler._fire(
+        "role",
+        "ghost",
+        org.all_roles()[0].schedules[0],
+        "ghost",
+        _at(9, 0),
+        ZoneInfo("UTC"),
+    )
+    assert ok is False
+    assert store.records == []
+    assert queue.published == []
 
 
 async def test_disabled_schedule_does_not_fire():
@@ -316,7 +335,6 @@ async def test_hot_reload_picks_up_new_schedule():
     queue = _Queue()
     scheduler = Scheduler(
         event_queue=queue,
-        agent_pool=_Pool([_Agent("qa", "QA", "id-qa")]),
         org_provider=lambda: holder[0],
         store=MemoryScheduledRunStore(),
         default_timezone="UTC",
@@ -363,3 +381,87 @@ async def test_jitter_delays_firing_deterministically():
         s2, q2, _s, _ = _build(_role_org(), jitter_seconds=45)
         s2._last_tick_utc = fire - timedelta(seconds=60)
         assert await s2.tick_once(now=fire) == 0
+
+
+# --- the tick is a fleet-wide singleton -------------------------------------
+
+
+async def test_a_node_without_the_duty_fires_nothing():
+    """Every node enumerating every schedule is pure duplicated work.
+
+    Not incorrect — the ``scheduled_runs`` claim means all but one lose
+    the race on every due fire — but it is N walks of the org and N
+    claim round-trips per tick to produce one fire.
+    """
+    org = _role_org()
+    scheduler, queue, store, _ = _build(org)
+    scheduler._claim_duty = _never
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 0
+    assert queue.inbox_tasks() == []
+    assert store.records == []
+
+
+async def test_a_node_without_the_duty_leaves_its_window_open():
+    """The same rule the config-shed gate follows, for the same reason.
+
+    Advancing ``_last_tick_utc`` on a tick that did nothing would close a
+    window nobody evaluated. Leaving it alone keeps this node on its
+    FIRST tick, so if it ever wins the duty it evaluates the catchup
+    window rather than a window stretching back to boot.
+    """
+    org = _role_org()
+    scheduler, _queue, _store, _ = _build(org)
+    scheduler._claim_duty = _never
+
+    assert scheduler._last_tick_utc is None
+    await scheduler.tick_once(now=_at(9, 0))
+    assert scheduler._last_tick_utc is None
+
+
+async def test_the_duty_holder_fires_normally():
+    org = _role_org()
+    scheduler, queue, _store, _ = _build(org)
+    scheduler._claim_duty = _always
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 1
+    assert len(queue.inbox_tasks()) == 1
+
+
+async def test_a_duty_claim_that_raises_fires_nothing():
+    """Fail closed: an unreadable lease store says nothing about who
+    holds the duty, and firing on that basis puts every node back to
+    racing the claim."""
+
+    async def _boom() -> bool:
+        raise RuntimeError("lease store unreachable")
+
+    org = _role_org()
+    scheduler, queue, _store, _ = _build(org)
+    scheduler._claim_duty = _boom
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 0
+    assert queue.inbox_tasks() == []
+
+
+async def test_no_placement_host_ticks_as_before():
+    """Single node: there is no fleet to be a singleton within, so the
+    default must be unchanged."""
+    org = _role_org()
+    scheduler, queue, _store, _ = _build(org)
+    assert scheduler._claim_duty is None
+
+    scheduler._last_tick_utc = _at(8, 59)
+    assert await scheduler.tick_once(now=_at(9, 0)) == 1
+    assert len(queue.inbox_tasks()) == 1
+
+
+async def _always() -> bool:
+    return True
+
+
+async def _never() -> bool:
+    return False

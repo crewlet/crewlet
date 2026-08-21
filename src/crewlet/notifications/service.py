@@ -14,15 +14,16 @@ layer and parsed here via transport-specific logic.
 from __future__ import annotations
 
 import json
-import time
 from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
+from crewlet.db.rate_limits import MemoryRateLimitStore
 from crewlet.notifications.protocol import (
     InboundNotification,
     OutboundMessage,
     Transport,
 )
+from crewlet.queue.protocol import DeferDelivery
 from crewlet.telemetry import restore_context, tracer
 
 if TYPE_CHECKING:
@@ -74,8 +75,28 @@ class NotificationService:
         self._transports = transports
         self._handle_registry = handle_registry
         self._rate_limit = rate_limit
+        # Per-process by default; the engine hands over a shared store
+        # when a database is configured. A per-process valve multiplies
+        # the effective limit by replica count, and misses the pathology
+        # it exists for most completely — a notification loop bounces
+        # between nodes, so no single process sees enough of it to trip.
+        self._rate_store: Any = MemoryRateLimitStore()
         self._running = False
         self._subscribed = False
+
+        # Admission gate — ``() -> bool``, set by the engine to its
+        # ``admits_triggers``.  ``None`` means always admit (a service
+        # constructed without an engine: tests, programmatic embeds).
+        #
+        # Inbound routing is where a stale node does its most damage:
+        # Slack HMAC verification runs CONSUME-side against this
+        # process's cached signing secret, and a verification failure is
+        # a skip plus an ack.  So a node that missed a secret rotation
+        # does not merely lag — it silently eats its share of the
+        # fleet's inbound messages.  Gating here, before the parse,
+        # keeps those deliveries on the queue for a node that can read
+        # them.
+        self._admits: Any = None
 
         # GitLab webhook config (url + optional read token), set by the
         # engine via set_gitlab_config — enables participants-based
@@ -84,7 +105,15 @@ class NotificationService:
 
         # Rate limiting: max notifications per second per agent (0 = unlimited)
         # {agent_id: [timestamp, ...]}
-        self._rate_tracker: dict[str, list[float]] = {}
+
+    def set_admission_gate(self, admits: Any) -> None:
+        """Wire the predicate that decides whether to accept inbound work.
+
+        Called by the engine with :meth:`Engine.admits_triggers`.  Read
+        per delivery, so a posture change takes effect on the next
+        message with no re-subscription.
+        """
+        self._admits = admits
 
     def set_gitlab_config(self, gitlab_config: Any) -> None:
         """Wire (or clear) the GitLab integration config.
@@ -177,7 +206,6 @@ class NotificationService:
                     error=str(exc),
                 )
 
-        self._rate_tracker.clear()
         logger.info("notification_service_stopped")
 
     async def _handle_inbound(self, event: Event) -> None:
@@ -199,6 +227,35 @@ class NotificationService:
         if not self._running:
             return
 
+        # Config posture: park rather than parse.  DEFER — leave it
+        # unacked and stop consuming — never NAK, which dead-letters a
+        # healthy event after three one-second redeliveries while a shed
+        # can last minutes.
+        #
+        # And never a republish, which is what this was. Inbound events
+        # are key-partitioned by conversation, so a copy sent to the
+        # topic's tail while its prefetched siblings replay from the head
+        # reorders that conversation. It also lands on a topic this node
+        # is still attached to: the shed pauses it a moment later, but if
+        # that pause fails — it is caught and logged, by design, so one
+        # topic cannot abort a posture change — the copy comes straight
+        # back, is shed again and republished again, as fast as the
+        # broker will serve it. A deferral cannot spin.
+        #
+        # The engine's reconcile tick un-quiesces this consumer whenever
+        # the posture admits work again, rather than on the recovery
+        # edge: this refusal runs on the DELIVERY path while the posture
+        # changes on the reconcile loop, so an edge can fire just before
+        # the last in-flight delivery quiesces a consumer nothing would
+        # then restart.
+        if self._admits is not None and not self._admits():
+            logger.info(
+                "inbound_notification_shed",
+                source=event.source,
+                event_id=str(event.id),
+            )
+            raise DeferDelivery("config posture is shedding")
+
         # Restore OTel context from the incoming event so all
         # downstream events (ExternalNotification, etc.) share the
         # same trace that started at the webhook handler.
@@ -207,41 +264,6 @@ class NotificationService:
 
         with tracer.start_as_current_span(span_name, context=otel_ctx):
             await self._handle_inbound_inner(event)
-
-    def _resolve_human_recipient(self, notification: InboundNotification):
-        """Resolve the notification's recipient to a human seat, if any.
-
-        Mirrors the agent resolution order in ``_handle_inbound_inner``
-        (handle → email → the same external-ID candidates, including
-        the lowercased-email fallback) over the party API, evaluated
-        lazily — the first human hit returns.  Runs only after agent
-        resolution already failed, so any party found here is either
-        a human seat or nothing.
-        """
-        registry = self._handle_registry
-        meta = notification.metadata
-
-        def _candidates():
-            if notification.recipient_handle:
-                yield registry.resolve_party(notification.recipient_handle)
-            if notification.recipient_email:
-                yield registry.resolve_party_email(notification.recipient_email)
-            for ext_key in (
-                meta.get("assignee_account_id", ""),
-                meta.get("github_login", ""),
-                meta.get("gitlab_username", ""),
-                meta.get("plane_user_id", ""),
-                notification.recipient_email.lower()
-                if notification.recipient_email
-                else "",
-            ):
-                if ext_key:
-                    yield registry.resolve_party_external(notification.source, ext_key)
-
-        for party in _candidates():
-            if party is not None and party.is_human:
-                return party
-        return None
 
     async def _record_skip(
         self,
@@ -285,14 +307,28 @@ class NotificationService:
             return
 
         handle = notification.recipient_handle
-        agent = self._handle_registry.resolve_handle(handle) if handle else None
+        # Resolve to a PARTY, not to a live instance.
+        #
+        # Routing an inbound notification needs a handle and an agent id,
+        # both of which the registry derives from the org. Resolving
+        # through the local pool instead made delivery depend on where
+        # the agent happened to be running — correct only while every
+        # agent runs in every process, and a terminal drop the moment
+        # that stops being true, because this topic has one fleet-wide
+        # consumer group and whichever node wins the delivery is the one
+        # that has to resolve it.
+        #
+        # This also collapses what used to be two cascades: the agent
+        # lookup below and a second, party-based one for humans further
+        # down. One resolution, then a question about its kind.
+        party = self._handle_registry.resolve_party(handle) if handle else None
 
-        if agent is None and notification.recipient_email:
-            agent = self._handle_registry.resolve_email_address(
+        if party is None and notification.recipient_email:
+            party = self._handle_registry.resolve_party_email(
                 notification.recipient_email
             )
 
-        if agent is None:
+        if party is None:
             # External ID lookup using values populated during engine
             # startup (Jira/GitHub/GitLab/Plane account registration) or
             # by the webhook parser. Resolution order:
@@ -317,31 +353,30 @@ class NotificationService:
             for source, ext_key in ext_candidates:
                 if not ext_key:
                     continue
-                agent = self._handle_registry.resolve_external_id(source, ext_key)
-                if agent is not None:
+                party = self._handle_registry.resolve_party_external(source, ext_key)
+                if party is not None:
                     break
 
-        if agent is None:
+        if party is not None and party.is_human:
             # A human seat as recipient is EXPECTED, not an error: the
             # external tool (Jira, Slack, …) already notified the
             # person natively — the engine never forwards
             # external-surface events to humans.  Record the skip at
             # info level for traceability and stop quietly.
-            human = self._resolve_human_recipient(notification)
-            if human is not None:
-                logger.info(
-                    "notification_recipient_is_human",
-                    source=notification.source,
-                    seat=human.name,
-                    handle=human.handle,
-                )
-                await self._record_skip(
-                    notification.source,
-                    human.handle,
-                    "recipient is a human seat — notified natively by "
-                    "the external tool",
-                )
-                return
+            logger.info(
+                "notification_recipient_is_human",
+                source=notification.source,
+                seat=party.name,
+                handle=party.handle,
+            )
+            await self._record_skip(
+                notification.source,
+                party.handle,
+                "recipient is a human seat — notified natively by the external tool",
+            )
+            return
+
+        if party is None:
             logger.warning(
                 "notification_undeliverable",
                 source=notification.source,
@@ -356,6 +391,12 @@ class NotificationService:
             )
             return
 
+        # The seat's id, derived rather than looked up — see
+        # ResolvedParty.agent_id. Everything below needs an identifier
+        # for budgets, rate limits and telemetry, and none of it needs a
+        # live instance.
+        agent_id_str = str(party.agent_id or "")
+
         # Self-action guard: an agent must never be woken by a
         # notification describing its own action.  ``JiraTransport``
         # already excludes the trigger user from watcher fan-out, but
@@ -368,37 +409,37 @@ class NotificationService:
         actor_account_id = notification.metadata.get("actor_account_id", "")
         if actor_account_id:
             agent_ext_id = self._handle_registry.get_external_id(
-                notification.source, agent.handle
+                notification.source, party.handle
             )
             if agent_ext_id and agent_ext_id == actor_account_id:
                 logger.info(
                     "notification_self_action_skipped",
                     source=notification.source,
-                    agent_handle=agent.handle,
+                    agent_handle=party.handle,
                     actor_account_id=actor_account_id,
                     event_type=notification.source_event_type,
                 )
                 await self._record_skip(
                     notification.source,
-                    agent.handle,
+                    party.handle,
                     "self-action: agent's own webhook",
                 )
                 return
 
-        if not self._check_rate_limit(agent.id_str):
+        if not await self._check_rate_limit(agent_id_str):
             logger.warning(
                 "rate_limit_exceeded",
-                agent_id=agent.id_str,
+                agent_id=agent_id_str,
                 source=notification.source,
             )
             await self._record_skip(
                 notification.source,
-                agent.handle,
-                f"rate limit exceeded for {agent.handle}",
+                party.handle,
+                f"rate limit exceeded for {party.handle}",
             )
             return
 
-        inbox_topic = f"crewlet.agent.{agent.handle}.inbox"
+        inbox_topic = party.inbox_topic
 
         from crewlet.events.types import ExternalNotification
         from crewlet.notifications.notification_prompts import (
@@ -464,7 +505,7 @@ class NotificationService:
             notification_source=notification.source,
             source_event_type=notification.source_event_type,
             recipient_email=notification.recipient_email,
-            agent_id=agent.id_str,
+            agent_id=agent_id_str,
             sender=notification.sender,
             subject=notification.subject,
             body=enriched_body,
@@ -480,8 +521,8 @@ class NotificationService:
         logger.info(
             "notification_routed",
             source=notification.source,
-            handle=agent.handle,
-            agent_id=agent.id_str,
+            handle=party.handle,
+            agent_id=agent_id_str,
             inbox_topic=inbox_topic,
         )
 
@@ -774,27 +815,21 @@ class NotificationService:
                 error=str(exc),
             )
 
-    def _check_rate_limit(self, agent_id: str) -> bool:
-        """Check if the agent has exceeded the rate limit.
+    def set_rate_limit_store(self, store: Any) -> None:
+        """Point the valve at the shared counter (engine, with a DB)."""
+        self._rate_store = store
 
-        Uses a 1-second sliding window. Returns True if the
-        notification should be processed.
+    async def _check_rate_limit(self, agent_id: str) -> bool:
+        """Whether this agent is under its per-second notification cap.
+
+        Off by default, so the store is only consulted when an operator
+        has asked for the valve. Shared rather than per-process: the
+        limit is "N per agent per second" for the company, and a
+        notification loop is exactly the runaway that a per-process
+        counter cannot see.
         """
         if self._rate_limit <= 0:
             return True
-
-        now = time.monotonic()
-        window = 1.0
-
-        if agent_id not in self._rate_tracker:
-            self._rate_tracker[agent_id] = []
-
-        timestamps = self._rate_tracker[agent_id]
-        # Prune old entries
-        timestamps[:] = [t for t in timestamps if now - t < window]
-
-        if len(timestamps) >= self._rate_limit:
-            return False
-
-        timestamps.append(now)
-        return True
+        return await self._rate_store.allow(
+            f"notify:{agent_id}", limit=self._rate_limit, window_seconds=1.0
+        )

@@ -7,11 +7,17 @@ calls the tool, the wrapper delegates to the MCP client transparently.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.mcp.client import MCPClient
 from crewlet.mcp.http_client import MCPHttpClient
+from crewlet.mcp.timeouts import (
+    DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+)
 from crewlet.tools.capabilities import ToolAnnotations
 from crewlet.tools.protocol import AgentContext, ToolResult
 
@@ -193,6 +199,8 @@ class MCPToolBridge:
         env: dict[str, str] | None = None,
         tool_prefix: str = "",
         annotation_overrides: dict[str, ToolAnnotations] | None = None,
+        startup_timeout_seconds: float = DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+        request_timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
     ) -> list[MCPToolWrapper]:
         """Start a stdio MCP server and discover its tools.
 
@@ -209,10 +217,16 @@ class MCPToolBridge:
         Returns:
             List of wrapped tools discovered on the server.
         """
-        client = MCPClient(name=name, command=command, args=args, env=env)
+        client = MCPClient(
+            name=name,
+            command=command,
+            args=args,
+            env=env,
+            startup_timeout_seconds=startup_timeout_seconds,
+            request_timeout_seconds=request_timeout_seconds,
+        )
         await client.start()
-        self._clients[name] = client
-        return await self._discover_and_wrap(
+        return await self._register(
             client, tool_prefix, annotation_overrides=annotation_overrides
         )
 
@@ -224,6 +238,8 @@ class MCPToolBridge:
         tool_prefix: str = "",
         exclude_tools: set[str] | None = None,
         annotation_overrides: dict[str, ToolAnnotations] | None = None,
+        startup_timeout_seconds: float = DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+        request_timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
     ) -> list[MCPToolWrapper]:
         """Connect to a remote HTTP MCP server and discover tools.
 
@@ -240,22 +256,40 @@ class MCPToolBridge:
         Returns:
             List of wrapped tools discovered.
         """
-        client = MCPHttpClient(name=name, url=url, headers=headers)
+        client = MCPHttpClient(
+            name=name,
+            url=url,
+            headers=headers,
+            startup_timeout_seconds=startup_timeout_seconds,
+            request_timeout_seconds=request_timeout_seconds,
+        )
         await client.start()
-        self._clients[name] = client
-        return await self._discover_and_wrap(
+        return await self._register(
             client, tool_prefix, exclude_tools, annotation_overrides
         )
 
-    async def _discover_and_wrap(
+    async def _register(
         self,
         client: MCPClient | MCPHttpClient,
         tool_prefix: str,
         exclude_tools: set[str] | None = None,
         annotation_overrides: dict[str, ToolAnnotations] | None = None,
     ) -> list[MCPToolWrapper]:
-        """Discover tools on a connected client and wrap them."""
-        mcp_tools = await client.list_tools()
+        """Discover a connected client's tools, wrap them, and keep it.
+
+        Registration happens only on success. A client recorded before
+        discovery, whose discovery then failed, is a live subprocess
+        with no tools: it answers ``has_client`` yes, so a live config
+        edit sees a healthy server and the engine's own retry never
+        fires, while the process sits there until shutdown. A server
+        that could not be discovered is not a server this bridge has.
+        """
+        try:
+            mcp_tools = await client.list_tools()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await client.stop()
+            raise
         wrapped: list[MCPToolWrapper] = []
         _exclude = exclude_tools or set()
 
@@ -271,6 +305,7 @@ class MCPToolBridge:
             self._tools[wrapper.name] = wrapper
             wrapped.append(wrapper)
 
+        self._clients[client.name] = client
         logger.info(
             "tools_discovered",
             server=client.name,
@@ -304,16 +339,36 @@ class MCPToolBridge:
         self._tools = {k: v for k, v in self._tools.items() if v._client.name != name}
 
     async def stop_all(self) -> None:
-        """Stop all MCP servers."""
-        for name, client in list(self._clients.items()):
+        """Stop every MCP server, concurrently.
+
+        Sequentially, one server that will not die consumed the whole
+        shutdown budget the engine allows this step, and every server
+        after it in the dict was never stopped at all — their
+        subprocesses outlived the engine. They are independent
+        processes, so stopping them together turns "the first slow one
+        strands the rest" into "the slowest one bounds the step", which
+        is what the caller's timeout is actually for.
+        """
+        clients = list(self._clients.items())
+
+        async def _stop(name: str, client: MCPClient | MCPHttpClient) -> None:
             try:
                 await client.stop()
             except Exception as exc:
                 logger.error("server_stop_failed", server=name, error=str(exc))
-            finally:
-                self._remove_server_tools(name)
+
+        # `return_exceptions` covers the cancellation the caller's
+        # timeout delivers: the servers that did stop must still be
+        # dropped from the index, or a restarted bridge would think
+        # they were live.
+        await asyncio.gather(
+            *(_stop(name, client) for name, client in clients),
+            return_exceptions=True,
+        )
+        for name, _client in clients:
+            self._remove_server_tools(name)
         self._clients.clear()
-        logger.info("all_servers_stopped")
+        logger.info("all_servers_stopped", servers=len(clients))
 
     async def stop_server(self, name: str) -> None:
         """Stop a single MCP server by name."""

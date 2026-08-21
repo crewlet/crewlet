@@ -5,6 +5,7 @@ restart recovery."""
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,12 +16,15 @@ from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.events.types import SandboxRunCompleted, SandboxRunStarted
 from crewlet.org.models import Organization, OrgUnit, Role
 from crewlet.queue.memory import MemoryEventQueue
+from crewlet.queue.topics import (
+    agent_control_topic,
+    agent_inbox_group,
+    agent_inbox_topic,
+)
 from crewlet.sandbox import FakeCodingAgentRunner, FakeSandboxProvider, SandboxManager
 from crewlet.sandbox.coordinator import (
-    COMPLETIONS_TOPIC,
-    STARTED_TOPIC,
     SandboxCoordinator,
-    inbox_topic,
+    SandboxResumeUnavailable,
 )
 from crewlet.sandbox.pending_store import (
     MemoryPendingSandboxRunStore,
@@ -137,7 +141,7 @@ async def test_on_run_started_pauses_inbox_and_leaves_working_turn_alone() -> No
         SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
     )
     assert agent.state == AgentState.WORKING  # untouched — the turn owns it
-    assert inbox_topic("eng") in queue._paused_topics
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 
 
@@ -160,7 +164,7 @@ async def test_on_run_started_recovers_idle_agent_to_busy() -> None:
         SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
     )
     assert agent.state == AgentState.AWAITING_SANDBOX
-    assert inbox_topic("eng") in queue._paused_topics
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 
 
@@ -225,7 +229,12 @@ async def test_completion_keeps_agent_busy_until_resume_dispatch() -> None:
     await queue.start()
     agent = _mk_agent()
     agent.await_sandbox(task_id="t-1")
-    await queue.pause_topic(inbox_topic("eng"))
+    # The coordinator's OWN hold reason — pause holds are reason-scoped
+    # so the sandbox gate, the config shed and the no-turn-engine park
+    # cannot release each other's.
+    await queue.pause_topic(
+        agent_inbox_topic("eng"), agent_inbox_group("eng"), reason="sandbox"
+    )
     store = MemoryPendingSandboxRunStore()
     await store.create(_run())
     manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
@@ -266,7 +275,141 @@ async def test_completion_keeps_agent_busy_until_resume_dispatch() -> None:
     assert observed[0] == f"collect:{AgentState.AWAITING_SANDBOX}"
     assert observed[1] == str(AgentState.IDLE)
     # Settled (no re-suspend): the box is done and the inbox resumed.
-    assert inbox_topic("eng") not in queue._paused_topics
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+    await queue.stop()
+
+
+async def test_a_collect_failure_releases_the_inbox_even_if_cleanup_fails() -> None:
+    """The other half of the same rule, on the other exit.
+
+    Collection failing is already the bad day; the cleanup that follows
+    is two more calls that can fail on their own, and neither of them
+    failing is a reason to leave the seat parked on a run that is over.
+    """
+    queue = MemoryEventQueue()
+    await queue.start()
+    agent = _mk_agent()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run())
+    manager, _ = _mk_manager()  # no result: collection fails
+
+    async def _unavailable(turn_id: str, status: str, **kw: Any) -> Any:
+        raise RuntimeError("database is unreachable")
+
+    store.set_status = _unavailable  # type: ignore[method-assign]
+
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+    await coord.on_run_started(
+        SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+    )
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+
+    with contextlib.suppress(RuntimeError):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
+
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+    assert agent.state is not AgentState.AWAITING_SANDBOX, (
+        "the agent stayed parked on a run that had already failed"
+    )
+    await queue.stop()
+
+
+async def test_a_failed_box_release_still_releases_the_inbox() -> None:
+    """The seat must not go deaf because cleanup failed.
+
+    The inbox pause is reason-scoped, so nothing else in the engine can
+    release it, and by this point the resumed turn has already run — the
+    completion is settled, and neither the waiter nor a seat handoff
+    comes back for it. So a release that only happened on the happy path
+    meant one failed store write during teardown left the seat owned,
+    attached and silent until the process restarted, with an agent that
+    was otherwise perfectly idle.
+    """
+    queue = MemoryEventQueue()
+    await queue.start()
+    agent = _mk_agent()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run())
+    # Collect must SUCCEED here: the failure under test is in the settle
+    # tail, and a run whose collection fails never reaches it.
+    manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
+    await provider.create(manager.build_spec())
+    provider._by_id["sbx-1"] = provider.sandboxes[0]
+
+    async def _unavailable(turn_id: str) -> None:
+        raise RuntimeError("database is unreachable")
+
+    store.release_box = _unavailable  # type: ignore[method-assign]
+
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+    await coord.on_run_started(
+        SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+    )
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+
+    with contextlib.suppress(RuntimeError):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
+
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng")), (
+        "a seat was left deaf because releasing its sandbox row failed"
+    )
+    await queue.stop()
+
+
+async def test_a_failed_final_status_write_still_releases_the_inbox() -> None:
+    """Same rule, the other unguarded write in the settle tail. Marking
+    the run done is bookkeeping; the seat's ability to hear is not."""
+    queue = MemoryEventQueue()
+    await queue.start()
+    agent = _mk_agent()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run())
+    manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
+    await provider.create(manager.build_spec())
+    provider._by_id["sbx-1"] = provider.sandboxes[0]
+
+    real_set_status = store.set_status
+
+    async def _fail_on_done(turn_id: str, status: str, **kw: Any) -> Any:
+        if status == "done":
+            raise RuntimeError("database is unreachable")
+        return await real_set_status(turn_id, status, **kw)
+
+    store.set_status = _fail_on_done  # type: ignore[method-assign]
+
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+    await coord.on_run_started(
+        SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+    )
+
+    with contextlib.suppress(RuntimeError):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
+
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 
 
@@ -627,10 +770,10 @@ async def test_recover_repauses_running_agents() -> None:
         turn_engine=_TurnEngineStub(),
     )
 
-    await coord.recover()
+    await coord.recover_seat("eng", owner="node-a:1", epoch=1)
 
     # The running job re-pauses the agent's inbox and re-enters busy.
-    assert inbox_topic("eng") in queue._paused_topics
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     assert agent.state == AgentState.AWAITING_SANDBOX
     await queue.stop()
 
@@ -658,7 +801,7 @@ async def test_recover_reaps_a_tail_abandoned_by_a_dead_engine() -> None:
         turn_engine=_TurnEngineStub(),
     )
 
-    await coord.recover()
+    await coord.recover_seat("eng", owner="node-a:1", epoch=1)
 
     assert provider.sandboxes[0].closed is True
     row = await store.get("t-dead")
@@ -668,7 +811,7 @@ async def test_recover_reaps_a_tail_abandoned_by_a_dead_engine() -> None:
     await queue.stop()
 
 
-async def test_subscribe_wires_both_control_topics() -> None:
+async def test_attach_seat_wires_the_seats_control_topic() -> None:
     queue = MemoryEventQueue()
     await queue.start()
     agent = _mk_agent()
@@ -681,11 +824,13 @@ async def test_subscribe_wires_both_control_topics() -> None:
     coord = _coordinator(
         queue=queue, store=store, manager=manager, agent=agent, turn_engine=te
     )
-    await coord.subscribe()
+    await coord.attach_seat("eng")
 
-    # Publishing a completion onto the control topic drives the flow.
+    # Publishing a completion onto the SEAT's control topic drives the
+    # flow. Routing falls out of who subscribed: only the node that
+    # attached this seat has the suspended Execute conversation.
     await queue.publish(
-        COMPLETIONS_TOPIC,
+        agent_control_topic("eng"),
         SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1"),
     )
     assert len(te.calls) == 1
@@ -693,7 +838,7 @@ async def test_subscribe_wires_both_control_topics() -> None:
     # agent (post-restart recovery — a WORKING one is owned by its turn).
     assert agent.state == AgentState.IDLE
     await queue.publish(
-        STARTED_TOPIC,
+        agent_control_topic("eng"),
         SandboxRunStarted(agent_handle="eng", turn_id="t-2", sandbox_id="sbx-2"),
     )
     assert agent.state == AgentState.AWAITING_SANDBOX
@@ -701,7 +846,16 @@ async def test_subscribe_wires_both_control_topics() -> None:
 
 
 @pytest.mark.parametrize("missing", ["agent", "engine"])
-async def test_completion_turn_skipped_when_unresolvable(missing: str) -> None:
+async def test_a_completion_this_node_cannot_resume_is_refused(missing: str) -> None:
+    """It must RAISE, not settle.
+
+    The suspended Execute conversation — the agent's whole in-progress
+    turn — lives in the pending row and can only be resumed where the
+    seat's instance is. Returning quietly let the caller fall through to
+    settling the run ``done`` and tearing the box down, discarding it.
+    Raising reverts the claim so the completion redelivers to a node
+    that can actually resume it.
+    """
     queue = MemoryEventQueue()
     await queue.start()
     agent = _mk_agent()
@@ -719,10 +873,178 @@ async def test_completion_turn_skipped_when_unresolvable(missing: str) -> None:
         get_turn_engine=lambda: te,
         get_org=lambda: agent.definition.org,
     )
-    # Must not raise even when the agent/engine can't be resolved.
-    await coord.on_run_completed(
-        SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
-    )
+    with pytest.raises(SandboxResumeUnavailable):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
     if isinstance(te, _TurnEngineStub):
         assert te.calls == []
+    # The row is back where the claim found it, so the redelivered
+    # completion can win the flip again on the owning node.
+    run = await store.get("t-1")
+    assert run is not None and run.status == "running"
     await queue.stop()
+
+
+# ---------------------------------------------------------------------------
+# owner-routed control
+# ---------------------------------------------------------------------------
+#
+# A detached sandbox run outlives the process that started it, and the
+# seat it belongs to can move while the coding agent is still working.
+# The suspended Execute conversation lives in the pending row and can
+# only be resumed where the seat's instance is — so a completion has to
+# reach that node, and only that node.
+
+
+async def test_a_completion_reaches_the_seats_owner_and_nobody_else() -> None:
+    """Routing falls out of who subscribed.
+
+    Under one fleet-wide group the broker hands a completion to whichever
+    node wins it, which is a non-owner (N-1)/N of the time — and that
+    node has no suspended conversation to resume.
+    """
+    queue = MemoryEventQueue()
+    await queue.start()
+    owner_saw: list[str] = []
+    peer_saw: list[str] = []
+
+    async def _owner(event) -> None:
+        owner_saw.append(event.turn_id)
+
+    async def _peer(event) -> None:
+        peer_saw.append(event.turn_id)
+
+    # The owner attaches this seat; a peer attaches a DIFFERENT one.
+    await queue.subscribe(agent_control_topic("eng"), "agent-eng-control", _owner)
+    await queue.subscribe(agent_control_topic("ops"), "agent-ops-control", _peer)
+
+    await queue.publish(
+        agent_control_topic("eng"),
+        SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1"),
+    )
+
+    assert owner_saw == ["t-1"]
+    assert peer_saw == []
+    await queue.stop()
+
+
+async def test_a_completion_for_an_unowned_seat_is_held() -> None:
+    """A run outlives its node, so "nobody is attached right now" is a
+    normal state — and losing the completion would strand a real, billed
+    box with a suspended turn behind it."""
+    queue = MemoryEventQueue()
+    await queue.start()
+    await queue.ensure_subscription(agent_control_topic("eng"), "agent-eng-control")
+
+    await queue.publish(
+        agent_control_topic("eng"),
+        SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1"),
+    )
+    assert len(queue.backlog(agent_control_topic("eng"), "agent-eng-control")) == 1
+
+    seen: list[str] = []
+
+    async def _new_owner(event) -> None:
+        seen.append(event.turn_id)
+
+    await queue.subscribe(agent_control_topic("eng"), "agent-eng-control", _new_owner)
+    assert seen == ["t-1"]
+    await queue.stop()
+
+
+async def test_detaching_a_seat_leaves_its_control_subscription() -> None:
+    queue = MemoryEventQueue()
+    await queue.start()
+    store = MemoryPendingSandboxRunStore()
+    manager, _provider = _mk_manager()
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=_mk_agent(),
+        turn_engine=_TurnEngineStub(),
+    )
+
+    await coord.attach_seat("eng")
+    assert (agent_control_topic("eng"), "agent-eng-control") in queue.attachments()
+
+    await coord.detach_seat("eng")
+    assert (agent_control_topic("eng"), "agent-eng-control") not in (
+        queue.attachments()
+    )
+    # Non-destructive: a completion published now is still held.
+    await queue.publish(
+        agent_control_topic("eng"),
+        SandboxRunCompleted(agent_handle="eng", turn_id="t-9", sandbox_id="sbx-9"),
+    )
+    assert len(queue.backlog(agent_control_topic("eng"), "agent-eng-control")) == 1
+    await queue.stop()
+
+
+async def test_recover_seat_only_touches_its_own_seats_runs() -> None:
+    """Per-seat, not fleet-wide.
+
+    A boot-time scan of every active row had each node re-pausing,
+    re-parking and reaping runs belonging to seats its peers own — and a
+    seat claimed LATER (a takeover, not a boot) was never recovered at
+    all.
+    """
+    queue = MemoryEventQueue()
+    await queue.start()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run(turn_id="mine", agent_handle="eng"))
+    await store.create(_run(turn_id="theirs", agent_handle="ops"))
+    manager, _provider = _mk_manager()
+    agent = _mk_agent()
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+
+    await coord.recover_seat("eng", owner="node-a:1", epoch=7)
+
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng")) == {
+        "sandbox"
+    }
+    assert queue.pause_holds(agent_inbox_topic("ops"), agent_inbox_group("ops")) == (
+        set()
+    )
+    mine = await store.get("mine")
+    theirs = await store.get("theirs")
+    assert mine is not None and mine.owner == "node-a:1" and mine.owner_epoch == 7
+    assert theirs is not None and theirs.owner == ""
+    await queue.stop()
+
+
+async def test_a_stale_owner_cannot_settle_a_run_its_successor_holds() -> None:
+    """The fence. The ownership check is an optimization — it reads a
+    snapshot that can be a lease TTL stale — so correctness has to come
+    from the write itself."""
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run(turn_id="t-1"))
+
+    assert await store.claim_ownership("t-1", owner="node-a:1", epoch=1) is True
+    # The seat moves: the successor claims at a higher epoch.
+    assert await store.claim_ownership("t-1", owner="node-b:1", epoch=2) is True
+
+    # The old owner, not yet aware, tries to settle it.
+    assert await store.set_status("t-1", "done", epoch=1) is False
+    run = await store.get("t-1")
+    assert run is not None and run.status == "running"
+
+    # The current owner can.
+    assert await store.set_status("t-1", "done", epoch=2) is True
+
+
+async def test_ownership_never_moves_backwards() -> None:
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run(turn_id="t-1"))
+    await store.claim_ownership("t-1", owner="node-b:1", epoch=5)
+
+    assert await store.claim_ownership("t-1", owner="node-a:1", epoch=2) is False
+    run = await store.get("t-1")
+    assert run is not None and run.owner == "node-b:1"

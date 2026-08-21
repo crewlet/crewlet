@@ -11,6 +11,10 @@
 // surface documented in docs/reference/api-endpoints.md. The dashboard
 // simply no longer uses it.
 
+// It carries the stored bearer token like any other read: the API
+// guards its whole surface, and /stream/snapshot is on the guarded side.
+import { apiToken } from "./authToken.js";
+
 const BASE = location.origin;
 
 export const api = {
@@ -28,12 +32,36 @@ export const api = {
    */
   async snapshot() {
     try {
-      const response = await fetch(BASE + "/stream/snapshot");
+      const stored = apiToken();
+      const response = await fetch(
+        BASE + "/stream/snapshot",
+        stored ? { headers: { Authorization: "Bearer " + stored } } : undefined,
+      );
       if (!response.ok) return null;
       return await response.json();
     } catch {
       // A refused connection, a DNS failure, or a proxy answering 200
       // with an HTML error page (which fails to parse as JSON).
+      return null;
+    }
+  },
+
+  /**
+   * The fleet as the lease table sees it, or `null`.
+   *
+   * A REST read rather than a socket query, and not live state: leases
+   * move on their own with no event to push, so the Fleet view polls.
+   */
+  async fleet() {
+    try {
+      const stored = apiToken();
+      const response = await fetch(
+        BASE + "/fleet",
+        stored ? { headers: { Authorization: "Bearer " + stored } } : undefined,
+      );
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
       return null;
     }
   },

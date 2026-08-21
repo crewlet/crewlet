@@ -445,6 +445,55 @@ class TimescaleDBEventStore:
             )
         return results
 
+    async def sum_token_usage_by_role(
+        self,
+        *,
+        since_days: int = 30,
+        exclude_event_ids: list[str] | None = None,
+    ) -> dict[str, dict[str, int]]:
+        """Per-role token totals, summed BY THE DATABASE.
+
+        The rollup this replaces read every ``agent_turn_completed``
+        row in the window — full JSONB payload and all — over the wire,
+        parsed each one in Python, and added three integers. It runs on
+        every ``/agents`` read and every dashboard refresh, so a
+        company doing a few thousand turns a day paid a
+        tens-of-thousands-of-rows scan per request to produce one
+        number per seat.
+
+        ``exclude_event_ids`` keeps the composite's cross-store dedup
+        exact without giving the saving back: the in-memory satellite
+        leg is capped (1000 events) and its own totals are added by the
+        caller, so the ids it already counted are excluded here rather
+        than the whole persistent leg being pulled to compare. A
+        bounded id list in, one row per role out.
+        """
+        params: list[Any] = []
+        sql = (
+            "SELECT agent_role, "
+            "SUM(COALESCE((payload->>'input_tokens')::bigint, 0)) AS input_tokens, "
+            "SUM(COALESCE((payload->>'output_tokens')::bigint, 0)) AS output_tokens, "
+            "SUM(COALESCE((payload->>'total_tokens')::bigint, 0)) AS total_tokens "
+            f"FROM {EVENTS_TABLE} "
+            "WHERE event_type = 'agent_turn_completed' "
+            f"AND event_time >= now() - INTERVAL '{int(since_days)} days' "
+            "AND agent_role <> ''"
+        )
+        if exclude_event_ids:
+            params.append(list(exclude_event_ids))
+            sql += f" AND event_id <> ALL(${len(params)}::text[])"
+        sql += " GROUP BY agent_role"
+        rows = await self._db.execute(sql, *params)
+        return {
+            str(row.get("agent_role", "")): {
+                "input_tokens": int(row.get("input_tokens") or 0),
+                "output_tokens": int(row.get("output_tokens") or 0),
+                "total_tokens": int(row.get("total_tokens") or 0),
+            }
+            for row in rows
+            if row.get("agent_role")
+        }
+
     async def list_phase_token_events(
         self, *, since_days: int = 30, agent_role: str | None = None
     ) -> list[dict[str, Any]]:

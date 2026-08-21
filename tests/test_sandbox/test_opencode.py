@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from crewlet.sandbox.coding_agents._detached import (
     DONE_MARKER,
@@ -391,3 +392,55 @@ async def test_collect_findings_does_not_mask_a_crash() -> None:
 async def _read(sb: FakeSandbox, path: str) -> str:
     raw = await sb.read_file(path)
     return raw.decode() if isinstance(raw, bytes | bytearray) else str(raw)
+
+
+async def test_the_config_lands_inside_the_box_not_at_a_fixed_home():
+    """A local backend runs many boxes on one filesystem.
+
+    The config path was the hardcoded E2B home, so on
+    `containment: direct` — where a box lives under
+    `~/.crewlet/sandboxes/boxes/<id>` — `write_file` refused it and
+    every `run_sandbox` call for an OpenCode role died inside
+    `runner.start`. It is derived from `sandbox.home` like every other
+    artefact path.
+    """
+    from crewlet.sandbox.coding_agents.opencode import opencode_config_path
+
+    class _Box:
+        home = "/var/boxes/abc123"
+
+    assert opencode_config_path(_Box()) == (
+        "/var/boxes/abc123/.config/opencode/opencode.json"
+    )
+
+
+async def test_two_boxes_do_not_share_one_config():
+    """The reason the path is derived at all."""
+    from crewlet.sandbox.coding_agents.opencode import opencode_config_path
+
+    class _Box:
+        def __init__(self, home: str) -> None:
+            self.home = home
+
+    assert opencode_config_path(_Box("/boxes/a")) != opencode_config_path(
+        _Box("/boxes/b")
+    )
+
+
+async def test_the_runner_writes_where_this_box_can_accept_it(tmp_path):
+    """End to end through a real `direct` box, which is what broke."""
+    from crewlet.sandbox.coding_agents.opencode import OpenCodeRunner
+    from crewlet.sandbox.local import LocalSandboxProvider
+    from crewlet.sandbox.protocol import SandboxSpec
+
+    provider = LocalSandboxProvider(
+        containment="direct", state_dir=tmp_path / "sandboxes"
+    )
+    box = await provider.create(SandboxSpec())
+    try:
+        await OpenCodeRunner()._write_config(box, {}, None)
+        written = Path(box.home) / ".config" / "opencode" / "opencode.json"
+        assert written.is_file()
+        assert json.loads(written.read_text())["permission"] == "allow"
+    finally:
+        await box.close()

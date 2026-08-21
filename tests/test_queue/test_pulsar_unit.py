@@ -22,7 +22,7 @@ import pytest
 pulsar = pytest.importorskip("pulsar")
 
 from crewlet.events.types import Event  # noqa: E402
-from crewlet.queue.pulsar import PulsarEventQueue  # noqa: E402
+from crewlet.queue.pulsar import PulsarEventQueue, _Subscription  # noqa: E402
 
 
 class _FakeConsumer:
@@ -56,6 +56,23 @@ class _FakeBadMsg:
         return b"not-json"
 
 
+def _sub(consumer: object, topic: str = "topic", group: str = "group") -> _Subscription:
+    """A subscription record around a fake consumer.
+
+    The seam every dispatch path now takes: ``_process_message`` /
+    ``_process_batch`` / ``_collect_batch`` read the consumer, the
+    topic, the group AND the quiescing flag off one record, so a
+    mismatched trio is no longer constructible and the seat-handoff
+    paths are testable without a broker.
+    """
+    return _Subscription(
+        consumer=consumer,
+        executor=ThreadPoolExecutor(max_workers=1),
+        topic=topic,
+        group=group,
+    )
+
+
 @pytest.fixture
 def queue() -> PulsarEventQueue:
     # ``__init__`` is pure construction -- no network.  We only call
@@ -77,13 +94,70 @@ async def test_process_message_acks_on_success(queue: PulsarEventQueue) -> None:
     async def handler(e: Event) -> None:
         handled.append(e)
 
-    await queue._process_message(consumer, msg, handler, "topic", "group")
+    await queue._process_message(
+        _sub(consumer, "topic", "group"),
+        msg,
+        handler,
+    )
 
     assert consumer.acked == 1
     assert consumer.naked == 0
     assert handled[0].type == "test"
     assert queue._in_flight == 0
     assert queue._idle_event.is_set()
+
+
+async def test_a_failing_nak_does_not_escape_the_dispatch(
+    queue: PulsarEventQueue,
+) -> None:
+    """A NAK on a consumer a concurrent detach just closed raises.
+
+    The cancellation branch has always suppressed that; the ordinary
+    failure branch did not, so a handler error arriving during a seat
+    handoff turned into an exception out of the consume loop — and that
+    loop is a seat's inbox. Nothing restarts one: the node keeps the
+    lease, keeps the attachment, and reads nothing from the seat again,
+    while every health surface still reports it as served.
+    """
+
+    class _ClosedConsumer(_FakeConsumer):
+        def negative_acknowledge(self, _msg: object) -> None:
+            raise RuntimeError("consumer is closed")
+
+    consumer = _ClosedConsumer()
+
+    async def handler(_e: Event) -> None:
+        raise RuntimeError("handler blew up")
+
+    # No raise: the message is the broker's problem now, not the loop's.
+    await queue._process_message(
+        _sub(consumer, "topic", "group"), _FakeMsg(Event(type="t", source="s")), handler
+    )
+    assert queue._in_flight == 0
+
+
+async def test_a_failing_batch_nak_does_not_escape_the_dispatch(
+    queue: PulsarEventQueue,
+) -> None:
+    """The same asymmetry, in the batched path."""
+
+    class _ClosedConsumer(_FakeConsumer):
+        def negative_acknowledge(self, _msg: object) -> None:
+            raise RuntimeError("consumer is closed")
+
+    consumer = _ClosedConsumer()
+
+    async def handler(_events: list[Event]) -> None:
+        raise RuntimeError("handler blew up")
+
+    msgs = [_FakeMsg(Event(type="t", source="s"))]
+    await queue._process_batch(
+        _sub(consumer, "topic", "group"),
+        msgs,
+        handler,
+        lambda e: "k",
+    )
+    assert queue._in_flight == 0
 
 
 async def test_process_message_naks_on_handler_exception(
@@ -96,7 +170,11 @@ async def test_process_message_naks_on_handler_exception(
     async def handler(_e: Event) -> None:
         raise RuntimeError("boom")
 
-    await queue._process_message(consumer, msg, handler, "topic", "group")
+    await queue._process_message(
+        _sub(consumer, "topic", "group"),
+        msg,
+        handler,
+    )
 
     assert consumer.acked == 0
     assert consumer.naked == 1
@@ -118,7 +196,11 @@ async def test_process_message_naks_and_reraises_on_cancellation(
         raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
-        await queue._process_message(consumer, msg, handler, "topic", "group")
+        await queue._process_message(
+            _sub(consumer, "topic", "group"),
+            msg,
+            handler,
+        )
 
     assert consumer.acked == 0
     assert consumer.naked == 1, "cancelled in-flight msg must be NAK'd for restart"
@@ -137,7 +219,11 @@ async def test_process_message_corrupt_message_is_acked(
         nonlocal handler_called
         handler_called = True
 
-    await queue._process_message(consumer, _FakeBadMsg(), handler, "topic", "group")
+    await queue._process_message(
+        _sub(consumer, "topic", "group"),
+        _FakeBadMsg(),
+        handler,
+    )
 
     assert consumer.acked == 1
     assert consumer.naked == 0
@@ -164,9 +250,7 @@ async def test_in_flight_counter_visible_during_handler(
         handler_started.set()
         await handler_can_finish.wait()
 
-    task = asyncio.create_task(
-        queue._process_message(consumer, msg, handler, "topic", "group")
-    )
+    task = asyncio.create_task(queue._process_message(_sub(consumer), msg, handler))
     await handler_started.wait()
 
     saw_in_flight.append(queue._in_flight)
@@ -469,7 +553,12 @@ async def test_process_batch_partitions_by_key_and_acks_per_partition(
     async def handler(events: list[Event]) -> None:
         batches.append(events)
 
-    await queue._process_batch(consumer, [m1, m2, m3], handler, _conv_key, "t", "g")
+    await queue._process_batch(
+        _sub(consumer, "t", "g"),
+        [m1, m2, m3],
+        handler,
+        _conv_key,
+    )
 
     # Oldest-constituent dispatch order (same as first-arrival here —
     # auto-now timestamps follow construction order); same-key events
@@ -495,7 +584,12 @@ async def test_process_batch_naks_only_the_failing_partition(
         if events[0].payload["conv"] == "boom":
             raise RuntimeError("handler blew up")
 
-    await queue._process_batch(consumer, [m1, m2, m3], handler, _conv_key, "t", "g")
+    await queue._process_batch(
+        _sub(consumer, "t", "g"),
+        [m1, m2, m3],
+        handler,
+        _conv_key,
+    )
 
     assert set(consumer.naked) == {m1, m2}
     assert consumer.acked == [m3]
@@ -516,7 +610,12 @@ async def test_process_batch_corrupt_message_acked_rest_delivered(
     async def handler(events: list[Event]) -> None:
         batches.append(events)
 
-    await queue._process_batch(consumer, [bad, good], handler, _conv_key, "t", "g")
+    await queue._process_batch(
+        _sub(consumer, "t", "g"),
+        [bad, good],
+        handler,
+        _conv_key,
+    )
 
     assert [[e.type for e in b] for b in batches] == [["a"]]
     assert consumer.acked == [bad, good]
@@ -539,7 +638,12 @@ async def test_process_batch_cancellation_naks_current_and_remaining(
             raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
-        await queue._process_batch(consumer, [m1, m2, m3], handler, _conv_key, "t", "g")
+        await queue._process_batch(
+            _sub(consumer, "t", "g"),
+            [m1, m2, m3],
+            handler,
+            _conv_key,
+        )
 
     assert consumer.acked == [m1]
     assert set(consumer.naked) == {m2, m3}
@@ -561,7 +665,12 @@ async def test_process_batch_key_failure_falls_back_to_unique_key(
     async def handler(events: list[Event]) -> None:
         batches.append(events)
 
-    await queue._process_batch(consumer, [m1, m2], handler, bad_key, "t", "g")
+    await queue._process_batch(
+        _sub(consumer, "t", "g"),
+        [m1, m2],
+        handler,
+        bad_key,
+    )
 
     assert [len(b) for b in batches] == [1, 1]
     assert set(consumer.acked) == {m1, m2}
@@ -597,8 +706,7 @@ async def test_collect_batch_zero_linger_drains_until_first_empty_poll() -> None
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         collected = await q._collect_batch(
-            consumer,
-            executor,
+            _Subscription(consumer=consumer, executor=executor),
             asyncio.get_running_loop(),
             BatchOptions(linger_seconds=0.0, max_batch=20),
         )
@@ -620,8 +728,7 @@ async def test_collect_batch_respects_max_batch_cap() -> None:
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         collected = await q._collect_batch(
-            consumer,
-            executor,
+            _Subscription(consumer=consumer, executor=executor),
             asyncio.get_running_loop(),
             # max_batch counts the already-received first message too,
             # so the collector fetches at most max_batch - 1 more.
@@ -660,8 +767,7 @@ async def test_collect_batch_linger_window_keeps_collecting_past_empty_polls() -
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         collected = await q._collect_batch(
-            _LateConsumer(),
-            executor,
+            _Subscription(consumer=_LateConsumer(), executor=executor),
             asyncio.get_running_loop(),
             BatchOptions(linger_seconds=0.2, max_batch=20),
         )
@@ -681,8 +787,7 @@ async def test_collect_batch_stops_on_pause() -> None:
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         collected = await q._collect_batch(
-            consumer,
-            executor,
+            _Subscription(consumer=consumer, executor=executor),
             asyncio.get_running_loop(),
             BatchOptions(linger_seconds=5.0, max_batch=20),
         )
@@ -725,7 +830,12 @@ async def test_process_batch_defers_partitions_past_dispatch_budget(
     async def handler(events: list[Event]) -> None:
         handled.append(events)
 
-    await q._process_batch(consumer, [m1, m2, m3], handler, _conv_key, "t", "g")
+    await q._process_batch(
+        _sub(consumer, "t", "g"),
+        [m1, m2, m3],
+        handler,
+        _conv_key,
+    )
 
     # First partition dispatched normally; c2 deferred whole.
     assert [[e.type for e in b] for b in handled] == [["a"]]
@@ -764,7 +874,12 @@ async def test_process_batch_defer_republish_failure_naks_remainder(
 
     async def handler(events: list[Event]) -> None: ...
 
-    await q._process_batch(consumer, [m1, m2, m3], handler, _conv_key, "t", "g")
+    await q._process_batch(
+        _sub(consumer, "t", "g"),
+        [m1, m2, m3],
+        handler,
+        _conv_key,
+    )
 
     # c1 handled + acked; c2's first message republished + acked, its
     # second hit the publish failure and was NAK'd for redelivery.
@@ -785,7 +900,12 @@ async def test_process_batch_within_budget_dispatches_all_partitions(
     async def handler(events: list[Event]) -> None:
         handled.append(events)
 
-    await queue._process_batch(consumer, [m1, m2], handler, _conv_key, "t", "g")
+    await queue._process_batch(
+        _sub(consumer, "t", "g"),
+        [m1, m2],
+        handler,
+        _conv_key,
+    )
 
     assert [[e.type for e in b] for b in handled] == [["a"], ["b"]]
     assert set(consumer.acked) == {m1, m2}
@@ -817,7 +937,11 @@ async def test_process_batch_budget_counts_time_since_first_receive(
     # Pretend collection (linger) already consumed the whole budget.
     stale_receive = time.monotonic() - 120.0
     await q._process_batch(
-        consumer, [m1, m2], handler, _conv_key, "t", "g", received_at=stale_receive
+        _sub(consumer, "t", "g"),
+        [m1, m2],
+        handler,
+        _conv_key,
+        received_at=stale_receive,
     )
 
     # First partition still dispatches (it must make progress); the
@@ -848,5 +972,198 @@ async def test_process_batch_dispatches_oldest_conversation_first(
         handled.append(events[0].payload["conv"])
 
     # Receive order: hot first.
-    await queue._process_batch(consumer, [hot, quiet], handler, _conv_key, "t", "g")
+    await queue._process_batch(
+        _sub(consumer, "t", "g"),
+        [hot, quiet],
+        handler,
+        _conv_key,
+    )
     assert handled == ["quiet", "hot"]
+
+
+# ---------------------------------------------------------------------------
+# detach / quiesce (seat handoff)
+# ---------------------------------------------------------------------------
+#
+# The whole of seat ownership rests on detach being NON-destructive: the
+# durable subscription and its cursor must survive, so an unowned seat's
+# mail is retained rather than discarded. There is exactly one way to get
+# that wrong in this module, and it is one character of difference —
+# calling ``consumer.unsubscribe()`` instead of ``consumer.close()``.
+
+
+class _RecordingConsumer:
+    """Distinguishes close (keeps the subscription) from unsubscribe
+    (deletes it and its retained messages)."""
+
+    def __init__(self) -> None:
+        self.closed = 0
+        self.unsubscribed = 0
+        self.redelivered = 0
+
+    def close(self) -> None:
+        self.closed += 1
+
+    def unsubscribe(self) -> None:
+        self.unsubscribed += 1
+
+    def redeliver_unacknowledged_messages(self) -> None:
+        self.redelivered += 1
+
+
+def _attached(queue: PulsarEventQueue, topic: str, group: str) -> _Subscription:
+    """Register a subscription with no consume task, as if attached."""
+    sub = _Subscription(
+        consumer=_RecordingConsumer(),
+        executor=ThreadPoolExecutor(max_workers=1),
+        topic=topic,
+        group=group,
+    )
+    queue._subscriptions.append(sub)
+    return sub
+
+
+async def test_detach_closes_the_consumer_and_never_unsubscribes(
+    queue: PulsarEventQueue,
+) -> None:
+    sub = _attached(queue, "crewlet.agent.alice.inbox", "agent-alice")
+
+    assert await queue.detach("crewlet.agent.alice.inbox", "agent-alice") is True
+
+    assert sub.consumer.closed == 1
+    assert sub.consumer.unsubscribed == 0, (
+        "detach deleted the broker-side subscription — an unowned seat's "
+        "mail would be discarded instead of held for its next owner"
+    )
+    assert sub.quiescing is True
+    assert queue._subscriptions == []
+
+
+async def test_detach_is_idempotent_and_reports_whether_it_acted(
+    queue: PulsarEventQueue,
+) -> None:
+    _attached(queue, "t", "g")
+    assert await queue.detach("t", "g") is True
+    assert await queue.detach("t", "g") is False
+    assert await queue.detach("never", "attached") is False
+
+
+async def test_detach_releases_the_pairs_pause_holds(
+    queue: PulsarEventQueue,
+) -> None:
+    """A hold is a fact about ONE attachment.
+
+    A hold that outlived a detach left a node that re-acquired the seat
+    attaching into a still-paused subscription and going silently deaf —
+    and ``preferred`` stickiness makes flap-and-return the normal case.
+    """
+    _attached(queue, "t", "g")
+    await queue.pause_topic("t", "g", reason="seat")
+    assert queue._paused_subs[("t", "g")] == {"seat"}
+
+    await queue.detach("t", "g")
+    assert ("t", "g") not in queue._paused_subs
+
+
+async def test_pause_holds_are_scoped_to_one_group(
+    queue: PulsarEventQueue,
+) -> None:
+    """Shared subjects like ``crewlet.events.*`` carry several groups."""
+    sub_a = _attached(queue, "crewlet.events.task_created", "subscriptions")
+    sub_b = _attached(queue, "crewlet.events.task_created", "other")
+
+    await queue.pause_topic("crewlet.events.task_created", "subscriptions")
+    assert queue._is_sub_paused(sub_a) is True
+    assert queue._is_sub_paused(sub_b) is False
+
+
+async def test_quiesce_leaves_the_consumer_attached(
+    queue: PulsarEventQueue,
+) -> None:
+    """The voluntary release path: stop taking new work, let the
+    in-flight turn finish, THEN detach."""
+    sub = _attached(queue, "t", "g")
+
+    assert await queue.quiesce("t", "g") is True
+    assert sub.quiescing is True
+    assert sub.consumer.closed == 0
+    assert queue._subscriptions == [sub]
+    assert await queue.quiesce("nope", "g") is False
+
+
+async def test_unquiesce_restarts_the_loop_and_reclaims_the_prefetch(
+    queue: PulsarEventQueue,
+) -> None:
+    """The inverse quiesce needs, and the two things it must do.
+
+    The consume loop EXITS on the flag, so clearing it alone leaves the
+    attachment silent forever. And whatever the consumer had already
+    fetched was deliberately dropped unacked for a successor that, on
+    this path, never comes — so it has to be asked back, or it stays
+    hostage in the prefetch until the thirty-minute ack timeout.
+    """
+    sub = _attached(queue, "t", "g")
+    ran = 0
+
+    async def _loop() -> None:
+        nonlocal ran
+        ran += 1
+
+    sub.run = _loop
+
+    assert await queue.unquiesce("t", "g") is False, "nothing was quiescing"
+    assert await queue.quiesce("t", "g") is True
+    assert await queue.unquiesce("t", "g") is True
+
+    assert sub.quiescing is False
+    assert sub.consumer.redelivered == 1
+    assert sub.consumer.closed == 0, "resuming is not a re-attach"
+    await asyncio.sleep(0)
+    assert ran == 1
+
+
+async def test_a_quiescing_batch_stops_between_partitions(
+    queue: PulsarEventQueue,
+) -> None:
+    """Undispatched partitions are left UNACKED, not NAK'd.
+
+    A NAK spends the message's dead-letter budget, and a seat handoff is
+    not a failure: measured, a close-driven handoff returns the message
+    to the successor at ``redeliveryCount`` 0. Nor are they republished
+    — that would send them to the topic tail while their prefetched
+    siblings replay from the head, reordering the conversation.
+    """
+    consumer = _TrackingConsumer()
+    sub = _sub(consumer, "t", "g")
+    m1 = _FakeMsg(Event(type="a", payload={"conv": "c1"}))
+    m2 = _FakeMsg(Event(type="b", payload={"conv": "c2"}))
+    handled: list[str] = []
+
+    async def handler(events: list[Event]) -> None:
+        handled.append(events[0].payload["conv"])
+        sub.quiescing = True  # the lease moved mid-batch
+
+    await queue._process_batch(sub, [m1, m2], handler, _conv_key)
+
+    assert handled == ["c1"]  # the second partition never dispatched
+    assert consumer.acked == [m1]
+    assert consumer.naked == [], "quiescing NAK'd a healthy message"
+
+
+async def test_defer_delivery_leaves_the_message_and_quiesces(
+    queue: PulsarEventQueue,
+) -> None:
+    """The third handler outcome, on the real dispatch path."""
+    from crewlet.queue.protocol import DeferDelivery
+
+    consumer = _FakeConsumer()
+    sub = _sub(consumer, "crewlet.agent.alice.inbox", "agent-alice")
+
+    async def handler(_e: Event) -> None:
+        raise DeferDelivery("lease moved to another node")
+
+    await queue._process_message(sub, _FakeMsg(Event(type="t")), handler)
+
+    assert consumer.acked == 0, "deferral claimed work this node will not do"
+    assert consumer.naked == 0, "deferral spent the dead-letter budget"
+    assert sub.quiescing is True

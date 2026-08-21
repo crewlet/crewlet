@@ -100,13 +100,31 @@ _TOKEN_EXPIRY_WARNING_DAYS = 30
 def seat_token_vars(role: object) -> list[str]:
     """The ``${VAR}`` token references to mint for one seat, deduped.
 
-    ``mcp_env.plane`` ONLY — deliberately narrower than GitLab's scan:
-    Plane is not a code host, so there is no git-auth sandbox recipe and
-    no conventional ``sandbox.env`` token key; sandboxed MCP credentials
-    flow from the same ``mcp_env`` via ``resolve_sandbox_mcp``, so a
-    sandbox-using seat already gets the same var.
+    ``mcp_env.plane`` only — there is no sandbox counterpart the way
+    GitLab has one: Plane is not a code host, so there is no git-auth
+    recipe, and sandboxed MCP credentials flow from this same block via
+    ``resolve_sandbox_mcp``, so a sandbox-using seat already gets the
+    same var.
+
+    **Within that block, only the credential-bearing keys.** The engine
+    forwards the block verbatim to the role's MCP instance, so anything
+    else in it is config. Sweeping up every reference treated those as
+    tokens to mint — and because two seats declaring the same
+    non-credential var (a workspace slug, a base url) then look like two
+    seats claiming one credential, the shared-var check failed every
+    seat after the first.
+
+    Which keys carry a token is the same question boot-time identity
+    resolution answers, so the answer comes from there
+    (:data:`crewlet.config.PLANE_TOKEN_KEYS`) rather than from a second
+    list that would drift.
     """
-    return referenced_env_vars(dict(role.mcp_env.get("plane") or {}))
+    from crewlet.config import PLANE_TOKEN_KEYS
+
+    block = dict(role.mcp_env.get("plane") or {})
+    return referenced_env_vars(
+        {key: block[key] for key in PLANE_TOKEN_KEYS if block.get(key)}
+    )
 
 
 @dataclass

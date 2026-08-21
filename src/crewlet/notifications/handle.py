@@ -23,9 +23,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from crewlet._logging import get_logger
 from crewlet.org.models import HANDLE_RE, Role, RoleKind
+from crewlet.queue.topics import agent_inbox_topic
 
 if TYPE_CHECKING:
     from crewlet.agent.instance import AgentInstance
@@ -59,10 +61,22 @@ _VALID_HANDLE_RE = HANDLE_RE
 class ResolvedParty:
     """A resolved org-chart party — an agent seat or a human seat.
 
-    ``agent`` is the live instance for agent seats and ``None`` for
-    humans.  ``role`` is the org seat; for agent seats it can be
-    ``None`` when the registry has no org reference (pool-only
-    construction, e.g. in tests).
+    ``role`` is the org seat; it is ``None`` only when the registry has
+    no org reference at all (pool-only construction, e.g. in tests).
+
+    ``agent`` is the live :class:`AgentInstance` — and it is ``None``
+    for two different reasons, which callers must not conflate:
+
+    - the party is a **human seat**, which never has one; or
+    - the party is an **agent seat that is not running in this
+      process**.
+
+    The second case is the important one, and it is why resolution is
+    org-derived rather than pool-derived. Routing an event to a seat
+    needs only its handle and its agent id, both of which every process
+    can derive from the org. Needing the *instance* to route made
+    delivery depend on where the agent happened to be running — which is
+    correct only while every agent runs everywhere.
     """
 
     kind: RoleKind
@@ -70,10 +84,47 @@ class ResolvedParty:
     name: str
     role: Role | None
     agent: AgentInstance | None
+    org_name: str = ""
 
     @property
     def is_human(self) -> bool:
         return self.kind == RoleKind.HUMAN
+
+    @property
+    def is_local(self) -> bool:
+        """Whether this seat is running in THIS process.
+
+        The execution question, kept separate from the routing one. A
+        caller that wants to *run* something needs this; a caller that
+        wants to *deliver* something does not.
+        """
+        return self.agent is not None
+
+    @property
+    def agent_id(self) -> UUID | None:
+        """The seat's stable agent id, derived rather than looked up.
+
+        ``derive_agent_id`` is a ``uuid5`` over ``(org name, handle)``,
+        so every process computes the same value for the same seat with
+        no database and no live instance. That is what lets an event be
+        addressed to a seat this process is not running.
+        """
+        if self.kind == RoleKind.HUMAN or not self.handle:
+            return None
+        if self.agent is not None:
+            return self.agent.id
+        if not self.org_name:
+            return None
+        from crewlet.db.agents import derive_agent_id
+
+        return derive_agent_id(self.org_name, self.handle)
+
+    @property
+    def inbox_topic(self) -> str:
+        """The seat's inbox subject. Empty for human seats, which have none."""
+        if self.kind == RoleKind.HUMAN:
+            return ""
+        return agent_inbox_topic(self.handle)
 
 
 class HandleRegistry:
@@ -315,6 +366,17 @@ class HandleRegistry:
             return []
         return [r for r in org.all_roles() if r.kind == RoleKind.HUMAN]
 
+    def agent_seats(self) -> list[Role]:
+        """All agent seats in the live org (empty without an org ref)."""
+        org = self._org()
+        if org is None:
+            return []
+        return [r for r in org.all_roles() if r.kind == RoleKind.AGENT]
+
+    def _org_name(self) -> str:
+        org = self._org()
+        return org.name if org is not None else ""
+
     def _party_from_agent(self, agent: AgentInstance) -> ResolvedParty:
         org = self._org()
         role = org.get_role(agent.role_name) if org is not None else None
@@ -324,23 +386,50 @@ class HandleRegistry:
             name=agent.role_name,
             role=role,
             agent=agent,
+            org_name=self._org_name(),
         )
 
-    @staticmethod
-    def _party_from_human(seat: Role) -> ResolvedParty:
+    def _party_from_agent_seat(self, seat: Role) -> ResolvedParty:
+        """An agent seat that is NOT running in this process.
+
+        Addressable but not runnable: it has a handle, a role and a
+        derivable agent id, and no instance. This is the party a fleet
+        member resolves for a seat another node owns — and, today, for a
+        seat that simply has not been spawned yet.
+        """
+        return ResolvedParty(
+            kind=RoleKind.AGENT,
+            handle=seat.get_handle(),
+            name=seat.name,
+            role=seat,
+            agent=None,
+            org_name=self._org_name(),
+        )
+
+    def _party_from_human(self, seat: Role) -> ResolvedParty:
         return ResolvedParty(
             kind=RoleKind.HUMAN,
             handle=seat.get_handle(),
             name=seat.name,
             role=seat,
             agent=None,
+            org_name=self._org_name(),
         )
 
     def resolve_party(self, handle: str) -> ResolvedParty | None:
-        """Resolve a handle to a party — agent seats first, then humans."""
+        """Resolve a handle to a party.
+
+        Local agent instances first (so callers that can run the seat
+        get it), then agent seats from the org, then human seats. The
+        middle tier is what makes resolution independent of where an
+        agent happens to be running.
+        """
         agent = self.resolve_handle(handle)
         if agent is not None:
             return self._party_from_agent(agent)
+        for seat in self.agent_seats():
+            if seat.get_handle() == handle:
+                return self._party_from_agent_seat(seat)
         for seat in self.human_seats():
             if seat.get_handle() == handle:
                 return self._party_from_human(seat)
@@ -351,10 +440,42 @@ class HandleRegistry:
         agent = self.resolve_role(role_name)
         if agent is not None:
             return self._party_from_agent(agent)
+        for seat in self.agent_seats():
+            if seat.name == role_name:
+                return self._party_from_agent_seat(seat)
         for seat in self.human_seats():
             if seat.name == role_name:
                 return self._party_from_human(seat)
         return None
+
+    def resolve_party_agent_id(self, agent_id: str) -> ResolvedParty | None:
+        """Resolve an agent id to a party.
+
+        The inverse of :func:`~crewlet.db.agents.derive_agent_id`: that
+        is a ``uuid5`` over ``(org name, handle)``, so every process can
+        recompute the id of every agent seat and answer this with no
+        database and no live instance.  Internal events carry an agent
+        id rather than a handle (``TaskAssigned``, ``ExternalNotification``),
+        and looking that id up in the local pool made routing depend on
+        where the seat happened to be running.
+
+        Human seats have no agent id, so they never match here — a
+        caller that needs to distinguish "human recipient" from
+        "unknown recipient" has to ask the org by role or handle.
+        """
+        if not agent_id:
+            return None
+        from crewlet.agent.instance import AgentState
+
+        wanted = str(agent_id)
+        for agent in self._pool.agents:
+            if agent.id_str == wanted and agent.state != AgentState.TERMINATED:
+                return self._party_from_agent(agent)
+        org = self._org()
+        if org is None:
+            return None
+        seat = org.agent_seat_by_id(wanted)
+        return self._party_from_agent_seat(seat) if seat is not None else None
 
     def resolve_party_email(self, email: str) -> ResolvedParty | None:
         """Resolve an email to a party.
@@ -366,6 +487,16 @@ class HandleRegistry:
         if agent is not None:
             return self._party_from_agent(agent)
         lowered = email.lower()
+        # A plus-address names a seat directly, so it resolves even when
+        # that seat is not running here.
+        handle = self.parse_plus_address(email)
+        if handle:
+            for seat in self.agent_seats():
+                if seat.get_handle() == handle:
+                    return self._party_from_agent_seat(seat)
+        for seat in self.agent_seats():
+            if seat.email and seat.email.lower() == lowered:
+                return self._party_from_agent_seat(seat)
         for seat in self.human_seats():
             if seat.email and seat.email.lower() == lowered:
                 return self._party_from_human(seat)
@@ -403,17 +534,41 @@ class HandleRegistry:
         return None
 
     def all_parties(self) -> list[ResolvedParty]:
-        """Every addressable party — live agents ∪ human seats.
+        """Every addressable party — every ORG seat, agent and human.
 
-        The one enumeration callers should build corpora from (e.g.
-        the ``lookup_colleague`` fuzzy tiers), so the party mapping
-        lives here rather than being re-derived at call sites.
+        The one enumeration callers should build corpora from (e.g. the
+        ``lookup_colleague`` fuzzy tiers), so the party mapping lives
+        here rather than being re-derived at call sites.
+
+        Enumerated from the **org**, with live instances attached where
+        this process has them. Enumerating the pool instead would shrink
+        an agent's view of its own company to whatever happens to be
+        running locally — it would stop seeing colleagues that exist,
+        and a fuzzy match could then land on the wrong one because the
+        right one was missing from the corpus.
+
+        Falls back to the pool when there is no org reference at all
+        (pool-only construction in tests).
         """
-        parties = [
-            self._party_from_agent(agent)
-            for handle in self.all_handles()
-            if (agent := self.resolve_handle(handle)) is not None
-        ]
+        seats = self.agent_seats()
+        if not seats and self._org() is None:
+            parties = [
+                self._party_from_agent(agent)
+                for handle in self.all_handles()
+                if (agent := self.resolve_handle(handle)) is not None
+            ]
+            parties.extend(self._party_from_human(seat) for seat in self.human_seats())
+            return parties
+
+        parties: list[ResolvedParty] = []
+        for seat in seats:
+            handle = seat.get_handle()
+            agent = self.resolve_handle(handle) if handle else None
+            parties.append(
+                self._party_from_agent(agent)
+                if agent is not None
+                else self._party_from_agent_seat(seat)
+            )
         parties.extend(self._party_from_human(seat) for seat in self.human_seats())
         return parties
 

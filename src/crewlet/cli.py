@@ -63,6 +63,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Start embedded API server on this port (for webhooks)",
     )
     run_p.add_argument(
+        "--api-host",
+        default="",
+        help=(
+            "Bind host for the API server, overriding api.host in the Tier A config."
+        ),
+    )
+    run_p.add_argument(
+        "--roles",
+        default="",
+        metavar="ROLE[,ROLE...]",
+        help=(
+            "What this node runs, overriding node.roles in the Tier A "
+            "config: ingress (serve the HTTP API and its webhooks), "
+            "seats (claim seat leases and run agents), workers (the "
+            "company-wide singleton duties). Default: all three. "
+            "See docs/guides/fleet.md."
+        ),
+    )
+    run_p.add_argument(
         "--import-company",
         type=Path,
         default=None,
@@ -181,6 +200,72 @@ def _build_parser() -> argparse.ArgumentParser:
             "authoring loops (see docs/getting-started/ai-authoring.md)"
         ),
     )
+
+    # --- migrate ---
+    migrate_p = sub.add_parser(
+        "migrate",
+        help="Apply pending database migrations",
+    )
+    migrate_p.add_argument(
+        "config",
+        type=Path,
+        nargs="?",
+        default=Path("config.yaml"),
+        help="Path to the Tier A YAML config file (default: ./config.yaml)",
+    )
+    migrate_p.add_argument(
+        "--company",
+        type=Path,
+        default=None,
+        help=(
+            "Tier B company YAML to read the embedding width from, for a "
+            "database with no active revision yet. The pgvector columns "
+            "are fixed at creation and the sequence is forward-only, so "
+            "without a width the run stops before them (and says so) "
+            "rather than guessing"
+        ),
+    )
+    migrate_p.add_argument(
+        "--check",
+        action="store_true",
+        help="Report pending migrations and exit non-zero if any; apply nothing",
+    )
+    migrate_p.add_argument("--debug", action="store_true", help="Verbose logging")
+
+    # --- budgets ---
+    budgets_p = sub.add_parser(
+        "budgets",
+        help="Inspect or reset token-budget usage",
+    )
+    budgets_sub = budgets_p.add_subparsers(dest="budgets_command")
+
+    bud_show = budgets_sub.add_parser("show", help="Show token usage per scope")
+    bud_show.add_argument(
+        "config",
+        type=Path,
+        nargs="?",
+        default=Path("config.yaml"),
+        help="Path to the Tier A YAML config file (default: ./config.yaml)",
+    )
+    bud_show.add_argument("--debug", action="store_true", help="Verbose logging")
+
+    bud_reset = budgets_sub.add_parser(
+        "reset",
+        help="Zero token usage (usage is durable across restarts)",
+    )
+    bud_reset.add_argument(
+        "config",
+        type=Path,
+        nargs="?",
+        default=Path("config.yaml"),
+        help="Path to the Tier A YAML config file (default: ./config.yaml)",
+    )
+    bud_reset.add_argument(
+        "--scope",
+        default="",
+        help="Reset one scope ('org' or 'agent:<id>'); omit to reset every scope",
+    )
+    bud_reset.add_argument("--debug", action="store_true", help="Verbose logging")
 
     # --- schema ---
     schema_p = sub.add_parser(
@@ -779,12 +864,48 @@ def _build_api_parser() -> argparse.ArgumentParser:
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _parse_role_flag(raw: str) -> list[Any]:
+    """``--roles ingress,seats`` → node roles, or a usable error.
+
+    Rejects an unknown name rather than dropping it: a typo that
+    silently subtracted a role would leave a fleet doing a job nobody
+    does, which is the failure this whole surface exists to make
+    visible.
+    """
+    from crewlet.seat.placement import NodeRole
+
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if not names:
+        raise ValueError(
+            "--roles needs at least one of "
+            f"{', '.join(sorted(str(r) for r in NodeRole))}"
+        )
+    try:
+        return [NodeRole(name) for name in names]
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc} — --roles takes any of "
+            f"{', '.join(sorted(str(r) for r in NodeRole))}"
+        ) from exc
+
+
 def _migration_vars(config: CompanyConfig) -> dict[str, str]:
-    """Build template vars for SQL migrations from config."""
-    dims = (
-        config.providers.embeddings.dimensions if config.providers.embeddings else 1536
-    )
-    return {"embedding_dimensions": str(dims)}
+    """Build template vars for SQL migrations from config.
+
+    A config with no embeddings provider declares no width, so this
+    returns an EMPTY dict and the migrator defers the pgvector
+    migrations.  Guessing 1536 here would be the same permanent,
+    irreversible corruption as guessing it for an unconfigured database:
+    the column width is fixed at creation and the sequence is
+    forward-only, so a founder who later adds a 3072-dimension model gets
+    a diary and episode store that raise on every insert — silently,
+    because ``ReflectEngine`` swallows the error.  Deferring costs
+    nothing: an org with no embeddings provider is not using those tables
+    yet, and the migrations apply the moment one is configured.
+    """
+    if config.providers.embeddings is None:
+        return {}
+    return {"embedding_dimensions": str(config.providers.embeddings.dimensions)}
 
 
 def _migration_vars_for_payload(
@@ -792,18 +913,20 @@ def _migration_vars_for_payload(
 ) -> dict[str, str]:
     """Migration template vars derived from a raw Tier B payload.
 
-    Returns the 1536 default when there is no active revision (fresh DB)
-    or the payload has no embeddings block.  Used by the two-phase
-    migrate so the pgvector columns are created at the active config's
-    embedding width rather than a hardcoded 1536 (a non-1536 model
-    otherwise mismatches the ``vector(N)`` column and every insert
-    raises).
+    Returns an EMPTY dict when there is no active revision, which tells
+    the migrator to stop before the pgvector migrations rather than guess
+    a width.  This is the fix for a silent, permanent data-shape
+    corruption: the width is baked into ``vector(N)`` at creation and the
+    sequence is forward-only, so a guessed 1536 against a 3072-dimension
+    model makes every ``agent_diary`` / ``episodes`` insert raise
+    forever — and ``ReflectEngine`` swallows the error, so the learning
+    subsystem just goes quiet.
 
     ``cipher`` decrypts an encrypted-document payload so the embedding
     dimensions can be read from the plaintext structure.
     """
     if payload is None:
-        return {"embedding_dimensions": "1536"}
+        return {}
     from crewlet.secrets import load_config
 
     # Decrypt the stored config so the embedding dimension is readable.
@@ -838,14 +961,15 @@ async def _connect_and_migrate_from_db(
     ``secret_values`` table before it falls back to ``os.environ``.  Both
     long-lived entry points (``run`` and ``api``) come through here, which
     is what keeps the engine and the API answering references identically.
+
+    Both entry points may call this concurrently: the run is serialized
+    behind an advisory lock, and the pgvector width is never guessed (an
+    absent width defers those migrations instead), so neither process can
+    win a race to bake the wrong column type.
     """
     from crewlet.db.client import Database
     from crewlet.db.company_config import CompanyConfigStore
-    from crewlet.db.migrator import (
-        COMPANY_CONFIG_MIGRATION,
-        SECRET_VALUES_MIGRATION,
-        migrate,
-    )
+    from crewlet.db.migrator import BOOTSTRAP_MIGRATIONS, migrate
     from crewlet.db.secret_values import load_secret_source
     from crewlet.secrets.resolver import install_secret_source
 
@@ -853,7 +977,7 @@ async def _connect_and_migrate_from_db(
         raise RuntimeError("providers.database.dsn is required in config.yaml")
     db = await Database.connect(bootstrap.providers.database.dsn)
 
-    await migrate(db, only={COMPANY_CONFIG_MIGRATION, SECRET_VALUES_MIGRATION})
+    await migrate(db, only=set(BOOTSTRAP_MIGRATIONS))
     store = CompanyConfigStore(db)
     active = await store.get_active()
 
@@ -921,42 +1045,6 @@ async def _import_company_for_run(
     )
     print(f"Imported {company_config_path} as revision {revision_id}")
     return await store.get_active()
-
-
-def _build_api_event_store(db: Any | None) -> Any:
-    """Build the event store for the standalone API process.
-
-    Wraps the persistent leg in a ``CompositeEventStore`` so that
-    ``/agents`` aggregates per-agent token totals via the composite's
-    ``list_token_usage_events`` path.  Per-store ``get_agent_states``
-    deliberately leaves token counters at zero, so wiring
-    ``BufferedEventStore`` directly would make the API dashboard
-    report zero tokens.
-
-    The memory leg accumulates the webhook trace events that
-    ``routes._log_event`` writes via ``event_store.write_event``
-    (the composite's ``write_event`` dual-writes both legs), capped at
-    ``MemoryEventStore.max_events``.  The API process does NOT receive
-    engine events, so the only token-bearing data lives in the
-    persistent leg — token aggregation effectively reads from there
-    via ``list_token_usage_events`` deduped by ``event_id``.
-
-    When ``db`` is ``None`` (e.g. in tests that don't spin up a real
-    database), falls back to two in-memory legs — still wrapped in a
-    composite so the per-store wiring stays consistent.
-    """
-    from crewlet.timescaledb import (
-        BufferedEventStore,
-        CompositeEventStore,
-        MemoryEventStore,
-        TimescaleDBEventStore,
-    )
-
-    if db is not None:
-        persistent = BufferedEventStore(TimescaleDBEventStore(db))
-        return CompositeEventStore(persistent, MemoryEventStore())
-
-    return CompositeEventStore(MemoryEventStore(), MemoryEventStore())
 
 
 def _build_engine_event_store(memory_store: Any, persistent_store: Any | None) -> Any:
@@ -1162,8 +1250,27 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: invalid bootstrap config: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        _bind_node_identity(bootstrap)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    # --roles / --api-host override the Tier A file. Applied to the
+    # bootstrap object rather than threaded separately so there is one
+    # answer to "what does this node run" — the engine reads Tier A, and
+    # a flag that bypassed it would be invisible to the presence lease
+    # that tells the rest of the fleet.
+    if getattr(args, "roles", ""):
+        try:
+            bootstrap.node.roles = _parse_role_flag(args.roles)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+    if getattr(args, "api_host", ""):
+        bootstrap.api.host = args.api_host
+
     async def _run_engine() -> None:
-        from crewlet.a2a.memory import MemoryA2ABus
         from crewlet.queue.pulsar import PulsarEventQueue
 
         queue_cfg = bootstrap.providers.queue
@@ -1174,7 +1281,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             auth_token=queue_cfg.auth_token,
             tls_trust_certs_path=queue_cfg.tls_trust_certs_path,
         )
-        a2a_bus = MemoryA2ABus()
 
         # Connect + two-phase migrate.  When --import-company is given
         # and the DB has no active revision, the file is loaded inside
@@ -1232,7 +1338,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         engine = Engine.from_bootstrap(
             bootstrap,
             event_queue=event_queue,
-            a2a_bus=a2a_bus,
             storage=storage,
             embeddings=embeddings,
             company_config_store=company_config_store,
@@ -1257,6 +1362,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                     load_config(active_revision.payload, cipher)
                 )
             )
+            # Tell the control plane which activation epoch that apply
+            # satisfied.  Without it the first reconcile tick sees a
+            # target it has "never applied" and re-applies it seconds
+            # after boot — restarting every MCP child for nothing.
+            await engine._seed_applied_epoch(active_revision.revision_id)
 
         # Event store setup — in-memory store for instant reads,
         # TimescaleDB for persistence across restarts.  The event
@@ -1509,6 +1619,198 @@ def build_config_schema(tier: str) -> dict[str, Any]:
     }
 
 
+def _bind_node_identity(bootstrap: Any) -> str:
+    """Resolve this process's node id and bind it onto every log line.
+
+    Called by the long-lived entry points right after the Tier A config
+    loads.  With one process it is a constant label; with more than one it
+    is the difference between "the config apply failed" and "the config
+    apply failed on node-2".
+    """
+    import structlog
+
+    from crewlet.config import resolve_node_id
+
+    node_id = resolve_node_id(bootstrap)
+    structlog.contextvars.bind_contextvars(node=node_id)
+    return node_id
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Apply pending database migrations (the explicit schema step).
+
+    Recommended before starting any long-lived process.  ``crewlet run``
+    still auto-migrates for the single-host flow, but that convenience is
+    the thing that made three entry points race an unlocked, non-idempotent
+    DDL sequence — running this once, first, removes the race entirely.
+    """
+
+    async def _run() -> int:
+        from crewlet._env import load_env_file
+        from crewlet.config import load_bootstrap_config
+        from crewlet.db.client import Database
+        from crewlet.db.migrator import (
+            BOOTSTRAP_MIGRATIONS,
+            migrate,
+            pending_migrations,
+        )
+
+        # Same as every other entry point: Tier A resolves ${VAR} at load
+        # time, and the shipped examples put the DSN in
+        # ${CREWLET_DATABASE_DSN}. Without this, the first command the
+        # deployment guide tells an operator to run fails on a config
+        # `crewlet run` in the same directory loads fine.
+        load_env_file(args.config)
+        bootstrap = load_bootstrap_config(args.config)
+        if not bootstrap.providers.database.dsn:
+            print(
+                "Error: providers.database.dsn is required in the Tier A config",
+                file=sys.stderr,
+            )
+            return 1
+
+        db = await Database.connect(bootstrap.providers.database.dsn)
+        try:
+            # The bootstrap phase is dimension-independent and must exist
+            # before the active revision can be read at all.
+            if not args.check:
+                await migrate(db, only=set(BOOTSTRAP_MIGRATIONS))
+
+            template_vars = await _resolve_migration_vars(db, bootstrap, args.company)
+
+            if args.check:
+                pending = await pending_migrations(db, template_vars=template_vars)
+                if pending:
+                    print(f"{len(pending)} pending migration(s):", file=sys.stderr)
+                    for version in pending:
+                        print(f"  {version}", file=sys.stderr)
+                    return 1
+                print("schema up to date", file=sys.stderr)
+                return 0
+
+            applied = await migrate(db, template_vars=template_vars)
+            if applied:
+                print(f"applied {len(applied)} migration(s):", file=sys.stderr)
+                for version in applied:
+                    print(f"  {version}", file=sys.stderr)
+            else:
+                print("schema up to date", file=sys.stderr)
+
+            remaining = await pending_migrations(db, template_vars=template_vars)
+            if remaining:
+                print(
+                    f"\n{len(remaining)} migration(s) still pending: they size "
+                    f"their pgvector columns from the embedding width, which "
+                    f"no active company config declares yet.\nImport a company "
+                    f"(`crewlet config import company.yaml`) or pass "
+                    f"`--company company.yaml`, then re-run.",
+                    file=sys.stderr,
+                )
+            return 0
+        finally:
+            await db.close()
+
+    return asyncio.run(_run())
+
+
+async def _resolve_migration_vars(
+    db: Any, bootstrap: Any, company_path: Path | None
+) -> dict[str, str]:
+    """Migration template vars from the active revision, or ``--company``.
+
+    Returns an empty dict when neither is available — the migrator then
+    stops before the pgvector migrations rather than guessing a width.
+
+    Tolerates a database where ``company_config`` does not exist yet.
+    ``--check`` deliberately applies nothing, including the bootstrap
+    phase, so on a fresh database this read would otherwise raise
+    ``UndefinedTableError`` — a raw traceback in exactly the case the
+    flag exists for.
+    """
+    from crewlet.db.company_config import CompanyConfigStore
+    from crewlet.secrets import KeyringCipher
+
+    cipher = KeyringCipher.from_config(bootstrap.secrets)
+    active = None
+    if await db.fetchval("SELECT to_regclass('company_config')"):
+        active = await CompanyConfigStore(db).get_active()
+    if active is not None:
+        return _migration_vars_for_payload(active.payload, cipher)
+    if company_path is not None:
+        from crewlet.config import load_company_config
+
+        return _migration_vars(load_company_config(company_path))
+    return {}
+
+
+async def _open_budget_store(args: argparse.Namespace) -> tuple[Any, Any]:
+    """Connect and return ``(db, PostgresBudgetUsageStore)``."""
+    from crewlet._env import load_env_file
+    from crewlet.config import load_bootstrap_config
+    from crewlet.db.budgets import PostgresBudgetUsageStore
+    from crewlet.db.client import Database
+
+    load_env_file(args.config)
+    bootstrap = load_bootstrap_config(args.config)
+    if not bootstrap.providers.database.dsn:
+        raise RuntimeError("providers.database.dsn is required in the Tier A config")
+    db = await Database.connect(bootstrap.providers.database.dsn)
+    return db, PostgresBudgetUsageStore(db)
+
+
+def cmd_budgets_show(args: argparse.Namespace) -> int:
+    """Print token usage per scope."""
+
+    async def _run() -> int:
+        db, _store = await _open_budget_store(args)
+        try:
+            rows = await db.execute(
+                "SELECT scope, used_tokens, updated_at FROM token_budget_usage "
+                "ORDER BY scope"
+            )
+        finally:
+            await db.close()
+        if not rows:
+            print("no token usage recorded", file=sys.stderr)
+            return 0
+        width = max(len(str(r["scope"])) for r in rows)
+        for row in rows:
+            print(f"{str(row['scope']):<{width}}  {int(row['used_tokens']):>12,}")
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_budgets_reset(args: argparse.Namespace) -> int:
+    """Zero token usage.
+
+    Usage is durable across restarts — it used to reset on every engine
+    start, which made a cap advisory in exactly the situation that
+    motivates one (an agent burning budget in a crash loop). Resetting is
+    therefore a deliberate act rather than a side effect of a restart.
+    """
+
+    async def _run() -> int:
+        db, store = await _open_budget_store(args)
+        try:
+            count = await store.reset(args.scope)
+        finally:
+            await db.close()
+        target = args.scope or "all scopes"
+        print(f"reset {count} scope(s) ({target})", file=sys.stderr)
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_schema(args: argparse.Namespace) -> int:
     """Print (or write) the JSON Schema for a config tier."""
     text = json.dumps(build_config_schema(args.tier), indent=2) + "\n"
@@ -1525,124 +1827,46 @@ def cmd_schema(args: argparse.Namespace) -> int:
 
 
 def cmd_api(args: argparse.Namespace) -> int:
-    """Start the standalone API server (Tier A bootstrap + Tier B from DB)."""
+    """``crewlet run api`` — DEPRECATED alias for ``crewlet run --roles ingress``.
 
-    from crewlet._env import load_env_file
-    from crewlet.config import load_bootstrap_config
+    There is one node type now, and what it does is a config value.
+    ``crewlet run api`` was a second process shape with its own wiring:
+    it built the app, the stream service and the config refresher by
+    hand, in the same order as the engine's embedded path but never
+    provably the same way, and every fix to one had to be remembered for
+    the other. An ingress-only node IS the standalone API — an engine
+    that claims no seats, runs no duties, and serves the routes.
 
-    config_path: Path = args.config
-
-    # Load .env next to the bootstrap file, falling back to CWD
-    load_env_file(config_path)
-
-    level = logging.DEBUG if args.debug else logging.INFO
-    configure_logging(level=level)
-
-    if not config_path.exists():
-        print(
-            f"Error: bootstrap config not found: {config_path}",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        bootstrap = load_bootstrap_config(config_path)
-    except Exception as exc:
-        print(f"Error: invalid bootstrap config: {exc}", file=sys.stderr)
-        return 1
-
-    # Queue backend from Tier A
-    from crewlet.queue.pulsar import PulsarEventQueue
-
-    queue_cfg = bootstrap.providers.queue
-    event_queue = PulsarEventQueue(
-        queue_cfg.url,
-        tenant=queue_cfg.tenant,
-        namespace=queue_cfg.namespace,
-        auth_token=queue_cfg.auth_token,
-        tls_trust_certs_path=queue_cfg.tls_trust_certs_path,
+    Kept for one minor release so a deployment that names it does not
+    break on upgrade. It maps its ``--host`` / ``--port`` onto the run
+    command's flags and forces ``--roles ingress``; the deprecation goes
+    to stderr, where a supervisor's logs will keep it.
+    """
+    print(
+        "warning: `crewlet run api` is deprecated and will be removed in a "
+        "future release. Use `crewlet run <config> --roles ingress "
+        f"--api-host {args.host} --api-port {args.port}` — an ingress-only "
+        "node is the standalone API, on the same code path as every other "
+        "node. See docs/guides/fleet.md.",
+        file=sys.stderr,
     )
-
-    try:
-        from crewlet.api.app import attach_config_refresh, create_app
-        from crewlet.api.streaming import StreamService
-    except ImportError:
-        print(
-            "Error: crewlet[api] extras required. "
-            "Install with: pip install crewlet[api]",
-            file=sys.stderr,
+    return cmd_run(
+        argparse.Namespace(
+            config=args.config,
+            debug=args.debug,
+            api_port=args.port,
+            api_host=args.host,
+            roles="ingress",
+            import_company=None,
+            import_confluence=None,
+            update_confluence=False,
+            create_confluence_space=False,
+            prune_confluence=False,
+            import_plane=None,
+            update_plane=False,
+            prune_plane=False,
         )
-        return 1
-
-    async def _run_api() -> None:
-        import uvicorn
-
-        # Connect + two-phase migrate (pgvector columns sized from the
-        # active revision's embedding dimensions, not a hardcoded 1536).
-        db, company_config_store, _active, _ic = await _connect_and_migrate_from_db(
-            bootstrap
-        )
-
-        # Event store: the helper wraps the persistent leg in a
-        # CompositeEventStore so /agents aggregates per-agent token
-        # totals (see _build_api_event_store).
-        event_store = _build_api_event_store(db)
-
-        stream = StreamService()
-
-        # ``app.state.agent_roles`` / ``org_data`` / ``tools_data``
-        # / ``github_webhook_secret`` / ``forge_app_id`` are all
-        # populated by ``attach_config_refresh`` after the app starts
-        # (from the active revision, then refreshed live on every
-        # ``ConfigRevisionActivated`` event).
-        app = create_app(
-            event_queue=event_queue,
-            event_store=event_store,
-            database=db,
-            stream=stream,
-            bootstrap=bootstrap,
-            company_config_store=company_config_store,
-        )
-
-        await event_store.start()
-        await event_queue.start()
-        # Engine emits events on ``crewlet.events.>``.  Subscribe with
-        # an ephemeral broadcast consumer so every API instance gets
-        # every event without competing with peers; ``ingest`` updates
-        # the live-state projection and fans the event out to dashboards.
-        stream_unsubscribe = await event_queue.subscribe_stream(
-            "crewlet.events.>", stream.ingest
-        )
-        # Subscribe to revision_activated + prime app.state from the
-        # active revision (if any).  After this, the dashboard reads
-        # /agents and /org against the up-to-date Tier B payload, and
-        # any subsequent PUT /config refreshes app.state in place.
-        await attach_config_refresh(app)
-
-        try:
-            uv_config = uvicorn.Config(
-                app,
-                host=args.host,
-                port=args.port,
-                log_level="debug" if args.debug else "info",
-            )
-            server = uvicorn.Server(uv_config)
-            await server.serve()
-        finally:
-            await stream_unsubscribe()
-            await event_queue.stop()
-            await event_store.close()
-            await db.close()
-
-    print(f"Starting crewlet API from {config_path} on {args.host}:{args.port} …")
-    try:
-        asyncio.run(_run_api())
-    except KeyboardInterrupt:
-        _print_safe("\nShutdown requested (Ctrl+C).")
-    except (RuntimeError, ValueError) as exc:
-        _print_safe(f"Error: {exc}")
-        return 1
-    return 0
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────
@@ -1672,6 +1896,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+
+    if args.command == "budgets":
+        subcmd = getattr(args, "budgets_command", None)
+        if subcmd is None:
+            parser.print_help()
+            return 0
+        return {
+            "show": cmd_budgets_show,
+            "reset": cmd_budgets_reset,
+        }[subcmd](args)
 
     if args.command == "confluence":
         from crewlet.confluence.import_cli import (
@@ -1804,6 +2038,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "run": cmd_run,
         "validate": cmd_validate,
+        "migrate": cmd_migrate,
         "schema": cmd_schema,
     }
 

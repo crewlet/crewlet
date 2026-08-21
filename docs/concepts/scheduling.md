@@ -129,6 +129,14 @@ units:
 A **role** schedule always runs as that role (its `target` is ignored). A
 **unit** schedule resolves its runner(s) from `target`.
 
+Runners are resolved from the **org**, never from the agents running in
+the ticking process. A fire is addressed to the runner seat's inbox and
+consumed by whichever node owns that seat — which is rarely the node
+whose tick won the ledger claim. The seat's agent id comes from
+`Organization.agent_id_for`, the same `uuid5` over `(org name, handle)`
+every node derives, so the `TaskAssigned` a scheduler publishes names
+exactly the identity the turn will run under.
+
 > **Schedules are not inherited.** Unlike `lead` and `slack_channel`, a
 > schedule on a department does **not** cascade to child units — that
 > would silently multiply a standup across every squad. Declare schedules
@@ -271,8 +279,14 @@ minute.
 - **Spring-forward (clocks skip an hour):** a cron time in the skipped
   hour has no instant that day, so it **does not run** that day — and
   nothing was "missed" from the window's view, so there's no
-  `skipped_catchup` row. If a daily run is critical, avoid the local
-  02:00–03:00 window or use `timezone: UTC`.
+  `skipped_catchup` row. If a daily run is critical, use `timezone: UTC`,
+  or keep it out of the skipped hour — which is **not the same hour
+  everywhere**: it is 01:00–02:00 in `Europe/London`, 02:00–03:00 across
+  most of the rest of the EU and in the US, and something else again in
+  zones that shift by other amounts or on other dates. Check the hour for
+  the zone you actually set rather than assuming 02:00; a `30 1 * * *`
+  schedule on `Europe/London` is in the gap and silently skips one day a
+  year.
 - **Day-of-week ranges don't wrap:** `sat-sun` is rejected as a
   descending range (Sunday is `0`). Write `6-7`, `sat,sun`, or `0,6`
   for weekends.

@@ -197,7 +197,7 @@ def test_tool_wrapper_override_matches_prefixed_name():
 
 
 @pytest.mark.asyncio
-async def test_discover_and_wrap_threads_annotation_overrides():
+async def test_register_threads_annotation_overrides():
     bridge = MCPToolBridge()
     from crewlet.tools.capabilities import ToolAnnotations
 
@@ -205,7 +205,7 @@ async def test_discover_and_wrap_threads_annotation_overrides():
         name="linear",
         tools=[{"name": "linear_create_comment", "description": "Comment"}],
     )
-    wrapped = await bridge._discover_and_wrap(
+    wrapped = await bridge._register(
         client,
         tool_prefix="",
         annotation_overrides={
@@ -326,11 +326,11 @@ async def test_tool_wrapper_execute_error(
 
 
 @pytest.mark.asyncio
-async def test_bridge_discover_and_wrap(
+async def test_bridge_register_discovers_and_wraps(
     fake_client: FakeMCPClient,
 ):
     bridge = MCPToolBridge()
-    wrapped = await bridge._discover_and_wrap(fake_client, tool_prefix="")
+    wrapped = await bridge._register(fake_client, tool_prefix="")
     assert len(wrapped) == 2
     assert {t.name for t in wrapped} == {"search", "create"}
 
@@ -347,7 +347,7 @@ async def test_bridge_discover_with_prefix(
     fake_client: FakeMCPClient,
 ):
     bridge = MCPToolBridge()
-    wrapped = await bridge._discover_and_wrap(fake_client, tool_prefix="jira_")
+    wrapped = await bridge._register(fake_client, tool_prefix="jira_")
     assert {t.name for t in wrapped} == {
         "jira_search",
         "jira_create",
@@ -359,7 +359,7 @@ async def test_bridge_get_server_tools(
     fake_client: FakeMCPClient,
 ):
     bridge = MCPToolBridge()
-    await bridge._discover_and_wrap(fake_client, "")
+    await bridge._register(fake_client, "")
 
     server_tools = bridge.get_server_tools("test-server")
     assert len(server_tools) == 2
@@ -382,7 +382,7 @@ async def test_bridge_stop_all(fake_client: FakeMCPClient):
 async def test_bridge_stop_server(fake_client: FakeMCPClient):
     bridge = MCPToolBridge()
     bridge._clients["test-server"] = fake_client
-    await bridge._discover_and_wrap(fake_client, "")
+    await bridge._register(fake_client, "")
     assert len(bridge._tools) == 2
 
     await bridge.stop_server("test-server")
@@ -420,13 +420,14 @@ async def test_bridge_restart_http_server(monkeypatch, fake_client: FakeMCPClien
     have relaunched it as a stdio subprocess (empty command)."""
     bridge = MCPToolBridge()
     bridge._clients["remote"] = fake_client
-    await bridge._discover_and_wrap(fake_client, "")
+    await bridge._register(fake_client, "")
 
     created: dict[str, object] = {}
 
     class _FakeHttp:
-        def __init__(self, name, url, headers=None):
+        def __init__(self, name, url, headers=None, **timeouts):
             created["name"], created["url"], created["headers"] = name, url, headers
+            created.update(timeouts)
             self.name = name
 
         async def start(self) -> None:
@@ -448,3 +449,138 @@ async def test_bridge_restart_http_server(monkeypatch, fake_client: FakeMCPClien
     assert created["url"] == "https://new.example/mcp"
     assert created["headers"] == {"Authorization": "Bearer x"}
     assert [w.name for w in wrapped] == ["r_remote_tool"]
+
+
+# ── a server that never speaks ─────────────────────────────────────
+
+
+async def test_a_server_that_fails_discovery_is_not_registered():
+    """Registering before discovery leaves a live process with no tools.
+
+    ``has_client`` then answers yes for a server that serves nothing, so
+    a live config edit sees it as healthy and the engine's own restart
+    never fires — the process sits there until shutdown.
+    """
+
+    class _Boom(FakeMCPClient):
+        async def list_tools(self) -> list[dict]:
+            raise RuntimeError("server closed the pipe")
+
+    bridge = MCPToolBridge()
+    client = _Boom("jira")
+
+    with pytest.raises(RuntimeError, match="closed the pipe"):
+        await bridge._register(client, tool_prefix="")
+
+    assert bridge.has_client("jira") is False
+    assert client.stopped is True, "the subprocess must not be left running"
+
+
+async def test_discovery_answers_to_the_startup_deadline():
+    """A connected-but-mute server must fail, not hang.
+
+    The engine starts MCP servers on the seat-acquisition path, so an
+    await that never returns holds up every seat behind it — and its
+    caller's ``except`` is dead code while it does.
+    """
+    from crewlet.mcp.client import MCPClient
+
+    client = MCPClient(name="mute", command="true", startup_timeout_seconds=0.05)
+    # Stand in for a connected session that never answers tools/list.
+    client._initialized = True
+    client._client = object()
+
+    import crewlet.mcp.client as client_mod
+
+    async def _never(_session):
+        import asyncio
+
+        await asyncio.Event().wait()
+
+    original = client_mod.list_tool_dicts
+    client_mod.list_tool_dicts = _never
+    try:
+        with pytest.raises(TimeoutError, match="tool discovery"):
+            await client.list_tools()
+    finally:
+        client_mod.list_tool_dicts = original
+
+
+async def test_timeouts_reach_the_client_from_the_server_config():
+    """The per-server overrides are the point — a local checkout and a
+    cold ``uvx`` fetch do not want the same deadline."""
+    created: dict = {}
+
+    class _Recording(FakeMCPClient):
+        def __init__(self, name, command=None, args=None, env=None, **timeouts):
+            super().__init__(name, tools=[])
+            created.update(timeouts)
+
+    import crewlet.mcp.bridge as bridge_mod
+
+    original = bridge_mod.MCPClient
+    bridge_mod.MCPClient = _Recording
+    try:
+        await MCPToolBridge().add_server(
+            name="calc",
+            command="uvx",
+            startup_timeout_seconds=7.0,
+            request_timeout_seconds=11.0,
+        )
+    finally:
+        bridge_mod.MCPClient = original
+
+    assert created == {
+        "startup_timeout_seconds": 7.0,
+        "request_timeout_seconds": 11.0,
+    }
+
+
+async def test_stop_all_does_not_strand_servers_behind_a_slow_one():
+    """Shutdown budgets the whole step, not each server.
+
+    Stopped in sequence, one server that will not die consumed the
+    entire budget and every server after it in the dict was never
+    stopped at all — its subprocess outlived the engine. They are
+    independent processes, so the slowest one should bound the step,
+    not the first slow one.
+    """
+    import asyncio
+
+    order: list[str] = []
+
+    class _Slow(FakeMCPClient):
+        async def stop(self) -> None:
+            await asyncio.sleep(0.2)
+            order.append(self.name)
+            self.stopped = True
+
+    bridge = MCPToolBridge()
+    # Five servers that each take 0.2 s: 1.0 s in sequence, 0.2 s
+    # together. The engine's shutdown budget is per STEP, so the
+    # sequential shape blew it and left the tail running.
+    clients = [_Slow(f"server-{i}") for i in range(5)]
+    for client in clients:
+        bridge._clients[client.name] = client
+
+    await asyncio.wait_for(bridge.stop_all(), timeout=0.6)
+
+    assert all(c.stopped for c in clients), [c.name for c in clients if not c.stopped]
+    assert bridge.has_client("server-4") is False
+
+
+async def test_stop_all_drops_its_index_even_when_a_server_raises():
+    """A restarted bridge must not believe a failed stop left it live."""
+
+    class _Boom(FakeMCPClient):
+        async def stop(self) -> None:
+            raise RuntimeError("will not die")
+
+    bridge = MCPToolBridge()
+    bridge._clients["boom"] = _Boom("boom")
+    bridge._clients["ok"] = FakeMCPClient("ok")
+
+    await bridge.stop_all()
+
+    assert bridge.has_client("boom") is False
+    assert bridge.has_client("ok") is False

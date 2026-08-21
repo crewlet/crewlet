@@ -31,6 +31,57 @@ from crewlet.telemetry import tracer
 
 logger = get_logger("api.routes")
 
+# ``Retry-After`` on the unconfigured 503. Matched to the control plane's
+# reconcile cadence: a node that missed an activation event picks the
+# revision up on its next poll, so telling a sender to come back sooner
+# just burns deliveries against a node that cannot have converged yet.
+WEBHOOK_UNCONFIGURED_RETRY_AFTER_SECONDS = 15
+
+# ``Retry-After`` on the 503 a route answers when its HMAC secret is
+# missing. Deliberately longer than the unconfigured one above: that
+# case resolves itself on the next reconcile poll, this one waits on a
+# human editing config, and a sender hammering every 15 s in the
+# meantime buys nothing.
+WEBHOOK_NO_SECRET_RETRY_AFTER_SECONDS = 300
+
+
+def _no_secret_response(source: str) -> JSONResponse:
+    """The answer when a webhook route has no secret to verify against.
+
+    **5xx, never 4xx.** A 4xx says "your request is malformed, do not
+    send it again" — and the request is fine. What is wrong is on this
+    side, so a 4xx would make the sender discard a delivery nobody has
+    any other copy of. That is the silent, unretried, unrecoverable loss
+    ``_webhook_unconfigured_response`` was rewritten to stop; a missing
+    secret has exactly the same shape as a missing config, and deserves
+    exactly the same answer.
+
+    503 rather than 500 for the same reason it is a 503 there: nothing
+    crashed. This node cannot serve this delivery *yet*, which is what
+    503 means and what ``Retry-After`` is for. The delivery waits at the
+    provider and flows the moment somebody sets the secret — so a
+    deployment that has not set one is stalled, not damaged.
+
+    A signature that does not MATCH is the other case and stays 401:
+    there the credential really was presented and really was wrong.
+    """
+    logger.error(
+        "webhook_no_secret_configured",
+        source=source,
+        hint=(
+            "this route verifies a provider HMAC and has no secret to "
+            "verify against, so it cannot accept deliveries. Answering "
+            "503 so the sender retries rather than discards them; set "
+            "the integration's webhook_secret to clear it"
+        ),
+    )
+    return JSONResponse(
+        {"status": "unavailable", "reason": "no_webhook_secret"},
+        status_code=503,
+        headers={"Retry-After": str(WEBHOOK_NO_SECRET_RETRY_AFTER_SECONDS)},
+    )
+
+
 _SENSITIVE_HEADERS = frozenset({"authorization", "cookie"})
 
 
@@ -144,22 +195,39 @@ async def _log_event(
 def _webhook_unconfigured_response(
     request: Request, *, source: str, event_type: str = ""
 ) -> JSONResponse | None:
-    """Return a 200 OK + WARNING log when the engine is unconfigured.
+    """Return a 503 + WARNING log when this process has no active config.
 
-    Webhook providers hammer their endpoints on a fixed retry schedule.
-    When the engine has no active company config there's nobody to
-    deliver to — but a non-2xx triggers retry storms, so we drop with a
-    200 (the signature check has already run in the caller).
+    **Fail closed, not quiet.** This used to answer 200 to avoid provoking
+    retries — which told the sender the delivery had been accepted when
+    nothing had been done with it. That trade only made sense while a
+    missing config meant the whole deployment was unconfigured. It stops
+    being true the moment more than one process serves webhooks: a node
+    that missed a config activation would silently discard real events
+    that its peers were handling fine, and the sender, having been told
+    "200", would never retry. Silent, unretried, unrecoverable loss.
+
+    A 503 is the honest answer — nothing here can handle this delivery
+    right now — and it is precisely what every provider's retry schedule
+    exists for. Slack disabling an endpoint after sustained 5xx is the
+    correct pressure toward fixing a genuinely-unconfigured deployment,
+    not a reason to lie about the outcome.
+
+    ``Retry-After`` keeps well-behaved senders from hot-looping while a
+    node is still converging on its first revision.
     """
     if getattr(request.app.state, "configured", False):
         return None
     logger.warning(
-        "webhook_dropped_unconfigured",
+        "webhook_rejected_unconfigured",
         source=source,
         event_type=event_type,
         remote=request.client.host if request.client else "",
     )
-    return JSONResponse({"status": "dropped", "reason": "unconfigured"})
+    return JSONResponse(
+        {"status": "unavailable", "reason": "unconfigured"},
+        status_code=503,
+        headers={"Retry-After": str(WEBHOOK_UNCONFIGURED_RETRY_AFTER_SECONDS)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +430,22 @@ def _build_confluence_summary(body: dict[str, Any]) -> str:
 
 
 async def jira_webhook(request: Request) -> JSONResponse:
-    """POST /webhooks/jira — publish to EventQueue."""
+    """POST /webhooks/jira — verify then publish to EventQueue.
+
+    Verified at the route for the same reason its Confluence twin is:
+    this path is exempt from the API's bearer token because it
+    authenticates by provider HMAC, so the check has to run before the
+    delivery is recorded and published. The ``JiraTransport`` keeps its
+    own check on the consume side as defence in depth.
+    """
     body_raw = await request.body()
+
+    refused = _atlassian_signature_failure(
+        request, body_raw, source="jira", state_attr="jira_webhook_secret"
+    )
+    if refused is not None:
+        return refused
+
     body_data = _parse_json_object(body_raw)
     if body_data is None:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
@@ -606,6 +688,28 @@ async def sandbox_otel(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+async def _claim_delivery(request: Request, source: str, key: str) -> bool:
+    """Claim an inbound delivery, or report it as already handled.
+
+    GitHub and GitLab had NO dedupe at all — not even the per-process
+    ring the other sources kept — so every retry, and every redelivery an
+    operator triggered from the provider UI, woke the agent again. Both
+    send a stable delivery id, which is exactly the identity this needs.
+
+    Fails open: a dedupe store that cannot be reached must not stop
+    inbound work. A duplicate is recoverable noise; a dropped delivery is
+    a message nobody ever answers.
+    """
+    store = getattr(request.app.state, "delivery_dedupe", None)
+    if store is None or not key:
+        return True
+    try:
+        return await store.claim(source, key)
+    except Exception:
+        logger.warning("delivery_dedupe_failed", source=source)
+        return True
+
+
 async def github_webhook(request: Request) -> JSONResponse:
     """POST /webhooks/github — publish to EventQueue."""
     body_raw = await request.body()
@@ -614,11 +718,7 @@ async def github_webhook(request: Request) -> JSONResponse:
         request.app.state, "github_webhook_secret", None
     )
     if not webhook_secret:
-        logger.error("github_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook signature verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response("github")
     signature = request.headers.get("x-hub-signature-256", "")
     if not signature or not _verify_github_signature(
         body_raw, webhook_secret, signature
@@ -642,6 +742,11 @@ async def github_webhook(request: Request) -> JSONResponse:
         "webhook.github",
         attributes={"webhook.source": "github", "github.event": gh_event},
     ):
+        delivery_id = request.headers.get("x-github-delivery", "")
+        if not await _claim_delivery(request, "github", delivery_id):
+            logger.debug("github_delivery_duplicate", delivery_id=delivery_id)
+            return JSONResponse({"status": "duplicate"})
+
         logger.info("github_webhook_received", github_event=gh_event)
         github_summary = _build_github_summary(gh_event, body_data)
         await _log_event(
@@ -730,11 +835,7 @@ async def gitlab_webhook(request: Request) -> JSONResponse:
         request.app.state, "gitlab_signing_secret", None
     )
     if not signing_secret:
-        logger.error("gitlab_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response("gitlab")
 
     verified = _verify_gitlab_signature(
         body_raw,
@@ -763,6 +864,16 @@ async def gitlab_webhook(request: Request) -> JSONResponse:
         "webhook.gitlab",
         attributes={"webhook.source": "gitlab", "gitlab.event": gl_event},
     ):
+        # GitLab 19.1+ Standard-Webhooks sends `webhook-id`; older
+        # deliveries carry `X-Gitlab-Event-UUID`. Either is a stable
+        # per-delivery identity.
+        delivery_id = request.headers.get(
+            "x-gitlab-event-uuid", ""
+        ) or request.headers.get("webhook-id", "")
+        if not await _claim_delivery(request, "gitlab", delivery_id):
+            logger.debug("gitlab_delivery_duplicate", delivery_id=delivery_id)
+            return JSONResponse({"status": "duplicate"})
+
         logger.info("gitlab_webhook_received", gitlab_event=gl_event)
         gitlab_summary = _build_gitlab_summary(gl_event, body_data)
         await _log_event(
@@ -829,11 +940,7 @@ async def plane_webhook(request: Request) -> JSONResponse:
         request.app.state, "plane_webhook_secret", None
     )
     if not webhook_secret:
-        logger.error("plane_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response("plane")
     signature = request.headers.get("x-plane-signature", "")
     if not signature or not _verify_plane_signature(
         body_raw, webhook_secret, signature
@@ -891,9 +998,75 @@ async def plane_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+# ``sha256=`` + 64 hex, the ``X-Hub-Signature`` shape Atlassian Data
+# Center uses for both Jira and Confluence. Same prefilter rationale as
+# ``_PLANE_SIGNATURE_RE``: keeps the compare total, so a header the
+# client made up cannot turn a 401 into a 500.
+_ATLASSIAN_SIGNATURE_RE = re.compile(r"sha256=[0-9a-fA-F]{64}")
+
+
+def _verify_atlassian_signature(
+    body_raw: bytes, webhook_secret: str, signature: str
+) -> bool:
+    """``X-Hub-Signature`` = ``sha256=`` + HMAC-SHA256 of the raw body.
+
+    One implementation for Jira and Confluence, because it is one
+    scheme. Two copies of a signature check is how they come to disagree
+    — the same reasoning ``_verify_slack_signature`` gives for delegating
+    to the transport rather than reimplementing Slack's.
+    """
+    if _ATLASSIAN_SIGNATURE_RE.fullmatch(signature) is None:
+        return False
+    expected = (
+        "sha256="
+        + hmac.new(webhook_secret.encode("utf-8"), body_raw, hashlib.sha256).hexdigest()
+    )
+    return hmac.compare_digest(expected, signature)
+
+
+def _atlassian_signature_failure(
+    request: Request, body_raw: bytes, *, source: str, state_attr: str
+) -> JSONResponse | None:
+    """The shared route-level gate, or ``None`` when the request passes.
+
+    Both Atlassian routes sit in the API's unguarded set, exempt from the
+    bearer token on the grounds that they authenticate by provider HMAC —
+    so this runs before the delivery is recorded or published, which is
+    where GitHub, GitLab and Plane put theirs.
+    """
+    secret: str | None = getattr(request.app.state, state_attr, None)
+    if not secret:
+        return _no_secret_response(source)
+    signature = request.headers.get("x-hub-signature", "")
+    if not signature or not _verify_atlassian_signature(body_raw, secret, signature):
+        logger.warning("webhook_signature_invalid", source=source)
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+    return None
+
+
 async def confluence_webhook(request: Request) -> JSONResponse:
-    """POST /webhooks/confluence — publish to EventQueue."""
+    """POST /webhooks/confluence — verify then publish to EventQueue.
+
+    Verified HERE, at the route, like GitHub / GitLab / Plane. The
+    ``ConfluenceTransport`` still checks the signature on the consume
+    side, but that is defence in depth rather than the gate: this route
+    is exempt from bearer auth precisely BECAUSE it authenticates by
+    provider HMAC, so the check has to run before the delivery is
+    recorded and published, not after.
+
+    Refuses when no secret is configured, again like its peers — an
+    unconfigured verifier that answers "valid" is not a verifier. Cloud
+    is unaffected: those events arrive through the Forge app on
+    ``/webhooks/forge`` with its own JWT, never here.
+    """
     body_raw = await request.body()
+
+    refused = _atlassian_signature_failure(
+        request, body_raw, source="confluence", state_attr="confluence_webhook_secret"
+    )
+    if refused is not None:
+        return refused
+
     body_data = _parse_json_object(body_raw)
     if body_data is None:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
@@ -1079,7 +1252,10 @@ async def forge_webhook(request: Request) -> JSONResponse:
 
     forge_app_id = getattr(request.app.state, "forge_app_id", "")
     if not forge_app_id:
-        return JSONResponse({"error": "forge_app_id not configured"}, status_code=500)
+        # Same class as a missing HMAC secret: the app id IS the JWT
+        # audience this route verifies against, so without it there is
+        # nothing to check and the delivery must be held, not discarded.
+        return _no_secret_response("forge")
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         return JSONResponse({"error": "unauthorized"}, status_code=401)

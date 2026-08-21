@@ -6,7 +6,6 @@ PostgreSQL instance that holds the operational tables (``token_usage``,
 everything.
 """
 
-from crewlet.timescaledb.buffer import BufferedEventStore
 from crewlet.timescaledb.composite import CompositeEventStore
 from crewlet.timescaledb.memory import MemoryEventStore
 from crewlet.timescaledb.protocol import EventStore
@@ -14,7 +13,6 @@ from crewlet.timescaledb.repository import TimescaleDBEventStore
 from crewlet.timescaledb.writer import EventStoreWriter
 
 __all__ = [
-    "BufferedEventStore",
     "CompositeEventStore",
     "EventStore",
     "EventStoreWriter",

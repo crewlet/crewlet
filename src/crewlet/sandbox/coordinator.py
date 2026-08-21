@@ -30,6 +30,7 @@ inbox), so the paused inbox never blocks the wake-up.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -40,7 +41,6 @@ from crewlet.agent.execute_sandbox import (
     teardown_sandbox_run,
 )
 from crewlet.agent.instance import AgentInstance, AgentState
-from crewlet.agent.llm_loop import redact_secrets
 from crewlet.events.types import (
     Event,
     SandboxClarificationRequested,
@@ -49,20 +49,61 @@ from crewlet.events.types import (
 )
 from crewlet.notifications.coalesce import conversation_key
 from crewlet.queue.protocol import EventQueue
+from crewlet.queue.topics import (
+    agent_control_group,
+    agent_control_topic,
+    agent_inbox_group,
+    agent_inbox_topic,
+)
+from crewlet.redaction import redact_secrets
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
 from crewlet.sandbox.protocol import CodingAgentResult
 
 logger = get_logger("sandbox.coordinator")
 
+
+class SandboxResumeUnavailable(RuntimeError):
+    """This node cannot resume the run the completion refers to.
+
+    Not a failure of the run — a failure of ROUTING. The suspended
+    Execute conversation lives in the pending row and can only be
+    resumed where the seat's instance is, so the completion has to go
+    back and reach that node instead of being settled here.
+    """
+
+
+# Where the sandbox lifecycle is ANNOUNCED, for observability. These stay
+# under ``crewlet.events.*`` because that is what the dashboard's
+# broadcast stream watches — moving them would blank the
+# Running-sandboxes panel. Nothing ACTS on them.
 STARTED_TOPIC = "crewlet.events.sandbox_run_started"
 COMPLETIONS_TOPIC = "crewlet.events.sandbox_run_completed"
+
+# Where the sandbox lifecycle is ACTED ON: one control topic per seat,
+# attached and detached alongside that seat's inbox.
+#
+# Routing then falls out of who subscribed, exactly as it does for the
+# inbox, rather than from any "which node" computation. A single
+# fleet-wide group could not work: it delivers a completion to whichever
+# node wins it, which is a non-owner (N-1)/N of the time, and that node
+# has no suspended Execute conversation to resume.
+#
+# It cannot ride the inbox either. While a seat is AWAITING_SANDBOX its
+# inbox is PAUSED — that is the busy gate — so a completion arriving
+# there would queue behind the very pause it exists to lift.
 _GROUP = "sandbox-coordinator"
 
-
-def inbox_topic(handle: str) -> str:
-    """The per-agent inbox topic paused while a sandbox job runs."""
-    return f"crewlet.agent.{handle}.inbox"
+# The reason this subsystem holds a seat's inbox paused.
+#
+# Its OWN reason, not the default. Pause holds are reason-scoped
+# precisely so one subsystem cannot un-gate another's, and three
+# independent things gate an agent inbox: this busy gate, the
+# config-divergence shed, and the no-turn-engine park. Sharing the
+# default with the park meant the late turn-engine build's blanket
+# resume released a live sandbox hold — delivering messages to an agent
+# whose turn is suspended mid-run.
+_SANDBOX_PAUSE_REASON = "sandbox"
 
 
 class SandboxCoordinator:
@@ -93,22 +134,65 @@ class SandboxCoordinator:
         """Swap the sandbox manager (live-reload of ``providers.sandbox``)."""
         self._manager = manager
 
-    async def subscribe(self) -> None:
-        """Subscribe to the engine-wide started / completed control topics."""
-        await self._event_queue.subscribe(STARTED_TOPIC, _GROUP, self._on_started_event)
+    async def attach_seat(self, handle: str) -> None:
+        """Consume one seat's sandbox control topic.
+
+        Called from the seat acquire hook, so the node that owns the seat
+        is the node that resumes its runs — and only that node.
+        """
+        if not handle:
+            return
         await self._event_queue.subscribe(
-            COMPLETIONS_TOPIC, _GROUP, self._on_completed_event
+            agent_control_topic(handle),
+            agent_control_group(handle),
+            self._on_control_event,
         )
-        logger.info("sandbox_coordinator_subscribed")
+        logger.info("sandbox_control_attached", seat=handle)
+
+    async def detach_seat(self, handle: str) -> None:
+        """Stop consuming a seat's control topic. Non-destructive.
+
+        The subscription and any undelivered completion survive for the
+        seat's next owner — a completion published while the seat is
+        between owners must not be lost, and the box it refers to is
+        still real.
+        """
+        if not handle:
+            return
+        with contextlib.suppress(Exception):
+            await self._event_queue.detach(
+                agent_control_topic(handle), agent_control_group(handle)
+            )
+        logger.info("sandbox_control_detached", seat=handle)
+
+    async def ensure_seat_subscription(self, handle: str) -> None:
+        """Make a seat's control subscription exist, owner or not.
+
+        Same invariant as the inbox: a completion published while nobody
+        is attached has to be held, not dropped. A detached run outlives
+        its node, so this window is not hypothetical.
+        """
+        if not handle:
+            return
+        await self._event_queue.ensure_subscription(
+            agent_control_topic(handle), agent_control_group(handle)
+        )
+
+    async def delete_seat_subscription(self, handle: str) -> None:
+        """Destructive teardown, for a decommissioned seat."""
+        if not handle:
+            return
+        with contextlib.suppress(Exception):
+            await self._event_queue.delete_subscription(
+                agent_control_topic(handle), agent_control_group(handle)
+            )
 
     # -- event adapters ----------------------------------------------------
 
-    async def _on_started_event(self, event: Event) -> None:
+    async def _on_control_event(self, event: Event) -> None:
         if isinstance(event, SandboxRunStarted):
             await self.on_run_started(event)
-
-    async def _on_completed_event(self, event: Event) -> None:
-        if isinstance(event, SandboxRunCompleted):
+        elif isinstance(event, SandboxRunCompleted):
             await self.on_run_completed(event)
 
     # -- kick-off → busy ---------------------------------------------------
@@ -132,7 +216,11 @@ class SandboxCoordinator:
         handle = event.agent_handle
         if not handle:
             return
-        await self._event_queue.pause_topic(inbox_topic(handle))
+        await self._event_queue.pause_topic(
+            agent_inbox_topic(handle),
+            agent_inbox_group(handle),
+            reason=_SANDBOX_PAUSE_REASON,
+        )
         agent = self._get_agent(handle)
         if agent is not None and agent.state == AgentState.IDLE:
             agent.await_sandbox(task_id=event.task_id)
@@ -178,14 +266,21 @@ class SandboxCoordinator:
             )
         except Exception:
             logger.exception("sandbox_collect_failed", turn_id=run.turn_id)
-            await self._pending_store.set_status(run.turn_id, "failed")
-            await teardown_sandbox_run(
-                run=run, manager=self._manager, pending_store=self._pending_store
-            )
             # The job is over even though collection failed — free the
-            # agent and let its inbox flow again.
-            self._free_agent(agent)
-            await self._event_queue.resume_topic(inbox_topic(run.agent_handle))
+            # agent and let its inbox flow again, whatever the cleanup
+            # below manages. Both of those are DB and network calls that
+            # can fail on their own, and neither failing is a reason to
+            # leave the seat parked on a run that is finished.
+            try:
+                await self._pending_store.set_status(
+                    run.turn_id, "failed", epoch=run.owner_epoch or None
+                )
+                await teardown_sandbox_run(
+                    run=run, manager=self._manager, pending_store=self._pending_store
+                )
+            finally:
+                self._free_agent(agent)
+                await self._resume_inbox(run.agent_handle)
             return
 
         await self._account(run, result)
@@ -208,7 +303,7 @@ class SandboxCoordinator:
             # A clarification wait frees the agent (a human reply can take
             # days) and lets its inbox flow so the answer can arrive.
             self._free_agent(agent)
-            await self._event_queue.resume_topic(inbox_topic(run.agent_handle))
+            await self._resume_inbox(run.agent_handle)
             await self._handle_clarification(agent, run, result, event)
             return
 
@@ -228,6 +323,31 @@ class SandboxCoordinator:
         """AWAITING_SANDBOX → IDLE, tolerating an agent already free."""
         if agent is not None and agent.state == AgentState.AWAITING_SANDBOX:
             agent.resume_from_sandbox()
+
+    async def _resume_inbox(self, handle: str) -> None:
+        """Release this subsystem's pause hold on a seat's inbox.
+
+        Never raises, and never skipped on a path that is done with the
+        box. The hold is reason-scoped, so nothing else in the engine can
+        release it: a seat that keeps one is owned, attached and deaf,
+        and stays that way until the process restarts — the run's row is
+        already terminal, so neither the waiter nor a seat handoff comes
+        back for it.
+
+        Which is why every caller releases it from a ``finally``. The
+        release used to be the last statement of a happy path, so a
+        teardown that raised — one E2B call failing to kill a box, which
+        is a network call like any other — took the seat out of service
+        permanently as a side effect of failing to free a sandbox.
+        """
+        try:
+            await self._event_queue.resume_topic(
+                agent_inbox_topic(handle),
+                agent_inbox_group(handle),
+                reason=_SANDBOX_PAUSE_REASON,
+            )
+        except Exception:
+            logger.exception("sandbox_inbox_resume_failed", agent_handle=handle)
 
     async def _handle_clarification(
         self,
@@ -264,7 +384,9 @@ class SandboxCoordinator:
             await teardown_sandbox_run(
                 run=run, manager=self._manager, pending_store=self._pending_store
             )
-            await self._pending_store.set_status(run.turn_id, "reseed")
+            await self._pending_store.set_status(
+                run.turn_id, "reseed", epoch=run.owner_epoch or None
+            )
         await self._event_queue.publish(
             "crewlet.events.sandbox_clarification_requested",
             SandboxClarificationRequested(
@@ -388,12 +510,16 @@ class SandboxCoordinator:
             # and the suspend persist). Can't continue the turn — fail + reap,
             # free the agent, and let its inbox flow again.
             logger.warning("sandbox_resume_no_execute_state", turn_id=run.turn_id)
-            await self._pending_store.set_status(run.turn_id, "failed")
-            await teardown_sandbox_run(
-                run=run, manager=self._manager, pending_store=self._pending_store
-            )
-            self._free_agent(agent)
-            await self._event_queue.resume_topic(inbox_topic(run.agent_handle))
+            try:
+                await self._pending_store.set_status(
+                    run.turn_id, "failed", epoch=run.owner_epoch or None
+                )
+                await teardown_sandbox_run(
+                    run=run, manager=self._manager, pending_store=self._pending_store
+                )
+            finally:
+                self._free_agent(agent)
+                await self._resume_inbox(run.agent_handle)
             return
         # Free the agent only NOW, immediately before the resume dispatch, so
         # no queued event can take the WORKING slot first (the inbox is still
@@ -420,15 +546,26 @@ class SandboxCoordinator:
                 turn_id=run.turn_id,
                 revert_to=revert_to,
             )
-            await self._pending_store.set_status(run.turn_id, revert_to)
+            await self._pending_store.set_status(
+                run.turn_id, revert_to, epoch=run.owner_epoch or None
+            )
             raise
-        latest = await self._pending_store.get(run.turn_id)
-        if latest is not None and latest.status == "running":
-            # The resumed executor called run_sandbox AGAIN: a new detached
-            # job owns the box and the suspending turn re-parked the agent —
-            # leave the inbox paused for the next completion.
-            logger.info("sandbox_reused_in_turn", turn_id=run.turn_id)
-        else:
+        # From here the hold is released on EVERY exit but one: the box is
+        # either finished with the seat or a new run owns it, and any
+        # other outcome — a store read that fails, a teardown that
+        # raises — is a reason to let the seat work, not to park it
+        # forever.
+        keep_paused = False
+        try:
+            latest = await self._pending_store.get(run.turn_id)
+            if latest is not None and latest.status == "running":
+                # The resumed executor called run_sandbox AGAIN: a new
+                # detached job owns the box and the suspending turn
+                # re-parked the agent — leave the inbox paused for the
+                # next completion. The ONE deliberate exit.
+                keep_paused = True
+                logger.info("sandbox_reused_in_turn", turn_id=run.turn_id)
+                return
             # Tear down the box the RESUMED row points at: a re-seeded run
             # provisioned a fresh one, so ``run``'s (possibly reaped) id is
             # stale.
@@ -437,8 +574,12 @@ class SandboxCoordinator:
                 manager=self._manager,
                 pending_store=self._pending_store,
             )
-            await self._pending_store.set_status(run.turn_id, "done")
-            await self._event_queue.resume_topic(inbox_topic(run.agent_handle))
+            await self._pending_store.set_status(
+                run.turn_id, "done", epoch=run.owner_epoch or None
+            )
+        finally:
+            if not keep_paused:
+                await self._resume_inbox(run.agent_handle)
 
     async def _dispatch_resume_execute(
         self,
@@ -465,13 +606,23 @@ class SandboxCoordinator:
 
         turn_engine = self._get_turn_engine()
         if turn_engine is None or agent is None:
-            logger.warning(
-                "sandbox_resume_skipped",
-                turn_id=run.turn_id,
-                have_engine=turn_engine is not None,
-                have_agent=agent is not None,
+            # RAISE, never return. Returning let the caller fall through
+            # to settling the run `done` and tearing the box down — with
+            # the suspended Execute conversation, the agent's whole
+            # in-progress turn, discarded. Raising reverts the claim so
+            # the completion redelivers to a node that can actually
+            # resume it.
+            #
+            # The per-seat control topic makes this rare rather than
+            # routine (a completion reaches its seat's owner by
+            # construction), but "rare" is not "never": a lease can move
+            # between the publish and the receive.
+            raise SandboxResumeUnavailable(
+                f"cannot resume run {run.turn_id!r} for seat "
+                f"{run.agent_handle!r}: "
+                f"turn_engine={'yes' if turn_engine is not None else 'no'} "
+                f"agent={'yes' if agent is not None else 'no'}"
             )
-            return
         st = run.execute_state or {}
         try:
             plan = (
@@ -506,22 +657,30 @@ class SandboxCoordinator:
 
     # -- restart recovery --------------------------------------------------
 
-    async def recover(self) -> None:
-        """Re-attach to still-active runs on boot so a restart never orphans.
+    async def recover_seat(self, handle: str, *, owner: str, epoch: int) -> None:
+        """Re-attach to a seat's still-active runs as this node claims it.
 
-        Running jobs re-pause their agents' inboxes and re-enter the busy
+        Per-seat, and inside the acquire hook, because a fleet-wide boot
+        scan is wrong twice over: every node would re-pause, re-park and
+        reap runs belonging to seats its peers own, and a node that
+        claims a seat later — a takeover, not a boot — would never
+        recover it at all.
+
+        Running jobs re-pause this seat's inbox and re-enter the busy
         state; the poll waiter then drives them to completion.
-        Clarification / re-seed runs are left for their answer — their boxes
-        are paused, and the waiter's reaper expires them on TTL.
+        Clarification / re-seed runs are left for their answer — their
+        boxes are paused, and the waiter's reaper expires them on TTL.
 
-        A ``resumed`` row can only mean the previous engine died between
-        claiming a completion and settling it. Nothing will ever pick it up
-        again — the at-most-once claim already flipped, so the redelivered
-        completion is refused — and its box is sitting paused. Reap it here:
-        this is the one moment the row is unambiguously abandoned (no live
-        process holds it), so it is safe to do what no TTL would.
+        A ``resumed`` row means the engine that owned this seat died
+        between claiming a completion and settling it. Nothing will ever
+        pick it up — the at-most-once claim already flipped, so a
+        redelivered completion is refused — and its box sits paused.
+        Reaping it is safe HERE and only here: taking the seat's lease is
+        what proves no live process holds the row. A boot-time scan
+        proved nothing of the sort, because a peer could be mid-resume on
+        a seat this node never owned.
         """
-        active = await self._pending_store.list_active()
+        active = await self._pending_store.list_active_for_seat(handle)
         if not active:
             return
         recovered = 0
@@ -533,17 +692,36 @@ class SandboxCoordinator:
                 continue
             if run.status != "running":
                 continue
-            await self._event_queue.pause_topic(inbox_topic(run.agent_handle))
+            await self._pending_store.claim_ownership(
+                run.turn_id, owner=owner, epoch=epoch
+            )
+            await self._event_queue.pause_topic(
+                agent_inbox_topic(run.agent_handle),
+                agent_inbox_group(run.agent_handle),
+                reason=_SANDBOX_PAUSE_REASON,
+            )
             agent = self._get_agent(run.agent_handle)
             if agent is not None:
                 agent.await_sandbox(task_id=run.turn_id)
             recovered += 1
         logger.info(
-            "sandbox_runs_recovered",
+            "sandbox_seat_recovered",
+            seat=handle,
+            epoch=epoch,
             running=recovered,
             abandoned=abandoned,
             active=len(active),
         )
+
+    async def release_seat(self, handle: str) -> None:
+        """Stop tracking a seat's runs; the row is the durable state.
+
+        Nothing is torn down: a detached run belongs to the
+        ``pending_sandbox_run`` row, not to this process, and the seat's
+        next owner recovers it through :meth:`recover_seat`. Reaping the
+        box here would destroy work the successor is about to resume.
+        """
+        logger.debug("sandbox_seat_released", seat=handle)
 
     async def _reap_abandoned_tail(self, run: PendingSandboxRun) -> None:
         """Tear down a ``resumed`` run left behind by a dead engine."""
@@ -664,4 +842,9 @@ def _answer_text(event: Event) -> str:
     return str(event.payload.get("task_description", "") or "")
 
 
-__all__ = ["COMPLETIONS_TOPIC", "STARTED_TOPIC", "SandboxCoordinator", "inbox_topic"]
+__all__ = [
+    "COMPLETIONS_TOPIC",
+    "STARTED_TOPIC",
+    "SandboxCoordinator",
+    "SandboxResumeUnavailable",
+]

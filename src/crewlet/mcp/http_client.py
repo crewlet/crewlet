@@ -11,6 +11,7 @@ plain-dict contract.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -22,6 +23,10 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from crewlet._logging import get_logger
 from crewlet.mcp._content import extract_content, list_tool_dicts
 from crewlet.mcp._identity import crewlet_client_info
+from crewlet.mcp.timeouts import (
+    DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+)
 
 logger = get_logger("mcp.http_client")
 
@@ -47,10 +52,14 @@ class MCPHttpClient:
         name: str,
         url: str,
         headers: dict[str, str] | None = None,
+        startup_timeout_seconds: float = DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+        request_timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         self.name = name
         self.url = url.rstrip("/")
         self._auth_headers = headers or {}
+        self.startup_timeout_seconds = startup_timeout_seconds
+        self.request_timeout_seconds = request_timeout_seconds
         self._client: Client | None = None
         self._exit_stack: AsyncExitStack | None = None
         self._tools: list[dict[str, Any]] = []
@@ -74,12 +83,32 @@ class MCPHttpClient:
             # (LIFO: transport closes before the client it rides on).
             http_client = self._build_http_client()
             await self._exit_stack.enter_async_context(http_client)
-            self._client = await self._exit_stack.enter_async_context(
-                Client(
-                    streamable_http_client(self.url, http_client=http_client),
-                    client_info=crewlet_client_info(),
+
+            # Bounded for the same reason as the stdio client, and with
+            # the same two layers: ``read_timeout_seconds`` per request,
+            # ``wait_for`` over the connect. The httpx transport already
+            # has its own read timeout, but it resets on every chunk —
+            # an endpoint that dribbles keepalives and never answers
+            # holds the connection open indefinitely underneath it.
+            async def _connect() -> None:
+                self._client = await self._exit_stack.enter_async_context(  # type: ignore[union-attr]
+                    Client(
+                        streamable_http_client(self.url, http_client=http_client),
+                        client_info=crewlet_client_info(),
+                        read_timeout_seconds=self.request_timeout_seconds,
+                    )
                 )
-            )
+
+            try:
+                await asyncio.wait_for(_connect(), self.startup_timeout_seconds)
+            except TimeoutError as exc:
+                msg = (
+                    f"MCP server '{self.name}' did not connect within "
+                    f"{self.startup_timeout_seconds:g}s ({self.url}). Raise "
+                    "startup_timeout_seconds on the server if it legitimately "
+                    "takes longer to respond."
+                )
+                raise TimeoutError(msg) from exc
 
             # server_info is None when a modern (2026-era) server chooses
             # not to identify itself — that's a valid connection.
@@ -127,7 +156,17 @@ class MCPHttpClient:
 
         # Follows pagination cursors; preserves the MCP behavioural hints
         # — see MCPClient.list_tools.
-        self._tools = await list_tool_dicts(self._client)
+        # Discovery answers to the startup budget — see MCPClient.
+        try:
+            self._tools = await asyncio.wait_for(
+                list_tool_dicts(self._client), self.startup_timeout_seconds
+            )
+        except TimeoutError as exc:
+            msg = (
+                f"MCP server '{self.name}' did not answer tool discovery "
+                f"within {self.startup_timeout_seconds:g}s"
+            )
+            raise TimeoutError(msg) from exc
         logger.info(
             "tools_listed",
             server=self.name,

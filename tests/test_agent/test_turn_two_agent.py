@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from crewlet.a2a.memory import MemoryA2ABus
 from crewlet.a2a.service import A2AService
 from crewlet.agent.definition import AgentDefinition
 from crewlet.agent.instance import AgentInstance
@@ -169,13 +168,12 @@ async def test_end_to_end_two_agent_a2a_handoff_with_depth_inheritance():
     register_builtin_tools(registry)
     register_colleague_tools(registry)
 
-    # Event queue + A2A bus shared by both engines.
+    # Event queue shared by both engines.
     queue = MemoryEventQueue()
     await queue.start()
 
     try:
-        bus = MemoryA2ABus()
-        a2a = A2AService(bus, queue)
+        a2a = A2AService(queue)
 
         # Separate per-agent concurrency controllers.
         alice_conc = ConcurrencyController(max_concurrent=4)

@@ -56,6 +56,7 @@ from html import unescape
 from typing import TYPE_CHECKING, Any
 
 from crewlet._logging import get_logger
+from crewlet.db.deliveries import MemoryDeliveryDedupeStore
 from crewlet.notifications.protocol import InboundNotification, OutboundMessage
 
 if TYPE_CHECKING:
@@ -422,14 +423,12 @@ class PlaneTransport:
         self._token = config.token
         self._client: PlaneClient | None = None
         self._handle_registry: HandleRegistry | None = None
-        self._processed_events: dict[str, float] = {}
         # Covers queue redelivery + operator replay — NOT Plane's own
-        # webhook retries: CE's backoff starts at ~600 s (past this
-        # TTL), and retries only fire when the API layer failed to
-        # return 200, i.e. when the process holding this in-memory map
-        # was down anyway.  Same constant as the Jira / Confluence
-        # transports.
-        self._dedup_ttl = 300.0  # 5 minutes
+        # webhook retries: CE's backoff starts at ~600 s (past the TTL),
+        # and retries only fire when the API layer failed to return 200.
+        # Shared once the engine hands over a database-backed store, so a
+        # retry reaching a peer node is still a duplicate.
+        self._dedupe: Any = MemoryDeliveryDedupeStore()
         self._project_leads: dict[str, str] = {}
         self._notification_excluded_projects: set[str] = set()
         self._index_callback: IndexCallback | None = None
@@ -555,7 +554,6 @@ class PlaneTransport:
 
     async def stop(self) -> None:
         """Stop and clean up resources."""
-        self._processed_events.clear()
         self._project_names.clear()
         self._project_cache_fetched_at = float("-inf")
         if self._client is not None:
@@ -570,7 +568,7 @@ class PlaneTransport:
 
     # ── dedup ──
 
-    def _dedup_event(self, body: dict[str, Any]) -> bool:
+    async def _dedup_event(self, body: dict[str, Any]) -> bool:
         """True when this delivery was already processed (skip it).
 
         CE payloads carry no stable event id (``X-Plane-Delivery`` is
@@ -600,21 +598,20 @@ class PlaneTransport:
             )
         )
 
-        now = time.monotonic()
-
-        # Prune old entries
-        stale = [
-            k for k, t in self._processed_events.items() if now - t > self._dedup_ttl
-        ]
-        for k in stale:
-            del self._processed_events[k]
-
-        if dedup_key in self._processed_events:
+        claimed = await self._dedupe.claim("plane", dedup_key)
+        if not claimed:
             logger.debug("duplicate_plane_event_skipped", dedup_key=dedup_key)
-            return True
+        return not claimed
 
-        self._processed_events[dedup_key] = now
-        return False
+    def set_delivery_dedupe(self, store: Any) -> None:
+        """Point delivery dedupe at the shared store.
+
+        Called by the engine when a database is configured. The default
+        is per-process, which is correct for a single node and silently
+        wrong for two — the same retry reaching a peer would be a fresh
+        delivery there.
+        """
+        self._dedupe = store
 
     # ── project id→identifier cache ──
 
@@ -815,7 +812,7 @@ class PlaneTransport:
 
         # Deduplicate first — the API layer already verified the
         # signature, so nothing precedes this.
-        if self._dedup_event(body):
+        if await self._dedup_event(body):
             return []
 
         # Opportunistic cache seeding: an expanded project FK carries

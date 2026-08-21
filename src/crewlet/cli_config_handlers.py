@@ -88,17 +88,18 @@ async def _connect_and_migrate(
     should not invent the schema as a side effect.
 
     ``company`` is the :class:`CompanyConfig` being imported.  Its
-    embedding dimensions size the pgvector columns the migrations
-    create — a non-1536 model otherwise mismatches the ``vector(N)``
-    column width.  Falls back to 1536 only when no config is supplied.
+    embedding dimensions size the pgvector columns the migrations create,
+    via the one shared derivation in ``cli._migration_vars`` — the width
+    is never guessed here.  When no config is supplied, or it declares no
+    embeddings provider, the vars come back empty and the migrator defers
+    those migrations rather than baking a wrong, permanent column width.
     """
+    from crewlet.cli import _migration_vars
     from crewlet.db.migrator import migrate
 
     db = await _connect(args)
-    dims = "1536"
-    if company is not None and company.providers.embeddings is not None:
-        dims = str(company.providers.embeddings.dimensions)
-    await migrate(db, template_vars={"embedding_dimensions": dims})
+    template_vars = _migration_vars(company) if company is not None else {}
+    await migrate(db, template_vars=template_vars)
     return db
 
 

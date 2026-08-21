@@ -93,6 +93,18 @@ class CanonicalIdentity(BaseModel):
         return ""
 
 
+#: Cap on one interaction body, and on any text joined from several.
+#:
+#: A single body is clipped here at construction; a COALESCED trigger
+#: can carry ``max_batch`` of them, so anything that joins bodies has to
+#: re-apply the bound or it hands a consumer up to ``max_batch`` times
+#: this much. 4000 characters is roughly a thousand tokens — enough for
+#: any real chat message plus its quoted context, and small enough that
+#: a batch of them still leaves the prompt room for the rest of the
+#: turn.
+INTERACTION_BODY_LIMIT = 4000
+
+
 class InboundInteraction(BaseModel):
     """A canonical record of one inbound message that triggered a turn.
 
@@ -134,7 +146,7 @@ class InboundInteraction(BaseModel):
 
     @classmethod
     def list_from_trigger_event(
-        cls, event: Any, *, body_limit: int = 4000
+        cls, event: Any, *, body_limit: int = INTERACTION_BODY_LIMIT
     ) -> list[InboundInteraction]:
         """Normalize any platform event into canonical interactions.
 
@@ -325,7 +337,7 @@ def salient_task_text(
     interactions: list[InboundInteraction] | None,
     fallback: str,
     *,
-    limit: int = 4000,
+    limit: int = INTERACTION_BODY_LIMIT,
 ) -> str:
     """Return the inbound message(s) stripped of notification scaffolding.
 
@@ -408,10 +420,18 @@ def merge_interactions_by_sender(
         if len(group) == 1:
             merged.append(first)
             continue
+        # Capped like `interaction_text`, and for the same reason: each
+        # constituent body is already clipped at construction, but a
+        # coalesced trigger can carry `max_batch` of them from one
+        # chatty sender — and this merged body goes straight into the
+        # counterparty profiler's prompt.
+        joined = "\n\n".join(i.body for i in group if i.body)
+        if len(joined) > INTERACTION_BODY_LIMIT:
+            joined = joined[:INTERACTION_BODY_LIMIT] + " … [truncated]"
         merged.append(
             first.model_copy(
                 update={
-                    "body": "\n\n".join(i.body for i in group if i.body),
+                    "body": joined,
                     "requires_recon": any(i.requires_recon for i in group),
                 }
             )

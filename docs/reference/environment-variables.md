@@ -10,6 +10,7 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
+| `CREWLET_NODE_ID` | This process's identity, when `node.id` is unset in the Tier A file. Labels every log line, health payload, and config-apply event. Must be **stable across restarts**; defaults to `node-0` | Your orchestrator (Kubernetes pod name / StatefulSet ordinal, or the host name) |
 | `CREWLET_DATABASE_DSN` | PostgreSQL DSN the example Tier A configs reference (`providers.database.dsn`) | Your database (`postgresql://crewlet:crewlet@localhost:5432/crewlet` for the bundled compose) |
 | `CREWLET_PULSAR_URL` | Pulsar broker URL the example Tier A configs reference (`providers.queue.url`) | `pulsar://localhost:6650` for the bundled compose |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |
@@ -197,7 +198,7 @@ Used only when `providers.sandbox` is configured so sandbox-enabled roles can au
 | `E2B_API_KEY` | E2B API key (`providers.sandbox.api_key`). **Required even for self-hosted/local E2B** — the SDK always authenticates (sends it as an `X-API-KEY` header); `E2B_DOMAIN` only changes *which* API it talks to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted E2B's key management |
 | `E2B_DOMAIN` | Self-hosted / local E2B cluster domain (`providers.sandbox.domain`). Omit for E2B cloud. | Your self-hosted E2B deployment |
 | `E2B_VALIDATE_API_KEY` | Set to `false` to skip the SDK's `e2b_<hex>` key-format check — needed if your self-hosted cluster issues keys in a different format. Default `true`. Read directly by the `e2b` SDK from the env. | — |
-| `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read directly by the engine: the externally-reachable base URL of the engine's own API (e.g. `http://host.docker.internal:80`). When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route and sandbox runs export telemetry through it (forwarded to `OTEL_EXPORTER_OTLP_*` when configured). Unset = no sandbox telemetry. | Your engine's public address |
+| `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read by every node: the externally-reachable base URL of whichever node serves your webhooks (an `ingress` one) (e.g. `http://host.docker.internal:80`). When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route and sandbox runs export telemetry through it (forwarded to `OTEL_EXPORTER_OTLP_*` when configured). Unset = no sandbox telemetry. | Your engine's public address |
 
 Inside each sandbox run the engine **injects** `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL` — the running agent's identity facts, readable by `role.sandbox.setup` recipes (e.g. to configure `git config user.name`/`user.email`). They are outputs of the engine, not inputs you set.
 

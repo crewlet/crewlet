@@ -11,7 +11,7 @@ from typing import Any
 
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
+from tests.test_api.helpers import create_app
 
 
 class _MockEventQueue:

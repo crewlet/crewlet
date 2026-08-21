@@ -53,53 +53,14 @@ from crewlet.events.types import (
 )
 from crewlet.providers.llm.protocol import LLMProvider, Message
 from crewlet.queue.protocol import EventQueue
+from crewlet.redaction import redact_secrets
 from crewlet.tools.protocol import AgentContext, ToolResult, ToolResultValidator
 
 logger = get_logger("agent.llm_loop")
 
-# Patterns that indicate secrets/credentials in tool output.  Keeping
-# the list here (rather than per-phase) ensures every phase uses the
-# same redaction.
-_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"sk-proj-[A-Za-z0-9_-]{20,}"), "[REDACTED:api-key]"),
-    (re.compile(r"sk-[A-Za-z0-9_-]{20,}"), "[REDACTED:api-key]"),
-    (re.compile(r"xoxb-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
-    (re.compile(r"xoxp-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
-    (re.compile(r"xoxs-[A-Za-z0-9-]{20,}"), "[REDACTED:slack-token]"),
-    (re.compile(r"AKIA[A-Z0-9]{16}"), "[REDACTED:aws-key]"),
-    (re.compile(r"ghp_[A-Za-z0-9]{36,}"), "[REDACTED:github-token]"),
-    (re.compile(r"gho_[A-Za-z0-9]{36,}"), "[REDACTED:github-token]"),
-    (re.compile(r"glpat-[A-Za-z0-9_-]{20,}"), "[REDACTED:gitlab-token]"),
-    (re.compile(r"plane_api_[A-Za-z0-9_-]{20,}"), "[REDACTED:plane-token]"),
-    (re.compile(r"plane_wh_[A-Za-z0-9_-]{20,}"), "[REDACTED:plane-webhook-secret]"),
-    (
-        re.compile(
-            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
-            r"[\s\S]*?"
-            r"-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
-        ),
-        "[REDACTED:private-key]",
-    ),
-    (re.compile(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+"), "[REDACTED:password]"),
-]
-
-
 # ---------------------------------------------------------------------------
 # Tool-output sanitization + validation
 # ---------------------------------------------------------------------------
-
-
-def redact_secrets(text: str) -> str:
-    """Replace known secret / credential patterns with redaction markers.
-
-    The single redaction implementation, shared by tool-result validation
-    and any other surface that ships free text to the dashboard / event
-    store (e.g. a sandbox coding-agent transcript, which can echo a cloned
-    repo URL's token or a printed key). Idempotent.
-    """
-    for pattern, replacement in _SECRET_PATTERNS:
-        text = pattern.sub(replacement, text)
-    return text
 
 
 def sanitize_tool_output(output: str) -> str:
@@ -297,34 +258,21 @@ async def consume_budget(
 ) -> None:
     """Check and consume token budget. Raises ``RuntimeError`` on exhaustion.
 
-    Budget-type disambiguation (org vs. agent): if
-    ``BudgetManager.consume`` returns False, figure out which budget
-    would reject and publish a ``BudgetExhausted`` event naming it
-    before raising.
+    The spend names its own refusing scope: the check and the increment
+    happen in one statement against the shared counter, so which budget
+    said no comes back with the answer. Re-reading the caps afterwards to
+    work it out — as this did — is a read a peer's spend can invalidate
+    between the refusal and the report.
     """
     if budget_manager is None or total <= 0:
         return
-    budget_ok = await budget_manager.consume(agent.id_str, total)
-    if budget_ok:
+    outcome = await budget_manager.spend(agent.id_str, total)
+    if outcome.ok:
         return
 
-    org_b = budget_manager.org_budget
-    agent_budget = budget_manager.get_agent_budget(agent.id_str)
-    org_would_reject = (
-        org_b.max_tokens > 0 and org_b.used_tokens + total > org_b.max_tokens
-    )
-    if org_would_reject:
-        budget_type = "org"
-        used = org_b.used_tokens
-        limit = org_b.max_tokens
-    elif agent_budget is not None:
-        budget_type = "agent"
-        used = agent_budget.used_tokens
-        limit = agent_budget.max_tokens
-    else:
-        budget_type = "org"
-        used = org_b.used_tokens
-        limit = org_b.max_tokens
+    budget_type = outcome.rejected_scope or "org"
+    used = outcome.rejected_used
+    limit = outcome.rejected_limit
 
     logger.warning(
         "budget_exhausted",
@@ -468,6 +416,25 @@ def assistant_text_with_reasoning(messages: list[Message]) -> str:
         if msg.role == "assistant"
     ]
     return "\n\n".join(part for part in parts if part)
+
+
+def _is_known_read(name: str, surface: Any) -> bool:
+    """Whether ``name`` is annotated read-only on this surface.
+
+    Deliberately narrow: only an explicit ``read_only: true`` counts.
+    ``writes_to_shared_surface`` answers the opposite question and
+    returns ``False`` for an all-unknown annotation set, which is right
+    for its own callers and exactly wrong here — using it would exempt
+    every unannotated tool from the fence.
+    """
+    from crewlet.tools.capabilities import resolve_annotations
+
+    tool = surface.lookup(name)
+    if tool is None:
+        return False
+    registry = getattr(surface, "_registry", None)
+    lookup = getattr(registry, "annotations_for", None)
+    return resolve_annotations(tool, lookup).read_only is True
 
 
 async def run_tool_loop(
@@ -681,8 +648,15 @@ async def run_tool_loop(
     # the round budget. Counter so a pathological model can't burn the whole
     # budget on reprompts beyond a small cap.
     forced_retries = 0
+    fence = getattr(context, "seat_fence", None)
     for round_num in range(max_rounds):
         rounds_used = round_num + 1
+        # Seat fence, at the cheapest possible point: no tokens have been
+        # spent this round and nothing has fired. A node whose lease
+        # moved stops HERE rather than running the rest of the turn
+        # beside the seat's new owner. Raises SeatLost.
+        if fence is not None:
+            fence()
         # Refresh tool defs at the top of every round so any in-loop
         # surface mutation is visible to the provider on this call,
         # not the one after.
@@ -830,13 +804,41 @@ async def run_tool_loop(
 
         terminated_by_tool = False
         for tool_call in completion.tool_calls:
-            tool_result = await execute_tool(
-                tool_call.name,
-                tool_call.arguments,
-                context,
-                surface=surface,
-                validators=validators,
-            )
+            # The finest-grained fence, and the last point before an
+            # external side effect. Skipped for tools KNOWN to be
+            # read-only: refusing a read buys nothing (it produces no
+            # duplicate effect) and costs the turn. Unknown is fenced —
+            # most builtins carry no annotations, and treating "not
+            # classified" as "safe" would leave the majority of the
+            # outbound surface unfenced.
+            if fence is not None and not _is_known_read(tool_call.name, surface):
+                fence()
+            # One detached job per turn, enforced BEFORE the call runs.
+            # Honouring only the first suspend (below) was not enough:
+            # the second call still executed, which for `run_sandbox`
+            # meant a second coding agent started in the same box,
+            # writing over the first one's result files — and its
+            # `attach_sandbox` overwrote the row's `command_id`, so the
+            # completion poll watched the second job while the loop
+            # resumed holding the first call's id. Refusing the repeat
+            # unrun is the only point at which nothing has happened yet.
+            if suspended and tool_call.name == pending_tool_name:
+                tool_result = ToolResult(
+                    success=False,
+                    error=(
+                        f"{tool_call.name} is already running for this turn "
+                        "and its result will be delivered when it finishes. "
+                        "Wait for it rather than starting another."
+                    ),
+                )
+            else:
+                tool_result = await execute_tool(
+                    tool_call.name,
+                    tool_call.arguments,
+                    context,
+                    surface=surface,
+                    validators=validators,
+                )
             # Suspend: the tool kicked off detached work whose result lands
             # later (the sandbox tool). Leave THIS call unanswered — the
             # engine appends the real result on resume — and defer only it;
@@ -859,10 +861,31 @@ async def run_tool_loop(
                 )
                 continue
             if tool_result.suspend and not allow_suspend:
+                # The tool parked work this loop cannot wait for, so
+                # whatever it returned is a receipt, not a result.
+                # Passing it through as a success told the model the job
+                # was done — and the job may genuinely be running, keyed
+                # to a turn that is about to finish without it. A
+                # failure is the honest answer: the model can say so
+                # rather than reporting work it never saw the result of.
+                # The launch itself is not undone here; tearing down a
+                # detached run belongs to its coordinator, and the
+                # phases that must never reach this point say so by
+                # denying the tool outright (see
+                # `_SUBAGENT_CONTROL_DENYLIST`).
                 logger.warning(
                     "tool_suspend_ignored_outside_execute",
                     tool=tool_call.name,
                     phase=phase_name,
+                )
+                tool_result = ToolResult(
+                    success=False,
+                    error=(
+                        f"{tool_call.name} parks work for a later result and "
+                        f"can only be used in the Execute phase, not in "
+                        f"{phase_name}. Its result will not arrive here — do "
+                        "not report it as done."
+                    ),
                 )
             if tool_result.success:
                 content = tool_result.output

@@ -84,8 +84,14 @@ unknowns:
   sub-agent surface.
 
 First-party control tools (`spawn_subagent`, `a2a_ask`, the discovery
-meta-tools) are denied separately by name — they are Crewlet's *own*
-tools, so naming them is not a third-party coupling.
+meta-tools, `run_sandbox`) are denied separately by name — they are
+Crewlet's *own* tools, so naming them is not a third-party coupling.
+`run_sandbox` is on that list because a detached coding run is keyed to
+the **parent** turn: the pending row carries the parent's `turn_id` and
+the launch pauses the parent seat's inbox, while a sub-agent cannot park
+for the result. The parent turn would finish without persisting the
+suspended conversation, leaving the seat deaf for the whole coding run
+with nothing to resume into.
 
 ---
 

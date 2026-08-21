@@ -7,6 +7,7 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from dotenv import dotenv_values
 
 from crewlet.config import GitLabConfig, GitLabProvisioningConfig
 from crewlet.gitlab.client import GitLabClient, GitLabProvisionError
@@ -396,6 +397,39 @@ async def test_rotate_remints(tmp_path):
         )
     assert all(s.token_action == "rotated" for s in report.seats)
     assert any(t.startswith("glpat-rotated") for t in fake.minted_tokens)
+
+
+async def test_rotate_replaces_an_expired_token(tmp_path):
+    """The documented yearly renewal, on the state it exists to fix.
+
+    An expired PAT comes back `active: false`, so there was nothing to
+    rotate — and the mint below it is gated on the ${VAR} being empty,
+    which it never is: it still holds the dead token. The run reported
+    "skipped" and exited 0 having renewed nothing, leaving the seat
+    authenticating with a credential GitLab no longer accepts.
+    """
+    fake = FakeGitLab()
+    env = str(tmp_path / ".env.gitlab")
+    cfg = _config()
+    async with _make_client(fake) as client:
+        await provision(client, _org(), cfg, webhook_url="", sink=EnvFileSink(env))
+        before = dict(dotenv_values(env))
+        # A year passes: GitLab expires every managed token.
+        for tokens in fake.tokens.values():
+            for token in tokens:
+                token["active"] = False
+
+        report = await provision(
+            client, _org(), cfg, webhook_url="", sink=EnvFileSink(env), rotate=True
+        )
+
+    assert all(s.token_action == "minted" for s in report.seats), (
+        "an expired token must be replaced, not reported as skipped"
+    )
+    after = dict(dotenv_values(env))
+    assert set(after) == set(before)
+    for var, old_value in before.items():
+        assert after[var] != old_value, f"{var} still holds the expired token"
 
 
 async def test_sink_flushed_when_webhook_ensure_aborts(tmp_path):

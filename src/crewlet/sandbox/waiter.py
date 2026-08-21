@@ -44,6 +44,7 @@ from typing import Any
 
 from crewlet._logging import get_logger
 from crewlet.events.types import SandboxRunCompleted
+from crewlet.queue.topics import agent_control_topic
 from crewlet.sandbox.coordinator import COMPLETIONS_TOPIC
 from crewlet.sandbox.manager import SandboxManager
 from crewlet.sandbox.pending_store import PendingSandboxRun, PendingSandboxRunStore
@@ -78,11 +79,19 @@ class SandboxWaiter:
         # inside the box TTL (``default_timeout_seconds``, 900 s) and makes
         # the give-up window ``_MAX_CONNECT_FAILURES`` * 15 s ≈ 1 min.
         poll_seconds: float = 15.0,
+        # Single-owner gate. The waiter polls EVERY active run in the
+        # company, not just this node's seats, because a box can be
+        # polled from anywhere — so N nodes running it means N reconnects
+        # per box per tick and N racing reapers. Supplied by the engine
+        # as a callable that claims ``worker:sandbox-waiter``; ``None``
+        # means "no fleet", which is the single-node case.
+        claim_duty: Any = None,
     ) -> None:
         self._event_queue = event_queue
         self._pending_store = pending_store
         self._manager = manager
         self._poll_seconds = poll_seconds
+        self._claim_duty = claim_duty
         self._running = False
         self._task: asyncio.Task[None] | None = None
         # turn_id -> consecutive reconnect failures (reset on any success).
@@ -92,7 +101,7 @@ class SandboxWaiter:
         if self._running:
             return
         self._running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run_loop(), name="sandbox_waiter")
         logger.info("sandbox_waiter_started", poll_seconds=self._poll_seconds)
 
@@ -118,6 +127,8 @@ class SandboxWaiter:
                 if not self._running:
                     return
                 try:
+                    if not await self._may_tick():
+                        continue
                     await self.tick_once()
                 except asyncio.CancelledError:
                     return
@@ -125,6 +136,21 @@ class SandboxWaiter:
                     logger.exception("sandbox_waiter_tick_failed")
         finally:
             self._running = False
+
+    async def _may_tick(self) -> bool:
+        """Whether this node holds the waiter duty this tick.
+
+        Re-claimed every tick rather than held: the duty lease is short,
+        so a node that dies mid-poll releases it by lapsing and a peer
+        takes over on its next tick, with no handoff protocol.
+        """
+        if self._claim_duty is None:
+            return True
+        try:
+            return bool(await self._claim_duty())
+        except Exception:
+            logger.exception("sandbox_waiter_duty_claim_failed")
+            return False
 
     async def tick_once(self) -> int:
         """Poll every running run once; return how many completions fired.
@@ -184,20 +210,38 @@ class SandboxWaiter:
             paused_for = (now - run.paused_at).total_seconds()
             if paused_for < run.pause_ttl_seconds:
                 continue
+            # Claim FIRST, destroy second. The reaper decides from a
+            # snapshot taken seconds ago, and the clarification answer
+            # that un-pauses the run may have arrived since:
+            # ``claim_for_resume`` has already flipped the row to
+            # ``resumed`` and the Execute loop is reconnecting to this
+            # very box. Killing before the compare-and-set destroyed it
+            # underneath that resume — and then the CAS refused, so the
+            # reaper walked away silently and the answered run failed on
+            # a box that no longer existed. The CAS is the authority for
+            # the whole reap, not just for the status write.
+            if not await self._pending_store.set_status(
+                run.turn_id, "reseed", expect=run.status
+            ):
+                continue
+            # Release before the kill, for the same reason in the other
+            # direction: an answer claiming a ``reseed`` row must not
+            # find a ``sandbox_id`` we are about to destroy. Cleared, it
+            # provisions a fresh box and re-seeds from the pushed branch.
+            sandbox_id = run.sandbox_id
+            await self._pending_store.release_box(run.turn_id)
             # Kill by id: ``connect`` would auto-resume the snapshot, booting
             # the VM back up purely to shut it down.
             try:
-                await self._manager.provider.kill(run.sandbox_id)
+                await self._manager.provider.kill(sandbox_id)
             except Exception:
-                # An already-gone box is the normal case for an old snapshot;
-                # release the row either way so we stop tracking a dead id.
+                # An already-gone box is the normal case for an old
+                # snapshot; the row is released either way.
                 logger.warning(
                     "sandbox_pause_reap_kill_failed",
                     turn_id=run.turn_id,
-                    sandbox_id=run.sandbox_id,
+                    sandbox_id=sandbox_id,
                 )
-            await self._pending_store.release_box(run.turn_id)
-            await self._pending_store.set_status(run.turn_id, "reseed")
             reaped += 1
             logger.info(
                 "sandbox_pause_ttl_reaped",
@@ -255,21 +299,32 @@ class SandboxWaiter:
         return "done" if done else "running"
 
     async def _publish_completion(self, run: PendingSandboxRun) -> None:
-        await self._event_queue.publish(
-            COMPLETIONS_TOPIC,
-            SandboxRunCompleted(
-                source=run.role,
-                agent_id=run.agent_id,
-                agent_handle=run.agent_handle,
-                role=run.role,
-                turn_id=run.turn_id,
-                sandbox_id=run.sandbox_id,
-                coding_agent=run.coding_agent,
-                # Carry the original trace so the completion turn nests.
-                trace_id=run.trace_id,
-                span_id=run.span_id,
-            ),
+        """Announce the completion, and route the resume to the owner.
+
+        Two publishes, two purposes. The ``crewlet.events.*`` copy is an
+        ANNOUNCEMENT: the dashboard's broadcast stream watches that
+        subject space, and dropping it would blank the Running-sandboxes
+        panel. The per-seat control copy is a COMMAND, and it goes to the
+        seat's own topic because only the node holding that seat has the
+        suspended Execute conversation to resume — a single fleet-wide
+        group would hand it to a non-owner (N-1)/N of the time.
+        """
+        completion = SandboxRunCompleted(
+            source=run.role,
+            agent_id=run.agent_id,
+            agent_handle=run.agent_handle,
+            role=run.role,
+            turn_id=run.turn_id,
+            sandbox_id=run.sandbox_id,
+            coding_agent=run.coding_agent,
+            # Carry the original trace so the completion turn nests.
+            trace_id=run.trace_id,
+            span_id=run.span_id,
         )
+        await self._event_queue.publish(COMPLETIONS_TOPIC, completion)
+        control = agent_control_topic(run.agent_handle)
+        if control:
+            await self._event_queue.publish(control, completion)
 
 
 __all__ = ["SandboxWaiter"]

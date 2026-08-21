@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
+from tests.test_api.helpers import create_app
 
 
 class _NoopEventQueue:

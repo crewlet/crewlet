@@ -38,6 +38,49 @@ def _stream(app: Any) -> Any:
     return getattr(app.state, "stream", None)
 
 
+def websocket_auth_failed(websocket: WebSocket) -> bool:
+    """Whether this WebSocket handshake must be rejected.
+
+    ``BaseHTTPMiddleware`` never sees a WebSocket scope, so the stream —
+    which carries every event in the company, prompts and tool arguments
+    included — has to check for itself. Forgetting this would leave the
+    single richest endpoint open while every REST route was guarded.
+
+    Browsers cannot set headers on a ``WebSocket`` constructor, so a
+    ``?token=`` query parameter is accepted alongside the standard
+    ``Authorization`` header that non-browser clients can send. Query
+    strings tend to appear in proxy access logs; the header is the better
+    credential when a client can use it.
+    """
+    from crewlet.api.auth import check_bearer, requires_token
+
+    state = websocket.app.state
+    # Mirrors the middleware's own mounting condition: an app built with
+    # no Tier A config has no auth policy to enforce, and the HTTP routes
+    # are open too. Enforcing here regardless would make the WebSocket the
+    # one endpoint that rejects on an app nothing else guards.
+    if not getattr(state, "auth_enabled", False):
+        return False
+    if not requires_token(state, path=websocket.url.path, method="GET"):
+        return False
+
+    tokens: dict[str, str] = getattr(state, "auth_tokens", None) or {}
+    if not tokens:
+        return not getattr(state, "auth_disabled", False)
+
+    # Reuse the header path when one was sent; ``check_bearer`` only needs
+    # ``.headers`` and ``.app``, which a WebSocket provides.
+    if websocket.headers.get("authorization"):
+        return check_bearer(websocket) is None  # type: ignore[arg-type]
+
+    import hmac
+
+    candidate = websocket.query_params.get("token", "").strip()
+    if not candidate:
+        return True
+    return not any(hmac.compare_digest(candidate, t) for t in tokens.values())
+
+
 def _fallback_snapshot(app: Any) -> dict[str, Any]:
     """Snapshot from static config alone (no stream service wired)."""
     state = app.state
@@ -119,6 +162,17 @@ async def stream_websocket(websocket: WebSocket) -> None:
     dedups streamed envelopes against the snapshot by event id, so the
     register-before-snapshot ordering is harmless.
     """
+    if websocket_auth_failed(websocket):
+        logger.warning(
+            "ws_auth_failed",
+            remote=websocket.client.host if websocket.client else "",
+        )
+        # 1008 = policy violation. Closing before ``accept()`` makes the
+        # browser see the handshake fail rather than a connection that
+        # opens and dies, so the dashboard can show the token gate.
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     stream = _stream(websocket.app)
     lock = asyncio.Lock()

@@ -726,17 +726,19 @@ units:
           # ``each`` again, but for coaching: every direct member runs its own
           # weekly 1:1 with its manager (the CTO).  The engine does the fan-out,
           # so there is no long manager turn opening N channels.  A 1:1 is
-          # private, so it runs over the A2A bus (a2a_ask) — NOT chat/Plane; the
+          # private, so it runs on an A2A channel (a2a_ask) — NOT chat/Plane; the
           # post-turn learning loop persists the takeaways automatically.  See
           # the "Manager 1:1" playbook page (LEAD project) and docs/concepts/one-on-ones.md.
           - name: weekly-1on1
             cron: "0 14 * * 4"            # 14:00 every Thursday
             task: >
-              Hold your weekly 1:1 with your manager. Open it over the private A2A
-              bus with a2a_ask (a 1:1 is private — do NOT use chat or Plane): use
-              query_episodes to recall what you shipped and where you got stuck,
-              walk your manager through it, ask for feedback, and note the action
-              items you agree on. Follow the "Manager 1:1" playbook page (LEAD project).
+              Hold your weekly 1:1 with your manager. Open it on a private A2A
+              channel with a2a_ask (a 1:1 is private — do NOT use chat or Plane):
+              use query_episodes to recall what you shipped and where you got
+              stuck, and put the whole review in the one brief — what you shipped,
+              where you are blocked, and the feedback you want — because your
+              manager answers it in one reply. Note the action items you agree on.
+              Follow the "Manager 1:1" playbook page (LEAD project).
         roles:
           - name: Agent SWE
             goal: "Pick up the assigned Plane work items and implement production-grade Go features for Nimbus's control plane (nimbuscore, nimbusk0s), write comprehensive tests, and ship clean, reviewable code that meets acceptance criteria — while keeping work-item status, worklogs, and comments up to date throughout the lifecycle of every task"

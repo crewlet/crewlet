@@ -377,7 +377,8 @@ async def run_execute_phase(
             iteration=turn.iteration,
         ),
         build_list_mcp_server_tools(
-            role_mcp_tools,
+            # Same universe the catalogue advertises — see plan.py.
+            catalogue_tools,
             availability_filter=turn.availability_set,
         ),
     ]

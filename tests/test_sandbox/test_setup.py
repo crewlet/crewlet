@@ -207,3 +207,69 @@ def test_setup_step_rejects_unknown_fields() -> None:
 
     with pytest.raises(ValidationError):
         SandboxSetupStep(name="x", command=["oops"])  # type: ignore[call-arg]
+
+
+async def test_a_setup_command_gets_a_provisioning_budget_not_a_control_one():
+    """Provisioning is work, not a control-plane call.
+
+    Without its own budget these inherited the backend's control
+    timeout — sized for a `mkdir` or a `docker exec` — so any real
+    step (a dependency install, a cold image pull, a large clone) was
+    killed and failed the whole acquisition.
+    """
+    from crewlet.sandbox.setup import DEFAULT_SETUP_TIMEOUT_SECONDS
+
+    seen: list[float] = []
+
+    class _Recording(FakeSandbox):
+        async def exec(self, cmd, *, env=None, cwd="", timeout_s=0.0):
+            seen.append(timeout_s)
+            return await super().exec(cmd, env=env, cwd=cwd, timeout_s=timeout_s)
+
+    box = _Recording()
+    await apply_setup(box, [SandboxSetupStep(name="install", commands=["npm ci"])])
+    assert seen == [DEFAULT_SETUP_TIMEOUT_SECONDS]
+
+    seen.clear()
+    await apply_setup(
+        box,
+        [SandboxSetupStep(name="slow", commands=["pull"], timeout_seconds=1800.0)],
+    )
+    assert seen == [1800.0]
+
+
+async def test_a_failing_setup_command_does_not_echo_its_resolved_text():
+    """`${VAR}` in a command is resolved before it runs.
+
+    A recipe that pipes a token into a login therefore carries that
+    token verbatim in the command string — and this message is logged
+    AND handed back to the LLM. The step name and the command's
+    position identify it without carrying the secret.
+    """
+
+    class _Failing(FakeSandbox):
+        async def exec(self, cmd, *, env=None, cwd="", timeout_s=0.0):
+            if cmd == "true":
+                return ExecResult(exit_code=0)
+            return ExecResult(
+                exit_code=1, stderr="fatal: token glpat-AAAAAAAAAAAAAAAAAAAAAA rejected"
+            )
+
+    with pytest.raises(SandboxSetupError) as excinfo:
+        await apply_setup(
+            _Failing(),
+            [
+                SandboxSetupStep(
+                    name="git-auth",
+                    commands=[
+                        "true",
+                        "echo ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA | login",
+                    ],
+                )
+            ],
+        )
+
+    message = str(excinfo.value)
+    assert "ghp_" not in message, "the resolved command text carried a token"
+    assert "glpat-" not in message, "stderr carried a token"
+    assert "git-auth" in message and "#2" in message

@@ -425,10 +425,28 @@ class EpisodeLifecycleWorker:
     # ------------------------------------------------------------------
 
     def _resolve_any_role(self, agent_handle: str) -> Role | None:
-        """Resolve the agent's role via the pool/org so the aux
-        provider can be selected.  Tolerates lightweight test orgs."""
+        """Resolve the agent's role so the aux provider can be selected.
+
+        From the ORG first, and only then from the pool. This worker
+        consumes a fleet-wide group, so the node that wins a
+        ``CompactionRequested`` is rarely the node running that seat —
+        and a pool-first lookup answered "not here" for every one of
+        them, silently downgrading the compaction to the default aux
+        provider instead of the role's configured one. The org knows
+        every seat on every node; the pool is an execution detail.
+
+        The pool fallback stays for lightweight test orgs that carry a
+        definition but no indexed role.
+        """
         if not agent_handle:
             return None
+        seat = None
+        try:
+            seat = self._org.agent_seat_by_handle(agent_handle)
+        except Exception:
+            seat = None
+        if seat is not None:
+            return seat
         agent = None
         if self._agent_pool is not None:
             try:

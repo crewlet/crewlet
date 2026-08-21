@@ -276,6 +276,52 @@ async def test_engine_with_extension():
 
 
 @pytest.mark.asyncio
+async def test_the_context_carries_the_fleet_fields() -> None:
+    """``node_id`` and ``claim_duty`` have to actually be wired.
+
+    Both fail SILENTLY if the engine stops passing them. ``claim_duty``
+    is documented as "``None`` means treat it as yes", which is right for
+    a bare context in a test and exactly wrong for a real engine: every
+    extension doing a company-wide job would quietly do it once per
+    node, which is the thing the field exists to prevent. Nothing else
+    would report it — that is a job done N times, not an error.
+    """
+    ext = TrackingExtension()
+    engine = Engine(organization=make_org(), extensions=[ext])
+
+    await engine.start()
+    try:
+        assert ext.ctx is not None
+        assert ext.ctx.node_id, "an extension cannot tell which node it is on"
+        assert ext.ctx.node_id == engine._node_id
+        assert ext.ctx.claim_duty is not None, (
+            "extensions were left with no way to ask for a singleton duty"
+        )
+        # And it answers. A single node is a fleet of one, so it wins.
+        assert await ext.ctx.claim_duty("acme-digest") is True
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_duty_is_claimed_per_call_not_held() -> None:
+    """The doc tells extensions to ask again each tick, which is only
+    sound if asking twice works — a claim that answered yes once and no
+    forever after would push every extension into the
+    hold-from-on_engine_start shape the doc warns against."""
+    ext = TrackingExtension()
+    engine = Engine(organization=make_org(), extensions=[ext])
+
+    await engine.start()
+    try:
+        assert ext.ctx is not None
+        for _ in range(3):
+            assert await ext.ctx.claim_duty("acme-digest") is True
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
 async def test_engine_extension_registers_tool():
     ext = ToolRegisteringExtension()
     engine = Engine(organization=make_org(), extensions=[ext])

@@ -7,13 +7,22 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from crewlet._logging import get_logger
-from crewlet.env_refs import ENV_VAR_PATTERN, env_var_reference
+from crewlet.env_refs import (
+    ENV_VAR_PATTERN,
+    env_var_reference,
+    has_env_reference,
+)
+from crewlet.mcp.timeouts import (
+    DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+)
 from crewlet.notifications.typing_status import StatusPhrases, WorkingStatusMode
 from crewlet.org.hierarchy import get_effective_lead
 from crewlet.org.models import (
@@ -22,11 +31,13 @@ from crewlet.org.models import (
     OrgUnit,
     Role,
     RoleKind,
+    RolePlacementConfig,
     RoleSandboxConfig,
     Schedule,
 )
 from crewlet.providers.llm.cli_profiles import CLIAgentName
 from crewlet.sandbox.setup import SandboxSetupStep
+from crewlet.seat.placement import DEFAULT_NODE_ROLES, NodeRole
 from crewlet.secrets.resolver import lookup_secret, resolve_env
 from crewlet.tools.capabilities import ToolAnnotations
 
@@ -574,20 +585,35 @@ class QueueConfig(BaseModel):
     """Queue backend type. Currently only ``pulsar`` (Apache Pulsar) is supported."""
     url: str = "pulsar://localhost:6650"
     """Pulsar broker service URL (binary protocol)."""
+    admin_url: str = ""
+    """Pulsar admin HTTP endpoint. Empty = derived from ``url`` by
+    Pulsar's own default port convention (``pulsar://host:6650`` →
+    ``http://host:8080``, ``pulsar+ssl://host:6651`` →
+    ``https://host:8443``).
+
+    The engine needs it to keep **every seat's subscription alive
+    whether or not any node owns the seat** — a durable subscription
+    holds an unowned seat's mail, and creating one needs no consumer
+    only through this endpoint. Set it explicitly whenever the admin
+    endpoint is not on the broker's host at the default port (a proxy,
+    a separate admin service, a non-default port)."""
     tenant: str = Field(default="public", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    """Pulsar tenant that holds all crewlet topics. The engine never
-    talks to the admin API — a non-default tenant must be created
-    out-of-band (``pulsar-admin tenants create <tenant>``)."""
+    """Pulsar tenant that holds all crewlet topics. Tenants are never
+    auto-created — a non-default tenant must exist before start
+    (``pulsar-admin tenants create <tenant>``)."""
     namespace: str = Field(default="default", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     """Namespace under ``tenant`` for all crewlet topics. Like the
     tenant, a non-default namespace is created out-of-band
     (``pulsar-admin namespaces create <tenant>/<namespace>``)."""
     auth_token: str = ""
-    """JWT presented to the broker (token authentication). The token's
-    ``sub`` claim is the engine's *role*; grant that role produce+consume
-    on this engine's namespace only, so engines sharing a cluster cannot
-    touch each other's tenants. Use ``${VAR}`` to read it from the
-    environment. Empty = connect unauthenticated."""
+    """JWT presented to the broker (token authentication), and to the
+    admin endpoint as a bearer token. The token's ``sub`` claim is the
+    engine's *role*; grant that role produce+consume on this engine's
+    namespace only, so engines sharing a cluster cannot touch each
+    other's tenants — plus the namespace-level permission the
+    subscription lifecycle needs, since produce+consume alone does not
+    authorize it. Use ``${VAR}`` to read it from the environment. Empty =
+    connect unauthenticated."""
     tls_trust_certs_path: str = ""
     """CA bundle for ``pulsar+ssl://`` URLs (optional; empty = system
     defaults). Tokens are bearer credentials — use TLS whenever the
@@ -628,7 +654,20 @@ class ApiAuthTokenConfig(BaseModel):
 
 
 class ApiAuthConfig(BaseModel):
-    """Bearer-token auth policy for ``/config/*`` routes."""
+    """Bearer-token auth policy for the API.
+
+    Writes and the whole ``/config`` surface always require a token.
+    Reads are governed by :attr:`allow_anonymous_read`, which defaults
+    to open — reading is what a dashboard does, and the page that would
+    prompt for a token is itself served unauthenticated, so requiring
+    one by default puts a modal in front of every first load.
+
+    Exempt from auth entirely, because they authenticate by other means
+    or must be reachable to obtain a token at all: ``/health``,
+    ``/ready``, the dashboard shell and its static assets,
+    ``/webhooks/*`` (HMAC-verified per source) and ``/otlp/*`` (signed
+    per-run token).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -638,8 +677,34 @@ class ApiAuthConfig(BaseModel):
 
     disabled: bool = False
     """Local-development override.  When ``True``, the API serves
-    ``/config/*`` without auth and logs a loud startup warning.
+    every route without auth and logs a loud startup warning.
     Never use in production."""
+
+    allow_anonymous_read: bool = True
+    """Whether read-only routes (``GET`` / ``HEAD`` outside ``/config``)
+    serve without a token.  Writes and the whole ``/config`` surface
+    always require one.
+
+    Default ``True``: the dashboard is a read surface, and a browser
+    that has to be handed a bearer token before it will show an org
+    chart is friction on the common case.  It is a real exposure
+    nonetheless — the read surface carries LLM transcripts, agent diary
+    entries and the whole event stream — so the API states which posture
+    it took at startup, at WARNING when the bind host is not loopback.
+
+    Set ``False`` to guard the entire surface.  Everything a browser
+    needs then carries the token, including the ``/ws/stream``
+    handshake, and the dashboard prompts for one when the engine refuses
+    it."""
+
+    allowed_origins: list[str] = Field(default_factory=list)
+    """Browser origins permitted by CORS, e.g.
+    ``["https://crewlet.example.com"]``.
+
+    Empty (the default) means **same-origin only** — the dashboard is
+    served by this process, so it needs no entry.  The previous default
+    was ``*``, which let any site a logged-in operator visited read
+    every unauthenticated endpoint."""
 
 
 class ApiConfig(BaseModel):
@@ -731,6 +796,114 @@ class SecretsConfig(BaseModel):
         return self
 
 
+NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+DEFAULT_NODE_ID = "node-0"
+
+
+class NodeConfig(BaseModel):
+    """Tier A identity of THIS process within the company.
+
+    Every Crewlet process has one.  Today it labels every log line and
+    the ``/health`` payload — already the difference between "a config
+    apply failed" and "the config apply failed on node-2" once more than
+    one process runs, and the only way a caller behind a load balancer
+    can tell which process answered.  It is also the identity every
+    cross-process mechanism is keyed on (lease owner, per-node
+    subscription name, per-node config apply status); see
+    ``docs/concepts/scaling.md``.
+
+    **It must be stable across restarts**, which is why it comes from the
+    deployment rather than being generated.  A fresh value per boot would
+    orphan whatever the previous incarnation registered under the old one
+    — the failure the ``hook-{id(callback)}`` subscription naming already
+    demonstrates.  In Kubernetes use the pod name (a StatefulSet ordinal
+    is ideal); under systemd, the host name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = ""
+    """This process's identity. Empty resolves via ``CREWLET_NODE_ID``,
+    then falls back to ``node-0`` (the single-process default, so nothing
+    has to be set to run one engine)."""
+
+    roles: list[NodeRole] = Field(default_factory=lambda: sorted(DEFAULT_NODE_ROLES))
+    """What this process is willing to do: ``ingress`` (serve the HTTP
+    API and its webhooks), ``seats`` (claim seat leases and run agents),
+    ``workers`` (run the company-wide singleton duties). Defaults to all
+    three — one process running a whole company, which is every existing
+    deployment.
+
+    Subtracting a role subtracts it from THIS node, never from the
+    company, so the fleet as a whole still needs every role somewhere: a
+    fleet with no ``workers`` node runs no scheduler, no retention sweep
+    and no sandbox waiter, and one with no ``ingress`` node never hears a
+    webhook. Neither is detectable from a single node's config, so the
+    engine checks it against live node presence at runtime and says so
+    (``fleet_role_unmanned``).
+
+    A node that does not run seats is also excluded from the seat
+    denominator its peers divide by — see
+    :mod:`crewlet.seat.placement`."""
+
+    labels: dict[str, str] = Field(default_factory=dict)
+    """Free-form facts about where this process runs (``zone: eu``,
+    ``gpu: "true"``), matched by a seat's ``role.placement`` selector.
+    Advertised to peers on this node's presence lease, so a label change
+    takes effect on the next heartbeat rather than at the next config
+    activation.
+
+    Values are strings; a selector compares them exactly. Nothing here
+    means anything to the engine on its own — the org decides what to
+    select on."""
+
+    @field_validator("roles")
+    @classmethod
+    def _validate_roles(cls, v: list[NodeRole]) -> list[NodeRole]:
+        if not v:
+            raise ValueError(
+                "node.roles must name at least one of "
+                f"{', '.join(sorted(str(r) for r in NodeRole))} — a node "
+                f"with no roles does nothing at all. Omit the key to run "
+                f"every role, which is the single-process default."
+            )
+        # Deduplicated and sorted, because this is a SET written as a
+        # list. It is advertised to every peer on the presence lease, so
+        # two nodes running the same thing must describe it identically
+        # — otherwise `[workers, ingress]` and `[ingress, workers]` are
+        # two different strings for one fact, and the default (already
+        # stored sorted) reads differently from an explicit list naming
+        # the same three. A repeated name is a typo either way, and one
+        # that reached the fleet view as a duplicated badge.
+        return sorted(set(v))
+
+    @field_validator("labels")
+    @classmethod
+    def _validate_labels(cls, v: dict[str, str]) -> dict[str, str]:
+        for key in v:
+            if not key or not key.strip():
+                raise ValueError("node.labels keys must be non-empty")
+        return v
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, v: str) -> str:
+        # A ``${VAR}`` reference is validated after resolution, in
+        # ``resolve_node_id``.  Tier A substitutes references before
+        # model_validate on the normal load path, so this only matters
+        # for a config constructed programmatically — but rejecting the
+        # reference form here would make that path fail on a value the
+        # YAML path accepts.
+        if v and not has_env_reference(v) and not NODE_ID_PATTERN.match(v):
+            raise ValueError(
+                f"node.id {v!r} must start alphanumeric and contain only "
+                f"letters, digits, '.', '_' or '-' (max 64 chars) — it is "
+                f"used in log fields and broker subscription names"
+            )
+        return v
+
+
 class BootstrapConfig(BaseModel):
     """Tier A — ops-owned, on-disk, restart-only.
 
@@ -748,7 +921,83 @@ class BootstrapConfig(BaseModel):
     providers: BootstrapProvidersConfig = BootstrapProvidersConfig()
     api: ApiConfig = ApiConfig()
     secrets: SecretsConfig = SecretsConfig()
+    node: NodeConfig = NodeConfig()
     debug: bool = False
+
+
+def resolve_node_id(bootstrap: BootstrapConfig | None = None) -> str:
+    """Resolve this process's node id.
+
+    Precedence: ``node.id`` in the Tier A file, then the
+    ``CREWLET_NODE_ID`` environment variable (which is how a container
+    orchestrator injects a pod name without templating the config file),
+    then :data:`DEFAULT_NODE_ID`.
+
+    Resolved through :func:`resolve_env_scalar`, so ``node.id:
+    "${HOSTNAME}"`` works like every other Tier A reference.  An
+    environment value that fails validation is rejected here rather than
+    surfacing later as a malformed subscription name.
+    """
+    configured = bootstrap.node.id if bootstrap is not None else ""
+    value = resolve_env_scalar(configured) if configured else ""
+    if not value:
+        value = os.environ.get("CREWLET_NODE_ID", "").strip()
+    if not value:
+        return DEFAULT_NODE_ID
+    if not NODE_ID_PATTERN.match(value):
+        raise ValueError(
+            f"node id {value!r} must start alphanumeric and contain only "
+            f"letters, digits, '.', '_' or '-' (max 64 chars)"
+        )
+    return value
+
+
+_INCARNATION: str = ""
+
+
+def resolve_node_incarnation(bootstrap: BootstrapConfig | None = None) -> str:
+    """This process's unique holder identity: ``{node_id}:{random}``.
+
+    The counterpart to :func:`resolve_node_id`, and deliberately the
+    opposite property.  The node id is *stable across restarts* because
+    it names a placement — a pod, a host — and things registered under it
+    must survive a restart.  A lease holder needs the reverse: it names
+    one running incarnation, so that a replacement process is never
+    mistaken for its predecessor.
+
+    Conflating the two is a real hole rather than a nicety.  A lease is
+    renewable by its own owner string, so if a restarted pod reused the
+    identity of a predecessor still draining a long turn, both would hold
+    the seat at the same fencing epoch — and with the default id being
+    the shared constant ``node-0``, so would any two engines started
+    against one database.
+
+    Computed once per process and cached: two calls return the same
+    value, so a caller cannot accidentally fence itself out by
+    re-resolving.
+
+    That cache is right for the usual case — one engine per process —
+    and wrong for the other one.  Two :class:`~crewlet.engine.Engine`
+    objects in ONE process (an embedding, a fleet test) are two lease
+    holders, and handing them the same identity recreates exactly the
+    hole this function exists to close: each could renew the other's
+    lease, and both would hold a seat at the same fencing epoch.  Those
+    callers use :func:`new_node_incarnation`.
+    """
+    global _INCARNATION  # noqa: PLW0603
+    if not _INCARNATION:
+        _INCARNATION = new_node_incarnation(bootstrap)
+    return _INCARNATION
+
+
+def new_node_incarnation(bootstrap: BootstrapConfig | None = None) -> str:
+    """Mint a FRESH holder identity, bypassing the process cache.
+
+    For a caller that is itself one lease holder among several in this
+    process.  Each engine holds its own for its whole life — minting a
+    second one mid-run would fence the engine out of its own seats.
+    """
+    return f"{resolve_node_id(bootstrap)}:{uuid4().hex[:8]}"
 
 
 class TurnEngineConfig(BaseModel):
@@ -1448,6 +1697,35 @@ class MCPServerConfig(AuthoredModel):
     Accepts snake_case (``read_only``) or the MCP camelCase
     (``readOnlyHint``) keys.  Overrides win over server-advertised
     hints."""
+
+    startup_timeout_seconds: float = Field(
+        default=DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS, gt=0
+    )
+    """How long to wait for the server to connect and answer discovery.
+
+    Covers launching the process (or opening the HTTP session), the
+    protocol handshake, and the first ``tools/list``.  A server that
+    never speaks is the failure this bounds: nothing raises, so without
+    a deadline the engine's own per-server ``try/except`` never runs and
+    one silent server holds up every seat that follows it.
+
+    The default suits a ``uvx`` / ``npx`` server whose package is not
+    yet in the local cache, which is the slow case for a healthy
+    server.  Lower it for a server you launch from a local checkout;
+    raise it if you deliberately fetch large images on first run."""
+
+    request_timeout_seconds: float = Field(
+        default=DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS, gt=0
+    )
+    """How long any one tool call may take before it is failed.
+
+    Matches the MCP SDK's own SSE-friendly HTTP read default, so a
+    stdio server and an HTTP one have the same ceiling rather than one
+    per transport.  Raise it for a server whose tools genuinely run
+    long (a large code search, a slow report); lower it for one that
+    should always answer quickly, so a wedged call surfaces as a failed
+    tool result the agent can react to instead of a turn that never
+    ends."""
 
     def annotation_overrides(self) -> dict[str, ToolAnnotations]:
         """Parse :attr:`tool_annotations` into resolved
@@ -2692,6 +2970,11 @@ class RoleConfig(AuthoredModel):
     """Per-role :doc:`code sandbox </concepts/code-sandbox>` gate.
     Absent → the seat is never offered the ``run_sandbox`` tool."""
 
+    placement: RolePlacementConfig | None = None
+    """Which nodes in the fleet may run this seat (see
+    :doc:`the fleet guide </guides/fleet>`). Absent → any node that runs
+    seats, which is what a single-process deployment always means."""
+
     integrations: RoleIntegrationsConfig = Field(default_factory=RoleIntegrationsConfig)
     schedules: list[Schedule] = Field(default_factory=list)
 
@@ -3108,6 +3391,7 @@ def _parse_role(data: RoleConfig | dict[str, Any]) -> Role:
         llm_sandbox=llm_sandbox,
         learning_enabled=cfg.learning_enabled,
         sandbox=cfg.sandbox,
+        placement=cfg.placement,
         mcp_env={k: dict(v) for k, v in cfg.mcp_env.items()},
         slack=slack,
         mattermost=mattermost,
@@ -4365,6 +4649,26 @@ async def register_github_accounts_from_org(
     return registered
 
 
+#: The keys of a ``mcp_env.gitlab`` block that can carry a PAT, in
+#: precedence order. THE definition of "which entry here is the
+#: credential", shared by identity resolution (which reads the value)
+#: and by provisioning (which mints into the ``${VAR}`` it references).
+#: The engine forwards the whole block verbatim to the role's MCP
+#: instance and names no tool-specific variable, so a block legitimately
+#: carries other entries — a host, an API url — and treating those as
+#: credentials is how ``--rotate`` came to overwrite a seat's host name
+#: with a PAT.
+GITLAB_TOKEN_KEYS: tuple[str, ...] = (
+    "Private-Token",
+    "PRIVATE-TOKEN",
+    "GITLAB_TOKEN",
+    "GITLAB_PERSONAL_ACCESS_TOKEN",
+)
+
+#: Header carrying ``Bearer <pat>`` rather than the bare token.
+GITLAB_BEARER_KEYS: tuple[str, ...] = ("Authorization", "authorization")
+
+
 def gitlab_token_from_mcp_env(gitlab_env: dict[str, str]) -> str:
     """Extract a GitLab PAT from a role's ``mcp_env.gitlab`` block.
 
@@ -4375,15 +4679,9 @@ def gitlab_token_from_mcp_env(gitlab_env: dict[str, str]) -> str:
     resolved. Returns ``""`` when no token is present or it resolves empty.
     """
     resolved = resolve_env_vars(gitlab_env)
-    token = (
-        resolved.get("Private-Token")
-        or resolved.get("PRIVATE-TOKEN")
-        or resolved.get("GITLAB_TOKEN")
-        or resolved.get("GITLAB_PERSONAL_ACCESS_TOKEN")
-        or ""
-    )
+    token = next((resolved[k] for k in GITLAB_TOKEN_KEYS if resolved.get(k)), "")
     if not token:
-        auth = resolved.get("Authorization") or resolved.get("authorization") or ""
+        auth = next((resolved[k] for k in GITLAB_BEARER_KEYS if resolved.get(k)), "")
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
     return token.strip()
@@ -4512,6 +4810,14 @@ async def register_gitlab_accounts_from_org(
     return registered
 
 
+#: The keys of a ``mcp_env.plane`` block that can carry an API token, in
+#: precedence order — the Plane counterpart of
+#: :data:`GITLAB_TOKEN_KEYS`, and shared with provisioning for the same
+#: reason: the block is forwarded verbatim, so anything else in it is
+#: config, not a credential to mint into.
+PLANE_TOKEN_KEYS: tuple[str, ...] = ("PLANE_API_KEY", "X-API-Key", "x-api-key")
+
+
 def plane_token_from_mcp_env(plane_env: dict[str, str]) -> str:
     """Extract a Plane API token from a role's ``mcp_env.plane`` block.
 
@@ -4522,13 +4828,7 @@ def plane_token_from_mcp_env(plane_env: dict[str, str]) -> str:
     empty.
     """
     resolved = resolve_env_vars(plane_env)
-    token = (
-        resolved.get("PLANE_API_KEY")
-        or resolved.get("X-API-Key")
-        or resolved.get("x-api-key")
-        or ""
-    )
-    return token.strip()
+    return next((resolved[k] for k in PLANE_TOKEN_KEYS if resolved.get(k)), "").strip()
 
 
 async def _resolve_plane_user_id_via_rest(

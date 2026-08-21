@@ -22,16 +22,22 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 
 from crewlet._logging import get_logger
-from crewlet.api.auth import ApiAuthMiddleware, load_tokens
+from crewlet.api.auth import ApiAuthMiddleware, bind_is_loopback, load_tokens
 from crewlet.api.config_audit import build_config_audit_routes
 from crewlet.api.config_entity_routes import build_config_entity_routes
 from crewlet.api.config_refresh import (
+    ConfigStateRefresher,
     prime_api_state_from_active,
-    subscribe_config_refresh,
 )
 from crewlet.api.config_routes import build_config_routes
 from crewlet.api.routes import build_routes
 from crewlet.api.streaming import StreamService, build_health_envelope
+from crewlet.config import resolve_node_id
+from crewlet.db.config_plane import ConfigPlaneStore
+from crewlet.db.deliveries import (
+    MemoryDeliveryDedupeStore,
+    PostgresDeliveryDedupeStore,
+)
 
 logger = get_logger("api.app")
 
@@ -59,23 +65,30 @@ def create_app(
     event_queue: Any,
     *,
     event_store: Any = None,
-    agent_roles: list[dict[str, Any]] | None = None,
-    org_data: dict[str, Any] | None = None,
-    schedules_data: list[dict[str, Any]] | None = None,
-    tools_data: list[dict[str, Any]] | None = None,
     database: Any = None,
     github_webhook_secret: str | None = None,
     gitlab_signing_secret: str | None = None,
     plane_webhook_secret: str | None = None,
+    confluence_webhook_secret: str | None = None,
+    jira_webhook_secret: str | None = None,
     slack_signing_secrets: dict[str, str] | None = None,
     sandbox_otel_receiver: Any = None,
     forge_app_id: str = "",
     bootstrap: Any = None,
     company_config_store: Any = None,
-    engine: Any = None,
+    runtime: Any = None,
     stream: StreamService | None = None,
 ) -> Starlette:
     """Build a Starlette ASGI application.
+
+    **One wiring, everywhere.**  The app learns the company from the
+    active config revision (:func:`attach_config_refresh`) and learns
+    what is happening from the broadcast event stream — whether it runs
+    inside the engine process or on its own host.  There are deliberately
+    no parameters for pre-loaded roles, org, schedules or tools: passing
+    a boot-time snapshot on one path and deriving it on the other is what
+    made these two the same surface with two implementations, and the
+    divergence shipped three bugs.  See :mod:`crewlet.api.runtime`.
 
     Parameters
     ----------
@@ -85,15 +98,6 @@ def create_app(
         An ``EventStore`` instance for persistent event storage and
         agent state queries.  When ``None``, events/agents endpoints
         return empty results.
-    agent_roles:
-        Pre-loaded role list from YAML config (served by GET /agents).
-    org_data:
-        Serialized organization hierarchy (served by GET /org).
-    schedules_data:
-        Resolved role/unit schedule descriptors (served by GET
-        /schedules, enriched per-request with next-run + run history).
-    tools_data:
-        List of tool descriptions (served by GET /tools).
     database:
         Optional ``Database`` pool for learning-store reads
         (episodes, counterparty profiles, synthesized skills) used by
@@ -108,6 +112,15 @@ def create_app(
     plane_webhook_secret:
         HMAC key for ``POST /webhooks/plane`` signature verification
         (``X-Plane-Signature``).  ``None`` → the endpoint returns 500.
+    confluence_webhook_secret:
+        HMAC key for ``POST /webhooks/confluence`` signature verification
+        (``X-Hub-Signature``, Data Center).  ``None`` → the endpoint
+        returns 500.  Cloud events arrive through the Forge app on
+        ``/webhooks/forge`` and carry a JWT instead, so they are
+        unaffected by this.
+    jira_webhook_secret:
+        The same, for ``POST /webhooks/jira`` — one scheme, one header,
+        one verifier.
     slack_signing_secrets:
         ``{handle: signing_secret}`` for Slack-enabled agent seats, used
         to verify inbound Slack webhooks at the edge.  Slack is the only
@@ -122,12 +135,12 @@ def create_app(
     company_config_store:
         Optional :class:`CompanyConfigStore`.  Required to mount the
         ``/config/*`` routes.
-    engine:
-        Optional ``Engine`` reference for live runtime metrics
-        (``in_flight_count``).  Only available on the embedded-API
-        path where engine and API share a process; the standalone
-        API process leaves this ``None`` and live-runtime fields are
-        omitted from ``/health``.
+    runtime:
+        Optional :class:`~crewlet.api.runtime.NodeRuntime` — the single
+        seam for facts only a co-located engine can answer (in-flight
+        turns, drain state, the live MCP tool surface).  Registered by
+        the embedded path; ``None`` on a standalone process, where those
+        fields are simply omitted.
     stream:
         Optional pre-wired :class:`~crewlet.api.streaming.StreamService`.
         The engine constructs one and wires it into the event flow (so
@@ -137,10 +150,14 @@ def create_app(
         still work (they just see no engine events until one is wired
         in).
     """
+    auth_cfg = getattr(getattr(bootstrap, "api", None), "auth", None)
+    # Same-origin by default. ``*`` let any page a logged-in operator
+    # happened to visit read every endpoint this process serves.
+    allowed_origins = list(getattr(auth_cfg, "allowed_origins", None) or [])
     middleware: list[Middleware] = [
         Middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=allowed_origins,
             allow_methods=["*"],
             allow_headers=["*"],
         ),
@@ -153,14 +170,46 @@ def create_app(
 
     auth_tokens: dict[str, str] = {}
     auth_disabled = False
+    auth_anonymous_read = False
+    auth_enabled = False
     if company_config_store is not None:
         routes.extend(build_config_routes())
         routes.extend(build_config_entity_routes())
         routes.extend(build_config_audit_routes())
-        if bootstrap is not None:
-            auth_tokens = load_tokens(bootstrap)
-            auth_disabled = bootstrap.api.auth.disabled
-            middleware.append(Middleware(ApiAuthMiddleware))
+    if bootstrap is not None:
+        # Mounted whenever Tier A is present, not only alongside the
+        # config routes: what it guards is a policy decision the whole
+        # API is subject to (see ``requires_token``), and ``/events`` /
+        # ``/agents/{id}/memory`` / ``/ws/stream`` carry full LLM
+        # transcripts regardless of whether a config store is wired.
+        auth_tokens = load_tokens(bootstrap)
+        auth_disabled = bootstrap.api.auth.disabled
+        auth_anonymous_read = bool(
+            getattr(bootstrap.api.auth, "allow_anonymous_read", True)
+        )
+        if auth_anonymous_read and not auth_disabled:
+            # Stated on every boot, because it is the default and a
+            # reader should never have to infer which posture they got.
+            # The LEVEL is what carries the judgement: bound to loopback
+            # this is a laptop, bound to anything else the transcripts
+            # are readable by whoever can reach the port — and a warning
+            # that fires on every deployment alike is a warning nobody
+            # reads by the third one.
+            reachable = not bind_is_loopback(bootstrap.api.host)
+            (logger.warning if reachable else logger.info)(
+                "api_anonymous_read_enabled",
+                host=bootstrap.api.host,
+                hint=(
+                    "api.auth.allow_anonymous_read is True — every read "
+                    "route, including LLM transcripts on /events, "
+                    "/agents/{id}/memory and /ws/stream, serves without "
+                    "a token. Writes and /config/* still require one. "
+                    "Set api.auth.allow_anonymous_read: false to guard "
+                    "reads too."
+                ),
+            )
+        auth_enabled = True
+        middleware.append(Middleware(ApiAuthMiddleware))
 
     @contextlib.asynccontextmanager
     async def _lifespan(app: Starlette) -> Any:
@@ -192,20 +241,32 @@ def create_app(
     # deployment those are two processes on two clocks.
     app.state.started_at = datetime.now(UTC).isoformat()
     app.state.event_queue = event_queue
-    app.state.agent_roles = agent_roles or []
-    app.state.org_data = org_data or {}
-    app.state.schedules_data = schedules_data or []
-    app.state.tools_data = tools_data or []
+    # Populated exclusively by ``attach_config_refresh`` from the active
+    # revision — never seeded from a boot-time snapshot, on either path.
+    app.state.agent_roles = []
+    app.state.org_data = {}
+    app.state.schedules_data = []
+    app.state.tools_data = []
     app.state.event_store = event_store
     app.state.database = database
     app.state.github_webhook_secret = github_webhook_secret
     app.state.gitlab_signing_secret = gitlab_signing_secret
     app.state.plane_webhook_secret = plane_webhook_secret
+    app.state.confluence_webhook_secret = confluence_webhook_secret
+    app.state.jira_webhook_secret = jira_webhook_secret
     # Per-AGENT, unlike every other inbound secret: one Slack app per
     # seat means one signing secret per seat, so the edge needs a map
     # keyed by the handle the webhook URL path carries.
     app.state.slack_signing_secrets = dict(slack_signing_secrets or {})
     app.state.sandbox_otel_receiver = sandbox_otel_receiver
+    # Inbound delivery dedupe. Process-local until a database is wired;
+    # GitHub and GitLab had none at all before this, so every provider
+    # retry and every operator replay woke the agent again.
+    app.state.delivery_dedupe = (
+        PostgresDeliveryDedupeStore(database)
+        if database is not None
+        else MemoryDeliveryDedupeStore()
+    )
     app.state.forge_app_id = forge_app_id
     app.state.bootstrap = bootstrap
     app.state.company_config_store = company_config_store
@@ -219,7 +280,13 @@ def create_app(
     )
     app.state.auth_tokens = auth_tokens
     app.state.auth_disabled = auth_disabled
-    app.state.engine = engine
+    app.state.auth_anonymous_read = auth_anonymous_read
+    # Whether ApiAuthMiddleware is mounted — the WebSocket handler checks
+    # this so it enforces exactly when the HTTP surface does.
+    app.state.auth_enabled = auth_enabled
+    app.state.runtime = runtime
+    # Names the process answering /health; see build_health_envelope.
+    app.state.node_id = resolve_node_id(bootstrap)
     app.state.stream = stream
     # The service needs the app to build a snapshot and to attach each
     # role's handle to the spend rollup it pushes.
@@ -238,19 +305,30 @@ def create_app(
     return app
 
 
-async def attach_config_refresh(app: Starlette) -> None:
-    """Subscribe ``app`` to ``revision_activated`` and prime its
-    cached state from the active revision if one exists.
+async def attach_config_refresh(
+    app: Starlette, *, poll: bool = True
+) -> ConfigStateRefresher | None:
+    """Prime ``app``'s cached state and attach its config reconciler.
 
-    Called once after the API process starts the event_queue and
-    connects to the DB.  Idempotent — safe to call multiple times.
+    Called once after the process starts the event_queue and connects to
+    the DB.  Idempotent — safe to call multiple times; the second call
+    returns the refresher the first one attached.
+
+    ``poll=False`` attaches the broadcast nudge but starts no loop: the
+    caller drives :meth:`ConfigStateRefresher.refresh_if_changed` itself.
+    That is the merged-node path, where the engine already polls the
+    activation pointer and a second loop would only let the two halves of
+    one process disagree about which epoch they are on.
+
+    Returns the refresher (``None`` when there is no config store to
+    reconcile against, e.g. a programmatic embed).
     """
-    await subscribe_config_refresh(
-        app,
-        store=app.state.company_config_store,
-        event_queue=app.state.event_queue,
-    )
-    await prime_api_state_from_active(app, app.state.company_config_store)
+    existing = getattr(app.state, "config_refresher", None)
+    if existing is not None:
+        return existing
+
+    store = app.state.company_config_store
+    await prime_api_state_from_active(app, store)
 
     # Roles are now populated (the standalone API learns them from the
     # active revision) — hydrate the live-state projection's baseline so
@@ -262,3 +340,26 @@ async def attach_config_refresh(app: Starlette) -> None:
         ]
         with contextlib.suppress(Exception):
             await stream.hydrate(app.state.event_store, role_names)
+
+    if store is None:
+        return None
+
+    database = getattr(app.state, "database", None)
+    plane = ConfigPlaneStore(database) if database is not None else None
+    refresher = ConfigStateRefresher(app, store, plane)
+    # The prime above already reflects the active revision, so record the
+    # epoch it satisfied.  Skipping this would make the first tick
+    # re-derive state that is already current.
+    await refresher.refresh_if_changed()
+    await refresher.start(app.state.event_queue, poll=poll)
+    app.state.config_refresher = refresher
+    return refresher
+
+
+async def detach_config_refresh(app: Starlette) -> None:
+    """Stop the reconciler attached by :func:`attach_config_refresh`."""
+    refresher = getattr(app.state, "config_refresher", None)
+    if refresher is None:
+        return
+    app.state.config_refresher = None
+    await refresher.stop()

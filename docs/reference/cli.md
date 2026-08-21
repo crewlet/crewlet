@@ -9,8 +9,11 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | Command | Description |
 |---------|-------------|
 | `crewlet run [config]` | Read Tier A bootstrap (default `./config.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
-| `crewlet run api <config>` | Start the standalone API server (same Tier A file; the positional is required — no `./config.yaml` fallback) |
+| `crewlet run api <config>` | **Deprecated** alias for `crewlet run <config> --roles ingress` — an ingress-only node is the standalone API |
 | `crewlet validate <config.yaml>` | Validate a Tier A or Tier B YAML and print a summary (`--json` for machine-readable errors) |
+| `crewlet migrate [config]` | Apply pending database migrations (Tier A file, default `./config.yaml`). Run this once before starting any process — `--check` reports pending work without applying it |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) |
+| `crewlet budgets reset [config]` | Zero token usage — durable across restarts, so resetting is deliberate. `--scope` limits it to one scope |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -48,7 +51,8 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 ## `crewlet run`
 
 ```
-crewlet run [config] [--debug] [--api-port PORT]
+crewlet run [config] [--debug] [--api-port PORT] [--api-host HOST]
+            [--roles ROLE[,ROLE...]]
             [--import-company PATH]
             [--import-confluence [PATH]] [--update-confluence]
             [--create-confluence-space] [--prune-confluence]
@@ -61,6 +65,8 @@ Reads Tier A bootstrap (`./config.yaml` by default) and starts the agent engine.
 |------|-------------|
 | `--debug` | Enable DEBUG-level logging |
 | `--api-port PORT` | Start an embedded API server on this port (for webhooks). Overrides `api.port` in the bootstrap config. |
+| `--api-host HOST` | Bind host for the API server. Overrides `api.host` in the bootstrap config. |
+| `--roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is rejected rather than dropped. See [Running a Fleet](../guides/fleet.md). |
 | `--import-company PATH` | Before booting, import the Tier B company YAML at `PATH` as the first revision **if no active revision exists** — a one-command bootstrap (`crewlet run config.yaml --import-company company.yaml`). Idempotent: a no-op once a revision is active (use `crewlet config import --force` to overwrite). The file's embedding dimensions size the pgvector columns on first migrate. A missing/invalid file aborts before any DB work. |
 | `--import-confluence [PATH]` | Before booting the engine, run the same publish as `crewlet confluence import` against `PATH` (defaults to `examples/` when given without a value; walked recursively). Publishes both [Tool Skills](../concepts/tool-skills.md) and [knowledge docs](../concepts/knowledge-system.md#publishing-knowledge-docs), routed by frontmatter. Requires `--import-company`: the Confluence credentials come from the Tier B company YAML's `confluence:` block, not the Tier A bootstrap. The import runs **before** the Tier A bootstrap is loaded — it depends only on `--import-company`, so it publishes even when the positional `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to actually start afterward). Failures abort engine start. Mutually exclusive with `--import-plane`. |
 | `--update-confluence` | With `--import-confluence`: overwrite existing pages instead of skipping them. |
@@ -318,15 +324,29 @@ an execution surface if unpacked on trust.
 
 ---
 
-## `crewlet run api`
+## `crewlet run api` (deprecated)
 
 ```
 crewlet run api config.yaml [--host 0.0.0.0] [--port 8000] [--debug]
 ```
 
-Starts the REST API as a separate process — the positional is the **Tier A** bootstrap file (the same one `crewlet run` reads), and it is required. `--port` defaults to **8000** (not 8080 — that's Pulsar's admin port in this repo's docker-compose). Connects to Pulsar for event publishing and PostgreSQL for read-only queries.
+**Deprecated — use `crewlet run <config> --roles ingress` instead.** It is
+kept for one minor release and prints a warning to stderr; the flags map
+onto `--api-host` / `--api-port`.
 
-This is the split topology: set `api.port: 0` in the Tier A file so the engine does not also bind the embedded API, and the two halves talk over Pulsar. See [API Endpoints](api-endpoints.md) for available routes.
+There is one node type now, and what it does is a config value. An
+ingress-only node *is* the standalone API: an engine that claims no
+seats, runs no singleton duties, launches no MCP children, and serves the
+routes. It used to be a second process shape with its own wiring — the
+app, the stream service and the config refresher built by hand in the
+same order as the engine's embedded path, but never provably the same
+way, so every fix to one had to be remembered for the other.
+
+The split topology is unchanged in shape: run one node with
+`--roles ingress` and `api.port` set, and the others with `api.port: 0`
+so nothing else binds it. The two halves talk over Pulsar. See
+[Running a Fleet](../guides/fleet.md) and
+[API Endpoints](api-endpoints.md).
 
 ---
 
@@ -363,6 +383,83 @@ With `--json`, the payload is `{"valid": bool, "tier": str, "errors": [{"path", 
 ```
 
 Exit code is `0` when valid, `1` otherwise (in both output modes).
+
+---
+
+## `crewlet migrate`
+
+Applies pending database migrations. This is the recommended first step of
+any deployment — run it to completion **before** starting the engine or the
+API.
+
+```bash
+crewlet migrate                          # uses ./config.yaml
+crewlet migrate /etc/crewlet/config.yaml
+crewlet migrate --check                  # report pending work, apply nothing
+crewlet migrate --company company.yaml   # supply the embedding width up front
+```
+
+| Flag | Description |
+|------|-------------|
+| `config` | Tier A YAML (positional, default `./config.yaml`) |
+| `--company PATH` | Tier B YAML to read the embedding width from, when no revision is active yet |
+| `--check` | List pending migrations and exit `1` if any; applies nothing |
+| `--debug` | Verbose logging |
+
+The whole run is serialized behind a PostgreSQL advisory lock and each
+migration file applies inside its own transaction, so concurrent callers
+wait rather than race, and a file is either fully applied and recorded or
+neither.
+
+### The embedding width, and why a run can stop early
+
+The `agent_diary` and `episodes` tables carry `vector(N)` columns whose
+width is fixed at creation, and the migration sequence is forward-only —
+so the width can never be changed afterwards. It is read from the active
+company config's `providers.embeddings.dimensions`.
+
+On a database with **no active revision yet**, that width is unknown, and
+`crewlet migrate` stops before those two migrations rather than guessing.
+It tells you so and exits `0`; the remaining migrations apply on the next
+run, once a company config exists:
+
+```bash
+crewlet config import company.yaml   # or: crewlet migrate --company company.yaml
+crewlet migrate                      # applies the rest
+```
+
+This is deliberate. A guessed width that disagrees with your embedding
+model makes every diary and episode write fail permanently, and the
+failure is swallowed — the [agent-learning subsystem](../concepts/agent-learning.md)
+simply goes quiet with nothing in the logs to explain it.
+
+`crewlet run` still auto-migrates on boot, whatever roles the node has, so the
+single-host quickstart stays one command. That is now safe to do
+concurrently — the advisory lock serializes them, and neither can bake a
+guessed embedding width because the width is either read from the active
+revision or deferred. Running `crewlet migrate` first is still the
+recommendation for any multi-process deployment: it makes schema changes an
+explicit, observable step rather than a side effect of whichever process
+happened to start first.
+
+---
+
+## `crewlet budgets`
+
+Token-budget usage is stored in PostgreSQL: it is shared by every process
+running the company (an in-memory counter would make an org cap of 500k
+into N x 500k) and it survives restarts.
+
+```bash
+crewlet budgets show                       # usage per scope
+crewlet budgets reset                      # zero every scope
+crewlet budgets reset --scope org          # just the org
+crewlet budgets reset --scope agent:<uuid> # just one seat
+```
+
+The **caps** are not stored here — they come from the active company
+config (`token_budget` on the org, `role.token_budget` on a seat), so
+every process derives the same numbers without coordinating.
 
 ---
 

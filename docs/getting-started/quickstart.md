@@ -54,6 +54,9 @@ api:
                     # uses port 80 instead so webhook URLs need no port suffix —
                     # see examples/nimbus.config.yaml for the trade-offs.)
   auth:
+    # Needed for WRITES and for /config. Reads — the dashboard, /events,
+    # /agents — serve without one by default; add
+    # `allow_anonymous_read: false` here to guard those too.
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
@@ -232,8 +235,19 @@ units:
 ```
 
 When a budget is exceeded, the agent's turn stops immediately and a
-`BudgetExhausted` event is emitted. Budgets are per-engine-run (the in-memory
-counter resets on restart).
+`BudgetExhausted` event is emitted.
+
+Usage is **durable** — it is stored in PostgreSQL and survives restarts, and
+is shared by every process running the company. Reset it deliberately:
+
+```bash
+crewlet budgets show     # usage per scope
+crewlet budgets reset    # zero everything (or --scope agent:<id>)
+```
+
+(Usage used to reset on every engine start, which made a cap advisory in
+exactly the situation that motivates one — an agent burning budget in a
+crash loop.)
 
 ## 3. Run it
 
@@ -294,6 +308,15 @@ curl -s http://localhost:8000/agents | python3 -m json.tool
 curl -s http://localhost:8000/health
 ```
 
+No token on those: reads serve without one by default, which is why the
+dashboard opened without asking you for anything. That also means anyone who can
+reach port 8000 can read the LLM transcripts on `/events` — fine on a laptop,
+a decision to make deliberately anywhere else. Set
+`api.auth.allow_anonymous_read: false` to guard reads, at which point every call
+above needs `-H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER"` and the
+dashboard prompts for the token on first load. See
+[Configuration § Auth](../concepts/configuration.md#auth) for the full rule.
+
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting:
 
@@ -307,16 +330,16 @@ curl -X PUT http://localhost:8000/config \
 
 ## Split deployment (optional)
 
-Run the API as its own process when you want webhooks to keep arriving while
-you restart the engine, or the two on different hosts. Set `api.port: 0` in
-the Tier A file (so the engine's embedded API stays off), then:
+Run ingress as its own node when you want webhooks to keep arriving while
+you restart the agents, or the two on different hosts. Same command, given
+different roles:
 
 ```bash
-crewlet run config.yaml           # terminal 1: the engine
-crewlet run api config.yaml       # terminal 2: the API (binds 8000 by default)
+crewlet run config.yaml --roles seats,workers --api-port 0        # terminal 1
+crewlet run config.yaml --roles ingress --api-port 8000           # terminal 2
 ```
 
-The standalone API exposes the same REST endpoints, webhook handlers
+The ingress node exposes the same REST endpoints, webhook handlers
 (`/webhooks/jira`, `/webhooks/slack/{handle}`, `/webhooks/github`,
 `/webhooks/gitlab`, `/webhooks/plane`, `/webhooks/confluence`,
 `/webhooks/forge`), and the `/config/*` CRUD surface (see

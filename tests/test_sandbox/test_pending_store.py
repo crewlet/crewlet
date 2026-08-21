@@ -4,17 +4,30 @@ Covers the in-memory store's full state-machine semantics (the
 at-most-once resume flip, clarification parking, conversation-key
 matching, active-recovery listing) and pins the Postgres store's SQL
 shape against a fake DB.
+
+The fake-DB cases assert the statement's WORDING, which is a useful
+regression guard and nothing more: a statement PostgreSQL refuses to
+parse passes every one of them, and the at-most-once claim's exclusivity
+— the whole correctness argument for resuming a detached run — was
+"proved" by a fake returning the value the test had just put in a dict.
+So the section at the bottom runs the same store against a real server
+whenever CREWLET_TEST_DSN is set, and asserts BEHAVIOUR instead.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+import pytest
 
 from crewlet.sandbox.pending_store import (
     MemoryPendingSandboxRunStore,
     PendingSandboxRun,
     PostgresPendingSandboxRunStore,
 )
+
+_TEST_DSN = os.environ.get("CREWLET_TEST_DSN", "")
 
 
 def _run(**over: Any) -> PendingSandboxRun:
@@ -271,3 +284,129 @@ async def test_pg_list_active_includes_resumed() -> None:
     await store.list_active()
     query, _ = db.calls[0]
     assert "'resumed'" in query
+
+
+# ── the real server ──────────────────────────────────────────────────
+#
+# Behaviour, not wording. Everything above this line runs against a fake
+# that answers from a dict, so none of it can tell a correct statement
+# from one the server rejects — and the at-most-once claim is the
+# primitive that decides whether a detached coding run resumes once or
+# twice.
+
+
+@pytest.fixture
+async def real_store() -> Any:
+    if not _TEST_DSN:
+        pytest.skip("set CREWLET_TEST_DSN to run against real PG")
+    from crewlet.db.client import Database
+
+    db = await Database.connect(_TEST_DSN)
+    await db.execute("DELETE FROM pending_sandbox_run")
+    try:
+        yield PostgresPendingSandboxRunStore(db)
+    finally:
+        await db.close()
+
+
+@pytest.mark.integration
+async def test_real_claim_for_resume_is_at_most_once(real_store: Any) -> None:
+    """The primitive the whole resume path rests on.
+
+    Two completion signals for one run — successive poll ticks, or an
+    at-least-once redelivery — must not both resume the suspended Execute
+    loop. Only the statement can enforce that, and until now only a fake
+    had ever been asked.
+    """
+    await real_store.create(_run())
+    first = await real_store.claim_for_resume("t-1")
+    second = await real_store.claim_for_resume("t-1")
+    assert first is not None and first.turn_id == "t-1"
+    assert second is None, "a second signal claimed a run that was already claimed"
+
+
+@pytest.mark.integration
+async def test_real_round_trip_preserves_the_suspended_conversation(
+    real_store: Any,
+) -> None:
+    """``execute_state`` IS the suspended Execute loop. A round trip that
+    loses it turns a resumable run into a lost turn."""
+    state = {
+        "messages": [{"role": "system", "content": "EXECUTE"}],
+        "pending_tool_call_id": "c1",
+        "pending_tool_name": "run_sandbox",
+        "active_tool_names": [],
+        "loaded_skill_keys": [],
+        "iteration": 2,
+    }
+    await real_store.create(_run(execute_state=state))
+    got = await real_store.get("t-1")
+    assert got is not None
+    assert got.execute_state == state
+    assert got.success_criteria == ["PR opened"]
+    assert got.conversation_key == "slack:C1:99"
+
+
+@pytest.mark.integration
+async def test_real_a_stale_epoch_cannot_write(real_store: Any) -> None:
+    """The fence. A node that lost the seat mid-run must not be able to
+    move the row under the node that owns it now."""
+    await real_store.create(_run())
+    assert await real_store.claim_ownership("t-1", owner="node-a:1111", epoch=3)
+
+    await real_store.set_status("t-1", "failed", epoch=2)
+    got = await real_store.get("t-1")
+    assert got is not None and got.status != "failed", (
+        "a write fenced at a stale epoch landed anyway"
+    )
+
+    await real_store.set_status("t-1", "failed", epoch=3)
+    got = await real_store.get("t-1")
+    assert got is not None and got.status == "failed"
+
+
+@pytest.mark.integration
+async def test_real_a_parked_run_is_found_by_its_conversation(
+    real_store: Any,
+) -> None:
+    """How an answer reaches the run that asked: the next inbound on the
+    conversation is matched back to the parked row."""
+    await real_store.create(_run())
+    await real_store.mark_awaiting_clarification(
+        "t-1", question="which branch?", audience="ops", conversation_key="slack:C1:99"
+    )
+    found = await real_store.find_awaiting_by_conversation("slack:C1:99")
+    assert found is not None and found.turn_id == "t-1"
+    assert await real_store.find_awaiting_by_conversation("slack:OTHER:1") is None
+
+
+@pytest.mark.integration
+async def test_real_active_listing_drives_restart_recovery(real_store: Any) -> None:
+    """On boot the coordinator re-pauses the inboxes of agents with live
+    runs from this list. A run missing from it is a seat that never gets
+    its busy state back."""
+    await real_store.create(_run())
+    await real_store.create(_run(turn_id="t-2", agent_handle="ops"))
+    assert {r.turn_id for r in await real_store.list_active()} == {"t-1", "t-2"}
+    assert {r.turn_id for r in await real_store.list_active_for_seat("eng")} == {"t-1"}
+
+    await real_store.delete("t-2")
+    assert {r.turn_id for r in await real_store.list_active()} == {"t-1"}
+
+
+@pytest.mark.integration
+async def test_real_releasing_the_box_clears_the_row_it_is_recorded_on(
+    real_store: Any,
+) -> None:
+    """``sandbox_id`` non-empty IS the box record, so a torn-down box has
+    to clear it — a stale id is something a later pass tries to reattach
+    to."""
+    await real_store.create(_run())
+    await real_store.mark_box_paused("t-1")
+    got = await real_store.get("t-1")
+    assert got is not None and got.paused_at is not None
+
+    await real_store.release_box("t-1")
+    got = await real_store.get("t-1")
+    assert got is not None and got.sandbox_id == ""
+    assert got.paused_at is None

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from crewlet.queue.topics import agent_control_topic
 from crewlet.sandbox import FakeCodingAgentRunner, FakeSandboxProvider, SandboxManager
 from crewlet.sandbox.coordinator import COMPLETIONS_TOPIC
 from crewlet.sandbox.pending_store import (
@@ -57,14 +58,18 @@ async def test_tick_fires_completion_when_job_done() -> None:
     fired = await waiter.tick_once()
 
     assert fired == 1
-    assert len(queue.published) == 1
-    topic, event = queue.published[0]
-    assert topic == COMPLETIONS_TOPIC
-    assert event.type == "sandbox_run_completed"
-    assert event.turn_id == "t-1"
-    assert event.agent_handle == "eng"
-    # The original trace rides along so the completion turn nests.
-    assert event.trace_id == "trace-1"
+    # Two publishes, two purposes. The ``crewlet.events.*`` copy is an
+    # ANNOUNCEMENT the dashboard's broadcast stream watches; the per-seat
+    # control copy is a COMMAND, routed to whoever holds the seat,
+    # because only that node has the suspended Execute conversation.
+    topics = [t for t, _e in queue.published]
+    assert topics == [COMPLETIONS_TOPIC, agent_control_topic("eng")]
+    for _topic, event in queue.published:
+        assert event.type == "sandbox_run_completed"
+        assert event.turn_id == "t-1"
+        assert event.agent_handle == "eng"
+        # The original trace rides along so the completion turn nests.
+        assert event.trace_id == "trace-1"
 
 
 async def test_tick_no_fire_when_job_still_running() -> None:
@@ -298,3 +303,51 @@ async def test_transient_connect_failure_resets_on_success() -> None:
     waiter._connect_failures["t-1"] = 3  # simulate a prior streak
     assert await waiter.tick_once() == 0  # connect succeeds → streak cleared
     assert "t-1" not in waiter._connect_failures
+
+
+async def test_an_answer_that_lands_mid_reap_keeps_its_box() -> None:
+    """The reaper decides from a snapshot taken seconds earlier.
+
+    In that gap the person can answer: ``claim_for_resume`` flips the row
+    to ``resumed`` and the Execute loop reconnects to this very box. The
+    compare-and-set is what catches it — so it has to gate the KILL, not
+    just the status write. Killing first destroyed the box underneath the
+    live resume and then the CAS refused, so the reaper walked away
+    silently and the answered run failed on a box that no longer existed.
+    """
+    import dataclasses
+
+    store = MemoryPendingSandboxRunStore()
+    run = _run(pause_ttl_seconds=1800.0)
+    await store.create(run)
+    await store.mark_awaiting_clarification(
+        "t-1", question="Q", audience="team", conversation_key="k"
+    )
+    run.paused_at = datetime.now(UTC) - timedelta(seconds=1801)
+    stale = dataclasses.replace(run)  # what the tick read, before the answer
+
+    manager, provider = _mk_manager(poll_done=True)
+    box = await provider.create(manager.build_spec())
+    await box.pause()
+    provider._by_id["sbx-1"] = provider.sandboxes[0]
+
+    # The answer lands after the snapshot and before the reap decision.
+    assert await store.claim_for_resume("t-1") is not None
+
+    async def _stale_list() -> list[PendingSandboxRun]:
+        return [stale]
+
+    store.list_active = _stale_list  # type: ignore[method-assign]
+    waiter = SandboxWaiter(
+        event_queue=_QueueStub(), pending_store=store, manager=manager
+    )
+
+    await waiter.tick_once()
+
+    assert provider.sandboxes[0].closed is False, (
+        "the reaper killed a box the resumed run is reconnecting to"
+    )
+    row = await store.get("t-1")
+    assert row is not None
+    assert row.status == "resumed"
+    assert row.sandbox_id == "sbx-1"

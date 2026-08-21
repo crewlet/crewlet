@@ -54,6 +54,10 @@ _CATEGORY_MAP: dict[str, str] = {
     # (operators watch when and how hard batching kicks in) — without
     # this entry the writer silently drops it.
     "notifications_coalesced": "notification",
+    # A redelivered trigger the completion ledger short-circuited.
+    # Without this entry the writer drops it, and the whole point of
+    # emitting it is that a skipped trigger should not be invisible.
+    "turn_trigger_skipped": "notification",
     "budget_exhausted": "system",
     "llm_unavailable": "system",
     "agent_turn_completed": "system",

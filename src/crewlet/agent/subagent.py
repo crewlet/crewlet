@@ -69,10 +69,10 @@ class _FractionalBudgetManager:
     parent_agent_remaining`` (or a flat cap when there is no agent budget).
 
     Exposes the same duck-typed surface ``llm_loop.consume_budget`` uses:
-    ``consume(agent_id, tokens)`` (awaitable), ``org_budget``,
-    ``get_agent_budget(agent_id)``. Tokens still flow through the real
-    manager for org/agent accounting; the wrapper just adds a per-call
-    ceiling.
+    ``spend(agent_id, tokens)`` (awaitable, returning a ``SpendOutcome``),
+    ``consume(...)``, ``org_budget``, ``get_agent_budget(agent_id)``.
+    Tokens still flow through the real manager for org/agent accounting
+    against the shared counter; the wrapper just adds a per-call ceiling.
 
     On cap breach the wrapper raises :class:`SubagentBudgetExceeded`
     rather than returning ``False`` -- that way ``llm_loop.consume_budget``
@@ -104,7 +104,7 @@ class _FractionalBudgetManager:
     def get_agent_budget(self, agent_id: str):  # type: ignore[override]
         return self._inner.get_agent_budget(agent_id)
 
-    async def consume(self, agent_id: str, tokens: int) -> bool:
+    async def spend(self, agent_id: str, tokens: int) -> Any:
         # Reserve under the lock *before* the inner await so a
         # concurrent child sees the reservation and can't also pass the
         # cap check.  The reservation is given back if the inner
@@ -127,11 +127,15 @@ class _FractionalBudgetManager:
                     f"> cap={self._max_subagent_tokens}"
                 )
             self._subagent_used += tokens
-        ok = await self._inner.consume(agent_id, tokens)
-        if not ok:
+        outcome = await self._inner.spend(agent_id, tokens)
+        if not outcome.ok:
             async with self._lock:
                 self._subagent_used -= tokens
-        return ok
+        return outcome
+
+    async def consume(self, agent_id: str, tokens: int) -> bool:
+        """Boolean form, matching :meth:`BudgetManager.consume`."""
+        return (await self.spend(agent_id, tokens)).ok
 
 
 def _subagent_budget_cap(
@@ -656,10 +660,21 @@ async def spawn_subagent_batch(
 
     semaphore = asyncio.Semaphore(max(1, max_parallel))
 
-    async def _run_one(task: SubagentTask) -> SubagentResult:
+    # Per-task result slots, filled as each child settles.
+    #
+    # The aggregate timeout below cancels the ``gather``, which discards
+    # the return value of every child — including the ones that had
+    # already FINISHED. Reporting those as timed-out with empty text
+    # throws away work that completed and was paid for: the tokens are
+    # spent either way, and the planner is told a child produced nothing
+    # when it produced an answer. A slot each is what lets the timeout
+    # path tell the two apart.
+    settled: list[SubagentResult | None] = [None] * len(tasks)
+
+    async def _run_one(index: int, task: SubagentTask) -> SubagentResult:
         async with semaphore:
             try:
-                return await spawn_subagent(
+                result = await spawn_subagent(
                     parent_turn=parent_turn,
                     task_prompt=task.task_prompt,
                     system_prompt=task.system_prompt,
@@ -688,7 +703,7 @@ async def spawn_subagent_batch(
                 )
             except Exception as exc:
                 logger.exception("subagent_batch_child_failed")
-                return SubagentResult(
+                result = SubagentResult(
                     text="",
                     turns_used=0,
                     tokens_used=0,
@@ -696,10 +711,12 @@ async def spawn_subagent_batch(
                     timed_out=isinstance(exc, TimeoutError),
                     error=str(exc)[:500],
                 )
+            settled[index] = result
+            return result
 
     try:
         results = await asyncio.wait_for(
-            asyncio.gather(*(_run_one(task) for task in tasks)),
+            asyncio.gather(*(_run_one(i, task) for i, task in enumerate(tasks))),
             timeout=batch_timeout_seconds,
         )
     except TimeoutError:
@@ -712,8 +729,14 @@ async def spawn_subagent_batch(
             batch_timeout_seconds=batch_timeout_seconds,
             task_count=len(tasks),
         )
+        # Children that already settled keep their real result; only the
+        # ones still running when the deadline landed are reported as
+        # timed out. Overwriting the lot would discard answers that were
+        # produced and paid for.
         results = [
-            SubagentResult(
+            done
+            if (done := settled[index]) is not None
+            else SubagentResult(
                 text="",
                 turns_used=0,
                 tokens_used=0,
@@ -721,7 +744,7 @@ async def spawn_subagent_batch(
                 timed_out=True,
                 error=f"batch wall-clock exceeded {batch_timeout_seconds}s",
             )
-            for _ in tasks
+            for index in range(len(tasks))
         ]
 
     # Publish the batch summary event for both the normal and the

@@ -649,6 +649,36 @@ class ExternalNotification(Event):
         return self.sender or super().actor
 
 
+class TurnTriggerSkipped(Event):
+    """A trigger was NOT worked, because a previous turn already did it.
+
+    Emitted when the completion ledger short-circuits a redelivered
+    trigger — the narrow window where a turn finished, its outbound
+    effects shipped, and the owning node died before the delivery was
+    acked.
+
+    It exists because the alternative is invisibility. Without it a
+    skipped trigger shows no turn on the dashboard, no error in the
+    logs, and nothing anywhere distinguishes "the agent never answered"
+    from "the agent already answered, on a node that has since died" —
+    which are the same observation and opposite problems.
+    """
+
+    type: str = "turn_trigger_skipped"
+    agent_handle: str = ""
+    agent_id: str = ""
+    trigger_id: str = ""
+    trigger_type: str = ""
+    reason: str = ""
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"trigger {self.trigger_type or 'event'} skipped for "
+            f"{self.agent_handle} ({self.reason or 'unspecified'})"
+        )
+
+
 class NotificationsCoalesced(Event):
     """Emitted when several same-conversation inbox events are merged
     into one digest trigger before an agent turn.

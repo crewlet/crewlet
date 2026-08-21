@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -18,15 +19,22 @@ from crewlet.queue.memory import MemoryEventQueue  # noqa: E402
 
 
 async def _engine_with_started_queue(roles: list[dict]):
-    """Engine whose event queue is started — the org-diff add/remove
-    branches publish AgentSpawned / RoleUpdated, which a stopped
-    MemoryEventQueue rejects."""
+    """A STARTED engine on a started queue.
+
+    Both halves matter. The org-diff add/remove branches publish
+    AgentSpawned / RoleUpdated, which a stopped MemoryEventQueue
+    rejects — and seats are established by the placement host, which
+    only runs on a started engine. An unstarted engine owns no seats, so
+    a live role add correctly spawns nothing there.
+    """
     eq = MemoryEventQueue()
     await eq.start()
-    return await make_engine(
+    engine = await make_engine(
         company=make_company(name="Acme", roles=roles),
         event_queue=eq,
     )
+    await engine.start()
+    return engine
 
 
 # ── _dispatch_org_diff covers every role field ─────────────────────────
@@ -154,6 +162,75 @@ async def test_changed_role_budget_updates_and_drops_live() -> None:
         )
     )
     assert agent_id not in engine.budget_manager._agent_budgets
+
+
+async def test_caps_cover_seats_this_node_does_not_run() -> None:
+    """Caps are a projection of the ORG, not of the local pool.
+
+    ``BudgetManager.spend`` passes ``agent_limit=None`` when it has no
+    local cap for an id, which the shared usage store reads as
+    unlimited.  So a node that seeded caps only for the seats it spawned
+    would run any seat it later took over with no per-agent cap at all.
+    """
+    engine = await _engine_with_started_queue([{"name": "CEO"}])
+    # A company where one seat is not running in this process at all.
+    wider = config_to_organization(
+        make_company(
+            name="Acme",
+            roles=[
+                {"name": "CEO"},
+                {"name": "Eng", "token_budget": 777},
+            ],
+        )
+    )
+    engine._reseed_seat_budgets(wider)
+
+    assert engine.agent_pool.get_all_for_role("Eng") == []
+    cap = engine.budget_manager.get_agent_budget(
+        wider.agent_id_for(wider.get_role("Eng"))
+    )
+    assert cap is not None and cap.max_tokens == 777
+
+
+async def test_reseed_drops_caps_for_seats_the_org_no_longer_has() -> None:
+    """The projection is exact — caps do not accumulate across
+    revisions, or a removed role's (possibly exhausted) cap would
+    outlive it and govern a re-added seat with the same handle."""
+    engine = await _engine_with_started_queue([{"name": "CEO"}])
+    with_eng = config_to_organization(
+        make_company(
+            name="Acme",
+            roles=[{"name": "CEO"}, {"name": "Eng", "token_budget": 777}],
+        )
+    )
+    engine._reseed_seat_budgets(with_eng)
+    eng_id = with_eng.agent_id_for(with_eng.get_role("Eng"))
+    assert engine.budget_manager.get_agent_budget(eng_id) is not None
+
+    without_eng = config_to_organization(
+        make_company(name="Acme", roles=[{"name": "CEO"}])
+    )
+    engine._reseed_seat_budgets(without_eng)
+    assert engine.budget_manager.get_agent_budget(eng_id) is None
+
+
+async def test_reseed_preserves_used_tokens_on_an_unchanged_cap() -> None:
+    """A reseed runs on every org swap, so it must not reset the local
+    usage mirror of seats the revision did not touch."""
+    engine = await _engine_with_started_queue([{"name": "CEO"}])
+    org = config_to_organization(
+        make_company(
+            name="Acme",
+            roles=[{"name": "CEO"}, {"name": "Eng", "token_budget": 777}],
+        )
+    )
+    engine._reseed_seat_budgets(org)
+    eng_id = org.agent_id_for(org.get_role("Eng"))
+    engine.budget_manager.get_agent_budget(eng_id).used_tokens = 400
+
+    engine._reseed_seat_budgets(org)
+    cap = engine.budget_manager.get_agent_budget(eng_id)
+    assert cap.max_tokens == 777 and cap.used_tokens == 400
 
 
 async def test_removed_role_drops_budget_live() -> None:
@@ -336,9 +413,9 @@ async def test_rollback_restores_scheduling_config() -> None:
     assert engine._scheduling_config is old_sched
 
 
-# C2 — Pulsar handler reports applied_before_failure on ConfigApplyError
-async def test_revision_handler_publishes_partial_applied_on_failure() -> None:
-    """When apply_config raises ConfigApplyError, the Pulsar handler must
+# C2 — converge reports applied_before_failure on ConfigApplyError
+async def test_converge_publishes_partial_applied_on_failure() -> None:
+    """When apply_config raises ConfigApplyError, the converge path must
     pull the list of subsystems that DID succeed off the exception and
     publish it as ConfigRevisionApplied.applied_subsystems — not []."""
     from unittest.mock import AsyncMock
@@ -352,43 +429,83 @@ async def test_revision_handler_publishes_partial_applied_on_failure() -> None:
         )
     )
 
-    # Drive the handler by registering it and emitting a fake event.
     published: list[tuple[str, object]] = []
 
     class _StubQueue:
-        async def subscribe(self, *, topic, group, handler):  # noqa: ARG002
-            self._handler = handler
-
         async def publish(self, topic, event):
             published.append((topic, event))
 
-    queue = _StubQueue()
-    engine.event_queue = queue  # type: ignore[assignment]
-    engine._company_config_store = AsyncMock()
+    engine.event_queue = _StubQueue()  # type: ignore[assignment]
+    store = AsyncMock()
     revision = AsyncMock()
     revision.payload = {"name": "Acme"}
-    engine._company_config_store.get_revision = AsyncMock(return_value=revision)
+    store.get_revision = AsyncMock(return_value=revision)
+    engine._company_config_store = store
 
-    await engine._subscribe_revision_activated()
-    from uuid import uuid4
+    from crewlet.db.config_plane import ApplyStatus, MemoryConfigPlaneStore
 
-    from crewlet.events.types import ConfigRevisionActivated
+    plane = MemoryConfigPlaneStore()
+    revision_id = uuid4()
+    epoch = await plane.record_activation(revision_id)
+    await engine._converge_to(await plane.target(), plane, store)
 
-    await queue._handler(
-        ConfigRevisionActivated(
-            revision_id=str(uuid4()),
-            source="api",
-            created_by="test",
-            summary="",
-        )
-    )
-
-    assert published, "handler did not publish a ConfigRevisionApplied event"
+    assert published, "converge did not publish a ConfigRevisionApplied event"
     topic, event = published[0]
     assert topic == "crewlet.config.revision_applied"
     assert event.status == "error"
     assert event.applied_subsystems == ["org", "budgets"]
     assert "providers" in event.error
+
+    # A clean rollback is `error`, not `degraded` — the node still
+    # serves the prior epoch, which is a legitimate state and one a peer
+    # may safely route work to.
+    ok, reported = await plane.peer_health(epoch, exclude_node="somebody-else")
+    assert (ok, reported) == (0, 1)
+    assert engine._apply_status is ApplyStatus.ERROR
+
+
+async def test_converge_records_degraded_when_rollback_could_not_restore() -> None:
+    """A failure after a restart-required subsystem was mutated is a
+    materially different state, and the control plane has to see it.
+
+    ``_rollback`` is synchronous: it cannot respawn MCP subprocesses and
+    it reinstalls transports that were already stopped.  So the node's
+    declared epoch is a lie — it reports the prior config while its tool
+    surface is amputated and its inbound path may be dead.  Such a node
+    must never be counted as somewhere work can safely go.
+    """
+    from unittest.mock import AsyncMock
+
+    from crewlet.db.config_plane import ApplyStatus, MemoryConfigPlaneStore
+    from crewlet.engine import ConfigApplyError
+
+    engine = await make_engine(company=make_company(name="Acme"))
+    engine.apply_config = AsyncMock(  # type: ignore[method-assign]
+        side_effect=ConfigApplyError(
+            "mcp_servers",
+            RuntimeError("spawn failed"),
+            ["org"],
+            degraded=True,
+        )
+    )
+
+    class _StubQueue:
+        async def publish(self, topic, event): ...
+
+    engine.event_queue = _StubQueue()  # type: ignore[assignment]
+    store = AsyncMock()
+    revision = AsyncMock()
+    revision.payload = {"name": "Acme"}
+    store.get_revision = AsyncMock(return_value=revision)
+
+    plane = MemoryConfigPlaneStore()
+    epoch = await plane.record_activation(uuid4())
+    await engine._converge_to(await plane.target(), plane, store)
+
+    assert engine._apply_status is ApplyStatus.DEGRADED
+    # Reported, but NOT counted as ok.
+    ok, reported = await plane.peer_health(epoch, exclude_node="somebody-else")
+    assert (ok, reported) == (0, 1)
 
 
 # first-activation applied_subsystems includes "scheduling"
@@ -462,7 +579,7 @@ async def test_live_role_add_goes_through_agent_pool() -> None:
     spy.assert_awaited_once()
     # ``source`` is what the audit trail keys off to distinguish
     # boot-time spawns from live additions.
-    assert spy.await_args.kwargs["source"] == "engine.apply_config"
+    assert spy.await_args.kwargs["source"] == "seat.acquire"
 
 
 # Jira and GitHub handle refreshes run concurrently
@@ -547,3 +664,91 @@ async def test_parse_body_or_400_returns_dict_on_valid_json() -> None:
     body, error = await _parse_body_or_400(request)
     assert error is None
     assert body == {"mission": "ship pixels"}
+
+
+# rollback RESTARTS the transports it restores
+async def test_rollback_restarts_the_transports_it_restores() -> None:
+    """A failed apply must not leave the node silently deaf.
+
+    ``_rollback`` used to restore transports with a dict assignment,
+    reinstalling objects the failed apply had already ``stop()``ed. The
+    node came out reporting the prior epoch with a dead inbound path —
+    every webhook rejected with ``handle_event_after_stop``, with nothing
+    in the logs tying it to the apply that caused it.
+    """
+
+    class _Transport:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.running = False
+            self.starts = 0
+
+        async def start(self) -> None:
+            self.running = True
+            self.starts += 1
+
+        async def stop(self) -> None:
+            self.running = False
+
+        async def send(self, *args, **kwargs) -> None: ...
+
+        def set_handle_registry(self, registry) -> None: ...
+
+    engine = await make_engine(company=make_company(name="Acme"))
+    surviving = _Transport("slack")
+    await surviving.start()
+    replacement = _Transport("slack")
+
+    class _Service:
+        def __init__(self) -> None:
+            self.transports: dict = {"slack": surviving}
+
+        def set_gitlab_config(self, cfg) -> None: ...
+
+    engine.notification_service = _Service()  # type: ignore[assignment]
+
+    # The apply swapped in a replacement and stopped the incumbent.
+    snapshot = engine._snapshot_for_rollback()
+    await engine._apply_notification_transports_live([replacement])
+    assert surviving.running is False
+    assert replacement.running is True
+
+    await engine._rollback(snapshot)
+
+    assert engine.notification_service.transports["slack"] is surviving
+    assert surviving.running is True, "rollback reinstalled a stopped transport"
+    assert replacement.running is False
+
+
+async def test_rollback_does_not_restart_an_untouched_transport() -> None:
+    """Restoring must be idempotent for transports the apply never moved
+    — a second ``start()`` on a live transport is its own failure mode."""
+
+    class _Transport:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.starts = 0
+
+        async def start(self) -> None:
+            self.starts += 1
+
+        async def stop(self) -> None: ...
+
+        async def send(self, *args, **kwargs) -> None: ...
+
+        def set_handle_registry(self, registry) -> None: ...
+
+    engine = await make_engine(company=make_company(name="Acme"))
+    transport = _Transport("slack")
+
+    class _Service:
+        def __init__(self) -> None:
+            self.transports: dict = {"slack": transport}
+
+        def set_gitlab_config(self, cfg) -> None: ...
+
+    engine.notification_service = _Service()  # type: ignore[assignment]
+    snapshot = engine._snapshot_for_rollback()
+
+    await engine._rollback(snapshot)
+    assert transport.starts == 0

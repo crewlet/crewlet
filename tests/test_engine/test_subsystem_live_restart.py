@@ -488,21 +488,16 @@ async def test_refresh_plane_routing_seeds_leads_and_exclusions() -> None:
     engine._refresh_plane_routing(object())
 
 
-async def test_embedded_api_receives_plane_webhook_secret(monkeypatch) -> None:
-    """``_start_embedded_api`` passes the resolved Plane webhook secret
-    from ``self._plane_config`` into ``create_app`` — the seam the
-    ``/webhooks/plane`` route verifies against."""
+async def test_embedded_api_resolves_the_plane_webhook_secret(monkeypatch) -> None:
+    """The embedded API ends up with the resolved Plane webhook secret —
+    the seam ``/webhooks/plane`` verifies against.
+
+    Asserted on the app's state rather than on a ``create_app`` argument:
+    the secret is now DERIVED from the active config by the same
+    ``attach_config_refresh`` path the standalone API uses, so there is no
+    parameter to observe and nothing left that only one deployment does.
+    """
     import uvicorn
-
-    import crewlet.api.app as api_app
-
-    captured: dict = {}
-
-    def _fake_create_app(**kwargs):  # type: ignore[no-untyped-def]
-        captured.update(kwargs)
-        return MagicMock()
-
-    monkeypatch.setattr(api_app, "create_app", _fake_create_app)
 
     async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
         return None
@@ -517,7 +512,7 @@ async def test_embedded_api_receives_plane_webhook_secret(monkeypatch) -> None:
     )
     await engine._start_embedded_api()
     try:
-        assert captured["plane_webhook_secret"] == "wh-secret-123"
+        assert engine._api_app.state.plane_webhook_secret == "wh-secret-123"
     finally:
         if engine._api_serve_task is not None:
             await engine._api_serve_task
@@ -526,19 +521,9 @@ async def test_embedded_api_receives_plane_webhook_secret(monkeypatch) -> None:
 async def test_embedded_api_plane_secret_none_when_unconfigured(
     monkeypatch,
 ) -> None:
-    """Without a Plane integration the pass-through stays ``None`` (the
-    route then answers 500 ``webhook verification not configured``)."""
+    """Without a Plane integration the secret stays falsy (the route then
+    answers 500 ``webhook verification not configured``)."""
     import uvicorn
-
-    import crewlet.api.app as api_app
-
-    captured: dict = {}
-
-    def _fake_create_app(**kwargs):  # type: ignore[no-untyped-def]
-        captured.update(kwargs)
-        return MagicMock()
-
-    monkeypatch.setattr(api_app, "create_app", _fake_create_app)
 
     async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
         return None
@@ -548,13 +533,10 @@ async def test_embedded_api_plane_secret_none_when_unconfigured(
     engine = await make_engine(company=CompanyConfig(name="Acme"))
     await engine._start_embedded_api()
     try:
-        assert captured["plane_webhook_secret"] is None
+        assert not engine._api_app.state.plane_webhook_secret
     finally:
         if engine._api_serve_task is not None:
             await engine._api_serve_task
-
-
-# ── knowledge backend live rewire (searcher + skills sync) ─────────
 
 
 def _mk_prompt_skill(key: str = "tool:stale", page_id: str = "P-STALE"):
@@ -1412,3 +1394,290 @@ async def test_role_add_registers_slack_app_before_org_swap() -> None:
     )
     swe_config = next(cfg for h, cfg in captured if h == "agent-swe")
     assert swe_config.bot_token == "xoxb-swe"
+
+
+async def test_embedded_api_uses_the_broadcast_stream_not_a_publish_listener(
+    monkeypatch,
+) -> None:
+    """The core of the wiring merge.
+
+    ``add_publish_listener`` fires only on THIS process's publishes, so an
+    embedded dashboard fed by it is structurally unable to see a peer's
+    events — it would show 1/N of a fleet's activity and look correct.
+    ``subscribe_stream`` is the broadcast path the standalone API already
+    used; both now use it, which is what makes them one wiring.
+    """
+    import uvicorn
+
+    async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(uvicorn.Server, "serve", _noop_serve)
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+
+    listeners_before = len(getattr(engine.event_queue, "_publish_listeners", []))
+    subscribed: list[str] = []
+    original = engine.event_queue.subscribe_stream
+
+    async def _spy(pattern, handler):  # type: ignore[no-untyped-def]
+        subscribed.append(pattern)
+        return await original(pattern, handler)
+
+    monkeypatch.setattr(engine.event_queue, "subscribe_stream", _spy)
+
+    await engine._start_embedded_api()
+    try:
+        assert subscribed == ["crewlet.events.>"]
+        # The event-store writer keeps its own publish listener; the point
+        # is that the STREAM no longer adds one.
+        assert (
+            len(getattr(engine.event_queue, "_publish_listeners", []))
+            == listeners_before
+        )
+    finally:
+        if engine._api_serve_task is not None:
+            await engine._api_serve_task
+
+
+async def test_embedded_api_registers_a_runtime_for_live_engine_facts(
+    monkeypatch,
+) -> None:
+    """In-flight count and drain state cannot come from config or the
+    event stream — they are properties of a live engine object. That is
+    the one seam, and it replaces five embedded-only parameters."""
+    import uvicorn
+
+    from crewlet.api.runtime import EngineNodeRuntime
+
+    async def _noop_serve(self, sockets=None):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr(uvicorn.Server, "serve", _noop_serve)
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    await engine._start_embedded_api()
+    try:
+        runtime = engine._api_app.state.runtime
+        assert isinstance(runtime, EngineNodeRuntime)
+        assert runtime.engine is engine
+    finally:
+        if engine._api_serve_task is not None:
+            await engine._api_serve_task
+
+
+# ---------------------------------------------------------------------------
+# Credential rotation — re-activating an UNCHANGED revision
+# ---------------------------------------------------------------------------
+
+
+async def test_reactivating_an_unchanged_revision_rebuilds_on_rotation(
+    monkeypatch,
+) -> None:
+    """The documented rotation gesture must actually rebuild something.
+
+    `docs/concepts/secret-store.md` names "re-activate the unchanged
+    revision" as how you make a running engine pick up a rotated
+    credential. That payload is byte-identical by definition, so the
+    no-op early-out fired and the gesture did nothing but swap the secret
+    snapshot: MCP children kept the credential baked into their spawn
+    env, LLM providers kept the revoked key, transports kept the old
+    token — indefinitely.
+    """
+    monkeypatch.setenv("ROTATED_KEY", "old-secret")
+
+    company = CompanyConfig(
+        name="Acme",
+        providers={
+            "llm": {
+                "default": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "api_keys": ["${ROTATED_KEY}"],
+                }
+            }
+        },
+    )
+    engine = await make_engine(company=company)
+
+    rotations: list[str] = []
+
+    async def _spy() -> list[str]:
+        rotations.append("rebuilt")
+        return ["providers"]
+
+    monkeypatch.setattr(
+        engine, "_apply_credential_rotation", lambda _cfg: _spy(), raising=False
+    )
+
+    # Same payload, same resolved value: a genuine no-op.
+    assert await engine.apply_config(company) == []
+    assert rotations == []
+
+    # Same payload, DIFFERENT resolved value: a rotation.
+    monkeypatch.setenv("ROTATED_KEY", "new-secret")
+    applied = await engine.apply_config(company)
+
+    assert rotations == ["rebuilt"]
+    assert applied == ["providers"]
+
+
+async def test_rotation_records_the_new_fingerprint(monkeypatch) -> None:
+    """A rotation applied once must not re-apply on every later
+    activation — the node would restart its MCP children forever."""
+    monkeypatch.setenv("ROTATED_KEY", "old-secret")
+    company = CompanyConfig(
+        name="Acme",
+        providers={
+            "llm": {
+                "default": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "api_keys": ["${ROTATED_KEY}"],
+                }
+            }
+        },
+    )
+    engine = await make_engine(company=company)
+
+    calls: list[int] = []
+
+    async def _spy() -> list[str]:
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(
+        engine, "_apply_credential_rotation", lambda _cfg: _spy(), raising=False
+    )
+
+    monkeypatch.setenv("ROTATED_KEY", "new-secret")
+    await engine.apply_config(company)
+    await engine.apply_config(company)
+    await engine.apply_config(company)
+
+    assert len(calls) == 1
+
+
+# ── credential rotation restarts MCP children ──────────────────────
+
+
+async def test_credential_rotation_restarts_shared_mcp_servers() -> None:
+    """Rotation's whole point is that the children stop holding the old
+    secret.
+
+    An MCP child bakes its resolved ``${VAR}`` env into its spawn
+    environment, so a rotated credential reaches it only by restart.
+    This is the pass that has to do it — the ordinary config diff
+    cannot, because on the rotation path the payload is byte-identical
+    and every ``old != new`` check is false by construction.
+    """
+    from unittest.mock import AsyncMock as A
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    engine._tier_b_done = True
+    bridge = MagicMock()
+    bridge.restart_server = A(return_value=[])
+    bridge.restart_http_server = A(return_value=[])
+    bridge.stop_server = A()
+    engine.mcp_bridge = bridge
+
+    cfg = CompanyConfig(
+        name="Acme",
+        mcp_servers=[
+            {
+                "name": "calc",
+                "command": "uvx",
+                "args": ["mcp-calc"],
+                "env": {"CALC_TOKEN": "${CALC_TOKEN}"},
+                "shared": True,
+            },
+            {
+                "name": "remote",
+                "transport": "http",
+                "url": "https://mcp.example/mcp",
+                "shared": True,
+            },
+        ],
+    )
+    applied = await engine._apply_credential_rotation(cfg)
+
+    assert "mcp_servers" in applied
+    # The stdio child is relaunched with its full spec, not just a name.
+    stdio = bridge.restart_server.await_args.kwargs
+    assert stdio["name"] == "calc"
+    assert stdio["command"] == "uvx"
+    assert stdio["args"] == ["mcp-calc"]
+    # An http server must go through the http path — restart_server
+    # would relaunch it as a stdio subprocess with an empty command.
+    assert bridge.restart_http_server.await_args.kwargs["name"] == "remote"
+
+
+async def test_credential_rotation_skips_per_role_templates() -> None:
+    """A ``shared: false`` entry names no global instance.
+
+    Its per-role children are ``server::Role`` and are rebuilt by the
+    ``role_mcp`` pass; restarting the bare template name here would
+    stop nothing and then launch a second, unowned global copy.
+    """
+    from unittest.mock import AsyncMock as A
+
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    engine._tier_b_done = True
+    bridge = MagicMock()
+    bridge.restart_server = A(return_value=[])
+    bridge.restart_http_server = A(return_value=[])
+    engine.mcp_bridge = bridge
+
+    applied = await engine._apply_credential_rotation(
+        CompanyConfig(
+            name="Acme",
+            mcp_servers=[
+                {
+                    "name": "atlassian",
+                    "command": "uvx",
+                    "args": ["mcp-atlassian"],
+                    "shared": False,
+                }
+            ],
+        )
+    )
+
+    bridge.restart_server.assert_not_awaited()
+    assert "mcp_servers" not in applied
+
+
+async def test_credential_rotation_rebuilds_llm_providers() -> None:
+    """A rotated API key lives inside a constructed client.
+
+    ``build_llm_providers`` returns a ``{key: provider}`` mapping.
+    Unpacking it into two names iterates its KEYS, so the rebuild
+    raised for every possible shape — empty, one entry, several — and
+    the ``except`` logged it. The engine went on using the client built
+    from the old key while reporting the rotation applied.
+    """
+    engine = await make_engine(company=CompanyConfig(name="Acme"))
+    engine._tier_b_done = True
+    before = engine._llm_providers
+    before_configs = engine._llm_provider_configs
+
+    cfg = CompanyConfig(
+        name="Acme",
+        providers={
+            "llm": {
+                "default": {
+                    "type": "anthropic",
+                    "model": "claude-sonnet-4-5",
+                    "api_keys": ["rotated-value"],
+                }
+            }
+        },
+    )
+    applied = await engine._apply_credential_rotation(cfg)
+
+    assert "providers" in applied
+    assert "default" in engine._llm_providers
+    # Mutated in place — TurnEngine holds these by reference, so a
+    # rebuild that rebinds them is invisible to every later turn.
+    assert engine._llm_providers is before
+    assert engine._llm_provider_configs is before_configs
+    assert engine._llm_provider_configs["default"].api_keys == ["rotated-value"]

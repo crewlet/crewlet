@@ -9,6 +9,8 @@ their stored values on write-back (:func:`restore_redacted`).
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from crewlet.config import CompanyConfig
@@ -408,3 +410,115 @@ def test_reference_with_a_leading_digit_is_masked():
     containing it is a literal and must be masked."""
     payload = {"name": "X", "integrations": {"jira": {"token": "pat-${1}-literal"}}}
     assert is_redaction_marker(redact_payload(payload)["integrations"]["jira"]["token"])
+
+
+# ── cli-agent credentials ──────────────────────────────────────────
+
+
+CLI_AGENT_PAYLOAD = {
+    "providers": {
+        "llm": {
+            "default": {
+                "type": "cli-agent",
+                "api_keys": ["sk-metered"],
+                "cli": {
+                    "agent": "claude",
+                    "auth": {
+                        "mode": "subscription",
+                        "token": "sk-ant-oat01-EXAMPLE",
+                        "credential_bundle": "H4sIAAAABUNDLE",
+                    },
+                    "env": {
+                        "VENDOR_API_KEY": "literal-key",
+                        "VENDOR_REGION": "eu-west-1",
+                    },
+                    "overrides": {"env": {"OTHER_TOKEN": "literal-2"}},
+                },
+            }
+        }
+    }
+}
+
+
+def test_cli_agent_credentials_are_masked():
+    """`${VAR}` is a convention on these fields, not a constraint.
+
+    An operator who pastes the token from `crewlet llm login
+    --capture-token --print-token` gets a literal, and nothing pointed
+    at it — so it rendered in the clear through `GET /config`, the
+    dashboard's config view and `config export --redact`, while the
+    `api_keys` entry beside it was masked. The bundle is the worse of
+    the two: it is the entire CLI login archive.
+    """
+    redacted = redact_payload(CLI_AGENT_PAYLOAD)
+    cli = redacted["providers"]["llm"]["default"]["cli"]
+
+    assert cli["auth"]["token"] != "sk-ant-oat01-EXAMPLE"
+    assert cli["auth"]["credential_bundle"] != "H4sIAAAABUNDLE"
+    assert cli["env"]["VENDOR_API_KEY"] != "literal-key"
+    assert cli["overrides"]["env"]["OTHER_TOKEN"] != "literal-2"
+
+
+def test_cli_agent_non_secret_env_stays_readable():
+    """`cli.env` mixes config with credentials, like `mcp_servers[].env`.
+
+    Masking it wholesale would hide the region, the model endpoint and
+    every other setting an operator reads the config view to check.
+    """
+    redacted = redact_payload(CLI_AGENT_PAYLOAD)
+    cli = redacted["providers"]["llm"]["default"]["cli"]
+    assert cli["env"]["VENDOR_REGION"] == "eu-west-1"
+    assert cli["agent"] == "claude"
+    assert cli["auth"]["mode"] == "subscription"
+
+
+def test_cli_agent_credentials_survive_a_redacted_write_back():
+    """The dashboard writes back what it was shown.
+
+    A masked field the restore does not know about would be written
+    back as its mask, destroying the credential.
+    """
+    redacted = redact_payload(CLI_AGENT_PAYLOAD)
+    restored = restore_redacted(redacted, CLI_AGENT_PAYLOAD)
+    cli = restored["providers"]["llm"]["default"]["cli"]
+
+    assert cli["auth"]["token"] == "sk-ant-oat01-EXAMPLE"
+    assert cli["auth"]["credential_bundle"] == "H4sIAAAABUNDLE"
+    assert cli["env"]["VENDOR_API_KEY"] == "literal-key"
+    assert cli["overrides"]["env"]["OTHER_TOKEN"] == "literal-2"
+
+
+def test_a_free_form_secret_survives_a_redacted_write_back():
+    """The corruption this module's docstring warns about, on every
+    untyped surface it covers.
+
+    `restore_redacted` walks the pointers of the REDACTED payload,
+    where each masked value is a marker dict. The free-form emitter
+    only emitted a pointer for a `str`, so it emitted nothing there:
+    the restore had no pointer to swap back and the marker was stored
+    AS the credential. One dashboard save — editing any unrelated
+    field — replaced every shared MCP server's API key with
+    `{"encrypted": true, "key_id": null}`.
+    """
+    stored = {
+        "mcp_servers": [
+            {
+                "name": "tavily",
+                "env": {"TAVILY_API_KEY": "sk-real", "TAVILY_HOST": "api.example"},
+                "headers": {"Authorization": "Bearer sk-hdr"},
+            }
+        ]
+    }
+    redacted = redact_payload(stored)
+    assert is_redaction_marker(redacted["mcp_servers"][0]["env"]["TAVILY_API_KEY"])
+
+    # The client edits something unrelated and PUTs the document back.
+    edited = copy.deepcopy(redacted)
+    edited["mcp_servers"][0]["name"] = "tavily-eu"
+    restored = restore_redacted(edited, stored)
+
+    server = restored["mcp_servers"][0]
+    assert server["env"]["TAVILY_API_KEY"] == "sk-real"
+    assert server["headers"]["Authorization"] == "Bearer sk-hdr"
+    assert server["env"]["TAVILY_HOST"] == "api.example"
+    assert server["name"] == "tavily-eu"

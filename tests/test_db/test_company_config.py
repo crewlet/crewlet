@@ -24,6 +24,10 @@ def _make_async_ctx(value):
 def mock_conn() -> AsyncMock:
     conn = AsyncMock()
     conn.execute = AsyncMock(return_value=None)
+    # Both activation paths ``fetchval`` — ``activate`` to read back the
+    # summary (and detect a missing revision), and both to append the
+    # activation epoch.  A single scalar satisfies both.
+    conn.fetchval = AsyncMock(return_value=7)
     conn.transaction = MagicMock(return_value=_make_async_ctx(None))
     return conn
 
@@ -221,9 +225,56 @@ async def test_activate_runs_deactivate_then_activate_in_transaction(
 ) -> None:
     target = uuid4()
     await store.activate(target)
-    assert mock_conn.execute.call_count == 2
-    deactivate_call = mock_conn.execute.call_args_list[0]
-    reactivate_call = mock_conn.execute.call_args_list[1]
-    assert "is_active = FALSE" in deactivate_call[0][0]
+    assert mock_conn.execute.call_count == 1
+    assert "is_active = FALSE" in mock_conn.execute.call_args_list[0][0][0]
+    reactivate_call = mock_conn.fetchval.call_args_list[0]
     assert "is_active = TRUE" in reactivate_call[0][0]
     assert reactivate_call[0][1] == target
+
+
+async def test_activate_appends_an_activation_epoch(
+    store: CompanyConfigStore, mock_conn: AsyncMock
+) -> None:
+    """The epoch append shares the activation's transaction.
+
+    It has to: a crash between the ``is_active`` flip and the epoch
+    append would leave a fleet converged on a revision nobody asked for,
+    or an activation no node ever notices.
+    """
+    target = uuid4()
+    await store.activate(target)
+    epoch_call = mock_conn.fetchval.call_args_list[1]
+    assert "INSERT INTO config_activations" in epoch_call[0][0]
+    assert epoch_call[0][1] == target
+    # One connection, one transaction — not a second acquire.
+    assert mock_conn.transaction.call_count == 1
+
+
+async def test_insert_active_appends_an_activation_epoch(
+    store: CompanyConfigStore, mock_conn: AsyncMock
+) -> None:
+    revision_id = await store.insert_active(
+        {"name": "Test Co"},
+        created_by="founder",
+        source="cli",
+        summary="initial",
+    )
+    epoch_call = mock_conn.fetchval.call_args_list[0]
+    assert "INSERT INTO config_activations" in epoch_call[0][0]
+    assert epoch_call[0][1] == revision_id
+    assert mock_conn.transaction.call_count == 1
+
+
+async def test_activate_rejects_a_revision_that_does_not_exist(
+    store: CompanyConfigStore, mock_conn: AsyncMock
+) -> None:
+    """A missing revision must abort the transaction, not deactivate.
+
+    The UPDATE previously matched zero rows silently while the preceding
+    ``is_active = FALSE`` had already run — so activating a bad id left
+    the company with NO active revision at all, which reads to every
+    consumer as "unconfigured".
+    """
+    mock_conn.fetchval = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="does not exist"):
+        await store.activate(uuid4())

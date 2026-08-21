@@ -760,3 +760,34 @@ def test_non_discovery_phase_still_blocks_activation(registry):
     surface = ToolSurface.for_review(registry, role_mcp_tools=[])
     assert surface.catalogue_names() == []
     assert surface.activate("escalate") is False
+
+
+def test_a_subagent_cannot_launch_a_detached_sandbox():
+    """`run_sandbox` is engine control keyed to the PARENT turn.
+
+    The pending row carries the parent's turn_id and the launch pauses
+    the parent seat's inbox. A sub-agent runs with `allow_suspend=False`
+    so it cannot park for the result; the parent turn then finishes
+    without persisting an `execute_state`, and the seat stays deaf for
+    the whole coding run with nothing to resume into. It carries no MCP
+    annotations, so the shared-write filter does not catch it — it has
+    to be named.
+    """
+    registry = ToolRegistry()
+    registry.register(_tool("run_sandbox", "Run a coding agent in a sandbox."))
+    registry.register(_tool("read_page", "Read a page."))
+
+    surface, denied = ToolSurface.for_subagent(
+        registry,
+        [],
+        parent_tool_names=["run_sandbox", "read_page"],
+        requested_tool_names=["run_sandbox", "read_page"],
+    )
+
+    assert "run_sandbox" in denied
+    assert surface.names == ["read_page"]
+    # And it must not be reachable through discovery either.
+    from crewlet.tools.surface import subagent_safe_tools
+
+    safe = subagent_safe_tools(registry, [])
+    assert "run_sandbox" not in {t.name for t in safe}

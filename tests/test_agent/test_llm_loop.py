@@ -1385,3 +1385,102 @@ async def test_a_progress_publish_failure_never_breaks_the_phase(surface, ctx):
         iteration=0,
     )
     assert result.text == "finished"
+
+
+async def test_a_second_launch_in_one_message_is_refused_unrun(ctx):
+    """One detached job per turn, enforced BEFORE the second call runs.
+
+    Honouring only the first suspend was not enough: the second call
+    still executed. For `run_sandbox` that started a second coding
+    agent in the same reused box, writing over the first one's result
+    files — and its `attach_sandbox` overwrote the row's `command_id`,
+    so the completion poll watched the second job while the loop
+    resumed holding the first call's id.
+    """
+    launched: list[str] = []
+
+    async def _counting_launch(params: dict[str, Any], _c: AgentContext) -> ToolResult:
+        launched.append(params.get("task", ""))
+        return ToolResult(
+            success=True, output="", suspend=True, suspend_payload={"sandbox_id": "s"}
+        )
+
+    reg = ToolRegistry()
+    reg.register(
+        SimpleTool(
+            name="run_sandbox",
+            description="launch detached work",
+            parameters={"type": "object"},
+            fn=_counting_launch,
+        )
+    )
+    surf = ToolSurface.for_execute(
+        reg, role_mcp_tools=[], tools_needed=["run_sandbox"], always_on=[]
+    )
+    provider = _ProviderStub(
+        completions=[
+            Completion(
+                content="",
+                tool_calls=[
+                    ToolCall(id="s1", name="run_sandbox", arguments={"task": "first"}),
+                    ToolCall(id="s2", name="run_sandbox", arguments={"task": "second"}),
+                ],
+            ),
+        ]
+    )
+
+    result = await run_tool_loop(
+        provider=provider,
+        messages=[Message(role="user", content="go")],
+        surface=surf,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=_QueueStub(),
+        allow_suspend=True,
+    )
+
+    assert launched == ["first"], "the second call started a second coding agent"
+    assert result.pending_tool_call_id == "s1"
+    # The refusal is answered inline, so the conversation still has
+    # exactly one dangling tool_use.
+    replies = {m.tool_call_id: m.content for m in result.messages if m.role == "tool"}
+    assert "s1" not in replies
+    assert "already running for this turn" in replies["s2"]
+
+
+async def test_a_suspending_tool_outside_execute_reports_failure(ctx):
+    """A phase that cannot park for the result must not claim one.
+
+    Passing the tool's receipt through as a success told the model the
+    job was done, while the job — if it started at all — is keyed to a
+    turn about to finish without it.
+    """
+    surf = _suspend_surface(["run_sandbox"])
+    provider = _ProviderStub(
+        completions=[
+            Completion(
+                content="",
+                tool_calls=[ToolCall(id="s1", name="run_sandbox", arguments={})],
+            ),
+            Completion(content="done", tool_calls=[]),
+        ]
+    )
+
+    result = await run_tool_loop(
+        provider=provider,
+        messages=[Message(role="user", content="go")],
+        surface=surf,
+        context=ctx,
+        agent=_AgentStub(),
+        max_rounds=5,
+        event_queue=_QueueStub(),
+        allow_suspend=False,
+    )
+
+    assert result.suspended is False
+    reply = next(
+        m for m in result.messages if m.role == "tool" and m.tool_call_id == "s1"
+    )
+    assert "Execute phase" in reply.content
+    assert "do not report it as done" in reply.content

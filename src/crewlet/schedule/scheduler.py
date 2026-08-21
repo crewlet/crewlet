@@ -54,6 +54,7 @@ from crewlet.org.models import (
     Schedule,
     ScheduleTarget,
 )
+from crewlet.queue.topics import agent_inbox_topic
 from crewlet.schedule.cron import (
     CronExpr,
     iter_fire_times,
@@ -97,7 +98,6 @@ class Scheduler:
         self,
         *,
         event_queue: Any,
-        agent_pool: Any,
         org_provider: Callable[[], Organization],
         store: ScheduledRunStoreProtocol,
         default_timezone: str = "UTC",
@@ -105,10 +105,21 @@ class Scheduler:
         jitter_seconds: int = 0,
         catchup_min_seconds: int = 120,
         catchup_max_seconds: int = 7200,
+        admits: Callable[[], bool] | None = None,
+        claim_duty: Any = None,
     ) -> None:
         self._event_queue = event_queue
-        self._agent_pool = agent_pool
         self._org_provider = org_provider
+        # Config posture gate (``Engine.admits_triggers``).  A schedule's
+        # fire identity is derived from the ORG — its name, cron and
+        # target seat — so a node that cannot apply the current epoch
+        # would fire the previous company's schedules: crons that were
+        # edited, seats that were deleted, schedules that were removed
+        # outright.  Unlike a delivery, there is no queued copy to fall
+        # back on, which is why the tick skips whole rather than firing
+        # something and letting a peer sort it out.
+        self._admits = admits
+        self._claim_duty = claim_duty
         self._store = store
         self._default_tz = default_timezone or "UTC"
         self._tick_seconds = max(1, int(tick_seconds))
@@ -127,7 +138,7 @@ class Scheduler:
         if self._running:
             return
         self._running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run_loop(), name="scheduler")
         logger.info(
             "scheduler_started",
@@ -168,12 +179,51 @@ class Scheduler:
 
     # ----- tick -------------------------------------------------------
 
+    async def _holds_duty(self) -> bool:
+        """Whether this node holds the scheduler duty for this tick.
+
+        Re-claimed every tick rather than held, so a node that dies
+        between ticks releases it by lapsing. ``None`` means "no fleet" —
+        the single-node case.
+        """
+        if self._claim_duty is None:
+            return True
+        try:
+            return bool(await self._claim_duty())
+        except Exception:
+            logger.exception("scheduler_duty_claim_failed")
+            return False
+
     async def tick_once(self, now: datetime | None = None) -> int:
         """Evaluate every schedule once and dispatch due fires.
 
         Returns the number of ``TaskAssigned`` events published.  Exposed
         so tests can drive the scheduler without waiting on the interval.
         """
+        if self._admits is not None and not self._admits():
+            # Deliberately WITHOUT advancing ``_last_tick_utc``: the
+            # skipped window stays open, so once this node converges the
+            # missed-tick catchup evaluates it. Anything a peer already
+            # fired is absorbed by the ``scheduled_runs`` at-most-once
+            # claim, and anything nobody fired still runs.
+            logger.info("scheduler_tick_shed")
+            return 0
+
+        if not await self._holds_duty():
+            # Same rule, same reason: leave ``_last_tick_utc`` alone. A
+            # node that never wins the duty therefore stays on its FIRST
+            # tick, so if it ever does win one it evaluates the catchup
+            # window rather than a window stretching back to boot — and
+            # the at-most-once claim absorbs whatever the previous
+            # duty-holder already fired.
+            #
+            # The tick is a singleton because it is pure duplicated work,
+            # not because a peer's tick would be wrong: every node
+            # enumerates every schedule, and all but one of them lose the
+            # claim race on every due fire.
+            logger.debug("scheduler_tick_not_this_node")
+            return 0
+
         if now is None:
             now = datetime.now(UTC)
         elif now.tzinfo is None:
@@ -323,10 +373,21 @@ class Scheduler:
         fire_time_utc: datetime,
         tz: ZoneInfo,
     ) -> bool:
-        agent = self._agent_pool.get_by_handle(handle)
-        if agent is None:
-            # No live agent to run it — don't claim, so a later tick after
-            # the agent spawns could still pick up a future fire.
+        # Resolve the runner from the ORG, not from the local agent pool.
+        # A schedule fires into the seat's inbox, and the node that owns
+        # that seat consumes it — which is usually not the node whose
+        # tick won the claim.  Asking the pool made a fire conditional on
+        # the runner happening to run *here*: it warned
+        # ``schedule_runner_not_found``, refused to claim, and every
+        # other node's tick reached the same conclusion, so the schedule
+        # simply never ran.  The org knows the seat regardless.
+        org = self._org_provider()
+        seat = org.agent_seat_by_handle(handle)
+        if seat is None:
+            # The handle names no agent seat in the current org — a
+            # decommissioned role, or a config edit that landed between
+            # runner resolution and the fire.  Don't claim: a later tick
+            # against a corrected org should still be able to fire.
             logger.warning(
                 "schedule_runner_not_found",
                 handle=handle,
@@ -334,6 +395,7 @@ class Scheduler:
                 scope_id=scope_id,
             )
             return False
+        agent_id = org.agent_id_for(seat)
 
         fire_label = _fire_label(fire_time_utc, tz)
         # Each dispatched run gets its OWN trace (a fresh root span, detached
@@ -375,8 +437,8 @@ class Scheduler:
             event = TaskAssigned(
                 source="scheduler",
                 task_id=run_id,
-                agent_id=agent.id_str,
-                role=agent.role_name,
+                agent_id=agent_id,
+                role=seat.name,
                 payload={
                     "task_description": schedule.task,
                     "scheduled": True,
@@ -388,9 +450,7 @@ class Scheduler:
                 },
             )
             try:
-                await self._event_queue.publish(
-                    f"crewlet.agent.{agent.handle}.inbox", event
-                )
+                await self._event_queue.publish(agent_inbox_topic(handle), event)
             except Exception:
                 logger.exception(
                     "schedule_publish_failed", schedule=schedule.name, handle=handle

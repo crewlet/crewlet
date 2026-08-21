@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from crewlet.config import (
+    ApiAuthConfig,
     ApiConfig,
     BootstrapConfig,
     BootstrapProvidersConfig,
@@ -19,8 +20,13 @@ from crewlet.config import (
 def make_bootstrap(**overrides: Any) -> BootstrapConfig:
     """Build a minimal Tier A bootstrap config for tests.
 
-    Defaults: memory knowledge backend, empty DSN, no auth (so
-    test apps don't get gated by the bearer middleware).
+    Defaults: memory knowledge backend, empty DSN, and auth explicitly
+    DISABLED so test apps aren't gated by the bearer middleware.
+
+    Explicit because serving the API now requires an auth decision:
+    tokens, ``disabled``, or ``allow_anonymous_read``. Silence used to
+    mean "open", which is how ``/events`` and ``/ws/stream`` ended up
+    serving LLM transcripts to anyone who could reach the port.
     """
     return BootstrapConfig(
         providers=BootstrapProvidersConfig(
@@ -28,7 +34,7 @@ def make_bootstrap(**overrides: Any) -> BootstrapConfig:
             database=DatabaseConfig(),
             knowledge=KnowledgeStoreConfig(type="memory"),
         ),
-        api=ApiConfig(),
+        api=ApiConfig(auth=ApiAuthConfig(disabled=True)),
         debug=False,
         **overrides,
     )
@@ -45,9 +51,9 @@ async def make_engine(
     company: CompanyConfig | None = None,
     storage: Any = None,
     event_queue: Any = None,
-    a2a_bus: Any = None,
     embeddings: Any = None,
     company_config_store: Any = None,
+    lease_store: Any = None,
 ):
     """Build an engine and (optionally) apply a Tier B config.
 
@@ -60,9 +66,9 @@ async def make_engine(
         bootstrap or make_bootstrap(),
         storage=storage,
         event_queue=event_queue,
-        a2a_bus=a2a_bus,
         embeddings=embeddings,
         company_config_store=company_config_store,
+        lease_store=lease_store,
     )
     if company is not None:
         await engine.apply_config(company)
@@ -75,7 +81,6 @@ async def make_engine_from_yaml(
     bootstrap: BootstrapConfig | None = None,
     storage: Any = None,
     event_queue: Any = None,
-    a2a_bus: Any = None,
     embeddings: Any = None,
 ):
     """Test-only helper: build an engine from a Tier B YAML fixture,
@@ -91,7 +96,6 @@ async def make_engine_from_yaml(
         company=load_company_config(path),
         storage=storage,
         event_queue=event_queue,
-        a2a_bus=a2a_bus,
         embeddings=embeddings,
     )
 
@@ -118,17 +122,35 @@ class PartyRegistryStub:
     ``agents`` take :class:`StubAgent`; ``humans`` take real
     :class:`~crewlet.org.models.Role` seats; ``external`` maps
     ``{transport: {external_id: handle}}``.
+
+    ``remote_agents`` are agent seats that exist in the org but are
+    **not running in this process**.  They resolve like any other agent
+    seat and are addressable (handle, derived id, inbox), they just
+    carry no instance — the shape every seat has on every node that does
+    not own it.  Consumers that must not confuse "not here" with "does
+    not exist" are tested against these.  Pass a bare handle when only
+    the handle matters, or a real :class:`~crewlet.org.models.Role` when
+    the consumer reads the seat's own fields.
     """
+
+    _ORG_NAME = "TestCo"
 
     def __init__(
         self,
         agents: list[Any] | None = None,
         external: dict[str, dict[str, str]] | None = None,
         humans: list[Any] | None = None,
+        remote_agents: list[Any] | None = None,
     ) -> None:
         self._agents = {a.handle: a for a in (agents or [])}
         self._external = external or {}
         self._humans = {h.get_handle(): h for h in (humans or [])}
+        self._remote = {
+            (r if isinstance(r, str) else r.get_handle()): (
+                None if isinstance(r, str) else r
+            )
+            for r in (remote_agents or [])
+        }
 
     # -- party construction ------------------------------------------ #
 
@@ -142,6 +164,20 @@ class PartyRegistryStub:
             name=agent.role_name,
             role=None,
             agent=agent,
+        )
+
+    def _remote_agent_party(self, handle: str) -> Any:
+        from crewlet.notifications.handle import ResolvedParty
+        from crewlet.org.models import RoleKind
+
+        seat = self._remote.get(handle)
+        return ResolvedParty(
+            kind=RoleKind.AGENT,
+            handle=handle,
+            name=seat.name if seat is not None else handle,
+            role=seat,
+            agent=None,
+            org_name=self._ORG_NAME,
         )
 
     def _human_party(self, seat: Any) -> Any:
@@ -189,6 +225,8 @@ class PartyRegistryStub:
         agent = self._agents.get(query)
         if agent is not None:
             return self._agent_party(agent)
+        if query in self._remote:
+            return self._remote_agent_party(query)
         seat = self._humans.get(query)
         if seat is not None:
             return self._human_party(seat)
@@ -214,5 +252,6 @@ class PartyRegistryStub:
 
     def all_parties(self) -> list[Any]:
         parties = [self._agent_party(a) for a in self._agents.values()]
+        parties.extend(self._remote_agent_party(h) for h in self._remote)
         parties.extend(self._human_party(s) for s in self._humans.values())
         return parties

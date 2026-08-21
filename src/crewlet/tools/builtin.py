@@ -532,16 +532,27 @@ async def _lookup_colleague(
             else "on whichever surface the work lives"
         )
         lines.append(
-            f"Human teammate — not on the A2A bus. Mention or message them "
+            f"Human teammate — not on A2A. Mention or message them "
             f"{where}, include the context they need, and end your turn; "
             "they reply asynchronously and their reply will re-trigger you."
         )
     else:
-        agent = registry.resolve_handle(handle)
-        if agent is not None:
-            lines.append(f"role: {_safe_for_display(agent.role_name)}")
-            if agent.email:
-                lines.append(f"email: {_safe_for_display(agent.email)}")
+        # Same as the human branch: read the candidate's own party
+        # rather than re-resolving.  Re-resolving through the pool made
+        # the answer depend on whether the colleague happened to run in
+        # THIS process — an agent asking about a peer owned by another
+        # node got a card with no role and no email, which reads as a
+        # half-real colleague rather than a normal one.
+        party = match.party
+        if match.role_name:
+            lines.append(f"role: {_safe_for_display(match.role_name)}")
+        seat = getattr(party, "role", None)
+        email = seat.email if seat is not None else ""
+        if not email:
+            agent = getattr(party, "agent", None)
+            email = getattr(agent, "email", "") if agent is not None else ""
+        if email:
+            lines.append(f"email: {_safe_for_display(email)}")
 
         for transport in registry.all_transports():
             ext_id = registry.get_external_id(transport, handle)

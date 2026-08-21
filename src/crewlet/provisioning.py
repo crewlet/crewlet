@@ -36,23 +36,20 @@ from __future__ import annotations
 
 import bisect
 import os
+from pathlib import Path
 from typing import Any, Protocol
 
 from crewlet._logging import get_logger
+from crewlet.env_file import (
+    format_assignment,
+    is_exported,
+    parse_assignment,
+    write_secret_file,
+)
 from crewlet.env_refs import env_var_reference
 from crewlet.env_refs import referenced_env_vars as _referenced_env_vars
 
 logger = get_logger("provisioning")
-
-#: ``export ``-prefixed assignment lines — the exact shape ``--print``
-#: emits — are valid env-file syntax and must round-trip through
-#: :class:`EnvFileSink`.
-_EXPORT_PREFIX = "export "
-
-#: Owner-only. A minted PAT written with the default umask is
-#: world-readable on a normal Linux box, so the mode is applied when the
-#: file is *created*, never chmod'd after the first byte is on disk.
-_SECRET_FILE_MODE = 0o600
 
 
 def referenced_env_vars(mapping: dict[str, str]) -> list[str]:
@@ -151,28 +148,28 @@ class EnvFileSink:
             with open(path, encoding="utf-8") as fh:
                 self._lines = fh.read().splitlines()
             for i, line in enumerate(self._lines):
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                parsed = parse_assignment(line)
+                if parsed is None:
                     continue
-                key = stripped.split("=", 1)[0].strip()
-                if key.startswith(_EXPORT_PREFIX):
-                    key = key[len(_EXPORT_PREFIX) :].strip()
+                key, _value = parsed
+                if is_exported(line):
                     self._exported.add(key)
                 self._index.setdefault(key, []).append(i)
 
     def existing(self, var: str) -> str:
         for index in reversed(self._index.get(var, [])):
             # Last assignment first: that is the one a shell would apply.
-            value = self._lines[index].split("=", 1)[1].strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                value = value[1:-1]
-            if value:
-                return value
+            parsed = parse_assignment(self._lines[index])
+            if parsed is not None and parsed[1]:
+                return parsed[1]
         return os.environ.get(var, "")
 
     async def record(self, var: str, token: str) -> None:
-        prefix = _EXPORT_PREFIX if var in self._exported else ""
-        line = f"{prefix}{var}={token}"
+        # Quoted per the shared grammar, not interpolated bare: a token
+        # holding a space makes ``source`` fail on the line AND abandon
+        # every credential below it, and one holding ``${...}`` is
+        # rewritten by the python-dotenv reader the engine boots with.
+        line = format_assignment(var, token, export=var in self._exported)
         indexes = self._index.get(var, [])
         if indexes:
             # Write the effective (last) line and DELETE the ones it was
@@ -246,28 +243,26 @@ class EnvFileSink:
         self._write()
 
     def _write(self) -> None:
-        """Rewrite the file, holding it at ``0600``.
+        """Rewrite the file — owner-only, atomically.
 
-        ``os.open`` with the mode applies it at creation; a plain
-        ``open()`` + later ``chmod`` would leave the secrets
-        world-readable for the window in between.
+        Two properties, and neither came free.
 
-        The ``fchmod`` is the other half, and it is the one that matters
-        in practice: ``O_CREAT`` without ``O_EXCL`` ignores the mode
-        argument for a file that already exists, so an ``.env`` the
-        operator created by hand — ``touch``, an editor, ``0644`` under
-        the default umask — kept that mode while every minted personal
-        access token was written into it. Done on the descriptor, not the
-        path, so nothing can be swapped underneath it.
+        **The mode is the new file's.** ``O_CREAT`` without ``O_EXCL``
+        ignores the mode argument for a file that already exists, so an
+        ``.env`` the operator made by hand — ``touch``, an editor,
+        ``0644`` under the default umask, and this sink's default target
+        — kept that mode while every minted token was written into it.
+
+        **There is no truncated middle.** The whole file is rewritten on
+        every ``record``, so a crash or a full disk part-way through
+        destroyed the credentials already minted in the same run, which
+        the API will not issue again.
+
+        Replacing the inode carries both: the new file is created 0600
+        before a byte is written, and a reader sees either the old file
+        or the new one. See :func:`crewlet.env_file.write_secret_file`.
         """
-        fd = os.open(
-            self._path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            _SECRET_FILE_MODE,
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            os.fchmod(fh.fileno(), _SECRET_FILE_MODE)
-            fh.write("\n".join(self._lines) + "\n")
+        write_secret_file(Path(self._path), "\n".join(self._lines) + "\n")
 
 
 class PrintSink:
@@ -300,7 +295,7 @@ class PrintSink:
         # running ``--print > secrets.env`` loses every line still in the
         # buffer if the process is killed — exactly the window this sink
         # prints eagerly to close.
-        print(f"export {var}={token}", flush=True)
+        print(format_assignment(var, token, export=True), flush=True)
 
     async def discard(self, var: str) -> None:
         """Print the shell counterpart of the line that was printed.

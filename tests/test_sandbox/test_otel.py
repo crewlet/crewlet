@@ -34,19 +34,39 @@ def test_token_expires() -> None:
     assert tokens.validate(tok) == "t"
     clk.t += 2  # now past the 30s ttl
     assert tokens.validate(tok) is None
-    # expired token is reaped on the failed validate
-    assert tokens.sweep() == 0
 
 
-def test_revoke_and_sweep() -> None:
-    clk = _Clock()
-    tokens = SandboxOtelTokens(now=clk)
-    a = tokens.mint("a", ttl_seconds=10)
-    tokens.mint("b", ttl_seconds=10)
-    tokens.revoke(a)
-    assert tokens.validate(a) is None
-    clk.t += 11
-    assert tokens.sweep() == 1  # 'b' expired
+def test_a_second_process_with_the_same_key_verifies_the_token() -> None:
+    """The property the split deployment needs: the engine mints, the API
+    process verifies, and they share no memory — only the signing key."""
+    minter = SandboxOtelTokens(signing_key="shared-key")
+    verifier = SandboxOtelTokens(signing_key="shared-key")
+    tok = minter.mint("trace-xyz", ttl_seconds=60)
+    assert verifier.validate(tok) == "trace-xyz"
+
+
+def test_a_different_key_rejects_the_token() -> None:
+    tok = SandboxOtelTokens(signing_key="key-a").mint("t", ttl_seconds=60)
+    assert SandboxOtelTokens(signing_key="key-b").validate(tok) is None
+
+
+def test_tampered_tokens_are_rejected() -> None:
+    tokens = SandboxOtelTokens(signing_key="k")
+    tok = tokens.mint("trace-1", ttl_seconds=60)
+    version, trace_id, expiry, signature = tok.split(".")
+
+    # Claim a different trace...
+    assert tokens.validate(f"{version}.other.{expiry}.{signature}") is None
+    # ...or a later expiry, without re-signing.
+    assert (
+        tokens.validate(f"{version}.{trace_id}.{int(expiry) + 9999}.{signature}")
+        is None
+    )
+    # ...or garbage in the signature slot.
+    assert tokens.validate(f"{version}.{trace_id}.{expiry}.deadbeef") is None
+    # ...or a malformed shape entirely.
+    assert tokens.validate("not-a-token") is None
+    assert tokens.validate("") is None
 
 
 # --- receiver -------------------------------------------------------------
@@ -56,7 +76,7 @@ def test_endpoint_for_embeds_token() -> None:
     r = SandboxOtelReceiver(base_url="https://engine.internal/")
     url, token = r.endpoint_for("trace-1", ttl_seconds=60)
     assert url == f"https://engine.internal/otlp/{token}"
-    # the minted token validates against the receiver's own store
+    # the minted token verifies against the receiver's own signing key
     assert r.tokens.validate(token) == "trace-1"
 
 

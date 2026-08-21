@@ -148,31 +148,105 @@ crewlet run config.yaml            # engine + embedded API on :80
 
 (`--api-port 80` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses — the bundled `examples/nimbus.config.yaml` ships `api.port: 80`, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:80/webhooks/plane`). Binding 80 as a non-root process needs privileged-port access on Linux: `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or grant the binary `CAP_NET_BIND_SERVICE`. Avoid 8080 (Pulsar's admin port in the bundled `docker-compose.yml`) and make sure nothing else owns 80 — keep Plane's `PLANE_LISTEN_PORT` at its 8091 default.
 
-Do **not** also start `crewlet run api` on the same host with such a file — that command binds its own port (default 8000; it never reads `api.port`), and pointing both at one port means the second binder hits `EADDRINUSE` and kills whichever server came second.
+Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and kills whichever server came second.
 
 ### Separate Processes (split deployment, Pulsar backend)
 
-Run the API as its own process when you want the webhook receiver to stay up across engine restarts, or the two on separate hosts. They connect through Apache Pulsar — and set `api.port: 0` in the shared Tier A file so the engine does **not** also bind the embedded API (both processes read the same file; a positive `api.port` would make them fight over one port):
-
-```yaml
-api:
-  port: 0        # split deployment: the standalone `crewlet run api` binds 8000 instead
-```
+Run ingress as its own node when you want the webhook receiver to stay up across engine restarts, or the two on separate hosts. They connect through Apache Pulsar. Both read the same Tier A file, so give each one its roles — and its own `--api-port`, since only the ingress node should bind one:
 
 ```bash
-# Terminal 1: run the engine (embedded API off — api.port: 0)
-crewlet run config.yaml
+# Once, first: bring the schema up (safe to re-run; takes an advisory lock)
+crewlet migrate config.yaml
 
-# Terminal 2: run the API server (webhook receiver; binds port 8000 by default)
-crewlet run api config.yaml --host 0.0.0.0
+# Terminal 1: the agents and the fleet duties, no HTTP
+crewlet run config.yaml --roles seats,workers --api-port 0
+
+# Terminal 2: the webhook receiver and the dashboard
+crewlet run config.yaml --roles ingress --api-host 0.0.0.0 --api-port 8000
 ```
+
+Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
+
+`crewlet migrate` is idempotent and safe to re-run. Both long-lived
+processes also still auto-migrate on boot, and starting them together is no
+longer a race: the run takes a PostgreSQL advisory lock, each migration file
+applies in its own transaction, and the embedding width is read from the
+active revision rather than guessed. Running the explicit step first is
+still recommended — it turns a schema change into an observable step instead
+of a side effect of whichever process started first. On a database with no
+company config yet, the run stops before the `vector(N)` migrations rather
+than guessing the width — see
+[the CLI reference](../reference/cli.md#the-embedding-width-and-why-a-run-can-stop-early).
 
 Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned company YAML is imported into the database separately (`crewlet config import` or `crewlet run --import-company`).
 
-- **`crewlet run`** starts the agent engine — loads the org, boots agents, and processes tasks
-- **`crewlet run api`** starts the REST API server — receives webhooks (Slack, Plane, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue for the engine to consume
+- **`--roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
+- **`--roles ingress`** serves the REST API — receives webhooks (Slack, Plane, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
+- **`--roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
+
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable — an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver (sandbox tokens are signed, so the node that mints and the node that verifies need no shared memory). Signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key and logs a warning.
+
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies).
 
 Both communicate through Pulsar. Both accept `--debug` for verbose logging.
+
+### Replica count
+
+**Run one `crewlet run`, and scale up before you scale out.** A single
+engine handles many concurrent turns — agent handlers are `asyncio`
+tasks, so the practical ceiling is LLM provider rate limits and host
+memory, not process count. One node is the design's degenerate case, not
+a lesser path: it holds every lease, and everything a fleet does works
+exactly the same way.
+
+Multi-node is supported and certified by a chaos suite that kills nodes
+mid-turn under load. Reach for it when a node's failure is not acceptable
+downtime, when you need to terminate traffic separately from running
+agents, or when some seats have to run somewhere specific — not as a
+throughput lever, because `max_concurrent` is per process and N nodes is
+N × that ceiling whether you wanted it or not.
+
+**[Running a Fleet](fleet.md)** is the guide: node roles, seat placement,
+draining, and rolling upgrades. The two things that bite hardest:
+
+> **A fleet needs both a database and the right broker settings.**
+>
+> Seat leases live in PostgreSQL. With no `providers.database.dsn` they fall
+> back to an in-process store, and every node then believes it owns the whole
+> company — the engine logs `seat_placement_is_process_local` at boot.
+>
+> Pulsar's two reapers must also be turned off, because an unowned seat's
+> subscription has no connected consumer and both reapers delete exactly that:
+> set `subscriptionExpirationTimeMinutes` to `0` and
+> `brokerDeleteInactiveTopicsEnabled` to `false` (or
+> `brokerDeleteInactiveTopicsMode` to `delete_when_subscriptions_caught_up`).
+> The repo's `docker-compose.yml` ships these values. Nothing in the engine can
+> detect a broker that is quietly deleting a quiet seat's mail.
+
+Give each node a distinct id — `node.id` in the Tier A file, or the
+`CREWLET_NODE_ID` environment variable, which is how a container orchestrator
+injects a pod name without templating the config. Two nodes sharing an id
+miscount the fleet and each compute too small a share.
+
+Bring the schema up **before** starting any node, with
+[`crewlet migrate`](../reference/cli.md#crewlet-migrate).
+
+What a fleet gets right, each of which was a real defect before:
+
+- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn loop re-checks the fence before every round and every write-capable tool. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
+- *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
+- *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — an append-only epoch log every node polls — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
+- *Token budgets.* A shared PostgreSQL counter, so an org cap of 500 k is 500 k across the fleet.
+- *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering and curation are [singleton duties](../concepts/seat-ownership.md#singleton-duties) now, along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps — six `worker:{duty}` leases, each claimed per tick so a node that dies mid-duty hands it back by lapsing.
+- *Unbounded table growth.* `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions` and `a2a_channels` all answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty.
+
+The one thing that is still per-process: `max_concurrent`. The concurrency
+gate is per node, so an org's ceiling becomes N × the configured value.
+Size it per node, not per company.
+
+For the model underneath all of this — what a node is, what the fleet shares,
+and where the constants come from — see
+[Scaling Out](../concepts/scaling.md).
 
 ---
 
@@ -305,8 +379,6 @@ flowchart TD
 
 The writer is registered as a publish listener via `event_queue.add_publish_listener(writer.on_publish)`. It runs inline during every `publish()` call, so events are written to PostgreSQL at the same time they're published to Pulsar — no consumer groups, no subscription timing issues, no message loss. If the database is temporarily unavailable, the write error is logged and the event still reaches Pulsar normally.
 
-For the API server, a `BufferedEventStore` wrapper provides non-blocking writes via a background flush queue (10K event cap, 1-second flush interval).
-
 #### In-Memory Satellite
 
 Even with TimescaleDB configured, a `MemoryEventStore` (capped at 1000 events) runs as a second leg of a `CompositeEventStore`. This gives queries an instant-read path for events that haven't yet round-tripped through PostgreSQL — useful for the dashboard when a batch of events was just published.
@@ -369,7 +441,7 @@ The dashboard API also provides `GET /events/trace/{trace_id}` which returns all
 
 ### Debug Mode
 
-Set `debug: true` in the Tier A bootstrap file (`config.yaml`) to enable DEBUG-level logging (or pass `--debug` on `crewlet run` / `crewlet run api`):
+Set `debug: true` in the Tier A bootstrap file (`config.yaml`) to enable DEBUG-level logging (or pass `--debug` on `crewlet run`):
 
 ```yaml
 # config.yaml (Tier A)

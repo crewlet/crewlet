@@ -34,6 +34,9 @@ How the engine works, one subsystem per page:
 
 - **[Overview](concepts/overview.md)** — The org chart as execution graph, design principles, high-level architecture
 - **[Configuration](concepts/configuration.md)** — Two-tier config (ops-owned `config.yaml` + founder-owned versioned PostgreSQL), bootstrap sequence, unconfigured state, live propagation, auth, snapshot/rollback, whole-config encryption at rest
+- **[Scaling Out](concepts/scaling.md)** — Why one node is the design's degenerate case rather than a lesser path, what a node is (`ingress` / `seats` / `workers`), the five kinds of coupling that had to be resolved and which one a lock actually fixes, what the fleet shares in PostgreSQL versus what stays per-process, the measured broker numbers the lease TTL and prefetch cap come from, and what the design does not promise
+- **[Seat Ownership](concepts/seat-ownership.md)** — How a fleet decides which node runs which seat, and why no two ever run the same one: TTL leases with epoch fencing, fair-share placement with give-back, the two release modes, freshness-based admission, owner-only inbox and sandbox-control attachment, the durable subscription that holds an unowned seat's mail, the broker settings that must not delete it, and why a wedged-but-alive node ends its own process
+- **[Control Plane](concepts/control-plane.md)** — How every node converges on one company config: the append-only activation epoch log, the reconcile poll, per-node apply status (`ok` / `error` / `degraded`), the posture a lagging node takes (`serve` / `wait` / `shed` / `isolated` / `stuck`), what a running turn sees through a live apply, and what `/health` and `/ready` report
 - **[Secret Store](concepts/secret-store.md)** — Encrypted `secret_values` table consulted ahead of `os.environ` when resolving `${VAR}`: `crewlet secrets set/list/unset/get/rekey`, the `--secret-store` provisioning sink that hands minted credentials straight to the engine, store-wins precedence, and the Tier A root-of-trust boundary
 - **[Organization Model](concepts/organization-model.md)** — Hierarchy, departments, teams, roles (seats), handles
 - **[Humans in the Org Chart](concepts/humans-in-the-org.md)** — Human seats (`kind: human`): hierarchy membership, contact identities, notify delivery, escalation terminus, prompts and lookup
@@ -48,7 +51,7 @@ How the engine works, one subsystem per page:
 - **[Scheduling](concepts/scheduling.md)** — Role/unit-scoped cron-style recurring work (standups, audits, nightly jobs)
 - **[Knowledge System](concepts/knowledge-system.md)** — Query-time knowledge-base search behind the `KnowledgeSearcher` seam (Confluence CQL or Plane page search — one backend per org) + private `agent_diary`
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles
-- **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A bus + learning loop
+- **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A channels + learning loop
 - **[Decision Framework](concepts/decision-framework.md)** — DACI model for multi-agent decisions
 
 ## Integrations
@@ -69,6 +72,8 @@ Connecting the external surfaces agents work on:
 - **[Tools & MCP](guides/tools-and-mcp.md)** — Built-in tools, MCP integration, tool registry
 - **[Extensions](guides/extensions.md)** — Extension system, hooks, writing extensions
 - **[Deployment](guides/deployment.md)** — Docker, Pulsar sizing & auth, TimescaleDB observability, tracing
+- **[Running a Fleet](guides/fleet.md)** — When to run more than one node, node roles, seat placement, draining and rolling upgrades
+- **[Running One Agent Somewhere Else](guides/satellite-nodes.md)** — Put a single seat on a host that can reach what it needs — an internal API, a licensed binary, a GPU, a lab network — without moving the company: what a satellite is, what moves with the seat (its MCP servers above all), what the node still needs outbound, and what a pin costs when the host is down
 - **[Configure via API](guides/configure-via-api.md)** — End-to-end curl recipes for bootstrapping a company through `/config/*`
 
 ## Reference

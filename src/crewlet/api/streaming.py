@@ -42,6 +42,7 @@ from typing import Any
 from crewlet import __version__
 from crewlet._logging import get_logger
 from crewlet.api.live_state import EVENT_FEED_LIMIT, Change, LiveState
+from crewlet.config import DEFAULT_NODE_ID
 from crewlet.events.types import Event, event_failed
 
 logger = get_logger("api.streaming")
@@ -180,14 +181,26 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
     one, just with empty screens.  Precedence is
     ``shutting_down > unconfigured > ok``: a draining engine is draining
     first, whatever else is true of it.
+
+    ``node`` names the process that answered — the field that turns
+    "the config apply failed" into "the config apply failed on node-2"
+    once a load balancer is in front of more than one process, and the
+    only way a caller can tell which one it reached.
+
+    ``in_flight`` / ``shutting_down`` are present only when a
+    :class:`~crewlet.api.runtime.NodeRuntime` is registered (the embedded
+    path); a standalone process omits them.  ``status`` flips to
+    ``"shutting_down"`` during a graceful drain so the dashboard's live
+    dot tracks the drain instead of staying green.
     """
-    engine = getattr(app.state, "engine", None)
+    runtime = getattr(app.state, "runtime", None)
     stream = getattr(app.state, "stream", None)
     configured = bool(getattr(app.state, "configured", False))
     body: dict[str, Any] = {
         "status": "ok" if configured else "unconfigured",
+        "node": str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID),
         "configured": configured,
-        "engine": engine is not None,
+        "engine": runtime is not None,
         "version": __version__,
         # The API process's own start. Deliberately separate from the
         # engine's: on the standalone deployment they are two processes
@@ -199,13 +212,27 @@ def build_health_envelope(app: Any) -> dict[str, Any]:
         "feed_hydrated": bool(stream is not None and stream.hydrated),
         "clients": stream.client_count if stream is not None else 0,
     }
-    if engine is not None:
-        body["in_flight"] = engine.in_flight_count
-        body["engine_started_at"] = str(getattr(engine, "started_at", "") or "")
-        shutting_down = engine.shutting_down or not engine.is_running
+    if runtime is not None:
+        body["in_flight"] = runtime.in_flight
+        body["engine_started_at"] = runtime.started_at
+        shutting_down = runtime.shutting_down
         body["shutting_down"] = shutting_down
+        # ``posture`` is what the node concluded about its own config
+        # lag, and the only place an operator can see WHY a node left
+        # rotation — /ready reports a bare 503 either way, and "draining"
+        # and "cannot apply epoch 41" call for opposite responses.
+        body["posture"] = runtime.posture
+        body["applied_epoch"] = runtime.applied_epoch
+        # Which seats this node is actually serving. The first question
+        # about any fleet, and previously answerable only by reading
+        # three processes' logs at DEBUG.
+        seats = runtime.seats() if hasattr(runtime, "seats") else {}
+        if seats:
+            body["seats"] = seats
         if shutting_down:
             body["status"] = "shutting_down"
+        elif body["posture"] not in ("serve", "wait"):
+            body["status"] = str(body["posture"])
     return body
 
 
@@ -219,6 +246,44 @@ def _schedule_projection(app: Any) -> list[dict[str, Any]]:
     from crewlet.api.routes.org import schedule_projection
 
     return schedule_projection(app)
+
+
+def build_readiness_envelope(app: Any) -> tuple[dict[str, Any], int]:
+    """Readiness for a load balancer: ``(body, http_status)``.
+
+    Distinct from ``/health`` on purpose.  Liveness answers "is this
+    process alive" — it must stay 200 through a drain so an orchestrator
+    does not SIGKILL a node mid-turn.  Readiness answers "should traffic
+    come here", and during a drain the answer is no: the balancer should
+    stop sending requests while in-flight turns finish.
+
+    Also not ready before the first config revision is applied — an
+    unconfigured node cannot verify a webhook signature, and taking it
+    out of rotation is how a fleet avoids answering with a node that
+    would only reject the delivery.
+
+    And not ready while the node is **shedding** or **stuck**: it has
+    confirmed it cannot apply an epoch its peers have, so it would answer
+    under a stale company.  ``wait`` and ``isolated`` deliberately stay
+    ready — ``wait`` is ordinary propagation during a rollout (failing
+    readiness there would make every successful rollout a fleet-wide
+    outage), and ``isolated`` means *no* node applied the revision, so
+    taking this one out would take the fleet out over one bad revision.
+    """
+    runtime = getattr(app.state, "runtime", None)
+    configured = bool(getattr(app.state, "configured", False))
+    draining = bool(runtime.shutting_down) if runtime is not None else False
+    posture = str(runtime.posture) if runtime is not None else "serve"
+    diverged = posture in ("shed", "stuck")
+    ready = configured and not draining and not diverged
+    body: dict[str, Any] = {
+        "ready": ready,
+        "node": str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID),
+        "configured": configured,
+        "draining": draining,
+        "posture": posture,
+    }
+    return body, (200 if ready else 503)
 
 
 class StreamService:
@@ -389,9 +454,14 @@ class StreamService:
         """
         if not self._tokens_dirty or not self._clients:
             return
+        # Aggregate BEFORE clearing the flag: an aggregation that raises
+        # would otherwise consume the burst it failed on, so the rollup
+        # would stay stale until the next phase completed rather than
+        # being retried on the next tick.
+        rollup = self.token_rollup()
         self._tokens_pushed_at = time.monotonic()
         self._tokens_dirty = False
-        self._fan_out("tokens", self.token_rollup())
+        self._fan_out("tokens", rollup)
 
     def token_rollup(self) -> dict[str, Any]:
         """The live spend rollup, with each role's handle attached."""
@@ -483,15 +553,23 @@ class StreamService:
         while True:
             await asyncio.sleep(_TOKENS_PUSH_INTERVAL_SECONDS)
             elapsed += _TOKENS_PUSH_INTERVAL_SECONDS
-            self._flush_tokens()
-            if elapsed < self._health_interval:
-                continue
-            elapsed = 0.0
-            if self._health_fn is None:
-                continue
+            # One guard around the whole tick, like every other loop in
+            # the engine. This is the service's ONLY background timer, it
+            # is started once and nothing restarts it, so an exception
+            # escaping here does not skip a tick — it ends health pushes
+            # and spend rollups for the life of the process. The socket
+            # stays open throughout, so a dashboard shows the last health
+            # it received and goes on looking healthy: exactly the lie
+            # the health surface is built to avoid.
             try:
-                body = self._health_fn()
-            except Exception:  # pragma: no cover - defensive
-                logger.exception("health_tick_failed")
-                continue
-            await self.broadcast("health", body)
+                self._flush_tokens()
+                if elapsed < self._health_interval:
+                    continue
+                elapsed = 0.0
+                if self._health_fn is None:
+                    continue
+                await self.broadcast("health", self._health_fn())
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("stream_health_tick_failed")

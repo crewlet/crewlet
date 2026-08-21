@@ -19,7 +19,7 @@ import { schedule, cancel } from "./scheduler.js";
 import { $, delegate } from "./dom.js";
 import { esc } from "./format.js";
 import { icon } from "./icons.js";
-import { apiToken } from "./authToken.js";
+import { apiToken, promptForToken } from "./authToken.js";
 import {
   dotClass,
   renderHealthPopover,
@@ -37,6 +37,7 @@ import { createPeopleView } from "./views/people.js";
 import { createAuditView } from "./views/audit.js";
 import { createAgentsView } from "./views/agents.js";
 import { createSchedulesView } from "./views/schedules.js";
+import { createFleetView } from "./views/fleet.js";
 import { createConfigView } from "./views/config.js";
 import { createAgentView } from "./views/agent.js";
 import { createEventDetailView } from "./views/eventDetail.js";
@@ -57,6 +58,7 @@ const VIEWS = {
   tokens: createTokensView,
   tools: createToolsView,
   schedules: createSchedulesView,
+  fleet: createFleetView,
   config: createConfigView,
   agent: createAgentView,
   llm: createAgentView, // the agent view owns the llm sub-route
@@ -75,6 +77,7 @@ const TITLES = {
   tokens: "Tokens",
   tools: "Tools",
   schedules: "Schedules",
+  fleet: "Fleet",
   config: "Configuration",
   eventDetail: "Event",
   trace: "Trace",
@@ -166,6 +169,7 @@ const NAV = [
   { name: "tokens", icon: "zap", label: "Tokens" },
   { name: "tools", icon: "wrench", label: "Tools" },
   { name: "schedules", icon: "clock", label: "Schedules" },
+  { name: "fleet", icon: "globe", label: "Fleet" },
   { name: "config", icon: "database", label: "Configuration" },
 ];
 
@@ -289,16 +293,19 @@ function renderChrome() {
       pop.innerHTML = "";
     }
 
-    // Always-on chrome for the two conditions that must never wait for
-    // a click: a socket that is down (the page is polling REST and may
+    // Always-on chrome for the conditions that must never wait for a
+    // click: a rejected API token (the socket will never come back on
+    // its own), a socket that is down (the page is polling REST and may
     // be stale) and an engine with no active company configuration
     // (every inbound webhook is being dropped). A dashboard that is
     // quietly wrong is worse than one that says it cannot see.
     const banner = $("#degraded");
-    const text = bannerFor(health, state.connected, state.events);
+    const text = bannerFor(health, state.connected, state.events, state.authRejected);
     banner.hidden = !text;
-    banner.className = "degraded " + bannerTone(health, state.connected);
+    banner.className =
+      "degraded " + bannerTone(health, state.connected, state.authRejected);
     if (text) $("#degraded-text").textContent = text;
+    $("#degraded-action").hidden = !state.authRejected;
 
     const footer = $("#chrome-footer");
     const pill = $("#inflight");
@@ -361,6 +368,16 @@ function initDelegation() {
     else if (action === "reconnect") {
       socket.reconnect();
       toggleHealth(false);
+    } else if (action === "set-token-chrome") {
+      // Its own action name, not the views' `set-token`: this delegate
+      // runs before the branch that forwards to the active view, so
+      // sharing the name would swallow the Configuration and Audit
+      // buttons and leave those views un-reloaded after a token was set.
+      promptForToken(() => {
+        socket.setToken(apiToken());
+        store.setAuthRejected(false);
+        socket.reconnect();
+      });
     } else if (action === "agent")
       navigate("/agents/" + encodeURIComponent(el.dataset.id));
     else if (action === "view-events") {

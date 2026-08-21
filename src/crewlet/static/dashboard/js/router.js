@@ -43,6 +43,7 @@ export function parseRoute() {
     "tokens",
     "tools",
     "schedules",
+    "fleet",
     "config",
   ];
   const name = known.includes(parts[0]) ? parts[0] : "dashboard";

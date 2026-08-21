@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from crewlet.a2a.service import A2AService
 
 from crewlet._logging import configure_logging, get_logger
-from crewlet.a2a.protocol import A2ABus
+from crewlet._tasks import cancel_and_wait
 from crewlet.agent.instance import AgentInstance, AgentState
 from crewlet.agent.pool import AgentPool
 from crewlet.agent.turn import TurnEngine
@@ -33,7 +34,9 @@ from crewlet.config import (
     register_plane_accounts_from_org,
     register_slack_apps_from_org,
     resolve_env_vars,
+    resolve_node_id,
 )
+from crewlet.config_resolution import resolution_fingerprint
 from crewlet.db.protocol import StorageBackend
 from crewlet.events.types import (
     Event,
@@ -49,7 +52,13 @@ from crewlet.notifications.service import NotificationService
 from crewlet.observability import ObservabilityManager
 from crewlet.org.models import Organization
 from crewlet.providers.llm.protocol import LLMProvider
-from crewlet.queue.protocol import BatchOptions, EventQueue
+from crewlet.queue.protocol import BatchOptions, DeferDelivery, EventQueue
+from crewlet.queue.topics import (
+    agent_control_group,
+    agent_control_topic,
+    agent_inbox_group,
+    agent_inbox_topic,
+)
 from crewlet.secrets.resolver import refresh_secret_snapshot
 from crewlet.task.delegation import DelegationHandler
 from crewlet.task.tracker import ExecutionTracker
@@ -59,8 +68,50 @@ from crewlet.tools.protocol import Tool
 from crewlet.tools.registry import ToolRegistry
 from crewlet.tools.run_sandbox_tool import register_run_sandbox_tool
 from crewlet.tools.spawn_subagent_tool import register_spawn_subagent_tool
+from crewlet.work_key import bind_work_key, derive_work_key
 
 logger = get_logger("engine")
+
+# Why a seat's inbox is held while this node has no turn engine.
+#
+# Its OWN reason. Pause holds are reason-scoped precisely so one
+# subsystem cannot un-gate another's, and three independent things gate
+# an agent inbox: this park, the sandbox busy gate, and the
+# config-divergence shed. Sharing the default with the sandbox gate made
+# the late turn-engine build's blanket resume release a live run's hold
+# — delivering messages to an agent whose turn is suspended mid-run.
+_NO_TURN_ENGINE_PAUSE_REASON = "no_turn_engine"
+
+# Inbox trigger types the completion ledger covers.
+#
+# These are the types that run a TURN, which is the only work whose
+# duplication costs anything outward-facing. The informational types
+# (``task_created`` / ``task_completed`` / ``task_delegated``) are logged
+# and dropped, so recording them would be bookkeeping about nothing.
+#
+# ``a2a_request`` / ``a2a_message`` were exempt while the content rode a
+# process-local ``asyncio.Queue``: ``_handle_a2a`` drained it
+# DESTRUCTIVELY, so a re-run on any node — including this one — found an
+# empty channel and told the agent nobody had sent anything. Neither
+# branch of a short-circuit-or-re-run choice could be honoured, so the
+# ledger stayed out of it. The content rides the durable wake event now,
+# which makes an A2A trigger re-runnable and therefore ledgerable like
+# any other.
+#
+# The requester's hop NEEDS it. The responder's is guarded twice over —
+# it answers and closes, and a closed channel refuses a second answer —
+# but the hop that carries the reply BACK lands on a channel that is
+# already closed by design, so the ledger is the only thing standing
+# between a redelivery and a second turn spent acting on the same answer.
+_LEDGERED_INBOX_TYPES = frozenset(
+    {
+        "task_assigned",
+        "notification",
+        "external_notification",
+        "a2a_request",
+        "a2a_message",
+    }
+)
 
 # Type alias for event handler callbacks (replaces old EventBus.EventHandler).
 _EventHandler = Callable[[Event], Awaitable[None]]
@@ -239,10 +290,28 @@ class ConfigApplyError(RuntimeError):
         subsystem: str,
         original: Exception,
         applied_before_failure: list[str],
+        *,
+        degraded: bool = False,
     ) -> None:
         self.subsystem = subsystem
         self.original = original
         self.applied_before_failure = applied_before_failure
+        self.degraded = degraded
+        """Whether rollback could NOT restore what the apply tore down.
+
+        ``_rollback`` restores and RESTARTS transports, but it cannot
+        respawn the per-role MCP children the failed revision already
+        started. So a failure AFTER a restart-required subsystem was
+        mutated leaves the node claiming the prior epoch while its tool
+        surface may be amputated. That is a materially different state
+        from a clean rollback, and the control plane has to be able to
+        tell them apart — a node in it must never be counted as somewhere
+        work can safely go.
+
+        Set conservatively, on *entering* the restart-required block
+        rather than on proving something was torn down: a false
+        ``degraded`` costs one node's readiness, a false ``ok`` costs
+        silent breakage no probe would catch."""
         super().__init__(
             f"apply_config failed at subsystem={subsystem!r}: "
             f"{type(original).__name__}: {original}"
@@ -289,7 +358,6 @@ class Engine:
         max_concurrent: int = 10,
         org_token_budget: int = 0,
         event_queue: EventQueue | None = None,
-        a2a_bus: A2ABus | None = None,
         github_config: Any = None,
         gitlab_config: Any = None,
         plane_config: Any = None,
@@ -300,6 +368,8 @@ class Engine:
         learning_config: Any = None,
         scheduling_config: Any = None,
         embeddings: Any = None,
+        lease_store: Any = None,
+        turn_completion_store: Any = None,
     ) -> None:
         self.debug = debug
         self._turn_engine_config = turn_engine_config
@@ -321,6 +391,7 @@ class Engine:
         self._reflect_engine: Any = None
         self._episode_lifecycle_worker: Any = None
         self._skill_curator_worker: Any = None
+        self._maintenance_worker: Any = None
         # In-flight Tool Skills registry walk (boot populate or
         # live-refresh re-seed).  Tracked so a re-kick supersedes a
         # still-retrying older walk instead of racing it.
@@ -338,6 +409,44 @@ class Engine:
         # the spawn cascade and by ``/health`` / dashboard for the
         # ``configured`` predicate.
         self._active_config: Any = None
+        # Fingerprint of what the active config's ${VAR} references
+        # resolved to when it was applied. Half of the no-op check —
+        # see crewlet.config_resolution.
+        self._active_resolution: str = ""
+        # Control-plane state — see crewlet.db.config_plane.
+        self._config_plane_store: Any = None
+        self._node_id: str = ""
+        # What this node is willing to do, and how it is labelled.
+        # Resolved from Tier A at ``start``; the all-roles default until
+        # then, which is what an engine constructed directly (a test, an
+        # embedding) means by saying nothing.
+        self._node_profile: Any = None
+        self._incarnation: str = ""
+        self._applied_epoch: int = 0
+        self._apply_attempts: int = 0
+        # Which epoch ``_apply_attempts`` is counting. The budget is PER
+        # REVISION: without this it is a per-process budget, and a node
+        # that exhausts it on one bad revision never attempts any later
+        # one — including the fixed revision the operator pushes as the
+        # documented remedy.
+        self._apply_attempts_epoch: int = 0
+        self._ticks_behind: int = 0
+        self._apply_status: Any = None
+        # What the last recorded status was ABOUT, so the per-tick
+        # heartbeat can re-assert it verbatim rather than inventing one.
+        self._applied_revision_id: Any = None
+        self._apply_error: str = ""
+        self._posture: Any = None
+        self._reconcile_task: asyncio.Task[Any] | None = None
+        # Set by the broadcast activation nudge to shorten the next poll.
+        # Never carries data — see ``_subscribe_activation_nudge``.
+        self._reconcile_nudge: asyncio.Event = asyncio.Event()
+        self._nudge_unsubscribe: Any = None
+        # Refreshes the embedded API's cached projection (webhook
+        # secrets, roles, org) from the activation pointer.  Driven from
+        # this engine's reconcile tick rather than its own loop, so a
+        # merged node polls the pointer once, not twice.
+        self._api_refresher: Any = None
         # Secret-encryption keyring (Tier A ``secrets``).  ``None`` when
         # encryption is disabled; set by ``from_bootstrap``.  Used by
         # ``load_config`` to decrypt the whole config document in an
@@ -409,6 +518,33 @@ class Engine:
         self.turn_engine: TurnEngine | None = None
         self._extension_manager = ExtensionManager()
         self._pending_extensions = list(extensions or [])
+        # Observability hooks registered before ``start`` — see
+        # ``_subscribe_hook``.  A subscription needs a live broker
+        # connection, so they cannot be attached at registration time.
+        self._pending_hooks: list[tuple[str, str, _EventHandler]] = []
+        self._queue_started = False
+        # Seat placement. Constructed in ``start`` once the storage
+        # backend is known — see ``_build_seat_host``.
+        self._seat_host: Any = None
+        self._seat_host_started = False
+        # The event-loop watchdog. Lives and dies with the seat host,
+        # because what it protects is the seat host's promise: leases
+        # lapse on their own when the loop stalls, but the broker session
+        # does NOT — the client's IO threads keep answering keepalives,
+        # so the broker holds this node's prefetch for the full ack
+        # timeout while a peer runs the seats. Leaving collapses that.
+        self._loop_watchdog: Any = None
+        # An injected placement backend, for the caller that runs more
+        # than one engine against one fleet.  Left ``None``,
+        # ``_build_seat_host`` derives it from ``storage`` — the right
+        # default, because a process-local store is only ever correct
+        # for the process that is the whole fleet.
+        self._lease_store: Any = lease_store
+        # The completion ledger — "has this trigger already been worked?"
+        # Derived from ``storage`` at start; injectable for the same
+        # reason the lease store is, and it must be the SAME object
+        # across a fleet or it deduplicates nothing across a takeover.
+        self._turn_completions: Any = turn_completion_store
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -435,13 +571,14 @@ class Engine:
         logger.debug("init_subsystem", subsystem="observability")
         self.observability = ObservabilityManager(self.event_queue)
 
-        # A2A bus + service (v2)
-        self._a2a_bus = a2a_bus
-        self.a2a_service: A2AService | None = None
-        if a2a_bus is not None:
-            from crewlet.a2a.service import A2AService
+        # A2A service. Always built: it needs no bus any more, only the
+        # durable queue every engine already has. It used to be gated on
+        # an ``a2a_bus`` argument, so an engine constructed without one
+        # had ``a2a_ask`` fail with "A2A service not available" — a
+        # wiring detail the agent experienced as a missing capability.
+        from crewlet.a2a.service import A2AService
 
-            self.a2a_service = A2AService(bus=a2a_bus, queue=self.event_queue)
+        self.a2a_service: A2AService | None = A2AService(queue=self.event_queue)
 
         # Background tasks / cleanup
         self._cancel_deadline_timers: Callable[[], None] | None = None
@@ -487,7 +624,16 @@ class Engine:
         # pool again — without this guard each agent got TWO competing
         # consumers in one process, so two of its events could dispatch
         # concurrently and the loser NAK'd toward the dead-letter topic.
-        self._subscribed_inboxes: set[str] = set()
+        self._subscribed_inboxes: dict[str, int] = {}
+        """Attached seat inboxes, ``handle -> lease epoch``.
+
+        Written and cleared ONLY by the seat hooks, so it says exactly
+        what this process is consuming. It used to be a set maintained by
+        whatever happened to subscribe, and its idempotence guard made a
+        re-attach a silent no-op: a seat released by any path that forgot
+        to discard the handle came back owned in the lease table and dark
+        in the process, with the absence of a log line as the only
+        signal."""
         # Fire-and-forget requeue tasks (memory-backend re-entrancy guard in
         # the inbox handler); held so they aren't garbage-collected mid-run.
         self._requeue_tasks: set[asyncio.Task[None]] = set()
@@ -527,9 +673,10 @@ class Engine:
         *,
         storage: StorageBackend | None = None,
         event_queue: EventQueue | None = None,
-        a2a_bus: A2ABus | None = None,
         embeddings: Any = None,
         company_config_store: Any = None,
+        lease_store: Any = None,
+        turn_completion_store: Any = None,
     ) -> Engine:
         """Construct an engine from Tier A bootstrap state only.
 
@@ -550,14 +697,20 @@ class Engine:
             organization=empty_org,
             storage=storage,
             event_queue=event_queue,
-            a2a_bus=a2a_bus,
             embeddings=embeddings,
             debug=bootstrap.debug,
             api_port=bootstrap.api.port,
             api_host=bootstrap.api.host,
+            lease_store=lease_store,
+            turn_completion_store=turn_completion_store,
         )
         engine._bootstrap = bootstrap
         engine._company_config_store = company_config_store
+        # Resolved here as well as in ``start()`` because the boot-time
+        # apply — and the ``_seed_applied_epoch`` that follows it — runs
+        # before ``start()`` does, and a node that reports its apply
+        # status under an empty id is invisible to its peers.
+        engine._node_id = resolve_node_id(bootstrap)
         # Build the secret-encryption keyring from Tier A ``secrets``.
         # ``None`` when no keys are configured (encryption disabled);
         # ``load_config`` then fails closed only if an activated revision
@@ -572,6 +725,45 @@ class Engine:
             api_port=bootstrap.api.port,
         )
         return engine
+
+    async def _complete_deferred_migrations(self, new: Any) -> None:
+        """Apply migrations that were waiting on this config's embedding width.
+
+        The pgvector migrations bake ``vector(N)`` at creation and the
+        sequence is forward-only, so the migrator refuses to run them
+        until a config declares the width — which means a database
+        bootstrapped through the **unconfigured state** (boot the engine
+        with no revision, then ``PUT /config``) reaches this point with
+        ``episodes``, ``agent_diary``, ``scheduled_runs`` and
+        ``pending_sandbox_run`` still absent.  That is a first-class,
+        documented flow, and nothing else on it ever migrates: without
+        this the engine would spawn the whole org against a partial
+        schema and stay there until someone restarted it — onboarding
+        lookups raising every turn, every scheduler fire failing, and
+        detached sandbox runs unable to record the row they resume from.
+
+        Idempotent, advisory-lock-serialized, and a no-op once the schema
+        is complete, so it is safe on every activation.  Failure is
+        logged, not raised: a config apply that otherwise succeeded must
+        not be rolled back because the schema could not be advanced —
+        the next activation retries.
+        """
+        from crewlet.db.client import Database
+
+        if not isinstance(self.storage, Database):
+            return
+        try:
+            from crewlet.cli import _migration_vars
+            from crewlet.db.migrator import migrate
+
+            template_vars = _migration_vars(new)
+            if not template_vars:
+                return  # this config declares no width either
+            applied = await migrate(self.storage, template_vars=template_vars)
+            if applied:
+                logger.info("deferred_migrations_applied", versions=applied)
+        except Exception as exc:
+            logger.error("deferred_migrations_failed", error=str(exc))
 
     async def apply_config(self, new: Any) -> list[str]:
         """Apply a :class:`CompanyConfig` to this engine.
@@ -611,16 +803,41 @@ class Engine:
             # a rotated credential, and skipping the refresh there would
             # make that gesture silently do nothing.
             await refresh_secret_snapshot()
+            await self._complete_deferred_migrations(new)
             old = self._active_config
+            # What this payload's ``${VAR}`` references CURRENTLY resolve
+            # to.  Computed after ``refresh_secret_snapshot`` above, so a
+            # value just written to the secret store is already visible.
+            new_payload = new.model_dump()
+            fingerprint = resolution_fingerprint(new_payload)
             if old is not None:
                 # No-op early-out: a re-activation of the current
                 # revision (operator clicks revert-to-current, an idle
                 # PUT, etc.) would otherwise pay for the full snapshot
                 # capture + every subsystem's `if old.X != new.X`
                 # comparison.  Short-circuit before touching anything.
-                if old.model_dump() == new.model_dump():
+                #
+                # The FINGERPRINT is half of that comparison, and the
+                # half that used to be missing.  Re-activating an
+                # unchanged revision is the documented way to make a
+                # running engine pick up a rotated credential — and it is
+                # by definition a byte-identical payload, so keying the
+                # early-out on the payload alone made that gesture do
+                # nothing but swap the secret snapshot.  Every subsystem
+                # that captured a resolved value (an MCP child's spawn
+                # env, an LLM client, a transport header) kept the old
+                # one, indefinitely.
+                if (
+                    old.model_dump() == new_payload
+                    and fingerprint == self._active_resolution
+                ):
                     logger.info("apply_config_noop", org=new.name)
                     return []
+                if old.model_dump() == new_payload:
+                    logger.info("apply_config_rotation", org=new.name)
+                    applied_rotation = await self._apply_credential_rotation(new)
+                    self._active_resolution = fingerprint
+                    return applied_rotation
                 # Per-subsystem dispatch — each subsystem gets a
                 # handler; order matters (see
                 # ``_APPLY_DISPATCH_ORDER``).  Subsystems that
@@ -690,6 +907,7 @@ class Engine:
                 snapshot = self._snapshot_for_rollback()
                 applied: list[str] = []
                 failed_subsystem: str | None = None
+                entered_restart_required = False
                 try:
                     new_org_obj = config_to_organization(new)
                     failed_subsystem = "org"
@@ -715,6 +933,11 @@ class Engine:
                     if self._apply_scalars_diff(old, new):
                         applied.append("scalars")
                     failed_subsystem = "restart_required"
+                    # Past this point rollback cannot fully undo what is
+                    # about to change: it restores and restarts
+                    # transports, but the per-role MCP children this
+                    # block respawns stay on the failed revision.
+                    entered_restart_required = True
                     applied.extend(await self._apply_restart_required_diff(old, new))
                     failed_subsystem = None
                 except Exception as exc:
@@ -724,15 +947,19 @@ class Engine:
                         subsystem=failed_subsystem or "unknown",
                         error=str(exc),
                     )
-                    self._rollback(snapshot)
+                    await self._rollback(snapshot)
                     raise ConfigApplyError(
-                        failed_subsystem or "unknown", exc, applied
+                        failed_subsystem or "unknown",
+                        exc,
+                        applied,
+                        degraded=entered_restart_required,
                     ) from exc
                 # Refresh derived state that the org renders into.
                 self.delegation = DelegationHandler(
                     self.org, self.agent_pool, self.event_queue
                 )
                 self._active_config = new
+                self._active_resolution = fingerprint
                 logger.info(
                     "config_applied",
                     org=new.name,
@@ -784,11 +1011,18 @@ class Engine:
                 new.notification_coalesce_window_seconds
             )
             self._inbox_batch_options.max_batch = new.notification_coalesce_max_batch
-            self.budget_manager = BudgetManager(org_budget=new.token_budget)
-            # A new manager means a new meter; re-install the reporter's
-            # hook or every subsequent charge goes unreported.
-            if self._budget_reporter is not None:
-                self._budget_reporter.attach()
+            # Update the cap in place rather than rebuilding: a fresh
+            # BudgetManager would drop the shared usage store wired at
+            # boot, silently returning the fleet to per-process counters.
+            # It also keeps the meter — and therefore the reporter's hook
+            # — alive across an activation, so nothing has to re-attach.
+            # Per-agent caps are re-seeded by the org diff below.
+            self.budget_manager.update_org_budget(new.token_budget)
+            # Per-seat caps are a projection of the active revision, so
+            # they land the moment it activates — not when the spawn
+            # cascade happens to run.  Idempotent with the reseed in
+            # ``start`` step 4 and the one after every org swap.
+            self._reseed_seat_budgets(self.org)
             self._turn_engine_config = new.turn_engine
             self._learning_config = new.learning
             self._scheduling_config = new.scheduling
@@ -800,6 +1034,7 @@ class Engine:
             self._skill_variables = resolve_skill_variables(new)
             self._prompt_skill_registry.set_variables(self._skill_variables)
             self._active_config = new
+            self._active_resolution = fingerprint
 
             # If the engine is already running (i.e. the first
             # PUT /config arrived while we were idle in the
@@ -958,13 +1193,28 @@ class Engine:
             },
         }
 
-    def _rollback(self, snapshot: dict[str, Any]) -> None:
+    async def _rollback(self, snapshot: dict[str, Any]) -> None:
         """Restore engine state from a snapshot.
 
         Best-effort: an exception inside rollback is logged loudly
         (``config_rollback_failed``) but doesn't re-raise — the
         dashboard banner surfaces the divergence between
         the DB-active row and the engine-applied state.
+
+        **Async on purpose.** It used to be synchronous, which meant the
+        transport restore was a dict assignment — reinstalling transport
+        objects the failed apply had already ``stop()``ed. The node came
+        out of rollback reporting the prior epoch with a dead inbound
+        path: every webhook rejected with ``handle_event_after_stop``,
+        silently, until someone restarted the process. Restoring
+        transports has to *restart* them, and restarting is async.
+
+        What rollback still cannot undo is per-role MCP respawn: the
+        children of the failed revision are already running, and
+        re-running the spawn sequence for every role inside an
+        already-failing apply trades one failure for a longer, less
+        predictable one. That is what ``ConfigApplyError.degraded``
+        records, and why such a node fails readiness.
         """
         logger.warning(
             "config_rollback_started",
@@ -995,9 +1245,12 @@ class Engine:
             self._inbox_batch_options.max_batch = snapshot[
                 "notification_coalesce_max_batch"
             ]
-            # Budget org cap: restore max_tokens, leave used_tokens
-            # (they may have advanced via concurrent agent activity).
+            # Budget caps: restore the org max_tokens and re-derive the
+            # per-seat caps from the restored org.  Used-tokens are left
+            # alone throughout (they may have advanced via concurrent
+            # agent activity, and the shared store is the truth anyway).
             self.budget_manager.update_org_budget(snapshot["budget_org_max"])
+            self._reseed_seat_budgets(self.org)
             self._turn_engine_config = snapshot["turn_engine_config"]
             if (
                 self.turn_engine is not None
@@ -1023,19 +1276,22 @@ class Engine:
             # running services in their post-apply state even though
             # the stored configs reverted.
             if self.notification_service is not None:
-                self.notification_service.transports = dict(snapshot["live_transports"])
+                # Route the restore through the SAME machinery the apply
+                # used, rather than assigning the dict back. That is what
+                # stops the failed revision's transports, RESTARTS the
+                # snapshot's, and re-seeds routing from the now-restored
+                # org — a plain assignment reinstalled objects that had
+                # already been stopped, leaving the node silently deaf
+                # while it reported a healthy epoch. Transports whose
+                # identity never changed are skipped on both sides, so
+                # nothing is double-started.
+                await self._apply_notification_transports_live(
+                    list(snapshot["live_transports"].values())
+                )
                 # Same live-state restore for the GitLab routing config —
                 # the integrations diff pushed the failed revision's
                 # config onto the running service.
                 self.notification_service.set_gitlab_config(self._gitlab_config)
-                # ``_apply_org_diff`` re-seeded the surviving transports'
-                # lead maps (Jira project / Confluence space / Plane
-                # project → unit lead) from the FAILED revision's org.
-                # Now that ``self.org`` and the transports dict are
-                # restored, re-derive routing from the rolled-back org so
-                # a failed apply never leaves live routing on config that
-                # was never activated.
-                self._reseed_notification_routing()
             # Restore ExtensionManager._extensions to the pre-apply
             # set.  Cannot re-run on_engine_start on extensions that
             # were unregistered (their on_engine_stop already fired);
@@ -1063,106 +1319,476 @@ class Engine:
                 ),
             )
 
-    async def _subscribe_revision_activated(self) -> None:
-        """Subscribe to ``crewlet.config.revision_activated``.
+    async def _subscribe_activation_nudge(self) -> None:
+        """Wake the reconcile loop the moment a revision activates.
 
-        Handler loads the activated revision from the
-        :class:`CompanyConfigStore`, calls :meth:`apply_config`, and
-        publishes ``ConfigRevisionApplied`` with the outcome.  Both
-        configured and unconfigured engines subscribe — the
-        unconfigured one wakes up on the first PUT /config.
+        A **nudge only** — it carries no payload the loop trusts and
+        skipping it costs at most one poll interval.  That distinction is
+        the whole point of the rewrite: this used to be a *durable
+        competing-consumer* subscription (group ``engine-config``) that
+        did the apply itself, so with N engine processes exactly ONE
+        applied any given revision and the rest ran the previous company
+        indefinitely.  Deleted roles kept answering Slack, rotated
+        credentials kept being used, and the dashboard reported success
+        because the one node that applied it published ``ok``.
+
+        Broadcasting it (``subscribe_stream``) fixes the fan-out but not
+        the reliability: an ephemeral stream consumer starts at the
+        latest message, so anything published while a node reconnects is
+        simply gone, and there is no cursor to replay from.  Hence the
+        split — the poll in :meth:`_reconcile_config_loop` is
+        authoritative because it *asks*, and this only makes the common
+        case fast.
         """
-        from crewlet.config import CompanyConfig
-        from crewlet.events.types import ConfigRevisionActivated, ConfigRevisionApplied
+        from crewlet.events.types import ConfigRevisionActivated
 
         store = getattr(self, "_company_config_store", None)
         if store is None:
             logger.debug(
-                "skip_revision_activated_subscription",
+                "skip_activation_nudge_subscription",
                 reason="no company_config_store on engine",
             )
             return
 
-        async def _handle(event: ConfigRevisionActivated) -> None:
-            from uuid import UUID as _UUID
-
-            try:
-                rev_id = _UUID(event.revision_id)
-            except (ValueError, TypeError) as exc:
-                logger.error(
-                    "config_revision_activated_invalid_id",
-                    revision_id=event.revision_id,
-                    error=str(exc),
-                )
-                return
-
+        async def _handle(topic: str, event: ConfigRevisionActivated) -> None:
             logger.info(
-                "config_revision_activated_received",
-                revision_id=event.revision_id,
-                source=event.source,
+                "config_activation_nudge",
+                revision_id=getattr(event, "revision_id", ""),
+                source=getattr(event, "source", ""),
             )
-            revision = await store.get_revision(rev_id)
-            if revision is None:
-                logger.error(
-                    "config_revision_not_in_store",
-                    revision_id=event.revision_id,
-                )
-                return
+            self._reconcile_nudge.set()
 
-            applied_subsystems: list[str] = []
+        self._nudge_unsubscribe = await self.event_queue.subscribe_stream(
+            "crewlet.config.revision_activated",
+            _handle,
+        )
+        logger.info("subscribed_to_activation_nudge")
+
+    # ── control plane ────────────────────────────────────────────────
+
+    def _config_plane(self) -> Any:
+        """The activation log + apply-status store.
+
+        Falls back to the in-memory twin without a database — the same
+        rule the lease, budget and rate-limit stores follow.  It is the
+        *correct* plane for that shape rather than a stub: with no shared
+        database there is also no shared config store, so there is
+        exactly one process and nothing to converge with.  Keeping the
+        seam a real object (instead of ``None``) is what lets the
+        reconcile path have one implementation instead of two.
+        """
+        from crewlet.db.client import Database
+
+        if self._config_plane_store is not None:
+            return self._config_plane_store
+        if not isinstance(self.storage, Database):
+            from crewlet.db.config_plane import MemoryConfigPlaneStore
+
+            self._config_plane_store = MemoryConfigPlaneStore()
+            return self._config_plane_store
+        if self._config_plane_store is None and isinstance(self.storage, Database):
+            from crewlet.db.config_plane import ConfigPlaneStore
+
+            self._config_plane_store = ConfigPlaneStore(self.storage)
+        return self._config_plane_store
+
+    @property
+    def posture(self) -> Any:
+        """This node's current config posture. See :mod:`crewlet.db.config_plane`."""
+        from crewlet.db.config_plane import Posture
+
+        return self._posture or Posture.SERVE
+
+    def admits_triggers(self) -> bool:
+        """Whether this node should accept NEW work right now.
+
+        The gate sits on trigger admission rather than on ``run_turn``,
+        for two reasons the review gate made concrete. A stale node still
+        *consumes* inbound messages — and Slack HMAC verification happens
+        consume-side against this node's cached secret, where a failure
+        is a skip plus an ack, so a rotated signing secret means it
+        silently eats every message it wins. And refusing at ``run_turn``
+        would strand a seat whose sandbox run just completed: the pending
+        row is already flipped to ``resumed``, the box collected, the
+        inbox paused, and nothing reaps a ``resumed`` row in-process.
+        """
+        from crewlet.db.config_plane import Posture
+
+        return self.posture not in (Posture.SHED, Posture.STUCK)
+
+    async def _apply_posture(self, posture: Any) -> None:
+        """Pause or resume trigger topics to match ``posture``.
+
+        Uses the ``config`` pause reason, so releasing it cannot un-gate a
+        seat the sandbox is holding, and the sandbox releasing its own
+        hold cannot un-gate a diverged node.
+        """
+        from crewlet.db.config_plane import Posture
+
+        if posture == self._posture:
+            return
+        previous, self._posture = self._posture, posture
+        shed = posture in (Posture.SHED, Posture.STUCK)
+        was_shed = previous in (Posture.SHED, Posture.STUCK)
+        if shed == was_shed:
+            return
+
+        # Seat inboxes are handled by RELEASING the seats below — a
+        # diverged node must stop holding them, not merely stop reading
+        # them, or it reserves fleet capacity it refuses to use. What is
+        # left here is the ingress topic, which belongs to no seat.
+        pairs = [("crewlet.notifications.inbound", "notifications")]
+        for topic, group in pairs:
             try:
-                from crewlet.secrets import load_config
-
-                # Decrypt the encrypted-document payload to plaintext before
-                # validation + apply.
-                new = CompanyConfig.model_validate(
-                    load_config(revision.payload, self._cipher)
-                )
-                applied_subsystems = await self.apply_config(new) or []
-                applied_status = "ok"
-                error = ""
-            except ConfigApplyError as exc:
-                # Mid-apply failure: rollback already restored prior
-                # state.  Pull the ordered list of subsystems that DID
-                # succeed before the failure off the exception so the
-                # ConfigRevisionApplied event reports partial progress
-                # (dashboard "applied: org, budgets; failed at:
-                # turn_engine") instead of an empty list.
+                if shed:
+                    await self.event_queue.pause_topic(topic, group, reason="config")
+                else:
+                    await self.event_queue.resume_topic(topic, group, reason="config")
+            except Exception:
                 logger.exception(
-                    "config_apply_failed",
-                    revision_id=event.revision_id,
-                    subsystem=exc.subsystem,
-                    error=str(exc.original),
+                    "config_posture_topic_failed", topic=topic, group=group
                 )
-                applied_subsystems = list(exc.applied_before_failure)
-                applied_status = "error"
-                error = f"{exc.subsystem}: {exc.original}"
-            except Exception as exc:
-                logger.exception(
-                    "config_apply_failed",
-                    revision_id=event.revision_id,
-                    error=str(exc),
-                )
-                applied_status = "error"
-                error = str(exc)
+        # Ownership follows posture. A node that cannot apply the
+        # current epoch must not merely stop serving its seats — it must
+        # stop HOLDING them, or it reserves fleet capacity for itself
+        # while refusing to use it, and its seats stay dark until it
+        # converges. Fenced, not voluntary: it is not draining
+        # gracefully, it is diverged, and a peer should have the seat
+        # now rather than when this node's current turn happens to end.
+        if self._seat_host is not None:
+            from crewlet.seat.host import ReleaseReason
 
-            await self.event_queue.publish(
-                "crewlet.config.revision_applied",
-                ConfigRevisionApplied(
-                    source="engine.apply_config",
-                    revision_id=event.revision_id,
-                    status=applied_status,
-                    applied_subsystems=applied_subsystems,
-                    error=error,
+            try:
+                if shed:
+                    await self._seat_host.begin_drain()
+                    await self._seat_host.release_all(ReleaseReason.POSTURE)
+                elif self._running and not self._shutting_down:
+                    await self._seat_host.resume_claiming()
+            except Exception:
+                logger.exception("config_posture_seat_handoff_failed")
+        logger.warning(
+            "config_posture_changed",
+            posture=str(posture),
+            previous=str(previous or "serve"),
+            shedding=shed,
+        )
+
+    async def _reconcile_config_once(self) -> Any:
+        """One reconcile tick: converge if behind, then set posture."""
+        from crewlet.db.config_plane import (
+            MAX_APPLY_ATTEMPTS,
+            FleetView,
+            Posture,
+            decide_posture,
+        )
+
+        plane = self._config_plane()
+        store = getattr(self, "_company_config_store", None)
+        if plane is None or store is None:
+            return Posture.SERVE
+
+        # The embedded API's cached projection (webhook secrets above
+        # all) follows the same pointer.  Driven here rather than from
+        # its own loop so one process polls once — see
+        # crewlet.api.config_refresh.
+        if self._api_refresher is not None:
+            try:
+                await self._api_refresher.refresh_if_changed()
+            except Exception:
+                logger.exception("embedded_api_state_refresh_failed")
+
+        target = await plane.target()
+        if target is None:
+            return Posture.SERVE
+
+        # A new revision gets a fresh budget. ``_apply_attempts`` counts
+        # attempts at ONE epoch; carrying it across an activation makes
+        # STUCK terminal for the life of the process, so the operator
+        # does exactly what the runbook says — push a fixed revision —
+        # and the node never tries it, never says why, and stays shed.
+        if target.epoch != self._apply_attempts_epoch:
+            if self._apply_attempts >= MAX_APPLY_ATTEMPTS:
+                logger.info(
+                    "config_apply_attempts_reset",
+                    previous_epoch=self._apply_attempts_epoch,
+                    epoch=target.epoch,
+                    hint=(
+                        "a new revision was activated after this node "
+                        "exhausted its attempts on the previous one; "
+                        "trying again against the new target"
+                    ),
+                )
+            self._apply_attempts = 0
+            self._apply_attempts_epoch = target.epoch
+
+        if (
+            self._applied_epoch < target.epoch
+            and self._apply_attempts < MAX_APPLY_ATTEMPTS
+        ):
+            self._apply_attempts += 1
+            await self._converge_to(target, plane, store)
+
+        self._ticks_behind = (
+            self._ticks_behind + 1 if self._applied_epoch < target.epoch else 0
+        )
+        # Re-stamp this node's status EVERY tick, not only when it
+        # converges. ``peer_health`` reads these rows to answer "is there
+        # a healthy peer right now", and bounds them on freshness because
+        # ``record_apply`` upserts on node_id and a terminated node's
+        # ``ok`` would otherwise stand forever. That bound is only honest
+        # if a live node keeps writing: a converged node used to record
+        # once and go quiet, so its perfectly good status aged out and a
+        # lagging peer read ``peers_ok=0`` off a healthy fleet — WAIT or
+        # ISOLATED where the truth is SHED. One idempotent upsert per
+        # node per tick is what makes the row mean "alive, at this
+        # epoch" instead of "was alive, once".
+        await self._heartbeat_apply_status(plane)
+        peers_ok, peers_reported = await plane.peer_health(
+            target.epoch, exclude_node=self._node_id
+        )
+        posture = decide_posture(
+            FleetView(
+                target_epoch=target.epoch,
+                applied_epoch=self._applied_epoch,
+                ticks_behind=self._ticks_behind,
+                attempts=self._apply_attempts,
+                peers_ok=peers_ok,
+                peers_reported=peers_reported,
+                self_status=self._apply_status,
+            )
+        )
+        if posture == Posture.ISOLATED:
+            logger.error(
+                "config_revision_unapplied_fleet_wide",
+                epoch=target.epoch,
+                hint=(
+                    "no node applied this revision — it is probably the "
+                    "revision, not this node. Serving the prior config."
                 ),
             )
+        await self._apply_posture(posture)
+        if posture not in (Posture.SHED, Posture.STUCK):
+            await self._ensure_ingress_consuming()
+        return posture
 
-        await self.event_queue.subscribe(
-            topic="crewlet.config.revision_activated",
-            group="engine-config",
-            handler=_handle,
+    async def _ensure_ingress_consuming(self) -> None:
+        """Un-quiesce the ingress consumer if a shed left it stopped.
+
+        Reconciled on every admitting tick rather than fired on the
+        recovery edge, because the two things involved run on different
+        paths: the notification service refuses (and so quiesces) from
+        the DELIVERY path, while the posture changes on this loop. An
+        edge can therefore fire just before the shed's last in-flight
+        delivery quiesces a consumer that nothing would then restart —
+        and an ingress consumer that never restarts is a node that
+        accepts webhooks and reads none of them, on a company that has
+        otherwise fully recovered.
+
+        Converging on "if I admit work, I am consuming" cannot lose that
+        race: the next tick fixes it. Idempotent and cheap — the call is
+        a no-op when nothing is quiesced, and un-quiescing a topic that
+        is also PAUSED changes nothing, since the pause gates delivery
+        independently.
+        """
+        try:
+            await self.event_queue.unquiesce(
+                "crewlet.notifications.inbound", "notifications"
+            )
+        except Exception:
+            logger.exception("ingress_unquiesce_failed")
+
+    async def _heartbeat_apply_status(self, plane: Any) -> None:
+        """Re-assert this node's last apply outcome, unchanged.
+
+        Never fatal: a plane that cannot take the write leaves the
+        previous row, which ages out and makes this node look absent —
+        the same conservative direction the freshness bound already
+        takes. Failing the tick instead would stop the reconcile loop
+        that is the only way out of a divergence.
+        """
+        if self._apply_status is None or not self._applied_epoch:
+            return
+        try:
+            await plane.record_apply(
+                self._node_id,
+                epoch=self._applied_epoch,
+                revision_id=self._applied_revision_id,
+                status=self._apply_status,
+                error=self._apply_error,
+            )
+        except Exception:
+            logger.debug("config_status_heartbeat_failed", node=self._node_id)
+
+    async def _converge_to(self, target: Any, plane: Any, store: Any) -> None:
+        """Apply ``target`` and record the outcome for the fleet."""
+        from crewlet.config import CompanyConfig
+        from crewlet.db.config_plane import ApplyStatus
+        from crewlet.events.types import ConfigRevisionApplied
+        from crewlet.secrets import load_config
+
+        status = ApplyStatus.OK
+        error = ""
+        applied_subsystems: list[str] = []
+        try:
+            revision = await store.get_revision(target.revision_id)
+            if revision is None:
+                raise RuntimeError(f"revision {target.revision_id} not in store")
+            # Decrypt the encrypted-document payload before validation.
+            new = CompanyConfig.model_validate(
+                load_config(revision.payload, self._cipher)
+            )
+            applied_subsystems = await self.apply_config(new) or []
+        except ConfigApplyError as exc:
+            # Rollback has already run.  ``degraded`` distinguishes the
+            # case rollback could not undo (MCP children not respawnable,
+            # transports reinstalled already-stopped) — the control plane
+            # must never count such a node as somewhere work can go.
+            status = ApplyStatus.DEGRADED if exc.degraded else ApplyStatus.ERROR
+            error = f"{exc.subsystem}: {exc.original}"
+            applied_subsystems = list(exc.applied_before_failure)
+            logger.error(
+                "config_converge_failed",
+                epoch=target.epoch,
+                revision_id=str(target.revision_id),
+                subsystem=exc.subsystem,
+                degraded=exc.degraded,
+                error=str(exc.original),
+            )
+        except Exception as exc:
+            status = ApplyStatus.ERROR
+            error = str(exc)
+            logger.exception(
+                "config_converge_failed",
+                epoch=target.epoch,
+                revision_id=str(target.revision_id),
+            )
+        else:
+            self._applied_epoch = target.epoch
+            self._apply_attempts = 0
+            self._apply_attempts_epoch = target.epoch
+            self._ticks_behind = 0
+            logger.info(
+                "config_converged",
+                epoch=target.epoch,
+                revision_id=str(target.revision_id),
+                subsystems=applied_subsystems,
+            )
+
+        self._apply_status = status
+        self._applied_revision_id = target.revision_id
+        self._apply_error = error
+        try:
+            await plane.record_apply(
+                self._node_id,
+                epoch=target.epoch,
+                revision_id=target.revision_id,
+                status=status,
+                error=error,
+            )
+        except Exception:
+            # The write is how peers learn this node's outcome; losing it
+            # makes the node look silent rather than failed, which
+            # ``decide_posture`` reads as "no evidence" — the conservative
+            # direction.  The local apply already happened either way.
+            logger.exception("config_apply_status_write_failed")
+
+        await self.event_queue.publish(
+            "crewlet.config.revision_applied",
+            ConfigRevisionApplied(
+                source="engine.reconcile",
+                revision_id=str(target.revision_id),
+                status=str(status),
+                applied_subsystems=applied_subsystems,
+                error=error,
+            ),
         )
-        logger.info("subscribed_to_revision_activated")
+
+    async def _reconcile_config_loop(self) -> None:
+        """Poll the activation pointer forever.
+
+        The AUTHORITATIVE delivery mechanism, deliberately — see
+        :meth:`_subscribe_activation_nudge` for why the event it replaced
+        could not be.  A poll cannot miss anything, because it asks.
+
+        The nudge shortens the wait but never replaces the tick: after a
+        nudge fires, the next iteration still sleeps a full jittered
+        interval, so an activation storm cannot turn into an apply storm.
+        """
+        from crewlet.db.config_plane import reconcile_delay
+
+        # Runs from Tier-A boot until :meth:`_stop_control_plane`
+        # cancels it — deliberately NOT gated on ``self._running``, which
+        # only flips true at the END of the Tier-B cascade.  An
+        # unconfigured engine has to reconcile: the first activation is
+        # precisely what brings it to life.
+        while True:
+            try:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        self._reconcile_nudge.wait(), timeout=reconcile_delay()
+                    )
+                self._reconcile_nudge.clear()
+                await self._reconcile_config_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("config_reconcile_tick_failed")
+
+    async def _stop_control_plane(self) -> None:
+        """Cancel the reconcile loop and drop the activation nudge.
+
+        Called before the rest of the teardown: the reconciler can start
+        a full apply — respawning MCP children, rebuilding transports —
+        and one that lands mid-shutdown would resurrect subsystems the
+        drain is trying to bring down.
+        """
+        if self._reconcile_task is not None:
+            task, self._reconcile_task = self._reconcile_task, None
+            await cancel_and_wait(task)
+        if self._nudge_unsubscribe is not None:
+            unsubscribe, self._nudge_unsubscribe = self._nudge_unsubscribe, None
+            with contextlib.suppress(Exception):
+                await unsubscribe()
+        if self._api_refresher is not None:
+            refresher, self._api_refresher = self._api_refresher, None
+            with contextlib.suppress(Exception):
+                await refresher.stop()
+
+    async def _seed_applied_epoch(self, revision_id: Any) -> None:
+        """Record the epoch the boot-time apply of ``revision_id`` satisfied.
+
+        Boot applies the *active revision*; the reconcile loop converges
+        on the *activation pointer*.  Those agree in the ordinary case,
+        and when they do this node is already at that epoch — recording
+        it is what stops the first tick from re-applying (and restarting
+        every MCP child) seconds after boot.
+
+        When they disagree — an activation landed between the boot read
+        and this call — the epoch is deliberately left unseeded so the
+        first tick converges properly.
+        """
+        from crewlet.db.config_plane import ApplyStatus
+
+        plane = self._config_plane()
+        if plane is None:
+            return
+        try:
+            target = await plane.target()
+            if target is None or str(target.revision_id) != str(revision_id):
+                return
+            self._applied_epoch = target.epoch
+            self._apply_status = ApplyStatus.OK
+            self._applied_revision_id = target.revision_id
+            self._apply_error = ""
+            await plane.record_apply(
+                self._node_id,
+                epoch=target.epoch,
+                revision_id=target.revision_id,
+                status=ApplyStatus.OK,
+            )
+            logger.info("config_epoch_seeded", epoch=target.epoch)
+        except Exception:
+            logger.exception("config_epoch_seed_failed")
 
     async def start(self) -> None:
         """Boot the engine.
@@ -1204,25 +1830,44 @@ class Engine:
             if hasattr(self.storage, "initialize"):
                 await self.storage.initialize()
 
+            # 1.5 Point the budget cascade at the shared counter. Token
+            # budgets are a company-wide question ("have we spent our
+            # 500k"), so the in-memory default is only correct for a
+            # single process — with peers, an org cap silently becomes
+            # N x the configured value.
+            from crewlet.db.budgets import PostgresBudgetUsageStore
+            from crewlet.db.client import Database
+
+            if isinstance(self.storage, Database):
+                self.budget_manager.set_usage_store(
+                    PostgresBudgetUsageStore(self.storage)
+                )
+
             # 2. Start event queue
             logger.info("start_step", step="2/8", action="start_queues")
             await self.event_queue.start()
-
-            # 2.5 Start A2A bus (if configured)
-            if self._a2a_bus is not None:
-                logger.info("start_step", step="2.5/8", action="start_a2a_bus")
-                await self._a2a_bus.start()
+            self._queue_started = True
+            await self._apply_pending_hooks()
 
             # 3. Start observability manager
             logger.info("start_step", step="3/8", action="start_observability")
             await self.observability.start()
 
-            # 3.5. Subscribe to crewlet.config.revision_activated so the
-            # engine picks up live config edits.  Subscription is set
-            # up regardless of whether a Tier B config is currently
-            # active — an unconfigured engine wakes up when the first
-            # revision arrives.
-            await self._subscribe_revision_activated()
+            # 3.5. Attach the control plane so the node picks up live
+            # config edits.  Both halves run regardless of whether a
+            # Tier B config is currently active — an unconfigured engine
+            # wakes up on the first activation.
+            #
+            # The reconcile LOOP is authoritative; the broadcast nudge
+            # only makes the common case fast.  See
+            # ``_subscribe_activation_nudge``.
+            self._node_id = resolve_node_id(getattr(self, "_bootstrap", None))
+            self._resolve_node_profile()
+            await self._subscribe_activation_nudge()
+            if self._reconcile_task is None:
+                self._reconcile_task = asyncio.create_task(
+                    self._reconcile_config_loop()
+                )
 
             self._tier_a_done = True
 
@@ -1242,18 +1887,31 @@ class Engine:
         if self._tier_b_done:
             return
 
-        # 4. Spawn agents
+        # 4. Seat placement — NOT "spawn every agent".
+        #
+        # An agent instance is process-local state that is never
+        # persisted: its ``AgentState`` (WORKING, AWAITING_SANDBOX) lives
+        # only here. Spawning one on every node therefore does not give
+        # the fleet a warm spare, it gives it N copies of a state machine
+        # that disagree — a non-owner's instance strands in
+        # AWAITING_SANDBOX and the seat comes home poisoned.
+        #
+        # So the pool holds exactly the seats this node OWNS, and the
+        # placement host decides which those are. The actual spawning
+        # happens in ``_acquire_seat``, which also attaches the consumer
+        # — last, after the seat is established.
         role_count = len(list(self.org.all_roles()))
         logger.info(
-            "start_step", step="4/8", action="spawn_agents", role_count=role_count
+            "start_step", step="4/8", action="place_seats", role_count=role_count
         )
-        await self.agent_pool.spawn_from_org(self.org)
-
-        # Set per-agent token budgets from role configs
-        for agent in self.agent_pool.agents:
-            role = self.org.get_role(agent.role_name)
-            if role is not None:
-                self._seed_agent_budget(agent, role)
+        # Set per-seat token budgets from role configs.  Driven by the
+        # ORG, not the pool: a cap must exist for every seat this node
+        # could ever run, and under owner-only seats that is every seat
+        # in the company, not the subset spawned here.
+        self._reseed_seat_budgets(self.org)
+        if self._seat_host is None:
+            self._seat_host = self._build_seat_host()
+        await self._ensure_seat_subscriptions()
 
         # 5. Launch MCP servers (if configured)
         logger.info(
@@ -1275,6 +1933,7 @@ class Engine:
         transports_dict: dict[str, Any] = {}
         for transport in self._pending_transports:
             transports_dict[transport.name] = transport
+        self._share_delivery_dedupe(transports_dict)
 
         # The org provider keeps human-seat resolution live across
         # hot reloads that swap ``self.org``.
@@ -1296,6 +1955,9 @@ class Engine:
             handle_registry=self.handle_registry,
             rate_limit=self._notification_rate_limit,
         )
+        # A stale node must stop consuming inbound before it stops
+        # running turns — see NotificationService._handle_inbound.
+        self.notification_service.set_admission_gate(self.admits_triggers)
 
         # Register per-agent Slack apps from role configs
         from crewlet.notifications.transports.slack import (
@@ -1797,6 +2459,9 @@ class Engine:
                                     if skill_promo_cfg is not None
                                     else 0.6
                                 ),
+                                claim_duty=lambda: self.claim_worker_duty(
+                                    "skill-clustering"
+                                ),
                             )
                     logger.info(
                         "learning_enabled",
@@ -1974,6 +2639,7 @@ class Engine:
                         interval_hours=int(curator_cfg.interval_hours),
                         stale_after_days=int(curator_cfg.stale_after_days),
                         archive_after_days=int(curator_cfg.archive_after_days),
+                        claim_duty=lambda: self.claim_worker_duty("skill-curator"),
                     )
                     logger.info("learning_enabled", subsystem="skill_curator")
             else:
@@ -2004,7 +2670,6 @@ class Engine:
             if isinstance(self.storage, Database):
                 self._scheduler = Scheduler(
                     event_queue=self.event_queue,
-                    agent_pool=self.agent_pool,
                     org_provider=lambda: self.org,
                     store=ScheduledRunStore(self.storage),
                     default_timezone=sched_cfg.default_timezone,
@@ -2012,6 +2677,8 @@ class Engine:
                     jitter_seconds=sched_cfg.jitter_seconds,
                     catchup_min_seconds=sched_cfg.catchup_min_seconds,
                     catchup_max_seconds=sched_cfg.catchup_max_seconds,
+                    admits=self.admits_triggers,
+                    claim_duty=lambda: self.claim_worker_duty("scheduler"),
                 )
                 logger.info("scheduler_enabled", schedules=count_schedules(self.org))
             else:
@@ -2035,15 +2702,15 @@ class Engine:
                 summarize_max_tokens=summarize_max_tokens,
             )
 
-        # 7.5 Subscribe per-agent handlers on the event queue
-        logger.info(
-            "start_step",
-            step="7.5/8",
-            action="subscribe_agent_handlers",
-            agent_count=len(self.agent_pool.agents),
-        )
-        for agent in self.agent_pool.agents:
-            await self._subscribe_agent_inbox(agent)
+        # 7.5 Claim seats. The host's first sweep runs inline, so by the
+        # time ``start`` returns this node has established (and attached)
+        # its share — the same guarantee the old spawn-everything step
+        # gave, minus the seats that are not ours.
+        logger.info("start_step", step="7.5/8", action="claim_seats")
+        if self._seat_host is not None and not self._seat_host_started:
+            await self._seat_host.start()
+            self._seat_host_started = True
+            self._start_loop_watchdog()
 
         # Notification service wakes agents via the EventQueue inbox
         # subscriptions above; no direct engine coupling is needed.
@@ -2096,6 +2763,20 @@ class Engine:
             except Exception as exc:
                 logger.error("budget_reporter_start_failed", error=str(exc))
 
+        # Retention sweeps for the short-horizon tables. Built here
+        # rather than in the Tier-B cascade because it depends only on
+        # the storage backend, and skipped entirely without one: the
+        # memory twins prune themselves inline, since a process-local
+        # dict dies with the process.
+        self._build_a2a_channel_store()
+        self._build_turn_completion_store()
+        self._start_maintenance_worker()
+        if self._maintenance_worker is not None:
+            try:
+                await self._maintenance_worker.start()
+            except Exception as exc:
+                logger.error("maintenance_worker_start_failed", error=str(exc))
+
         # Sandbox coordinator — subscribes the
         # started/completed control topics and re-attaches to in-flight
         # detached runs after a restart. Best-effort: a failure is logged
@@ -2134,7 +2815,6 @@ class Engine:
         # hot reloads — including seat-kind flips — re-route correctly.
         self._cancel_deadline_timers = await setup_subscriptions(
             self.event_queue,
-            self.agent_pool,
             lambda: self.org,
         )
 
@@ -2147,7 +2827,9 @@ class Engine:
         )
         logger.info("engine_started", org=self.org.name)
 
-    async def _subscribe_agent_inbox(self, agent: AgentInstance) -> None:
+    async def _subscribe_agent_inbox(
+        self, agent: AgentInstance, epoch: int = 0
+    ) -> None:
         """Subscribe *agent*'s inbox with batched per-conversation delivery.
 
         Events that queue up while the agent is busy (or within the
@@ -2158,22 +2840,74 @@ class Engine:
         ``BatchOptions`` instance is mutated in place by live config
         reloads.
 
-        IDEMPOTENT per agent handle: boot and the late turn-engine path
-        (:meth:`_ensure_turn_engine_after_providers`) both walk the pool,
-        and a second subscribe would create a second competing consumer in
-        this process — two of the agent's events could then dispatch
-        concurrently, with the loser NAK'd toward the dead-letter topic.
+        Attaching a consumer is what makes this node the seat's owner in
+        practice, so this RAISES rather than silently skipping when asked
+        to attach something it believes attached. The old guard returned
+        quietly, which meant a seat whose release forgot to clear the set
+        came back owned in the lease table and dark in the process — the
+        absence of a log line being the only signal.
+
+        ``epoch`` records which claim this attachment belongs to, so a
+        release can tell "the consumer I attached" from "a consumer a
+        later claim attached".
         """
+        if not agent.handle:
+            raise ValueError(
+                "cannot attach an inbox for an empty handle — a seat with "
+                "no handle is not routable (see crewlet.queue.topics)"
+            )
         if agent.handle in self._subscribed_inboxes:
-            return
+            raise RuntimeError(
+                f"inbox for seat {agent.handle!r} is already attached at "
+                f"epoch {self._subscribed_inboxes[agent.handle]}; attaching "
+                f"twice would put two competing consumers on one seat"
+            )
+        started = time.monotonic()
         await self.event_queue.subscribe_batch(
-            topic=f"crewlet.agent.{agent.handle}.inbox",
-            group=f"agent-{agent.handle}",
+            topic=agent_inbox_topic(agent.handle),
+            group=agent_inbox_group(agent.handle),
             handler=self._make_agent_handler(agent),
             batch_key=conversation_key,
             options=self._inbox_batch_options,
         )
-        self._subscribed_inboxes.add(agent.handle)
+        self._subscribed_inboxes[agent.handle] = epoch
+        logger.info(
+            "inbox_attached",
+            seat=agent.handle,
+            epoch=epoch,
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
+
+    async def _detach_agent_inbox(self, handle: str) -> None:
+        """Stop consuming a seat's inbox, leaving the subscription.
+
+        Raises :class:`~crewlet.seat.host.SeatReleaseError` when the
+        detach cannot be proven, so the caller fails closed and keeps the
+        lease rather than handing a seat to a peer while this process may
+        still be consuming it.
+        """
+        from crewlet.seat.host import SeatReleaseError
+
+        epoch = self._subscribed_inboxes.pop(handle, None)
+        started = time.monotonic()
+        try:
+            await self.event_queue.detach(
+                agent_inbox_topic(handle), agent_inbox_group(handle)
+            )
+        except Exception as exc:
+            # Put it back: this process is still attached, and the
+            # bookkeeping must say so.
+            if epoch is not None:
+                self._subscribed_inboxes[handle] = epoch
+            raise SeatReleaseError(
+                f"could not detach the inbox consumer for seat {handle!r}: {exc}"
+            ) from exc
+        logger.info(
+            "inbox_detached",
+            seat=handle,
+            epoch=epoch,
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
 
     def _make_agent_handler(
         self, agent: AgentInstance
@@ -2193,10 +2927,48 @@ class Engine:
         """
 
         async def handle(events: list[Event]) -> None:
-            from crewlet.agent.turn import ShutdownDraining
+            from crewlet.agent.turn import SeatLost, ShutdownDraining
 
             if not events:
                 return
+            # Same-id dedupe FIRST, before any parking branch: at-least-
+            # once delivery — and the requeue machinery's own republish
+            # edges (a publish that timed out client-side but landed, a
+            # partial requeue followed by a partition NAK) — can put two
+            # copies of one event in the same drain. Identical ids mean
+            # identical payloads by construction, so dropping the extras
+            # is the one always-safe dedupe.
+            #
+            # It runs before the parking branches because those
+            # REPUBLISH: deduping afterwards meant every park pushed the
+            # duplicates back onto the topic, so copies multiplied across
+            # shed / sandbox / park cycles instead of holding steady, and
+            # were only ever collapsed by a drain that finally got
+            # through.
+            events = self._dedupe_inbox_events(agent, events)
+            if not events:
+                return
+            # Ownership. This node consumes the seat only while it holds
+            # the seat's lease; the branch is what stops a node that has
+            # lost it from starting work a peer may already be doing.
+            #
+            # ``DeferDelivery``, not a requeue: a requeue sends these to
+            # the topic tail while the successor replays its prefetched
+            # siblings from the head, which reorders the conversation.
+            # And not a NAK, which would spend the dead-letter budget on
+            # messages nothing is wrong with. Leave them unacked and stop
+            # consuming — the successor gets them in order, at
+            # redeliveryCount 0.
+            if not self._may_serve_seat(agent.handle):
+                # Tell the host the consumer is stopping, so the next
+                # successful renew resumes it. Freshness refuses inside
+                # an ordinary heartbeat window on a perfectly healthy
+                # node, so without this a seat goes deaf for the life of
+                # the process the first time a batch lands in that
+                # window. See ``SeatHost.note_delivery_deferred``.
+                if self._seat_host is not None:
+                    self._seat_host.note_delivery_deferred(agent.handle)
+                raise DeferDelivery(f"seat {agent.handle!r} is not owned here")
             # No turn engine yet (booted with zero LLM providers): PARK the
             # events instead of consuming-and-dropping them.  Pause the
             # topic first so the requeued copies buffer on the queue, then
@@ -2205,7 +2977,9 @@ class Engine:
             # actually run turns.
             if self.turn_engine is None:
                 await self.event_queue.pause_topic(
-                    f"crewlet.agent.{agent.handle}.inbox"
+                    agent_inbox_topic(agent.handle),
+                    agent_inbox_group(agent.handle),
+                    reason=_NO_TURN_ENGINE_PAUSE_REASON,
                 )
                 await self._requeue_inbox_events(agent, events)
                 return
@@ -2218,6 +2992,45 @@ class Engine:
             if agent.state == AgentState.AWAITING_SANDBOX:
                 await self._requeue_inbox_events(agent, events)
                 return
+            # Config posture: this node cannot apply an epoch its peers
+            # have, so it must not start NEW work under a stale company.
+            # Defer — leave the delivery unacked and stop consuming this
+            # inbox — rather than requeue it, and never NAK (three
+            # redeliveries at 1 s dead-letter a perfectly healthy event,
+            # and the node may be shedding for minutes).
+            #
+            # Requeue was wrong here twice over. A shed RELEASES this
+            # node's seats, and a release is fenced, so this is exactly
+            # the case the fenced rule already covers: republishing sends
+            # the events to the topic tail while the successor replays
+            # its prefetched siblings from the head, which reorders a
+            # conversation. And a requeue lands back on a topic this node
+            # is still attached to — so if the release that follows fails
+            # (an undead seat, a handoff exception) the copy comes
+            # straight back, is shed again, and republished again, at
+            # whatever rate the broker will serve. Deferring cannot spin:
+            # the consumer stops after the first one.
+            #
+            # This sits AFTER the AWAITING_SANDBOX branch on purpose: a
+            # seat mid-sandbox is already parked there, so a clarification
+            # answer reaching a shedding node behaves exactly as it does
+            # on a healthy one.  The sandbox *resume* never passes through
+            # here at all — the coordinator dispatches it directly — which
+            # is what keeps the gate from stranding a run whose pending
+            # row is already flipped and whose box is already collected.
+            if not self.admits_triggers():
+                logger.info(
+                    "inbox_events_shed",
+                    agent_handle=agent.handle,
+                    posture=str(self.posture),
+                    count=len(events),
+                )
+                # The resume edge, same as the other two defer paths: a
+                # posture that recovers without the seat ever changing
+                # hands leaves nothing else to un-quiesce the inbox.
+                if self._seat_host is not None:
+                    self._seat_host.note_delivery_deferred(agent.handle)
+                raise DeferDelivery(f"config posture {self.posture}")
             # Re-entrancy guard (memory backend): a publish to this agent's
             # OWN inbox from inside its running turn dispatches inline in
             # the same task — waiting for the agent there would deadlock on
@@ -2233,34 +3046,39 @@ class Engine:
                 self._requeue_tasks.add(requeue)
                 requeue.add_done_callback(self._requeue_tasks.discard)
                 return
-            # Same-id dedupe FIRST: at-least-once delivery — and the
-            # deferral / requeue machinery's own republish edges (a
-            # publish that timed out client-side but landed, a partial
-            # requeue followed by a partition NAK) — can put two copies
-            # of one event in the same drain.  Identical ids mean
-            # identical payloads by construction, so dropping the
-            # extras is the one always-safe dedupe; without it the
-            # copies would either double-count inside a digest or run
-            # two full turns via the degrade path.
-            seen_ids: set[Any] = set()
-            deduped: list[Event] = []
-            for event in events:
-                if event.id in seen_ids:
-                    logger.info(
-                        "inbox_duplicate_dropped",
-                        agent_handle=agent.handle,
-                        event_type=event.type,
-                        event_id=str(event.id),
-                    )
-                    continue
-                seen_ids.add(event.id)
-                deduped.append(event)
-            events = deduped
+            # Already worked? Read the completion ledger HERE — after
+            # every parking branch, so a parked partition is not marked
+            # done, and BEFORE coalescing, so recorded constituents drop
+            # out of the partition and only the remainder merges. A
+            # redelivery that overlaps a previous one partially (A+B,
+            # then A+B+C) therefore skips A and B and runs C.
+            events = await self._drop_worked_triggers(agent, events)
+            if not events:
+                return
+            # The identity of the work about to run, bound for the whole
+            # dispatch. Derived HERE because this is where the
+            # constituent list exists — the coalesced digest that reaches
+            # the turn is minted fresh on every merge, so a key taken
+            # from it would differ on every redelivery and match nothing
+            # (the same trap ``_record_worked_triggers`` documents).
+            work_key = derive_work_key(
+                [str(e.id) for e in events if e.type in _LEDGERED_INBOX_TYPES]
+            )
             try:
                 if len(events) > 1:
                     merged = await self._coalesce_inbox_events(agent, events)
                     if merged is not None:
-                        await self._handle_notification(agent, merged)
+                        # Through the SAME dispatch as a single event, not
+                        # straight to ``_handle_notification``. Going direct
+                        # skipped the sandbox clarification check, so a
+                        # parked run whose answer happened to arrive
+                        # alongside a follow-up message — which is what a
+                        # threaded reply looks like — was handled as an
+                        # unrelated message and its box stayed parked until
+                        # the pause reaper killed it.
+                        with bind_work_key(work_key):
+                            await self._dispatch_inbox_event(agent, merged)
+                        await self._record_worked_triggers(agent, events)
                         return
                     # Coalescing declined (heterogeneous partition —
                     # after the dedupe above, a genuine key-scheme bug)
@@ -2274,9 +3092,22 @@ class Engine:
                     # NAK; the dedupe above collapses them on the next
                     # drain.
                     await self._requeue_inbox_events(agent, events[1:])
-                    await self._dispatch_inbox_event(agent, events[0])
+                    # The head alone ran, so the key is the head's alone.
+                    with bind_work_key(
+                        derive_work_key(
+                            [
+                                str(e.id)
+                                for e in events[:1]
+                                if e.type in _LEDGERED_INBOX_TYPES
+                            ]
+                        )
+                    ):
+                        await self._dispatch_inbox_event(agent, events[0])
+                    await self._record_worked_triggers(agent, events[:1])
                     return
-                await self._dispatch_inbox_event(agent, events[0])
+                with bind_work_key(work_key):
+                    await self._dispatch_inbox_event(agent, events[0])
+                await self._record_worked_triggers(agent, events)
             except ShutdownDraining:
                 # The turn never started (engine draining) -- re-raise
                 # so the queue NAKs the partition and the next boot runs
@@ -2289,6 +3120,29 @@ class Engine:
                     event_count=len(events),
                 )
                 raise
+            except SeatLost as exc:
+                # The lease moved mid-turn. Defer, do not NAK: this is
+                # not a failed handler, and spending the message's
+                # dead-letter budget on a handoff would kill a healthy
+                # event after enough of them. The seat's new owner picks
+                # the delivery up, in order, at redeliveryCount 0.
+                logger.warning(
+                    "turn_abandoned_seat_lost",
+                    agent_handle=agent.handle,
+                    event_type=events[0].type,
+                    event_count=len(events),
+                )
+                # Same edge the ownership branch above records, and for
+                # the same reason: this deferral quiesces the consumer,
+                # and the resume hook is edge-triggered on a set the
+                # deferral would otherwise never enter. `SeatLost` is
+                # not always a real handoff — the in-turn fence trips in
+                # the ordinary freshness window too, and there the node
+                # still holds the seat, so nothing detaches and nothing
+                # resumes. The seat goes deaf on a healthy node.
+                if self._seat_host is not None:
+                    self._seat_host.note_delivery_deferred(agent.handle)
+                raise DeferDelivery(str(exc)) from exc
 
         return handle
 
@@ -2424,7 +3278,7 @@ class Engine:
         twice (requeued copy + redelivered original), and the handler's
         same-id dedupe collapses them when they next arrive together.
         """
-        topic = f"crewlet.agent.{agent.handle}.inbox"
+        topic = agent_inbox_topic(agent.handle)
         for event in events:
             await self.event_queue.publish(topic, event)
         logger.info(
@@ -2434,17 +3288,22 @@ class Engine:
         )
 
     async def _handle_a2a(self, agent: AgentInstance, event: Event) -> None:
-        """Handle an A2A channel request or incoming message for an agent.
+        """Handle an A2A channel request or reply for an agent.
 
-        Reads pending messages from the A2A channel, builds a task
-        description with the conversation context, and triggers an
-        agent turn so the target agent can respond.
+        The message content arrives ON the event. It used to be read
+        out of a per-channel ``asyncio.Queue``, which is process-local:
+        the target of an ask wakes on the node that owns ITS seat, and
+        that is rarely the node that opened the channel — so cross-node
+        the queue was empty and the agent was told nobody had said
+        anything yet. Reading the payload also makes the trigger
+        re-runnable, which is what lets the completion ledger cover A2A
+        at all: a drained queue could not be re-read.
 
-        Handles both ``a2a_request`` (initial channel open) and
-        ``a2a_message`` (subsequent message on an existing channel).
+        Handles both ``a2a_request`` (the opening brief) and
+        ``a2a_message`` (a reply on an open channel).
         """
-        if self._a2a_bus is None:
-            logger.warning("a2a_bus_not_configured", agent_handle=agent.handle)
+        if self.a2a_service is None:
+            logger.warning("a2a_service_not_configured", agent_handle=agent.handle)
             return
 
         channel_id = event.payload.get("channel_id", "")
@@ -2453,6 +3312,8 @@ class Engine:
         requester = event.payload.get("requester", "") or event.payload.get(
             "sender", ""
         )
+        content = event.payload.get("content", "") or ""
+        sender_role = event.payload.get("sender_role", "") or ""
         if not channel_id:
             logger.warning(
                 "a2a_request_missing_channel",
@@ -2460,69 +3321,68 @@ class Engine:
             )
             return
 
+        channel = await self.a2a_service.channels.get(channel_id)
+        if channel is None:
+            # No longer swallowed. With the state durable, "unknown"
+            # genuinely means never opened — a typo'd or long-purged
+            # channel id — rather than "opened on another node".
+            logger.warning(
+                "a2a_channel_unknown",
+                agent_handle=agent.handle,
+                channel_id=channel_id,
+            )
+            return
+
+        # Only the party that did NOT open the channel answers on it.
+        # Otherwise the requester's turn — itself triggered by the reply
+        # — would answer the answer, and two agents would volley until
+        # the delegation cap stopped them.
+        #
+        # Read from the CHANNEL, not from the event type: the record is
+        # what both nodes agree on, and it settles the degenerate
+        # requester-is-target case the same way on either.
+        is_responder = agent.handle != channel.requester
+
+        if is_responder and not channel.is_open:
+            # An answer with nowhere to go. Closed means the
+            # conversation ended — the reply already shipped, or the
+            # idle sweep gave up on it — and either way nothing is
+            # waiting on a second one.
+            logger.warning(
+                "a2a_channel_not_open",
+                agent_handle=agent.handle,
+                channel_id=channel_id,
+                state=channel.state,
+            )
+            return
+        # The requester's hop is NOT gated on that. The responder closes
+        # the channel immediately after replying, so by the time the
+        # reply reaches the asker the channel is closed every time —
+        # refusing it here would drop the answer on the floor, which is
+        # the exact failure A2A had before it had a reply path at all.
+        # In-process the close raced the delivery and lost; on a real
+        # broker it wins, so this only ever looked correct on the twin.
+
         logger.info(
             "a2a_channel_join",
             agent_handle=agent.handle,
             channel_id=channel_id,
             requester=requester,
+            content_length=len(content),
         )
 
-        # Read pending message(s) from the A2A channel.  The requester
-        # may still be sending (race between wake event and send), so
-        # wait briefly for the first message.
-        messages: list[dict[str, str]] = []
-        try:
-            receiver = self._a2a_bus.receive(channel_id, agent.handle)
-            first = await asyncio.wait_for(receiver.__anext__(), timeout=10.0)
-            messages.append(
-                {
-                    "sender": first.sender,
-                    "role": first.sender_role,
-                    "content": first.content,
-                }
-            )
-            # Drain any additional immediately available messages.
-            while True:
-                try:
-                    msg = await asyncio.wait_for(receiver.__anext__(), timeout=0.5)
-                    messages.append(
-                        {
-                            "sender": msg.sender,
-                            "role": msg.sender_role,
-                            "content": msg.content,
-                        }
-                    )
-                except (TimeoutError, StopAsyncIteration):
-                    break
-        except (TimeoutError, StopAsyncIteration, KeyError):
-            pass
-
-        total_content_length = sum(len(m["content"]) for m in messages)
-        sender = messages[0]["sender"] if messages else requester
-
-        logger.info(
-            "a2a_messages_read",
-            agent_handle=agent.handle,
-            channel_id=channel_id,
-            message_count=len(messages),
-            sender=sender,
-            total_content_length=total_content_length,
-        )
-
-        # Publish delivery event for observability.
-        # Propagate the trace context from the originating a2a_request
-        # event so that sent + delivered events are grouped in the same
-        # dashboard trace.
-        if messages and self.event_queue is not None:
+        if self.event_queue is not None:
             from crewlet.events.types import A2AMessageDelivered
 
+            # Trace context comes from the originating event so sent and
+            # delivered group into one dashboard trace.
             delivered_event = A2AMessageDelivered(
                 source=agent.handle,
                 channel_id=channel_id,
                 recipient=agent.handle,
-                sender=sender,
-                message_count=len(messages),
-                total_content_length=total_content_length,
+                sender=requester,
+                message_count=1 if content else 0,
+                total_content_length=len(content),
                 trace_id=event.trace_id,
                 span_id=event.span_id,
                 parent_span_id=event.parent_span_id,
@@ -2531,33 +3391,38 @@ class Engine:
                 "crewlet.events.a2a_message_delivered", delivered_event
             )
 
-        # Build task description with A2A context.
+        role_tag = f" ({sender_role})" if sender_role else ""
         parts = [
             f"You received a direct agent-to-agent (A2A) message from '{requester}'.",
             f"A2A Channel: {channel_id}",
             "",
         ]
-        if messages:
-            parts.append("**Message(s):**")
-            for m in messages:
-                role_tag = f" ({m['role']})" if m["role"] else ""
-                parts.append(f"- **{m['sender']}{role_tag}:** {m['content']}")
+        if content:
+            parts.append("**Message:**")
+            parts.append(f"- **{requester}{role_tag}:** {content}")
         else:
-            parts.append(
-                f"'{requester}' opened an A2A channel with"
-                " you but hasn't sent a message yet."
-                " Use the A2A tools to check for messages."
+            parts.append(f"'{requester}' opened an A2A channel with no message.")
+        parts.append("")
+        if is_responder:
+            parts.extend(
+                [
+                    "*** INSTRUCTIONS ***",
+                    "- Answer in your final response. Whatever you say"
+                    f" is delivered to '{requester}' on this channel, and"
+                    " the channel then closes — you do not need a tool"
+                    " to reply, and there is no second round.",
+                    "- This is a private channel between you"
+                    f" and '{requester}' — not visible in Slack.",
+                ]
             )
-        parts.extend(
-            [
-                "",
-                "*** INSTRUCTIONS ***",
-                f"- Use `send_a2a_message` with channel_id=`{channel_id}` to respond.",
-                "- Use `close_a2a_channel` when the conversation is complete.",
-                "- This is a private channel between you"
-                f" and '{requester}' — not visible in Slack.",
-            ]
-        )
+        else:
+            parts.extend(
+                [
+                    "*** INSTRUCTIONS ***",
+                    "- This is the answer to a question you asked."
+                    " Act on it; the channel is now closed.",
+                ]
+            )
 
         task_description = "\n".join(parts)
 
@@ -2566,22 +3431,75 @@ class Engine:
             agent_handle=agent.handle,
             channel_id=channel_id,
             requester=requester,
-            message_count=len(messages),
+            responder=is_responder,
             prompt_length=len(task_description),
         )
 
-        if self.turn_engine is not None:
-            await self.turn_engine.run_turn(
-                agent,
-                task_description=task_description,
-                event=event,
-                org=self.org,
-                a2a_context={
-                    "channel_id": channel_id,
-                    "requester": requester,
-                    "message_count": len(messages),
-                },
+        if self.turn_engine is None:
+            return
+        answer = await self.turn_engine.run_turn(
+            agent,
+            task_description=task_description,
+            event=event,
+            org=self.org,
+            a2a_context={
+                "channel_id": channel_id,
+                "requester": requester,
+                "responder": is_responder,
+            },
+        )
+        if is_responder:
+            await self._answer_a2a(agent, channel_id, answer or "", event)
+
+    async def _answer_a2a(
+        self, agent: AgentInstance, channel_id: str, answer: str, event: Event
+    ) -> None:
+        """Deliver the turn's final text as the reply, then close.
+
+        THE reply path, and until now there was none. ``a2a_ask``'s own
+        description promises "they reply on the same channel", and the
+        wake prompt told the agent to call ``send_a2a_message`` — a tool
+        that does not exist and that ``tests/test_tools/test_builtin``
+        asserts is not registered. So every ask delivered a brief and
+        every answer went nowhere.
+
+        The turn's answer IS the reply: no new LLM-facing tool, and no
+        channel lifecycle for a model to manage and forget. One round
+        trip, then closed — which is what "tight-loop / mechanical sync"
+        means, and what stops two agents volleying.
+
+        Failures here are logged, not raised: the turn already happened,
+        and a delivery failure must not make the trigger look unhandled
+        and replay the whole thing.
+        """
+        if self.a2a_service is None:
+            return
+        try:
+            if answer.strip():
+                await self.a2a_service.reply(
+                    channel_id,
+                    agent.handle,
+                    answer,
+                    sender_role=agent.role_name,
+                    delegation_depth=event.delegation_depth,
+                    delegation_chain=list(event.delegation_chain or []),
+                    parent_turn_id=event.parent_turn_id,
+                )
+            else:
+                logger.warning(
+                    "a2a_answer_empty",
+                    agent_handle=agent.handle,
+                    channel_id=channel_id,
+                )
+        except Exception:
+            logger.exception(
+                "a2a_answer_failed",
+                agent_handle=agent.handle,
+                channel_id=channel_id,
             )
+        finally:
+            with contextlib.suppress(Exception):
+                await self.a2a_service.close_channel(channel_id, closer=agent.handle)
 
     async def _handle_notification(self, agent: AgentInstance, event: Event) -> None:
         """Handle an external notification: wake the agent and run a turn.
@@ -2614,6 +3532,11 @@ class Engine:
             org=self.org,
             observability=self.observability,
             debug=self.debug,
+            node_id=self._node_id,
+            # The same per-tick singleton the engine's own duties use.
+            # Extensions run on every node, so a company-wide job an
+            # extension does unconditionally is a job done N times.
+            claim_duty=self.claim_worker_duty,
         )
 
     def _build_tools_data(self) -> list[dict[str, Any]]:
@@ -2703,99 +3626,67 @@ class Engine:
         import uvicorn
 
         from crewlet.api.app import attach_config_refresh, create_app
+        from crewlet.api.runtime import EngineNodeRuntime
         from crewlet.api.streaming import StreamService
 
-        # Field-for-field the same shape ``_serialize_agent_roles``
-        # produces for the standalone API: two producers of one payload
-        # that disagree is how a field ends up present on one
-        # deployment and missing on the other.
-        agent_roles = [
-            {
-                "name": agent.definition.role_name,
-                "role": agent.role_name,
-                "id": agent.id_str,
-                "goal": agent.definition.role.goal,
-                "handle": agent.handle,
-                "token_budget": int(agent.definition.role.token_budget or 0),
-            }
-            for agent in self.agent_pool.agents
-        ]
-
-        org_data = self.org.to_api_dict()
-
-        from crewlet.config import SchedulingConfig
-        from crewlet.schedule import describe_schedules
-
-        sched_cfg = self._scheduling_config or SchedulingConfig()
-        schedules_data = describe_schedules(
-            self.org, default_timezone=sched_cfg.default_timezone
-        )
-
-        tools_data = self._build_tools_data()
-
-        gh_secret = (
-            self._github_config.webhook_secret
-            if self._github_config is not None
-            else None
-        )
-        gl_signing = (
-            self._gitlab_config.signing_secret
-            if self._gitlab_config is not None
-            else None
-        )
-        pl_secret = (
-            self._plane_config.webhook_secret
-            if self._plane_config is not None
-            else None
-        )
-        # Per-agent Slack signing secrets, so the embedded API can verify
-        # inbound Slack requests at the edge without reaching into the
-        # transport (the standalone API has no engine to reach into, and
-        # gets the same map from attach_config_refresh).
-        slack_signing_secrets = {
-            handle: app_cfg.signing_secret
-            for handle, app_cfg in getattr(
-                self._get_running_slack_transport(), "apps", {}
-            ).items()
-            if app_cfg.signing_secret
-        }
-        forge_app_id = getattr(self, "_forge_app_id", "")
         bootstrap = getattr(self, "_bootstrap", None)
         store = getattr(self, "_company_config_store", None)
 
-        # Wire the stream service directly into the shared EventQueue's
-        # publish listener — events emitted in this process update the
-        # live-state projection and land on every connected dashboard
-        # WebSocket without a queue round-trip.  Cached on ``self`` so
-        # repeated _start_embedded_api calls (test harnesses, future
-        # restart paths) don't stack listeners.
+        # Subscribe the stream service to the BROADCAST event stream —
+        # the same wiring ``crewlet run api`` uses.  The old embedded
+        # path registered a publish listener instead, which fires only on
+        # this process's own publishes: correct for one process, and
+        # structurally unable to see a peer's events.  Unifying on the
+        # broadcast path is what makes the two deployments the same code
+        # rather than the same surface with two implementations.
+        #
+        # Cached on ``self`` so repeated _start_embedded_api calls (test
+        # harnesses, future restart paths) don't stack subscriptions.
         stream = getattr(self, "_stream", None)
         if stream is None:
             stream = StreamService()
-            self.event_queue.add_publish_listener(stream.ingest)
+            try:
+                await self.event_queue.subscribe_stream(
+                    "crewlet.events.>", stream.ingest
+                )
+            except Exception:
+                logger.exception("embedded_api_stream_subscribe_failed")
             self._stream = stream
 
+        # Webhook secrets, roles, org, schedules and tools are NOT passed
+        # in: ``attach_config_refresh`` derives every one of them from the
+        # active revision, on this path exactly as on the standalone one.
         app = create_app(
             event_queue=self.event_queue,
             event_store=self._event_store,
-            agent_roles=agent_roles,
-            org_data=org_data,
-            schedules_data=schedules_data,
-            tools_data=tools_data,
             database=self.storage,
-            github_webhook_secret=gh_secret,
-            gitlab_signing_secret=gl_signing,
-            plane_webhook_secret=pl_secret,
-            slack_signing_secrets=slack_signing_secrets,
             sandbox_otel_receiver=getattr(self, "_sandbox_otel_receiver", None),
-            forge_app_id=forge_app_id,
             bootstrap=bootstrap,
             company_config_store=store,
-            engine=self,
+            runtime=EngineNodeRuntime(self),
             stream=stream,
         )
         if store is not None:
-            await attach_config_refresh(app)
+            # poll=False: this engine's reconcile loop already polls the
+            # activation pointer and drives ``refresh_if_changed`` from
+            # its tick.  A second loop in the same process would only let
+            # the engine and its API disagree about the current epoch.
+            self._api_refresher = await attach_config_refresh(app, poll=False)
+        elif self._active_config is not None:
+            # No config store — a programmatic embed, or an engine built
+            # without a database. There is no revision to read and no
+            # activation event to react to, but the app still needs its
+            # roles, org, schedules and (above all) webhook secrets. Feed
+            # the in-memory config through the SAME derivation the refresh
+            # path uses, so there is one implementation with two sources
+            # rather than two implementations.
+            from crewlet.api.config_refresh import _apply_payload_to_app
+            from crewlet.config_yaml import company_config_to_dict
+
+            try:
+                _apply_payload_to_app(app, company_config_to_dict(self._active_config))
+            except Exception:
+                logger.exception("embedded_api_state_prime_failed")
 
         class _SignalFreeServer(uvicorn.Server):
             """Uvicorn server that never touches process signal handlers.
@@ -2815,6 +3706,10 @@ class Engine:
             @contextlib.contextmanager
             def capture_signals(self):  # type: ignore[override]
                 yield
+
+        # Exposed so operators (and tests) can inspect what the embedded
+        # API actually resolved — the state is derived now, not passed in.
+        self._api_app = app
 
         uv_config = uvicorn.Config(
             app,
@@ -2972,9 +3867,22 @@ class Engine:
             # Re-raise if start() failed
             start_task.result()
 
-            # Start embedded API server if configured
-            if self._api_port > 0:
+            # Start embedded API server if configured — and if this node
+            # terminates inbound traffic at all. A node without the
+            # ``ingress`` role that bound the port anyway would answer
+            # webhooks the operator routed elsewhere, and would put a
+            # dashboard on an address nothing is meant to reach.
+            from crewlet.seat.placement import NodeRole
+
+            if self._api_port > 0 and self.runs_role(NodeRole.INGRESS):
                 await self._start_embedded_api()
+            elif self._api_port > 0:
+                logger.info(
+                    "embedded_api_not_started",
+                    node=self._node_id,
+                    port=self._api_port,
+                    reason="node.roles does not include 'ingress'",
+                )
 
             # Block until shutdown signal
             if not stop_event.is_set():
@@ -2999,9 +3907,14 @@ class Engine:
     async def stop(self) -> None:
         """Graceful shutdown.
 
-        The order is critical: pause delivery *before* draining so no
-        new turns start while we wait for in-flight ones to finish.
+        The order is critical:
 
+        0. Release every owned seat, one at a time, through the
+           voluntary path — BEFORE pausing delivery. ``pause_delivery``
+           is one-way and node-wide, so past it this node serves nothing
+           while its heartbeat still renews every lease it holds: the
+           seats are blackholed for the whole drain, unservable here and
+           unclaimable anywhere else.
         1. Pause event delivery (no new messages dispatched to handlers)
         2. Stop work producers: deadline timers and the cron scheduler
            (no new auto-fired events), and flip the turn engine's
@@ -3022,10 +3935,9 @@ class Engine:
            guess at the orchestrator's grace period.
         4. Stop extensions
         5. Stop notification service, reflect engine, lifecycle workers
-        6. Stop A2A bus
-        7. Terminate agents and publish ``OrgStopped``
-        8. Stop MCP servers and close LLM provider clients
-        9. Stop event queue (final close) and close storage
+        6. Terminate agents and publish ``OrgStopped``
+        7. Stop MCP servers and close LLM provider clients
+        8. Stop event queue (final close) and close storage
 
         Each post-drain step has a short timeout (``_stop_step_timeout``)
         so a single teardown failure can't hang shutdown indefinitely.
@@ -3056,9 +3968,39 @@ class Engine:
 
         logger.info("engine_stopping", org=self.org.name)
 
-        # 1. Pause event delivery FIRST so no new turns start while we
-        #    wait for in-flight ones to finish.  Publishes still work --
-        #    a turn that's already running can still emit TaskCompleted
+        # 0. Hand the seats back BEFORE pausing delivery.
+        #
+        # Order matters more than it looks. ``pause_delivery`` is
+        # one-way and node-wide: past it, this node consumes nothing —
+        # but its heartbeat keeps renewing every seat it holds, so those
+        # seats are blackholed for the entire drain. No peer can take
+        # them (the lease is live) and this node will not serve them
+        # (delivery is paused). Releasing first lets peers pick each seat
+        # up as it goes idle, which is the whole point of a graceful
+        # drain.
+        #
+        # ``begin_drain`` also drops this node's presence lease, so peers
+        # recompute their share over the nodes that will actually serve.
+        # Stopped before the release, not after. Teardown is the one part
+        # of the process that legitimately blocks the loop — reaping MCP
+        # subprocesses, joining threads, tearing down sandboxes — and an
+        # ``os._exit`` in the middle of it would abandon the seat release
+        # that makes the drain graceful. A shutdown that hangs is a
+        # SIGKILL away; a shutdown that exits without releasing costs
+        # every peer a full TTL of dark seats.
+        await self._stop_loop_watchdog()
+        if self._seat_host is not None:
+            try:
+                await self._seat_host.begin_drain()
+                await _timed("seat_release", self._seat_host.release_all())
+                await _timed("seat_host", self._seat_host.stop())
+            except Exception as exc:
+                logger.error("seat_host_stop_failed", error=str(exc))
+            self._seat_host_started = False
+
+        # 1. Pause event delivery so no new turns start while we wait
+        #    for in-flight ones to finish.  Publishes still work -- a
+        #    turn that's already running can still emit TaskCompleted
         #    / TaskFailed before the queue is closed for good in step 9.
         logger.debug("pausing_event_delivery")
         try:
@@ -3070,6 +4012,11 @@ class Engine:
         #    (deadline retries, scheduled runs, periodic syncs) queue up
         #    behind the paused queue.
         logger.debug("cancelling_background_tasks")
+        # The config reconciler is a producer too: it can start a full
+        # apply (respawning MCP children, rebuilding transports) that
+        # would race the teardown below.  Cancelled first, before
+        # anything it might touch begins to come down.
+        await self._stop_control_plane()
         if self._cancel_deadline_timers is not None:
             self._cancel_deadline_timers()
             self._cancel_deadline_timers = None
@@ -3145,6 +4092,11 @@ class Engine:
                 self._skill_curator_worker.stop(),
             )
 
+        # 5.65. Stop the retention sweeps
+        if self._maintenance_worker is not None:
+            logger.debug("stopping_maintenance_worker")
+            await _timed("maintenance_worker", self._maintenance_worker.stop())
+
         # 5.7. Stop the episode lifecycle worker
         if self._episode_lifecycle_worker is not None:
             logger.debug("stopping_episode_lifecycle_worker")
@@ -3153,12 +4105,7 @@ class Engine:
                 self._episode_lifecycle_worker.stop(),
             )
 
-        # 6.5. Stop A2A bus
-        if self._a2a_bus is not None:
-            logger.debug("stopping_a2a_bus")
-            await _timed("a2a_bus", self._a2a_bus.stop())
-
-        # 7. Terminate all agents
+        # 6. Terminate all agents
         logger.debug("terminating_agents")
         for agent in self.agent_pool.active_agents:
             await _timed(f"terminate_{agent.handle}", self.agent_pool.terminate(agent))
@@ -3171,12 +4118,12 @@ class Engine:
             ),
         )
 
-        # 7.5. Stop MCP servers
+        # 7. Stop MCP servers
         logger.debug("stopping_mcp_servers")
         if self.mcp_bridge:
             await _timed("mcp_servers", self.mcp_bridge.stop_all())
 
-        # 7.7. Close LLM provider HTTP clients
+        # 7.5. Close LLM provider HTTP clients
         logger.debug("closing_llm_providers")
         for provider in self._llm_providers.values():
             if hasattr(provider, "close"):
@@ -3185,6 +4132,7 @@ class Engine:
         # 8. Stop event queue, close storage
         logger.debug("stopping_event_queue")
         await _timed("event_queue", self.event_queue.stop())
+        self._queue_started = False
 
         # Close every provider's pooled httpx clients before we
         # take down the storage / telemetry layers. Providers that
@@ -3232,6 +4180,12 @@ class Engine:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(coro, timeout=2.0)
 
+        # Same reasoning as the graceful path: force-stop still runs
+        # teardown, and a watchdog exit through the middle of it turns
+        # "exit now" into "exit now, and leave the sandboxes running".
+        await _quiet(self._stop_loop_watchdog())
+        await _quiet(self._stop_control_plane())
+
         # Embedded API: no graceful escalation here — force uvicorn out
         # and reap the serve task so the process can exit.
         api_server = self._api_server
@@ -3265,6 +4219,7 @@ class Engine:
             if hasattr(provider, "close"):
                 await _quiet(provider.close())
         await _quiet(self.event_queue.stop())
+        self._queue_started = False
         if hasattr(self.storage, "close"):
             await _quiet(self.storage.close())
 
@@ -3337,8 +4292,24 @@ class Engine:
         environment variables (``stdio``) or HTTP headers (``http``).
         This is how each agent gets its own identity in Jira/Confluence
         (``atlassian``), Slack, GitHub, etc.
+
+        Skipped entirely on a node that does not run seats. MCP children
+        exist to serve an agent's tool calls, and a node with no agents
+        makes none — so an ingress-only node launching them forks a
+        subprocess tree per shared server for nothing, and does it again
+        on every config activation.
         """
+        from crewlet.seat.placement import NodeRole
+
         if not self._mcp_configs:
+            return
+        if not self.runs_role(NodeRole.SEATS):
+            logger.info(
+                "mcp_servers_not_started",
+                node=self._node_id,
+                count=len(self._mcp_configs),
+                reason="node.roles does not include 'seats'",
+            )
             return
 
         self.mcp_bridge = MCPToolBridge()
@@ -3362,6 +4333,8 @@ class Engine:
                         headers=resolved_headers,
                         tool_prefix=cfg.tool_prefix,
                         annotation_overrides=cfg.annotation_overrides(),
+                        startup_timeout_seconds=cfg.startup_timeout_seconds,
+                        request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 else:
                     resolved_env = resolve_env_vars(cfg.env)
@@ -3373,6 +4346,8 @@ class Engine:
                         env=resolved_env,
                         tool_prefix=cfg.tool_prefix,
                         annotation_overrides=cfg.annotation_overrides(),
+                        startup_timeout_seconds=cfg.startup_timeout_seconds,
+                        request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 for tool in tools:
                     self.tool_registry.register(tool)
@@ -3464,6 +4439,8 @@ class Engine:
                     headers=resolve_env_vars(merged_headers),
                     tool_prefix=base_cfg.tool_prefix,
                     annotation_overrides=base_cfg.annotation_overrides(),
+                    startup_timeout_seconds=base_cfg.startup_timeout_seconds,
+                    request_timeout_seconds=base_cfg.request_timeout_seconds,
                 )
             else:
                 merged_env = {**base_cfg.env, **overrides}
@@ -3476,6 +4453,8 @@ class Engine:
                     env=resolved_env,
                     tool_prefix=base_cfg.tool_prefix,
                     annotation_overrides=base_cfg.annotation_overrides(),
+                    startup_timeout_seconds=base_cfg.startup_timeout_seconds,
+                    request_timeout_seconds=base_cfg.request_timeout_seconds,
                 )
             logger.info(
                 "mcp_role_server_started",
@@ -3533,7 +4512,14 @@ class Engine:
 
     # Observability hooks
     async def on_task_state_change(self, callback: _EventHandler) -> None:
-        """Register a callback for any task state changes."""
+        """Register a callback for any task state changes.
+
+        Callable before or after :meth:`start`.  Before, the
+        registration is held and applied when the queue comes up — a
+        subscription needs a live broker connection, so the natural
+        "register hooks, then start" order would otherwise raise on the
+        production backend while working in tests.
+        """
         group = f"hook-{id(callback)}"
         for event_type in [
             "task_created",
@@ -3543,16 +4529,33 @@ class Engine:
             "task_failed",
             "task_delegated",
         ]:
-            await self.event_queue.subscribe(
-                f"crewlet.events.{event_type}", group, callback
-            )
+            await self._subscribe_hook(f"crewlet.events.{event_type}", group, callback)
 
     async def on_agent_spawn(self, callback: _EventHandler) -> None:
-        """Register a callback for agent spawn events."""
+        """Register a callback for agent spawn events.
+
+        Callable before or after :meth:`start` — see
+        :meth:`on_task_state_change`.
+        """
         group = f"hook-{id(callback)}"
-        await self.event_queue.subscribe(
-            "crewlet.events.agent_spawned", group, callback
-        )
+        await self._subscribe_hook("crewlet.events.agent_spawned", group, callback)
+
+    async def _subscribe_hook(
+        self, topic: str, group: str, callback: _EventHandler
+    ) -> None:
+        """Subscribe an observability hook now, or when the queue starts."""
+        if self._queue_started:
+            await self.event_queue.subscribe(topic, group, callback)
+            return
+        self._pending_hooks.append((topic, group, callback))
+
+    async def _apply_pending_hooks(self) -> None:
+        """Attach the hooks registered before the queue was up."""
+        pending, self._pending_hooks = self._pending_hooks, []
+        for topic, group, callback in pending:
+            await self.event_queue.subscribe(topic, group, callback)
+        if pending:
+            logger.debug("pending_hooks_subscribed", count=len(pending))
 
     # --- Runtime org mutations ---
 
@@ -3804,23 +4807,63 @@ class Engine:
 
         return applied
 
-    def _seed_agent_budget(self, agent: Any, role: Any) -> None:
-        """Apply the role's ``token_budget`` to ``agent`` on the manager.
+    def _seed_seat_budget(self, role: Any, org: Any) -> None:
+        """Apply ``role``'s ``token_budget`` cap to the manager.
 
-        Shared by :meth:`start` step 4 (boot cascade) and the live
-        role-add branch in :meth:`_apply_org_diff`.  A 0 budget means
-        "unlimited" — skip the call so we don't seed a 0 cap that the
-        budget manager would treat as immediately-exhausted.
+        Keyed on the seat's DERIVED id, and seeded for every agent seat
+        in the org — not only the ones spawned in this process.  Caps
+        are config; only *usage* is shared (``PostgresBudgetUsageStore``),
+        and ``BudgetManager.spend`` passes ``agent_limit=None`` when it
+        has no local cap for an id, which the store reads as unlimited.
+        So a node that had not seeded a seat would run that seat's first
+        turn after a takeover with no per-agent cap at all — the one
+        failure mode a budget must not have.  Seeding from the org costs
+        one int per seat and removes the question.
+
+        A 0 budget means "unlimited" — skip the call so we don't seed a
+        0 cap that the budget manager would treat as immediately
+        exhausted.
         """
-        if role.token_budget <= 0:
+        if role.is_human or role.token_budget <= 0:
             return
-        self.budget_manager.set_agent_budget(agent.id_str, role.token_budget)
+        agent_id = org.agent_id_for(role)
+        if not agent_id:
+            return
+        self.budget_manager.set_agent_budget(agent_id, role.token_budget)
         logger.debug(
             "agent_token_budget_set",
-            agent_id=agent.id_str,
+            agent_id=agent_id,
             role=role.name,
             budget=role.token_budget,
         )
+
+    def _reseed_seat_budgets(self, org: Any) -> None:
+        """Make the per-seat token caps a projection of ``org``.
+
+        Caps are config, so they are derived from the active revision
+        rather than accumulated: every agent seat with a positive
+        ``token_budget`` gets its cap (usage history preserved via
+        ``update_agent_budget``), and every cap whose seat is gone —
+        role removed, flipped to human, budget dropped to 0
+        ("unlimited") — is dropped.
+
+        Called on every org swap, including the rollback path.  A
+        rollback that had already applied a per-role budget change used
+        to leave the *failed* revision's caps in place, because only the
+        org-level cap was in the snapshot.
+        """
+        wanted: dict[str, int] = {}
+        for role in org.all_roles():
+            if role.is_human or role.token_budget <= 0:
+                continue
+            agent_id = org.agent_id_for(role)
+            if agent_id:
+                wanted[agent_id] = role.token_budget
+        for agent_id, cap in wanted.items():
+            self.budget_manager.update_agent_budget(agent_id, cap)
+        for agent_id in self.budget_manager.agent_budget_ids():
+            if agent_id not in wanted:
+                self.budget_manager.drop_agent_budget(agent_id)
 
     def _apply_restart_required_subsystem(
         self,
@@ -3849,9 +4892,9 @@ class Engine:
         """
         setattr(self, attr_name, new_value)
         if not self._tier_b_done:
-            logger.info(f"{subsystem}_config_updated_pre_cascade")
+            logger.info("config_updated_pre_cascade", subsystem=subsystem)
             return [subsystem]
-        logger.warning(f"{subsystem}_config_restart_required", hint=hint)
+        logger.warning("config_restart_required", subsystem=subsystem, hint=hint)
         return [subsystem]
 
     async def _apply_learning_live(self, old: Any, new: Any) -> list[str]:
@@ -3881,6 +4924,24 @@ class Engine:
                 "changes still apply live."
             ),
         )
+
+    async def _drain_seat(self, role_name: str) -> bool:
+        """Wait for one seat's in-flight turns before mutating it.
+
+        A turn already pins the config it started under
+        (:mod:`crewlet.agent.turn_pin`), so it stays internally coherent
+        through a live apply.  But a pin holds a *catalogue*, not a
+        *capability*: the MCP clients its tools dispatch to can still be
+        stopped underneath it, and the definition it was spawned from can
+        be replaced. Draining is what turns "the turn survives the
+        rewire" into "the rewire happens between turns".
+
+        No-op before the turn engine exists (first activation, per-entity
+        bootstrap). Returns whether the seat reached idle.
+        """
+        if self.turn_engine is None:
+            return True
+        return await self.turn_engine.drain_seat(role_name)
 
     async def _stop_role_mcp(self, role: Any) -> None:
         """Stop every per-role MCP instance for ``role``.
@@ -3929,6 +4990,13 @@ class Engine:
             if not role.mcp_env:
                 return
             self.mcp_bridge = MCPToolBridge()
+        # This is the mutation the turn pin CANNOT survive: the pin holds
+        # the tool wrappers, but the clients they dispatch to are about
+        # to be killed.  Drain the seat first, here rather than at each
+        # call site, so every caller (org diff, credential rotation, the
+        # rotation-only apply path) gets it.  Bounded — see
+        # ``SEAT_DRAIN_TIMEOUT_SECONDS``.
+        await self._drain_seat(role.name)
         # Tear down the role's existing per-role instances.
         cfg_by_name: dict[str, MCPServerConfig] = {c.name: c for c in self._mcp_configs}
         await self._stop_role_mcp(role)
@@ -3958,6 +5026,95 @@ class Engine:
                 ),
             )
 
+    async def _apply_credential_rotation(self, cfg: Any) -> list[str]:
+        """Rebuild every subsystem that CAPTURED a resolved credential.
+
+        Reached when the config payload is byte-identical but its
+        ``${VAR}`` references now resolve differently — i.e. an operator
+        rotated a secret and re-activated the revision to pick it up.
+
+        The ordinary diff handlers cannot do this: every one of them
+        compares raw config (``old.providers.llm != new.providers.llm``,
+        ``old.mcp_servers != new.mcp_servers``, the role signature behind
+        ``_respawn_role_mcp``), and on this path all of those are equal by
+        construction. So the rebuild is unconditional for the subsystems
+        that hold a resolved value, and skipped entirely for those that
+        do not.
+
+        Best-effort per subsystem: a rotation that cannot rebuild one
+        transport must still reach the others, and must not roll the
+        engine back to a revision it is already running.
+        """
+        from crewlet.engine_builders import (
+            build_llm_providers,
+            build_notification_transports,
+        )
+
+        applied: list[str] = []
+
+        # LLM providers hold the key inside a constructed client.
+        # In-place mutation of both dicts, not reassignment: TurnEngine
+        # captured them by reference at construction, so replacing the
+        # objects would leave it reading the pre-rotation ones forever.
+        try:
+            providers = build_llm_providers(cfg)
+            if providers:
+                self._llm_providers.clear()
+                self._llm_providers.update(providers)
+                # The verbatim (``${VAR}``-unresolved) configs the
+                # sandbox backend derives a coding agent's creds from —
+                # same source as every other provider swap.
+                self._llm_provider_configs.clear()
+                self._llm_provider_configs.update(cfg.providers.llm)
+                applied.append("providers")
+        except Exception as exc:
+            logger.error("rotation_providers_failed", error=str(exc))
+
+        # MCP children baked the resolved env into their spawn
+        # environment, so nothing short of a restart picks up a new one.
+        # Shared servers only: a ``shared: false`` entry is a template
+        # with no global instance to restart — its per-role children are
+        # rebuilt by the ``role_mcp`` pass below.
+        try:
+            restarted = 0
+            for server_cfg in parse_mcp_servers(cfg.mcp_servers):
+                if not server_cfg.shared:
+                    continue
+                if await self._restart_mcp_server(server_cfg):
+                    restarted += 1
+            if restarted:
+                applied.append("mcp_servers")
+        except Exception as exc:
+            logger.error("rotation_mcp_failed", error=str(exc))
+
+        # Per-role MCP children hold that seat's own credentials.
+        try:
+            respawned = 0
+            for agent in list(self.agent_pool.agents):
+                role = getattr(agent.definition, "role", None)
+                if role is not None and getattr(role, "mcp_env", None):
+                    await self._respawn_role_mcp(role)
+                    respawned += 1
+            if respawned:
+                applied.append("role_mcp")
+        except Exception as exc:
+            logger.error("rotation_role_mcp_failed", error=str(exc))
+
+        # Transports hold tokens in clients and headers.
+        try:
+            new_transports = (
+                build_notification_transports(cfg, storage=self.storage)
+                + self._custom_transports
+            )
+            if new_transports:
+                await self._apply_notification_transports_live(new_transports)
+                applied.append("transports")
+        except Exception as exc:
+            logger.error("rotation_transports_failed", error=str(exc))
+
+        logger.info("credential_rotation_applied", subsystems=applied)
+        return applied
+
     async def _apply_mcp_servers_live(
         self,
         old_configs: list[Any],
@@ -3979,9 +5136,21 @@ class Engine:
 
         # Removed: stop the running client + drop its tools.
         for name in old_by_name.keys() - new_by_name.keys():
+            # Capture the tool names BEFORE stopping — the bridge drops
+            # its own index inside stop_server, and until now nothing
+            # dropped them from the shared ToolRegistry. A server removed
+            # by a live config edit therefore kept its tools in every
+            # later turn's catalogue, dispatching to a stopped client
+            # forever: a soft `success=False` the model burns rounds
+            # retrying, with nothing in the logs to explain it.
+            doomed = [t.name for t in self.mcp_bridge.get_server_tools(name)]
             try:
                 await self.mcp_bridge.stop_server(name)
-                logger.info("mcp_server_stopped_live", server=name)
+                for tool_name in doomed:
+                    self.tool_registry.unregister(tool_name)
+                logger.info(
+                    "mcp_server_stopped_live", server=name, tools_dropped=len(doomed)
+                )
             except Exception as exc:
                 logger.warning("mcp_server_stop_failed", server=name, error=str(exc))
 
@@ -4010,45 +5179,70 @@ class Engine:
             )
             if not needs_restart:
                 continue
-            try:
-                if cfg.transport == "http":
-                    # ``restart_server`` would relaunch this as a stdio
-                    # subprocess with an empty command; use the http
-                    # path so the remote connection is re-established.
-                    wrapped = await self.mcp_bridge.restart_http_server(
-                        name=name,
-                        url=cfg.url,
-                        headers=resolve_env_vars(cfg.headers),
-                        tool_prefix=cfg.tool_prefix,
-                        annotation_overrides=cfg.annotation_overrides(),
-                    )
-                else:
-                    # Resolve ``${VAR}`` env references the same way
-                    # ``_start_mcp_servers`` does — the DB payload keeps
-                    # them verbatim, so passing ``cfg.env`` raw would
-                    # hand the subprocess the literal ``${...}`` string.
-                    resolved_env = resolve_env_vars(cfg.env)
-                    _ensure_atlassian_toolsets(name, resolved_env)
-                    wrapped = await self.mcp_bridge.restart_server(
-                        name=name,
-                        command=cfg.command,
-                        args=cfg.args,
-                        env=resolved_env,
-                        tool_prefix=cfg.tool_prefix,
-                        annotation_overrides=cfg.annotation_overrides(),
-                    )
-                # Re-register the new wrapped tools with the engine
-                # tool registry so subsequent turns see them.
-                for tool in wrapped:
-                    self.tool_registry.register(tool)
-                logger.info(
-                    "mcp_server_restarted_live",
-                    server=name,
-                    transport=cfg.transport,
-                    tool_count=len(wrapped),
+            await self._restart_mcp_server(cfg)
+
+    async def _restart_mcp_server(self, cfg: Any) -> bool:
+        """Relaunch one shared MCP server from ``cfg``; report success.
+
+        The single restart path, shared by the live config diff and by
+        credential rotation. Rotation had its own three-line version
+        that called ``restart_server(name)`` — the wrong attribute, a
+        list iterated as if it were a mapping, and a required
+        ``command`` argument missing. All three raised inside
+        rotation's ``except``, so it logged ``rotation_mcp_failed`` and
+        moved on: the children kept running with the credential the
+        operator had just rotated away, while the rotation reported the
+        other subsystems as applied. One implementation, so a fix to
+        the restart is a fix everywhere it happens.
+        """
+        if self.mcp_bridge is None:
+            return False
+        name = cfg.name
+        try:
+            if cfg.transport == "http":
+                # ``restart_server`` would relaunch this as a stdio
+                # subprocess with an empty command; use the http
+                # path so the remote connection is re-established.
+                wrapped = await self.mcp_bridge.restart_http_server(
+                    name=name,
+                    url=cfg.url,
+                    headers=resolve_env_vars(cfg.headers),
+                    tool_prefix=cfg.tool_prefix,
+                    annotation_overrides=cfg.annotation_overrides(),
+                    startup_timeout_seconds=cfg.startup_timeout_seconds,
+                    request_timeout_seconds=cfg.request_timeout_seconds,
                 )
-            except Exception as exc:
-                logger.error("mcp_server_restart_failed", server=name, error=str(exc))
+            else:
+                # Resolve ``${VAR}`` env references the same way
+                # ``_start_mcp_servers`` does — the DB payload keeps
+                # them verbatim, so passing ``cfg.env`` raw would
+                # hand the subprocess the literal ``${...}`` string.
+                resolved_env = resolve_env_vars(cfg.env)
+                _ensure_atlassian_toolsets(name, resolved_env)
+                wrapped = await self.mcp_bridge.restart_server(
+                    name=name,
+                    command=cfg.command,
+                    args=cfg.args,
+                    env=resolved_env,
+                    tool_prefix=cfg.tool_prefix,
+                    annotation_overrides=cfg.annotation_overrides(),
+                    startup_timeout_seconds=cfg.startup_timeout_seconds,
+                    request_timeout_seconds=cfg.request_timeout_seconds,
+                )
+        except Exception as exc:
+            logger.error("mcp_server_restart_failed", server=name, error=str(exc))
+            return False
+        # Re-register the new wrapped tools with the engine
+        # tool registry so subsequent turns see them.
+        for tool in wrapped:
+            self.tool_registry.register(tool)
+        logger.info(
+            "mcp_server_restarted_live",
+            server=name,
+            transport=cfg.transport,
+            tool_count=len(wrapped),
+        )
+        return True
 
     async def _apply_notification_transports_live(
         self, new_transports: list[Any]
@@ -4081,6 +5275,7 @@ class Engine:
                 )
 
         self.notification_service.transports = new_dict
+        self._share_delivery_dedupe(new_dict)
 
         # Re-seed routing state BEFORE starting anything: it is an INPUT
         # to ``start()``, not something a started transport acquires
@@ -4170,6 +5365,123 @@ class Engine:
             logger.info("jira_handles_refreshed_live")
         except Exception as exc:
             logger.error("jira_handle_refresh_failed", error=str(exc))
+
+    def _share_delivery_dedupe(self, transports: Any) -> None:
+        """Point every transport's delivery dedupe at the shared store.
+
+        Each transport derives its own dedupe key — what counts as "the
+        same delivery" is genuinely source-specific — but the STORE has
+        to be shared, or a provider retry that lands on a peer node is a
+        fresh delivery there and the agent answers twice.
+
+        No database means no peers to share with, so the per-process
+        default stands.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.deliveries import PostgresDeliveryDedupeStore
+
+        if not isinstance(self.storage, Database):
+            return
+        store = PostgresDeliveryDedupeStore(self.storage)
+        for transport in (transports or {}).values():
+            setter = getattr(transport, "set_delivery_dedupe", None)
+            if setter is not None:
+                setter(store)
+
+        # The notification valve shares the same reasoning: per-process
+        # counters multiply the limit by replica count and cannot see a
+        # loop that bounces between nodes.
+        service = getattr(self, "notification_service", None)
+        if service is not None:
+            from crewlet.db.rate_limits import PostgresRateLimitStore
+
+            service.set_rate_limit_store(PostgresRateLimitStore(self.storage))
+
+    def _start_maintenance_worker(self) -> None:
+        """Build the retention sweep, if there is anything to sweep.
+
+        Skipped without a database, and correctly so: the memory twins
+        of these stores prune themselves inline, because a process-local
+        dict dies with the process. Only the Postgres tables accumulate,
+        and only they need a sweeper.
+
+        Behind ``worker:maintenance`` rather than per node: the deletes
+        are idempotent range deletes, so N nodes running them would not
+        corrupt anything — it would simply be N times the write
+        amplification and vacuum churn for one table's worth of benefit.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.deliveries import PostgresDeliveryDedupeStore
+        from crewlet.db.maintenance import MaintenanceWorker
+        from crewlet.db.rate_limits import PostgresRateLimitStore
+        from crewlet.schedule import ScheduledRunStore
+
+        if self._maintenance_worker is not None:
+            return
+        if not isinstance(self.storage, Database):
+            return
+        a2a_channels = (
+            self.a2a_service.channels if self.a2a_service is not None else None
+        )
+        self._maintenance_worker = MaintenanceWorker(
+            deliveries=PostgresDeliveryDedupeStore(self.storage),
+            rate_limits=PostgresRateLimitStore(self.storage),
+            scheduled_runs=ScheduledRunStore(self.storage),
+            turn_completions=self._turn_completions,
+            a2a_channels=a2a_channels,
+            apply_status=self._config_plane(),
+            # Closing a channel nothing finished is housekeeping on the
+            # same shared table, on the same singleton, for the same
+            # reason: N nodes closing the same abandoned channels would
+            # publish N closed events for each one.
+            close_idle_a2a=(
+                self.a2a_service.close_idle_channels
+                if self.a2a_service is not None
+                else None
+            ),
+            # `agent_diary` rows carry their own `ttl_until`, so they
+            # expire per row rather than on a table retention — same
+            # shape as the idle-A2A close, same singleton, same reason.
+            expire_diary=(
+                self._agent_diary.delete_expired
+                if getattr(self, "_agent_diary", None) is not None
+                else None
+            ),
+            claim_duty=lambda: self.claim_worker_duty("maintenance"),
+        )
+
+    def _build_a2a_channel_store(self) -> None:
+        """Point the A2A service at durable channel state, if there is any.
+
+        Without a database the service keeps its in-memory twin, which
+        is process-local — so cross-node authorization does not work,
+        exactly as seat placement does not. Same rule, said once here
+        and loudly at boot there.
+        """
+        from crewlet.a2a.channels import PostgresA2AChannelStore
+        from crewlet.db.client import Database
+
+        if self.a2a_service is None or not isinstance(self.storage, Database):
+            return
+        self.a2a_service.set_channel_store(PostgresA2AChannelStore(self.storage))
+
+    def _build_turn_completion_store(self) -> None:
+        """Wire the completion ledger, if there is somewhere to keep it.
+
+        Postgres or nothing. The memory twin exists and is used by tests,
+        but wiring it by default here would be worse than no ledger: it
+        is process-local, so it cannot deduplicate across the takeover
+        that is the entire reason the table exists, while looking from
+        the outside exactly as though it does.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.turn_completions import PostgresTurnCompletionStore
+
+        if self._turn_completions is not None:
+            return
+        if not isinstance(self.storage, Database):
+            return
+        self._turn_completions = PostgresTurnCompletionStore(self.storage)
 
     def _refresh_jira_routing(self, jira_transport: Any) -> None:
         """Re-seed a freshly-rebuilt JiraTransport's routing state.
@@ -4907,18 +6219,9 @@ class Engine:
         sandbox. ``None`` → the sandbox uses a directly-configured collector
         endpoint (or no telemetry).
         """
-        base = os.environ.get("CREWLET_SANDBOX_OTEL_RECEIVER_URL", "")
-        if not base:
-            return None
-        from crewlet.sandbox.otel import SandboxOtelReceiver
+        from crewlet.sandbox.otel import build_sandbox_otel_receiver
 
-        return SandboxOtelReceiver(
-            base_url=base,
-            upstream_endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-            upstream_headers=_parse_otlp_headers(
-                os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
-            ),
-        )
+        return build_sandbox_otel_receiver(getattr(self, "_bootstrap", None))
 
     def _role_for_agent_id(self, agent_id: str) -> str:
         """Role name for a live agent id, or ``""``.
@@ -4964,9 +6267,20 @@ class Engine:
             token_usage_repo=token_usage_repo,
         )
         try:
-            await self._sandbox_coordinator.subscribe()
-            await self._sandbox_coordinator.recover()
-            logger.info("sandbox_coordinator_started")
+            # No fleet-wide subscribe and no fleet-wide recover: both are
+            # per-seat, done by the acquire hook, because only the node
+            # that owns a seat can resume its runs. This path can start
+            # AFTER seats were claimed (a provider arriving late), so
+            # catch up on whatever is already held.
+            held = self._seat_host.held_handles if self._seat_host is not None else ()
+            for handle in held:
+                await self._sandbox_coordinator.recover_seat(
+                    handle,
+                    owner=self._incarnation,
+                    epoch=self._seat_host.epoch_for(handle) or 0,
+                )
+                await self._sandbox_coordinator.attach_seat(handle)
+            logger.info("sandbox_coordinator_started", seats=len(held))
         except Exception as exc:
             logger.error("sandbox_coordinator_start_failed", error=str(exc))
 
@@ -4978,6 +6292,10 @@ class Engine:
             event_queue=self.event_queue,
             pending_store=self._sandbox_pending_store,
             manager=self._sandbox_manager,
+            # One waiter per company, not per node: it polls every live
+            # box, so N nodes running it means N reconnects per box per
+            # tick and N reapers racing to expire the same paused one.
+            claim_duty=lambda: self.claim_worker_duty("sandbox-waiter"),
         )
         try:
             await self._sandbox_waiter.start()
@@ -5059,31 +6377,42 @@ class Engine:
             sandbox_mcp_servers=getattr(self, "_mcp_configs", None),
             sandbox_otel_receiver=self._sandbox_otel_receiver,
             llm_provider_configs=self._llm_provider_configs,
+            # The in-turn fence. Read live rather than captured, because
+            # the host is built during ``start`` and the turn engine can
+            # be built before or after it.
+            seat_owner=_SeatOwnerView(self),
         )
 
     async def _ensure_turn_engine_after_providers(self) -> None:
-        """Build the turn engine + subscribe agent inboxes once the
-        first LLM provider lands post-activation.
+        """Build the turn engine and un-park the seats once the first LLM
+        provider lands post-activation.
 
         No-op when the engine already exists or no providers are
-        configured.  After building, subscribe inbox handlers for every
-        already-spawned agent so a role added *before* the provider PUT
-        also starts consuming its inbox (the role-add path only
-        subscribes when ``turn_engine`` is already present)."""
+        configured.
+
+        Iterates the seats this node OWNS, not the agent pool. The pool
+        retains terminated instances, so walking it re-subscribed
+        decommissioned seats — resurrecting a dead seat's consumer with a
+        handler closed over a TERMINATED instance. And the resume names
+        the park's own reason, so it cannot release a live sandbox hold
+        on a seat that is mid-run.
+        """
         if self.turn_engine is not None or not self._llm_providers:
             return
         self._build_turn_engine()
         logger.info("turn_engine_built_live")
-        for agent in self.agent_pool.agents:
-            await self._subscribe_agent_inbox(agent)
-            # Events that arrived while there was NO turn engine were parked
-            # (topic paused + requeued by the inbox handler) — now that
-            # turns can run, let them flow. No-op for never-paused topics.
-            await self.event_queue.resume_topic(f"crewlet.agent.{agent.handle}.inbox")
-            logger.info(
-                "agent_inbox_subscribed_live",
-                handle=agent.handle,
+        held = self._seat_host.held_handles if self._seat_host is not None else ()
+        for handle in held:
+            # Events that arrived while there was NO turn engine were
+            # parked (subscription paused + requeued by the inbox
+            # handler) — now that turns can run, let them flow. No-op for
+            # never-paused subscriptions.
+            await self.event_queue.resume_topic(
+                agent_inbox_topic(handle),
+                agent_inbox_group(handle),
+                reason=_NO_TURN_ENGINE_PAUSE_REASON,
             )
+            logger.info("agent_inbox_unparked_live", handle=handle)
         # The sandbox coordinator needs the (now-built) turn engine to
         # dispatch completion turns; start it on this late path too.
         if self._sandbox_coordinator is None:
@@ -5248,67 +6577,627 @@ class Engine:
         )
         return True
 
-    async def _spawn_role_live(self, role: Any, org: Any) -> None:
-        """Spawn one agent seat into the live engine (apply_config path).
+    # ── seat ownership ───────────────────────────────────────────────
 
-        Mirrors the boot cascade: AgentPool spawn, budget seed, inbox
-        subscription, then (post-Tier-B) the per-role MCP instances and
-        Slack app.  The Slack app is registered per-role here because
-        ``register_slack_apps_from_org(..., self.org)`` would iterate
-        the OLD org until ``_apply_org_diff`` swaps it at the end; the
-        broader Jira / GitHub refreshes that walk ``self.org`` run
-        after the swap.
+    def _resolve_node_profile(self) -> Any:
+        """Read this node's roles and labels out of Tier A.
+
+        Cached on the engine because it is consulted on every duty claim
+        and every presence renew, and because a node's roles must not
+        change under a running process: the fleet reads them off a lease
+        that this node re-sends on a heartbeat, so a value that drifted
+        mid-run would be advertised without anything having restarted.
         """
-        agent = await self.agent_pool.spawn_role(
-            role, org, source="engine.apply_config"
+        from crewlet.seat.placement import NodeProfile, parse_roles
+
+        bootstrap = getattr(self, "_bootstrap", None)
+        node_cfg = getattr(bootstrap, "node", None) if bootstrap is not None else None
+        self._node_profile = NodeProfile(
+            node_id=self._node_id,
+            roles=parse_roles([str(r) for r in getattr(node_cfg, "roles", [])] or None),
+            labels=dict(getattr(node_cfg, "labels", {}) or {}),
         )
-        self._seed_agent_budget(agent, role)
+        return self._node_profile
 
-        if self.turn_engine is not None:
-            await self._subscribe_agent_inbox(agent)
-        logger.info("agent_spawned", agent_id=agent.id_str, role=role.name)
+    @property
+    def node_profile(self) -> Any:
+        """What this node is. Never ``None``.
 
-        # Spawn per-role MCP instances (atlassian / per-agent slack /
-        # etc.).  ``_start_mcp_servers`` only fires at first
-        # activation; for roles added live via ``apply_config`` we
-        # mirror the per-role spawn loop so the agent's tools are
-        # available on its first turn.  Guard on ``_tier_b_done`` so
-        # the first-activation path doesn't double-spawn.
+        Resolved from Tier A on demand, not only from ``start``. The
+        fallback below is for an engine that genuinely has no Tier A — a
+        directly-constructed one, which has always been the all-roles
+        single-process default. Applying that fallback to an engine that
+        *has* Tier A merely because it has not started yet answers
+        ``runs_role`` with every role for a node whose config subtracts
+        two of them, which is the opposite of what the operator wrote.
+        """
+        from crewlet.seat.placement import NodeProfile
+
+        if self._node_profile is None:
+            if getattr(self, "_bootstrap", None) is not None:
+                return self._resolve_node_profile()
+            self._node_profile = NodeProfile(node_id=self._node_id)
+        return self._node_profile
+
+    def runs_role(self, role: Any) -> bool:
+        """Whether this node performs a given :class:`NodeRole`."""
+        return role in self.node_profile.roles
+
+    def _seat_placement(self, handle: str) -> Any:
+        """Where the seat behind ``handle`` may run, per the ACTIVE org.
+
+        Read fresh on every sweep rather than snapshotted: a live config
+        apply can move a pin, and a node holding a seat it no longer
+        matches has to find out.
+        """
+        from crewlet.seat.placement import ANYWHERE
+
+        role = self.org.agent_seat_by_handle(handle)
+        placement = getattr(role, "placement", None) if role is not None else None
+        return placement.to_placement() if placement is not None else ANYWHERE
+
+    def _build_seat_host(self) -> Any:
+        """Construct the placement host. Always — including single-node.
+
+        Backed by a real ``LeaseStore`` when a database is configured and
+        by a ``MemoryLeaseStore`` otherwise, so the single-node case is
+        the *degenerate* case of the fleet case rather than a second code
+        path. Every seat is then established through one sequence, and
+        the ordering bug that lived in the live-add path cannot come back
+        by only fixing boot.
+
+        A memory-backed store is private to this process, so every node
+        using one believes it owns the whole company. That is correct for
+        one node and catastrophic for two, which is why it is said out
+        loud at boot rather than left as a debug line.
+
+        An explicit ``lease_store=`` overrides the derivation, for the
+        caller that runs several engines against one fleet in one
+        process — an embedding, a fleet test.  Each still mints its own
+        incarnation, so they are peers to each other exactly as separate
+        processes would be, and the warning above does not apply: the
+        store is shared, so the fleet is real.
+        """
+        from crewlet.config import new_node_incarnation
+        from crewlet.db.client import Database
+        from crewlet.db.leases import LeaseStore, MemoryLeaseStore
+        from crewlet.seat.host import SeatHost
+
+        bootstrap = getattr(self, "_bootstrap", None)
+        # A FRESH incarnation per engine, not the process-cached one.
+        # Two engines in one process are two lease holders; sharing an
+        # identity would let each renew the other's lease and put both on
+        # one seat at the same fencing epoch — the exact hole the
+        # incarnation exists to close.
+        if not self._incarnation:
+            self._incarnation = new_node_incarnation(bootstrap)
+        if self._lease_store is not None:
+            leases: Any = self._lease_store
+        elif isinstance(self.storage, Database):
+            leases = LeaseStore(self.storage)
+        else:
+            leases = MemoryLeaseStore()
+            logger.warning(
+                "seat_placement_is_process_local",
+                node=self._node_id,
+                hint=(
+                    "no database configured, so seat leases are held in "
+                    "this process only and it will claim every seat. "
+                    "Correct for a single node; running a second node "
+                    "against the same broker in this mode gives two "
+                    "processes the same agents. Configure "
+                    "providers.database.dsn to run a fleet."
+                ),
+            )
+        return SeatHost(
+            leases=leases,
+            owner=self._incarnation,
+            node_id=self._node_id,
+            seats=self._agent_seat_handles,
+            placement_of=self._seat_placement,
+            profile=self.node_profile,
+            on_acquire=self._acquire_seat,
+            on_release=self._release_seat,
+            on_admission=self._seat_admission_changed,
+        )
+
+    def _start_loop_watchdog(self) -> None:
+        """Arm the one thing a stalled process can still do about itself.
+
+        A wedged event loop cannot be signalled — ``call_soon_threadsafe``
+        waits behind the same blockage — so no cross-thread mechanism can
+        stop this node's seat work from the outside. What a thread *can*
+        do unilaterally is end the process, and ending it is what the
+        fleet needs: the leases lapse on their own and peers take the
+        seats over, but the broker session does not lapse, so a
+        wedged-but-alive node keeps its prefetch of those seats' messages
+        for the full unacked-message timeout (~30 minutes, measured).
+        Exiting collapses that to a 9 ms redelivery.
+
+        The threshold is the seat lease TTL and is deliberately not a
+        config knob: past it this node is provably not the owner, and
+        letting the two numbers drift is precisely how a process gets to
+        be simultaneously "not the owner" and "still holding the mail".
+
+        Armed on every node, single or fleet. With one node there are no
+        peers waiting on the prefetch, but a wedged engine is a dead
+        engine either way, and exiting is what lets a supervisor notice.
+        """
+        if self._loop_watchdog is not None:
+            return
+        from crewlet.seat.host import SEAT_LEASE_TTL_SECONDS
+        from crewlet.seat.watchdog import EventLoopWatchdog
+
+        watchdog = EventLoopWatchdog(threshold_seconds=SEAT_LEASE_TTL_SECONDS)
+        try:
+            watchdog.start()
+        except Exception as exc:  # pragma: no cover — a thread that will not start
+            logger.warning("loop_watchdog_start_failed", error=str(exc))
+            return
+        self._loop_watchdog = watchdog
+
+    async def _stop_loop_watchdog(self) -> None:
+        watchdog, self._loop_watchdog = self._loop_watchdog, None
+        if watchdog is None:
+            return
+        with contextlib.suppress(Exception):
+            await watchdog.stop()
+
+    async def _seat_admission_changed(self, handle: str, admitted: bool) -> None:
+        """Stop or resume consuming a seat this node still holds.
+
+        The lease store went unreachable, or came back. Either way the
+        seat stays here — the row is untouched by a blip, and shedding on
+        one would tear a healthy company down over a two-second outage —
+        but ownership stops being *provable*, and a turn started without
+        proof is a turn a peer may be running too.
+
+        So the consumer is quiesced rather than detached: the attachment
+        and the subscription survive, in-flight work finishes, and
+        nothing new is fetched. The resume is the half that has to exist:
+        a delivery arriving during the blip quiesces the attachment
+        through ``DeferDelivery``, and with no inverse the node would
+        come back healthy, still own the seat, still be attached to it,
+        and never read from it again.
+
+        Pause holds are deliberately untouched in both directions — a
+        seat mid-sandbox is paused for its own reason, and lifting that
+        here would deliver into a suspended turn.
+        """
+        topics = (
+            (agent_inbox_topic(handle), agent_inbox_group(handle)),
+            (agent_control_topic(handle), agent_control_group(handle)),
+        )
+        for topic, group in topics:
+            try:
+                if admitted:
+                    await self.event_queue.unquiesce(topic, group)
+                else:
+                    await self.event_queue.quiesce(topic, group)
+            except Exception:
+                logger.exception(
+                    "seat_admission_gate_failed",
+                    seat=handle,
+                    topic=topic,
+                    admitted=admitted,
+                )
+
+    async def claim_worker_duty(self, duty: str, ttl_seconds: float = 45.0) -> bool:
+        """Claim a fleet-wide singleton duty for this node, briefly.
+
+        Some work belongs to the company rather than to a seat — polling
+        every live sandbox box, sweeping dedupe TTLs, creating the seat
+        subscriptions. Running it on every node is not merely wasteful,
+        it races: N reapers deciding independently to expire the same
+        paused box, N nodes reconnecting to the same sandbox each tick.
+
+        Claimed per tick rather than held, so a node that dies mid-duty
+        releases it by lapsing and a peer picks it up on its next tick,
+        with no handoff protocol. Without a placement host — the
+        single-node case — the answer is always yes: there is no fleet
+        to be a singleton within.
+
+        A node without the ``workers`` role never claims one. It does not
+        merely lose the race, it does not enter it: the duty then belongs
+        to whichever node the operator gave the role to, which is the
+        entire point of subtracting it here. A fleet where NOBODY has the
+        role runs none of these duties at all, so that shape is checked
+        against live presence and reported — see
+        :meth:`_check_fleet_roles`.
+        """
+        from crewlet.seat.placement import NodeRole
+
+        if not self.runs_role(NodeRole.WORKERS):
+            return False
+        if self._seat_host is None:
+            return True
+        from crewlet.db.leases import worker_resource
+
+        try:
+            lease = await self._seat_host.leases.try_acquire(
+                worker_resource(duty),
+                owner=self._incarnation,
+                ttl_seconds=ttl_seconds,
+                preferred=self._node_id,
+                # THIS build's protocol, not the store's default. A duty
+                # lease written at the default sits in the table as a
+                # live lower-protocol row, and the mixed-version gate
+                # refuses every SEAT claim while one exists — so a node
+                # would take a duty and then be unable to claim a single
+                # seat, including on a fleet where it is the only node.
+                # Invisible while PROTOCOL_VERSION was 1 and immediate
+                # the moment it moved.
+                protocol=self._seat_host.protocol,
+                gated=False,
+            )
+        except Exception:
+            logger.exception("worker_duty_claim_failed", duty=duty)
+            return False
+        return lease is not None
+
+    def _agent_seat_handles(self) -> list[str]:
+        """Every agent seat in the ACTIVE org, read fresh each sweep.
+
+        A snapshot taken at construction would keep claiming seats a live
+        config apply removed, and miss the ones it added.
+        """
+        return [r.get_handle() for r in self.org.all_roles() if not r.is_human]
+
+    async def _ensure_seat_subscriptions(self) -> None:
+        """Make every seat's inbox subscription exist, owner or not.
+
+        The invariant an unowned seat rests on: a durable subscription
+        retains what is published to it, so mail that lands during a
+        lease gap, a claim ramp, or a full fleet restart is held rather
+        than dropped on the floor — no dead letter, no producer error,
+        nothing to alert on.
+
+        Behind the ``seat-subscriptions`` singleton lease, because this
+        only needs doing once per company and there is no reason for
+        every node to walk every seat at every boot.
+        """
+        handles = self._agent_seat_handles()
+        if not handles:
+            return
+        if not await self.claim_worker_duty("seat-subscriptions", ttl_seconds=60.0):
+            logger.debug("seat_subscriptions_held_elsewhere")
+            return
+        created = 0
+        for handle in handles:
+            try:
+                if await self.event_queue.ensure_subscription(
+                    agent_inbox_topic(handle), agent_inbox_group(handle)
+                ):
+                    created += 1
+                # The seat's control topic needs the same invariant: a
+                # detached run outlives its node, so a completion can
+                # land while the seat is between owners.
+                if await self.event_queue.ensure_subscription(
+                    agent_control_topic(handle), agent_control_group(handle)
+                ):
+                    created += 1
+            except Exception:
+                logger.exception("seat_subscription_ensure_failed", seat=handle)
+        logger.info("seat_subscriptions_ensured", seats=len(handles), created=created)
+
+    async def _acquire_seat(self, handle: str, lease: Any) -> None:
+        """Establish a seat this node has just claimed, consumer LAST.
+
+        The ordering is the whole method. A seat is *established* — its
+        instance exists, its budget cap is seeded, its per-role MCP
+        children are up, its interrupted sandbox run is recovered — and
+        only then does it start receiving work. Attaching the consumer
+        first means the seat can win a delivery and run its first turn
+        with an empty tool surface, which is exactly what
+        ``_spawn_role_live`` used to do (subscribe at 5823, MCP at 5833)
+        while boot did the reverse.
+
+        Raising is how a takeover reports failure: the host releases the
+        lease, backs the seat off, and a peer gets a clear run at it.
+        """
+        role = self.org.agent_seat_by_handle(handle)
+        if role is None:
+            raise RuntimeError(
+                f"claimed seat {handle!r} has no agent role in the active org"
+            )
+        agent = self.agent_pool.get_by_handle(handle)
+        if agent is None:
+            agent = await self.agent_pool.spawn_role(
+                role, self.org, source="seat.acquire"
+            )
+        self._seed_seat_budget(role, self.org)
+
         if self._tier_b_done:
             await self._respawn_role_mcp(role)
             self._register_role_slack_app(role)
             await self._register_role_mattermost_bot(role)
 
-    async def _decommission_role_live(self, role_name: str, old_org: Any) -> None:
-        """Tear down a role's agent instance + per-role MCP (apply_config path).
+        # Recover an interrupted detached sandbox run BEFORE the consumer
+        # attaches: the run may have left the seat paused and parked, and
+        # a delivery arriving first would start a turn beside it. Then
+        # take over the seat's control topic, so completions for its runs
+        # reach this node and only this node.
+        if self._sandbox_coordinator is not None:
+            await self._sandbox_coordinator.recover_seat(
+                handle, owner=self._incarnation, epoch=lease.epoch
+            )
+            await self._sandbox_coordinator.attach_seat(handle)
 
-        Safe for human seats and never-spawned roles —
-        ``get_all_for_role`` simply returns no agents.
+        # LAST, and unconditionally. An owned seat is always attached:
+        # making the attachment depend on the turn engine existing left a
+        # seat owned in the lease table and deaf in the process, waiting
+        # on a resume pass that keyed off the pool rather than off
+        # ownership. A node booted with zero LLM providers parks its
+        # deliveries in the handler instead, under its own pause reason.
+        await self._subscribe_agent_inbox(agent, epoch=lease.epoch)
+        logger.info("seat_established", seat=handle, epoch=lease.epoch)
+
+    async def _release_seat(self, handle: str, lease: Any, reason: Any) -> None:
+        """Give a seat up. What that means depends entirely on ``reason``.
+
+        **Voluntary** (drain, role gone): quiesce so nothing new is
+        picked up, let the in-flight turn finish under a bounded wait,
+        then detach. The seat leaves cleanly and its work is not
+        duplicated.
+
+        **Fenced** (lease lost, acquire failed, posture): detach FIRST
+        and abandon whatever is running. A peer may already be serving
+        this seat, so waiting for a turn to finish only widens the
+        window in which two nodes run one agent — and nothing is
+        republished, which would hand that peer a second copy of work it
+        is already doing.
+
+        Either way this must be idempotent and tolerant of partial
+        state: a failed acquire releases the same seat, so the MCP
+        children may be half-spawned and the consumer may never have
+        attached.
         """
-        agents = self.agent_pool.get_all_for_role(role_name)
-        for agent in agents:
+        from crewlet.seat.host import ReleaseReason
+
+        fenced = bool(getattr(reason, "fenced", False))
+        if not fenced:
+            # Stop taking new work, then let the running turn finish.
+            with contextlib.suppress(Exception):
+                await self.event_queue.quiesce(
+                    agent_inbox_topic(handle), agent_inbox_group(handle)
+                )
+            if reason != ReleaseReason.ROLE_GONE:
+                await self._drain_seat_by_handle(handle)
+
+        # Detach before tearing anything else down: while the consumer is
+        # attached this node is still the seat's owner in practice.
+        # Raises SeatReleaseError if it cannot be proven, and the host
+        # then keeps the lease rather than handing on a seat we may still
+        # be consuming.
+        await self._detach_agent_inbox(handle)
+
+        if self._sandbox_coordinator is not None:
+            with contextlib.suppress(Exception):
+                await self._sandbox_coordinator.detach_seat(handle)
+            with contextlib.suppress(Exception):
+                await self._sandbox_coordinator.release_seat(handle)
+
+        role = self.org.agent_seat_by_handle(handle)
+        if role is not None:
+            with contextlib.suppress(Exception):
+                await self._stop_role_mcp(role)
+        agent = self.agent_pool.get_by_handle(handle)
+        if agent is not None:
             for issue_key in self.execution_tracker.get_issues(agent.id_str):
                 self.execution_tracker.untrack(issue_key)
-            # Drop the per-agent budget so a re-added role with the
-            # same id doesn't inherit a stale (possibly exhausted)
-            # counter.
-            self.budget_manager.drop_agent_budget(agent.id_str)
-            # Tear down the inbox consumer + its broker-side subscription:
-            # a decommissioned seat must not keep a consumer bound to a
-            # terminated instance, nor accumulate undeliverable events on
-            # a durable subscription forever.
-            if agent.handle in self._subscribed_inboxes:
+            with contextlib.suppress(Exception):
+                await self.agent_pool.terminate(agent)
+        logger.info("seat_relinquished", seat=handle, reason=str(reason))
+
+    def _may_serve_seat(self, handle: str) -> bool:
+        """Whether a NEW turn may start on this seat, right now.
+
+        Freshness-based — see
+        :meth:`~crewlet.seat.host.SeatHost.may_start`. A membership check
+        would read a snapshot up to a full lease TTL stale, which is
+        exactly the window it exists to close.
+        """
+        if self._seat_host is None:
+            return True
+        return self._seat_host.may_start(handle) is not None
+
+    async def _drop_worked_triggers(
+        self, agent: AgentInstance, events: list[Event]
+    ) -> list[Event]:
+        """Remove triggers a previous turn already finished.
+
+        The window this closes: a turn completes, its outbound effects
+        ship, and the node dies before the delivery is acked. At-least-
+        once then hands the trigger to the seat's next owner, which
+        re-runs the whole thing — a second Slack reply, a second Jira
+        comment, a second push.
+
+        Only trigger types that actually RUN a turn are consulted;
+        anything else passes through untouched (see
+        :data:`_LEDGERED_INBOX_TYPES` for which, and why).
+
+        Fails OPEN, like the store: an unreadable ledger cannot tell you
+        whether work was done, and the only safe answer to that is the
+        one the engine gave before the ledger existed — run it.
+        """
+        if self._turn_completions is None or not events:
+            return events
+        candidates = [e for e in events if e.type in _LEDGERED_INBOX_TYPES]
+        if not candidates:
+            return events
+        worked = await self._turn_completions.completed(
+            agent.handle, [str(e.id) for e in candidates]
+        )
+        if not worked:
+            return events
+        kept = [e for e in events if str(e.id) not in worked]
+        skipped = len(events) - len(kept)
+        logger.info(
+            "turn_trigger_already_worked",
+            agent_handle=agent.handle,
+            skipped=skipped,
+            remaining=len(kept),
+        )
+        await self._publish_trigger_skipped(agent, events, worked)
+        return kept
+
+    async def _record_worked_triggers(
+        self, agent: AgentInstance, events: list[Event]
+    ) -> None:
+        """Record the constituent triggers this turn finished.
+
+        The CONSTITUENTS, never a derived id: a coalesced partition is
+        merged into one digest before the turn runs and that digest is
+        minted fresh on every coalesce, so a key taken from it would
+        differ on every redelivery and match nothing.
+
+        Called after the dispatch returns — which includes the sandbox
+        SUSPEND, deliberately. Past the suspend the pending row's
+        ``claim_for_resume`` is the at-most-once authority for the rest
+        of that work, and the trigger itself is finished with.
+
+        Fails open inside the store: the side effects already shipped,
+        so failing to record them costs at most one duplicate turn —
+        exactly the behaviour without a ledger.
+        """
+        if self._turn_completions is None or not events:
+            return
+        ids = [str(e.id) for e in events if e.type in _LEDGERED_INBOX_TYPES]
+        if not ids:
+            return
+        epoch = 0
+        if self._seat_host is not None:
+            epoch = self._seat_host.epoch_for(agent.handle) or 0
+        await self._turn_completions.record(
+            agent.handle,
+            ids,
+            turn_id=str(getattr(agent, "current_turn_id", "") or ""),
+            node=self._incarnation,
+            owner_epoch=epoch,
+        )
+
+    async def _publish_trigger_skipped(
+        self, agent: AgentInstance, events: list[Event], worked: set[str]
+    ) -> None:
+        """Announce a short-circuit, so the mechanism is auditable.
+
+        Without it a skipped trigger is invisible in every operator
+        surface the product has: the dashboard shows no turn, the logs
+        show no error, and "the agent never answered" and "the agent
+        already answered on a node that has since died" look identical.
+        """
+        from crewlet.events.types import TurnTriggerSkipped
+
+        for event in events:
+            if str(event.id) not in worked:
+                continue
+            with contextlib.suppress(Exception):
+                await self.event_queue.publish(
+                    "crewlet.events.turn_trigger_skipped",
+                    TurnTriggerSkipped(
+                        source="engine",
+                        agent_handle=agent.handle,
+                        agent_id=agent.id_str,
+                        trigger_id=str(event.id),
+                        trigger_type=event.type,
+                        reason="already_worked",
+                    ),
+                )
+
+    def _dedupe_inbox_events(
+        self, agent: AgentInstance, events: list[Event]
+    ) -> list[Event]:
+        """Drop repeat ids from one drain. See the handler for why."""
+        seen_ids: set[Any] = set()
+        deduped: list[Event] = []
+        for event in events:
+            if event.id in seen_ids:
+                logger.info(
+                    "inbox_duplicate_dropped",
+                    agent_handle=agent.handle,
+                    event_type=event.type,
+                    event_id=str(event.id),
+                )
+                continue
+            seen_ids.add(event.id)
+            deduped.append(event)
+        return deduped
+
+    async def _drain_seat_by_handle(self, handle: str) -> bool:
+        """Bounded wait for a seat's in-flight turn, keyed by HANDLE.
+
+        ``_drain_seat`` keys by role name because every config-apply
+        primitive does; the seat host keys by handle because that is what
+        a lease names. One mapping, in one place, rather than each caller
+        guessing.
+        """
+        role = self.org.agent_seat_by_handle(handle)
+        if role is None:
+            return True
+        return await self._drain_seat(role.name)
+
+    async def _spawn_role_live(self, role: Any, org: Any) -> None:
+        """Establish one agent seat into the live engine (apply_config path).
+
+        Delegates the seat itself to the placement host so a live-added
+        role goes through exactly the same establish-then-attach sequence
+        as a takeover — this path used to invert it, subscribing the
+        inbox before spawning the per-role MCP children.
+
+        Without a claim the seat is simply not this node's to run: the
+        sweep will pick it up here or a peer will.
+        """
+        self._seed_seat_budget(role, org)
+        logger.info("seat_added_to_org", role=role.name, handle=role.get_handle())
+
+    async def _decommission_role_live(self, role_name: str, old_org: Any) -> None:
+        """Retire a role: release the seat here, then delete its inbox.
+
+        Two halves with different scopes. **Releasing the seat** is local
+        and only this node can do it — through the ordinary voluntary
+        path, so the teardown sequence is the same one every other
+        release uses. **Deleting the subscription** is fleet-wide and
+        must happen exactly once, after the seat is released and no node
+        will re-claim it; it goes through the admin API, which needs no
+        local consumer, so it does not depend on which node ran the seat.
+
+        Safe for human seats and never-spawned roles.
+        """
+        from crewlet.seat.host import ReleaseReason
+
+        old_role = old_org.get_role(role_name)
+        handle = old_role.get_handle() if old_role is not None else ""
+
+        if handle and self._seat_host is not None:
+            # Bounded drain first (the role still exists for a moment
+            # longer), then the standard release.
+            await self._drain_seat(role_name)
+            await self._seat_host.release(handle, ReleaseReason.ROLE_GONE)
+        else:
+            await self._drain_seat(role_name)
+            for agent in self.agent_pool.get_all_for_role(role_name):
+                for issue_key in self.execution_tracker.get_issues(agent.id_str):
+                    self.execution_tracker.untrack(issue_key)
+                self._subscribed_inboxes.pop(agent.handle, None)
+                await self.agent_pool.terminate(agent)
+                logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)
+
+        if handle:
+            # Destructive, and deliberately so: a decommissioned seat's
+            # inbox must not accumulate undeliverable events forever.
+            for topic, group in (
+                (agent_inbox_topic(handle), agent_inbox_group(handle)),
+                (agent_control_topic(handle), agent_control_group(handle)),
+            ):
                 try:
-                    await self.event_queue.unsubscribe(
-                        f"crewlet.agent.{agent.handle}.inbox",
-                        f"agent-{agent.handle}",
-                    )
+                    await self.event_queue.delete_subscription(topic, group)
                 except Exception:
-                    logger.exception("inbox_unsubscribe_failed", handle=agent.handle)
-                self._subscribed_inboxes.discard(agent.handle)
-            self._purge_cli_llm_workspaces(agent.handle)
-            await self.agent_pool.terminate(agent)
-            logger.info("agent_terminated", agent_id=agent.id_str, role=role_name)
+                    logger.exception("inbox_unsubscribe_failed", handle=handle)
+            self._subscribed_inboxes.pop(handle, None)
+            # Keyed on the handle, not on a live instance: under seat
+            # ownership the release above already terminated it, and on a
+            # node that never held the seat there was never one to ask.
+            self._purge_cli_llm_workspaces(handle)
 
         # Release the seat's Mattermost bot: its websocket, its HTTP
         # client and its handle-registry entries.  Unlike every other
@@ -5325,10 +7214,8 @@ class Engine:
         # ``_role_mcp_tools`` entry that a later role reusing the name
         # would surface.  Guard on the spawn cascade — before it runs
         # there are no per-role instances to stop.
-        if self._tier_b_done:
-            old_role = old_org.get_role(role_name)
-            if old_role is not None:
-                await self._stop_role_mcp(old_role)
+        if self._tier_b_done and old_role is not None:
+            await self._stop_role_mcp(old_role)
         self._role_mcp_tools.pop(role_name, None)
 
     async def _unregister_role_mattermost_bot(
@@ -5461,6 +7348,17 @@ class Engine:
             updated_count += 1
             logger.debug("role_updated", role=role_name, changed_fields=changed)
 
+            # Let this seat's in-flight turns finish before swapping what
+            # they are running as.  A turn already pins its definition,
+            # providers and tool catalogue (see crewlet.agent.turn_pin),
+            # so it stays *coherent* through a rewire — but pinning a
+            # catalogue is not pinning a capability, and the MCP respawn
+            # below genuinely kills the clients a running turn's tools
+            # dispatch to.  Bounded, and never on ``AgentState``: a seat
+            # parked on a detached sandbox run would otherwise hold the
+            # whole apply for the length of the run.
+            await self._drain_seat(role_name)
+
             if new_role.kind == RoleKind.HUMAN:
                 # Human seats have no AgentDefinition or instance —
                 # the org swap below carries contact / availability /
@@ -5478,17 +7376,9 @@ class Engine:
             for agent in agents:
                 agent.definition = new_defn
 
-                # Apply a changed per-role token budget in place.  A
-                # positive cap updates (preserving used-tokens history);
-                # dropping to 0 means "unlimited", so remove the cap.
-                if "token_budget" in changed:
-                    if new_role.token_budget > 0:
-                        self.budget_manager.update_agent_budget(
-                            agent.id_str, new_role.token_budget
-                        )
-                    else:
-                        self.budget_manager.drop_agent_budget(agent.id_str)
-
+                # A changed ``token_budget`` is applied by the
+                # ``_reseed_seat_budgets`` pass after the org swap, which
+                # covers seats this node does not run as well.
                 await self.event_queue.publish(
                     "crewlet.events.role_updated",
                     RoleUpdated(
@@ -5514,6 +7404,21 @@ class Engine:
 
         # Swap org after all agents are updated to avoid partial state
         self.org = new_org
+
+        # Per-seat token caps are a projection of the active org, so
+        # reconcile them against it once, here — rather than per spawned
+        # instance, which skipped every seat this node does not run.
+        self._reseed_seat_budgets(self.org)
+
+        # Placement reconciles against the NEW org: added seats become
+        # claimable, removed ones are released. It has to run after the
+        # swap because the host reads its seat list from ``self.org``.
+        if self._tier_b_done:
+            if self._seat_host is None:
+                self._seat_host = self._build_seat_host()
+            await self._ensure_seat_subscriptions()
+            with contextlib.suppress(Exception):
+                await self._seat_host.sweep()
 
         # Org config reaches agents directly through the
         # in-memory Organization (rendered into the Plan prompt by
@@ -5555,3 +7460,25 @@ class Engine:
             removed=len(removed),
             updated=updated_count,
         )
+
+
+class _SeatOwnerView:
+    """Live view of the engine's placement host, for the in-turn fence.
+
+    The turn engine is built before or after the host depending on
+    whether the company had LLM providers at boot, so it cannot capture
+    the host by value. This reads it per call and answers "may this seat
+    keep working?" — which is ``None`` both when the host does not exist
+    (single-node embeds, tests) and when the seat is not ours.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def may_start(self, handle: str) -> int | None:
+        host = self._engine._seat_host
+        if host is None:
+            # No placement at all: nothing can take the seat away, so
+            # there is nothing to fence against.
+            return 1
+        return host.may_start(handle)

@@ -93,6 +93,41 @@ async def test_apply_failure_restores_budget() -> None:
     assert engine.budget_manager.org_budget.max_tokens == 100
 
 
+async def test_apply_failure_restores_per_seat_budgets() -> None:
+    """A failed apply restores the per-ROLE caps, not just the org one.
+
+    ``org`` applies before ``scalars``, so by the time the failure lands
+    the new revision's per-seat caps are already in place.  Only the org
+    cap used to be in the rollback snapshot, so the failed revision's
+    per-role caps survived the rollback and governed spend until the
+    next successful apply.
+    """
+    engine = await make_engine(
+        company=CompanyConfig(
+            name="Initial", roles=[{"name": "Engineer", "token_budget": 100}]
+        ),
+    )
+    seat = engine.org.get_role("Engineer")
+    agent_id = engine.org.agent_id_for(seat)
+    assert engine.budget_manager.get_agent_budget(agent_id).max_tokens == 100
+
+    def _boom(self, old, new):
+        raise RuntimeError("simulated scalars failure")
+
+    engine._apply_scalars_diff = _boom.__get__(engine, type(engine))
+
+    with pytest.raises(ConfigApplyError):
+        await engine.apply_config(
+            CompanyConfig(
+                name="Initial",
+                roles=[{"name": "Engineer", "token_budget": 9000}],
+                integrations={"forge_app_id": "x"},
+            )
+        )
+
+    assert engine.budget_manager.get_agent_budget(agent_id).max_tokens == 100
+
+
 async def test_apply_failure_restores_plane_config() -> None:
     """A failed apply that already rebuilt ``_plane_config`` (the
     ``integrations_plane`` branch runs before the failing transport

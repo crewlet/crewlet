@@ -1,7 +1,8 @@
-"""Tests for the ``/config/*`` bearer-token middleware."""
+"""Tests for the API bearer-token middleware."""
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
@@ -9,10 +10,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from crewlet.api.app import create_app
 from crewlet.api.auth import TokenLoadError, load_tokens
 from crewlet.config import ApiAuthConfig, ApiAuthTokenConfig, ApiConfig, BootstrapConfig
 from crewlet.events.types import Event
+from tests.test_api.helpers import create_app
 
 
 class _MockQueue:
@@ -61,10 +62,15 @@ def test_load_tokens_disabled_returns_empty(caplog) -> None:
     assert load_tokens(bootstrap) == {}
 
 
-def test_load_tokens_empty_list_fatal() -> None:
-    bootstrap = BootstrapConfig()
-    with pytest.raises(TokenLoadError, match="empty"):
-        load_tokens(bootstrap)
+def test_load_tokens_empty_list_serves_reads_only() -> None:
+    """No tokens is a legitimate posture, not a misconfiguration.
+
+    Reads serve; writes and ``/config`` are refused outright, because no
+    token can ever match an empty map. A deployment that never writes
+    config therefore has no credential to manage — strictly safer than
+    being made to mint one it will not use.
+    """
+    assert load_tokens(BootstrapConfig()) == {}
 
 
 def test_load_tokens_empty_resolved_token_fatal() -> None:
@@ -185,3 +191,275 @@ def test_middleware_constant_time_compare_works_for_multiple_tokens() -> None:
         client.get("/config", headers={"Authorization": "Bearer bob-token"}).status_code
         == 404
     )
+
+
+# ---------------------------------------------------------------------------
+# Full-surface auth
+# ---------------------------------------------------------------------------
+
+
+class TestFullSurfaceAuth:
+    """What ``allow_anonymous_read: false`` actually closes.
+
+    Auth is a policy over the whole surface, not a ``/config/*`` prefix:
+    ``/events``, ``/agents/{id}/memory`` and ``/ws/stream`` serve full
+    LLM transcripts — prompts, tool arguments, diary entries — so an
+    operator who turns reads off has to get all three, not the two
+    somebody remembered to list.
+    """
+
+    @staticmethod
+    def _bootstrap(**auth: object):
+        from crewlet.config import (
+            ApiAuthConfig,
+            ApiAuthTokenConfig,
+            ApiConfig,
+            BootstrapConfig,
+        )
+
+        tokens = [ApiAuthTokenConfig(id="founder", token="s3cret")]
+        # Reads are open by default; these cases are about the posture
+        # that closes them, so it is set explicitly rather than relied on.
+        auth.setdefault("allow_anonymous_read", False)
+        return BootstrapConfig(
+            api=ApiConfig(auth=ApiAuthConfig(tokens=tokens, **auth))  # type: ignore[arg-type]
+        )
+
+    def _client(self, **auth: object):
+        from starlette.testclient import TestClient
+
+        from tests.test_api.helpers import create_app
+
+        app = create_app(MagicMock(), bootstrap=self._bootstrap(**auth))
+        app.state.configured = True
+        return TestClient(app, raise_server_exceptions=False)
+
+    @pytest.mark.parametrize("path", ["/agents", "/events", "/stream/snapshot"])
+    def test_data_routes_require_a_token(self, path: str) -> None:
+        assert self._client().get(path).status_code == 401
+
+    @pytest.mark.parametrize("path", ["/agents", "/events", "/stream/snapshot"])
+    def test_data_routes_pass_with_a_token(self, path: str) -> None:
+        resp = self._client().get(path, headers={"Authorization": "Bearer s3cret"})
+        assert resp.status_code != 401
+
+    @pytest.mark.parametrize("path", ["/health", "/ready"])
+    def test_probes_stay_open(self, path: str) -> None:
+        """An orchestrator has no token, and a liveness check that 401s is
+        a liveness check that fails."""
+        assert self._client().get(path).status_code in (200, 503)
+
+    def test_dashboard_shell_stays_open(self) -> None:
+        """The page that prompts for the token cannot itself require one.
+        It ships no data — every byte it renders comes from an
+        authenticated fetch."""
+        assert self._client().get("/dashboard").status_code == 200
+
+    def test_webhooks_stay_open_to_the_middleware(self) -> None:
+        """They authenticate by provider HMAC, which is stronger than a
+        shared bearer token — so they must not also 401."""
+        resp = self._client().post("/webhooks/jira", json={"webhookEvent": "x"})
+        assert resp.status_code != 401
+
+    def test_anonymous_read_opens_reads_but_not_writes(self) -> None:
+        client = self._client(allow_anonymous_read=True)
+        assert client.get("/agents").status_code != 401
+        # /config is never eligible: reading it exposes the whole company
+        # document, and writing it changes the company.
+        assert client.get("/config").status_code == 401
+        assert client.put("/config", content=b"name: x").status_code == 401
+
+    def test_reads_are_open_unless_the_operator_closes_them(self) -> None:
+        """The default, asserted on a config that says nothing about it.
+
+        The dashboard is a read surface served unauthenticated by
+        design — the page that would prompt for a token cannot itself
+        require one — so a default of "guarded" put a modal in front of
+        every first load.
+        """
+        from starlette.testclient import TestClient
+
+        from crewlet.config import (
+            ApiAuthConfig,
+            ApiAuthTokenConfig,
+            ApiConfig,
+            BootstrapConfig,
+        )
+        from tests.test_api.helpers import create_app
+
+        bootstrap = BootstrapConfig(
+            api=ApiConfig(
+                auth=ApiAuthConfig(
+                    tokens=[ApiAuthTokenConfig(id="founder", token="s3cret")]
+                )
+            )
+        )
+        app = create_app(MagicMock(), bootstrap=bootstrap)
+        app.state.configured = True
+        client = TestClient(app, raise_server_exceptions=False)
+
+        assert client.get("/agents").status_code != 401
+        assert client.get("/events").status_code != 401
+        # …and the half that is never open by default.
+        assert client.get("/config").status_code == 401
+        assert client.put("/config", content=b"name: x").status_code == 401
+
+    def test_disabled_opens_everything(self) -> None:
+        client = self._client(disabled=True)
+        assert client.get("/agents").status_code != 401
+        assert client.get("/events").status_code != 401
+
+
+class TestAnUnreachableApiRefusesToStart:
+    """The one token combination that cannot serve anybody.
+
+    Guarding every route behind a credential that does not exist is not
+    a strict posture, it is an outage — and one whose symptom is a
+    uniform 401 that reads exactly like a wrong token.
+    """
+
+    @staticmethod
+    def _bootstrap(**auth: object):
+        from crewlet.config import ApiAuthConfig, ApiConfig, BootstrapConfig
+
+        return BootstrapConfig(api=ApiConfig(auth=ApiAuthConfig(**auth)))  # type: ignore[arg-type]
+
+    def test_reads_closed_with_no_token_refuses_to_start(self) -> None:
+        from crewlet.api.auth import TokenLoadError, load_tokens
+
+        with pytest.raises(TokenLoadError, match="nothing is reachable"):
+            load_tokens(self._bootstrap(allow_anonymous_read=False))
+
+    @pytest.mark.parametrize("posture", [{}, {"disabled": True}])
+    def test_a_serving_posture_needs_no_token(self, posture: dict) -> None:
+        from crewlet.api.auth import load_tokens
+
+        assert load_tokens(self._bootstrap(**posture)) == {}
+
+
+class TestAnonymousReadIsAnnounced:
+    """A posture nobody is told about is a posture nobody reviews.
+
+    The level carries the judgement: on loopback this is a laptop, on
+    anything else the transcripts are readable by whoever reaches the
+    port. A warning that fires identically for both is one nobody reads
+    by the third deployment.
+    """
+
+    @staticmethod
+    def _build(host: str, caplog):
+        import logging
+
+        from crewlet.config import ApiConfig, BootstrapConfig
+        from tests.test_api.helpers import create_app
+
+        bootstrap = BootstrapConfig(api=ApiConfig(host=host))
+        with caplog.at_level(logging.INFO, logger="crewlet.api.app"):
+            create_app(MagicMock(), bootstrap=bootstrap)
+        return [r for r in caplog.records if "api_anonymous_read_enabled" in r.message]
+
+    def test_a_reachable_bind_warns(self, caplog) -> None:
+        records = self._build("0.0.0.0", caplog)
+        assert [r.levelname for r in records] == ["WARNING"]
+
+    def test_loopback_states_it_without_warning(self, caplog) -> None:
+        records = self._build("127.0.0.1", caplog)
+        assert [r.levelname for r in records] == ["INFO"]
+
+    def test_closing_reads_says_nothing(self, caplog) -> None:
+        import logging
+
+        from crewlet.config import (
+            ApiAuthConfig,
+            ApiAuthTokenConfig,
+            ApiConfig,
+            BootstrapConfig,
+        )
+        from tests.test_api.helpers import create_app
+
+        bootstrap = BootstrapConfig(
+            api=ApiConfig(
+                auth=ApiAuthConfig(
+                    tokens=[ApiAuthTokenConfig(id="f", token="s3cret")],
+                    allow_anonymous_read=False,
+                )
+            )
+        )
+        with caplog.at_level(logging.INFO, logger="crewlet.api.app"):
+            create_app(MagicMock(), bootstrap=bootstrap)
+        assert not [
+            r for r in caplog.records if "api_anonymous_read_enabled" in r.message
+        ]
+
+
+class TestWebSocketAuth:
+    """``BaseHTTPMiddleware`` never sees a WebSocket scope, so the stream —
+    the single richest endpoint — has to check for itself.
+
+    All of these run with reads closed. That is the posture where the
+    handshake check exists at all: with reads open the socket is a read
+    like any other and serves without a credential.
+    """
+
+    @staticmethod
+    def _app(**auth: object):
+        auth.setdefault("allow_anonymous_read", False)
+        from crewlet.config import (
+            ApiAuthConfig,
+            ApiAuthTokenConfig,
+            ApiConfig,
+            BootstrapConfig,
+        )
+        from tests.test_api.helpers import create_app
+
+        bootstrap = BootstrapConfig(
+            api=ApiConfig(
+                auth=ApiAuthConfig(
+                    tokens=[ApiAuthTokenConfig(id="f", token="s3cret")],
+                    **auth,  # type: ignore[arg-type]
+                )
+            )
+        )
+        app = create_app(MagicMock(), bootstrap=bootstrap)
+        app.state.configured = True
+        return app
+
+    def test_handshake_without_a_token_is_rejected(self) -> None:
+        from starlette.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        with TestClient(self._app()) as client:  # noqa: SIM117
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/stream") as ws:
+                    ws.receive_text()
+
+    def test_handshake_with_a_query_token_is_accepted(self) -> None:
+        """Browsers cannot set headers on a WebSocket constructor, so the
+        query form has to work."""
+        from starlette.testclient import TestClient
+
+        with (
+            TestClient(self._app()) as client,
+            client.websocket_connect("/ws/stream?token=s3cret") as ws,
+        ):
+            assert json.loads(ws.receive_text())["kind"] == "snapshot"
+
+    def test_handshake_with_a_header_token_is_accepted(self) -> None:
+        from starlette.testclient import TestClient
+
+        with (
+            TestClient(self._app()) as client,
+            client.websocket_connect(
+                "/ws/stream", headers={"Authorization": "Bearer s3cret"}
+            ) as ws,
+        ):
+            assert json.loads(ws.receive_text())["kind"] == "snapshot"
+
+    def test_a_wrong_token_is_rejected(self) -> None:
+        from starlette.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        with TestClient(self._app()) as client:  # noqa: SIM117
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/stream?token=nope") as ws:
+                    ws.receive_text()
