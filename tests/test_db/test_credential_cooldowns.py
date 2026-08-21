@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
@@ -17,6 +18,8 @@ from crewlet.providers.credential import (
     CredentialPool,
     short_hash,
 )
+
+_TEST_DSN = os.environ.get("CREWLET_TEST_DSN", "")
 
 
 class _FakeSQL:
@@ -54,11 +57,67 @@ def _postgres() -> Any:
     return PostgresCredentialCooldownStore(_FakeSQL())
 
 
+class _RealDB:
+    """PostgresCredentialCooldownStore over a real database, one connection per test.
+
+    Per-test because pytest-asyncio gives each test a fresh event loop
+    and an asyncpg pool is bound to the loop that made it — the shape
+    tests/test_db/test_leases.py explains at length.
+
+    Built lazily on first use so constructing the fixture stays sync,
+    and every call goes through ``_ready`` so the table is truthed once
+    per test rather than leaking rows between them.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._db: Any = None
+        self._store: Any = None
+
+    async def _ready(self) -> Any:
+        if self._store is None:
+            from crewlet.db.client import Database
+
+            self._db = await Database.connect(self._dsn)
+            await self._db.execute("DELETE FROM credential_cooldowns")
+            self._store = PostgresCredentialCooldownStore(self._db)
+        return self._store
+
+    def __getattr__(self, name: str) -> Any:
+        async def _call(*args: Any, **kwargs: Any) -> Any:
+            store = await self._ready()
+            return await getattr(store, name)(*args, **kwargs)
+
+        return _call
+
+    async def aclose(self) -> None:
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
+
+
 @pytest.fixture(
-    params=[pytest.param(_memory, id="memory"), pytest.param(_postgres, id="postgres")]
+    params=[
+        pytest.param(_memory, id="memory"),
+        pytest.param(_postgres, id="postgres"),
+        pytest.param(
+            lambda: _RealDB(_TEST_DSN),
+            id="postgres-real",
+            marks=[
+                pytest.mark.integration,
+                pytest.mark.skipif(
+                    not _TEST_DSN,
+                    reason="set CREWLET_TEST_DSN to run against real PG",
+                ),
+            ],
+        ),
+    ]
 )
-def store(request: pytest.FixtureRequest) -> Any:
-    return request.param()
+async def store(request: pytest.FixtureRequest) -> Any:
+    built = request.param()
+    yield built
+    if isinstance(built, _RealDB):
+        await built.aclose()
 
 
 async def test_cooling_a_key_is_visible_to_a_peer(store: Any) -> None:

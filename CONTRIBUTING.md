@@ -50,6 +50,13 @@ uv run pytest -m integration -s                         # -s to see measurements
   statement the server rejects fails the pull request rather than the
   deployment. Setting it locally still matters — it is how you find that out
   before pushing.
+
+  A new store belongs in that parameterisation from its first commit.
+  Asserting that a statement *contains* some text, or that a fake returns
+  what the test put in it, proves the author's intent and nothing about the
+  server: it cannot tell a correct statement from one PostgreSQL refuses to
+  parse, and it cannot test exclusivity at all — an at-most-once claim is a
+  property of the statement, not of the dict standing in for it.
 - **`tests/test_queue/test_broker_behavior.py`** measures the broker
   behaviours the multi-node design rests on (redelivery timing, cursor
   continuity across a subscription's change of owner, prefetch size) and
