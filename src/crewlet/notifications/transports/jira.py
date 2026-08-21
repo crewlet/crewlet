@@ -147,6 +147,15 @@ class JiraTransport:
         """Verify Jira webhook signature (HMAC-SHA256).
 
         If no webhook_secret is configured, returns True (no-op).
+
+        **This is not the gate, and must not be used as one.** The
+        ``/webhooks/{source}`` route verifies at the edge and refuses
+        outright when no secret is configured, which is what makes the
+        route's exemption from the API's bearer token sound. This stays
+        permissive because it is also on the path Forge-delivered Cloud
+        events take, and those carry a JWT verified at
+        ``/webhooks/forge`` rather than an HMAC. A caller that is NOT
+        one of those two needs the route's check, not this one.
         """
         if not self._webhook_secret:
             return True

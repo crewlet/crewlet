@@ -37,6 +37,50 @@ logger = get_logger("api.routes")
 # just burns deliveries against a node that cannot have converged yet.
 WEBHOOK_UNCONFIGURED_RETRY_AFTER_SECONDS = 15
 
+# ``Retry-After`` on the 503 a route answers when its HMAC secret is
+# missing. Deliberately longer than the unconfigured one above: that
+# case resolves itself on the next reconcile poll, this one waits on a
+# human editing config, and a sender hammering every 15 s in the
+# meantime buys nothing.
+WEBHOOK_NO_SECRET_RETRY_AFTER_SECONDS = 300
+
+
+def _no_secret_response(source: str) -> JSONResponse:
+    """The answer when a webhook route has no secret to verify against.
+
+    **5xx, never 4xx.** A 4xx says "your request is malformed, do not
+    send it again" — and the request is fine. What is wrong is on this
+    side, so a 4xx would make the sender discard a delivery nobody has
+    any other copy of. That is the silent, unretried, unrecoverable loss
+    ``_webhook_unconfigured_response`` was rewritten to stop; a missing
+    secret has exactly the same shape as a missing config, and deserves
+    exactly the same answer.
+
+    503 rather than 500 for the same reason it is a 503 there: nothing
+    crashed. This node cannot serve this delivery *yet*, which is what
+    503 means and what ``Retry-After`` is for. The delivery waits at the
+    provider and flows the moment somebody sets the secret — so a
+    deployment that has not set one is stalled, not damaged.
+
+    A signature that does not MATCH is the other case and stays 401:
+    there the credential really was presented and really was wrong.
+    """
+    logger.error(
+        f"{source}_webhook_no_secret_configured",
+        hint=(
+            "this route verifies a provider HMAC and has no secret to "
+            "verify against, so it cannot accept deliveries. Answering "
+            "503 so the sender retries rather than discards them; set "
+            "the integration's webhook_secret to clear it"
+        ),
+    )
+    return JSONResponse(
+        {"status": "unavailable", "reason": "no_webhook_secret"},
+        status_code=503,
+        headers={"Retry-After": str(WEBHOOK_NO_SECRET_RETRY_AFTER_SECONDS)},
+    )
+
+
 _SENSITIVE_HEADERS = frozenset({"authorization", "cookie"})
 
 
@@ -673,11 +717,7 @@ async def github_webhook(request: Request) -> JSONResponse:
         request.app.state, "github_webhook_secret", None
     )
     if not webhook_secret:
-        logger.error("github_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook signature verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response("github")
     signature = request.headers.get("x-hub-signature-256", "")
     if not signature or not _verify_github_signature(
         body_raw, webhook_secret, signature
@@ -794,11 +834,7 @@ async def gitlab_webhook(request: Request) -> JSONResponse:
         request.app.state, "gitlab_signing_secret", None
     )
     if not signing_secret:
-        logger.error("gitlab_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response("gitlab")
 
     verified = _verify_gitlab_signature(
         body_raw,
@@ -903,11 +939,7 @@ async def plane_webhook(request: Request) -> JSONResponse:
         request.app.state, "plane_webhook_secret", None
     )
     if not webhook_secret:
-        logger.error("plane_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response("plane")
     signature = request.headers.get("x-plane-signature", "")
     if not signature or not _verify_plane_signature(
         body_raw, webhook_secret, signature
@@ -1003,11 +1035,7 @@ def _atlassian_signature_failure(
     """
     secret: str | None = getattr(request.app.state, state_attr, None)
     if not secret:
-        logger.error(f"{source}_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook signature verification not configured"},
-            status_code=500,
-        )
+        return _no_secret_response(source)
     signature = request.headers.get("x-hub-signature", "")
     if not signature or not _verify_atlassian_signature(body_raw, secret, signature):
         logger.warning(f"{source}_webhook_signature_invalid")
@@ -1223,7 +1251,10 @@ async def forge_webhook(request: Request) -> JSONResponse:
 
     forge_app_id = getattr(request.app.state, "forge_app_id", "")
     if not forge_app_id:
-        return JSONResponse({"error": "forge_app_id not configured"}, status_code=500)
+        # Same class as a missing HMAC secret: the app id IS the JWT
+        # audience this route verifies against, so without it there is
+        # nothing to check and the delivery must be held, not discarded.
+        return _no_secret_response("forge")
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         return JSONResponse({"error": "unauthorized"}, status_code=401)

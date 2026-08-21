@@ -191,7 +191,7 @@ Inbound GitLab events arrive at **`POST /webhooks/gitlab`**.
 
 ### Verification
 
-Verification is the GitLab **signing token only**. The `webhook-signature` header is verified as a 19.1+ Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (constant-time compare, ±5-minute timestamp tolerance; the `whsec_…` secret's base64 payload is the HMAC key). An invalid or missing signature → **401**; a request that arrives before `signing_secret` is configured → **500**.
+Verification is the GitLab **signing token only**. The `webhook-signature` header is verified as a 19.1+ Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (constant-time compare, ±5-minute timestamp tolerance; the `whsec_…` secret's base64 payload is the HMAC key). An invalid or missing signature → **401**; a request that arrives before `signing_secret` is configured → **503** with a `Retry-After`, so the delivery is held for retry rather than discarded.
 
 The provisioner sets that secret as each hook's `signing_token` when it registers webhooks. The weaker plain `X-Gitlab-Token` scheme is not supported.
 

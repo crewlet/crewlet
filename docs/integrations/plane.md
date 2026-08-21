@@ -148,7 +148,7 @@ The paved road is [`crewlet plane provision --webhook-url https://engine.example
 
 ### Verification
 
-The `X-Plane-Signature` header carries the HMAC-SHA256 **hexdigest of the raw body** keyed with `webhook_secret` (Plane CE's only scheme), compared constant-time. Invalid or missing signature → **401**; no secret configured → **500**; malformed JSON → **400**; engine unconfigured → **200** `{"status": "dropped"}` — verified *first*, so forgeries never earn a 200.
+The `X-Plane-Signature` header carries the HMAC-SHA256 **hexdigest of the raw body** keyed with `webhook_secret` (Plane CE's only scheme), compared constant-time. Invalid or missing signature → **401**; no secret configured → **503** with `Retry-After` (the request is fine; what is missing is on this side, so the delivery is held for retry rather than discarded as a 4xx would tell the sender to do); malformed JSON → **400**; engine unconfigured → **200** `{"status": "dropped"}` — verified *first*, so forgeries never earn a 200.
 
 CE payloads carry no stable delivery id (`X-Plane-Delivery` is per-attempt), so the transport deduplicates on the event coordinates *plus* the activity discriminator (Plane fires one webhook per changed field with an identical `data` snapshot — a bulk edit is N deliveries differing only in `activity`), with a 5-minute TTL covering queue redelivery and operator replay.
 

@@ -870,11 +870,15 @@ class TestJiraWebhook:
             "an unverified delivery reached the inbound topic"
         )
 
-    def test_no_secret_configured_returns_500(
+    def test_no_secret_configured_holds_the_delivery(
         self, client: TestClient, event_queue: MockEventQueue
     ):
         resp = client.post("/webhooks/jira", json={"webhookEvent": "x"})
-        assert resp.status_code == 500
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
         assert event_queue.published == []
 
 
@@ -993,6 +997,30 @@ class TestGithubWebhook:
         )
         assert resp.status_code == 401
 
+    def test_no_secret_configured_holds_the_delivery(
+        self,
+        client: TestClient,
+    ):
+        """No secret means nothing to verify against, so the delivery is
+        HELD, not discarded.
+
+        503 and not 4xx: a 4xx tells the sender its request was bad and
+        must not be sent again, and the request is fine — what is missing
+        is on this side. Discarding it would be the silent, unretried
+        loss the unconfigured-config path was rewritten to stop. 503 with
+        ``Retry-After`` says "not yet", so the delivery waits at the
+        provider and flows once somebody sets the secret.
+        """
+        resp = client.post(
+            "/webhooks/github",
+            json={"action": "opened"},
+        )
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
+
 
 class TestGitlabWebhook:
     """GitLab webhook tests — signing-token (19.1+ Standard-Webhooks) only."""
@@ -1055,7 +1083,7 @@ class TestGitlabWebhook:
         resp = signing_client.post("/webhooks/gitlab", content=body, headers=headers)
         assert resp.status_code == 401
 
-    def test_no_secret_configured_500(
+    def test_no_secret_configured_holds_the_delivery(
         self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
         app = create_app(
@@ -1065,18 +1093,11 @@ class TestGitlabWebhook:
         )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/webhooks/gitlab", json={"object_kind": "issue"})
-        assert resp.status_code == 500
-
-    def test_no_secret_configured_returns_500(
-        self,
-        client: TestClient,
-    ):
-        """When no secret is configured, the endpoint rejects with 500."""
-        resp = client.post(
-            "/webhooks/github",
-            json={"action": "opened"},
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
         )
-        assert resp.status_code == 500
 
 
 class TestConfluenceWebhook:
@@ -1191,13 +1212,25 @@ class TestConfluenceWebhook:
             )
             assert resp.status_code == 401, bad
 
-    def test_no_secret_configured_returns_500(
+    def test_no_secret_configured_holds_the_delivery(
         self, client: TestClient, event_queue: MockEventQueue
     ):
-        """An unconfigured verifier that answers "valid" is not a
-        verifier — same posture as its peers."""
+        """No secret means nothing to verify against, so the delivery is
+        HELD, not discarded.
+
+        503 and not 4xx: a 4xx tells the sender its request was bad and
+        must not be sent again, and the request is fine — what is missing
+        is on this side. Discarding it would be the silent, unretried
+        loss the unconfigured-config path was rewritten to stop. 503 with
+        ``Retry-After`` says "not yet", so the delivery waits at the
+        provider and flows once somebody sets the secret.
+        """
         resp = client.post("/webhooks/confluence", json={"event": "page_created"})
-        assert resp.status_code == 500
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
         assert event_queue.published == []
 
 
@@ -1271,7 +1304,7 @@ class TestPlaneWebhook:
         )
         assert resp.status_code == 401
 
-    def test_no_secret_configured_500(
+    def test_no_secret_configured_holds_the_delivery(
         self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
         app = create_app(
@@ -1281,8 +1314,11 @@ class TestPlaneWebhook:
         )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/webhooks/plane", json={"event": "issue"})
-        assert resp.status_code == 500
-        assert resp.json() == {"error": "webhook verification not configured"}
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
 
     def test_invalid_json_400(self, plane_client: TestClient):
         """A valid signature over non-JSON bytes still 400s."""
@@ -1569,13 +1605,26 @@ class TestForgeWebhook:
         )
         assert resp.status_code == 401
 
-    def test_forge_no_app_id_configured_rejects(self, client: TestClient):
-        """When no forge_app_id configured, endpoint rejects with 500."""
+    def test_forge_no_app_id_holds_the_delivery(self, client: TestClient):
+        """No secret means nothing to verify against, so the delivery is
+        HELD, not discarded.
+
+        503 and not 4xx: a 4xx tells the sender its request was bad and
+        must not be sent again, and the request is fine — what is missing
+        is on this side. Discarding it would be the silent, unretried
+        loss the unconfigured-config path was rewritten to stop. 503 with
+        ``Retry-After`` says "not yet", so the delivery waits at the
+        provider and flows once somebody sets the secret.
+        """
         resp = client.post(
             "/webhooks/forge",
             json={"event": "avi:confluence:created:page", "context": {}},
         )
-        assert resp.status_code == 500
+        assert resp.status_code == 503
+        assert resp.json()["reason"] == "no_webhook_secret"
+        assert resp.headers["retry-after"], (
+            "a held delivery gave the sender no hint when to come back"
+        )
 
 
 class TestClientDisconnect:
