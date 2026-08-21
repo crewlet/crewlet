@@ -1108,6 +1108,7 @@ The package is published to PyPI as `crewlet` from a `v*` tag via `.github/workf
 - **`README.md` keeps repo-relative links** (GitHub and docs.crewlet.ai resolve them); `hatch-fancy-pypi-readme` absolutises them for PyPI. A new link form the patterns miss fails `tests/test_packaging`; fix the pattern in `pyproject.toml`, not the README.
 - **No `License ::` classifier** — `license = "MIT"` is an SPDX expression, and PEP 639 requires PyPI to reject a distribution carrying both.
 - **Python classifiers must match the CI matrices** exactly — and every CI job that fans out over interpreters (`test`, `package-install`) must name the same list. `crewlet[all]` must stay the union of the runtime extras. All asserted by `tests/test_packaging`.
+- **An extra must carry what its own surface needs at runtime — the `all` union does not prove that.** `all` being a union means a dependency can reach it through *some other* extra while the extra that actually needs it still lacks one, and the union test passes. That is exactly how `crewlet[api]` came to serve a WebSocket-only dashboard with no WebSocket library: `websockets` reached `all` via `mattermost`, so nothing failed — the dashboard just fell back to a 5-second poll and ran in degraded mode forever. When an extra's surface needs a package to work at all, name it in that extra and pin the requirement with its own test.
 
 ## Testing
 - Run tests: `pytest`
