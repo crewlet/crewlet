@@ -379,8 +379,6 @@ flowchart TD
 
 The writer is registered as a publish listener via `event_queue.add_publish_listener(writer.on_publish)`. It runs inline during every `publish()` call, so events are written to PostgreSQL at the same time they're published to Pulsar — no consumer groups, no subscription timing issues, no message loss. If the database is temporarily unavailable, the write error is logged and the event still reaches Pulsar normally.
 
-For the API server, a `BufferedEventStore` wrapper provides non-blocking writes via a background flush queue (10K event cap, 1-second flush interval).
-
 #### In-Memory Satellite
 
 Even with TimescaleDB configured, a `MemoryEventStore` (capped at 1000 events) runs as a second leg of a `CompositeEventStore`. This gives queries an instant-read path for events that haven't yet round-tripped through PostgreSQL — useful for the dashboard when a batch of events was just published.

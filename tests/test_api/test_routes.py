@@ -448,9 +448,9 @@ class TestAgentEndpoints:
 
         The per-store ``get_agent_states`` leaves token counters at
         zero — aggregation is done at the composite layer via
-        ``list_token_usage_events``.  Wiring
-        ``BufferedEventStore(TimescaleDBEventStore(...))`` directly would
-        make the dashboard report zero tokens for every agent.  This
+        ``list_token_usage_events``.  Wiring a
+        ``TimescaleDBEventStore`` in directly would make the dashboard
+        report zero tokens for every agent.  This
         test calls the real ``_build_engine_event_store`` helper to gate
         the wiring end-to-end — one helper now, because an ingress-only
         node is an engine and there is no second process shape with its
