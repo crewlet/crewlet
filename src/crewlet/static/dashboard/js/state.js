@@ -238,6 +238,34 @@ export function avatarFor(role) {
   return `<span class="avatar" style="--avatar-color:${roleColor(role)}">${icon(roleIcon(role))}</span>`;
 }
 
+// Event category → hue family.
+//
+// This lived only in the `.cat-*` rules in components.css, which meant the
+// assignment the design system makes claims about could not be read — or
+// checked — from the code that renders it. It is here for the same reason
+// PHASE_HUE is: these are the second of the two orders that render edge to
+// edge, so the categorical-hue gates are measured against this map.
+//
+// `system` is deliberately absent: it takes the neutral ink rather than a
+// hue family, which is what keeps a run of ordinary events quiet.
+export const CATEGORY_HUE = {
+  lifecycle: "blue",
+  task: "green",
+  communication: "purple",
+  decision: "amber",
+  knowledge: "pink",
+  learning: "purple",
+  a2a: "orange",
+  notification: "cyan",
+  webhook: "brown",
+};
+
+// The text step for a category label.
+export function categoryInk(key) {
+  const hue = CATEGORY_HUE[key];
+  return hue ? `var(--${hue}-ink)` : "var(--text-muted)";
+}
+
 // Event categories → label + accent class (matches the server-side map).
 export const EVENT_CATEGORIES = [
   { key: "lifecycle", label: "Lifecycle" },
