@@ -429,5 +429,20 @@ async def test_idle_channels_are_closed_and_announced(
     await asyncio.sleep(0.1)
     assert len(received) == 1
 
+    # And it says WHO and HOW MUCH. These events used to be published
+    # with no participants, no message count and a zero duration — on
+    # exactly the channels an operator needs to trace, since a channel
+    # only reaches the idle sweep because the turn that should have
+    # answered it never finished. "Who was waiting on whom when that
+    # node died" was unanswerable from the one event that exists to
+    # answer it.
+    closed = received[0]
+    assert closed.participants == ["alice", "bob"]
+    assert closed.message_count == 1
+    assert closed.duration_ms >= 0.0
+    # The writer dumps the whole event into the stored payload, so these
+    # are the fields the dashboard's event detail actually reads.
+    assert "duration_ms" in closed.model_dump(mode="json")
+
     # Idempotent: the next sweep finds nothing left to close.
     assert await service.close_idle_channels(older_than_seconds=-1) == 0

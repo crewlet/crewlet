@@ -18,8 +18,8 @@ database is refused loudly elsewhere rather than quietly degraded.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from crewlet._logging import get_logger
@@ -57,7 +57,34 @@ class A2AChannel:
     target: str
     state: str = "open"
     message_count: int = 0
-    opened_at: float = field(default_factory=time.monotonic)
+    opened_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    """When the channel opened, in WALL CLOCK UTC.
+
+    Not ``time.monotonic``, which is what this was: a monotonic reading
+    is meaningful only inside the process that took it, and a channel is
+    opened on one node and closed on another as a matter of course. Read
+    back from Postgres it became "opened just now" every time, so a
+    duration computed from it was always zero and an idle sweep on the
+    twin measured a different quantity than the same sweep in SQL. The
+    column is ``TIMESTAMPTZ`` and this now matches it."""
+    closed_at: datetime | None = None
+    """When the channel closed, or ``None`` while it is open.
+
+    Stamped by whichever store closed it — the database's own ``now()``
+    on the Postgres path — so a duration is the difference between two
+    readings of ONE clock rather than two nodes' opinions of the time."""
+
+    @property
+    def duration_ms(self) -> float:
+        """How long the channel was open, in milliseconds.
+
+        Zero while it is still open: a duration is a property of a
+        finished thing, and reporting the age of a live channel under
+        the same name would make the two indistinguishable downstream.
+        """
+        if self.closed_at is None:
+            return 0.0
+        return max(0.0, (self.closed_at - self.opened_at).total_seconds() * 1000.0)
 
     @property
     def is_open(self) -> bool:
@@ -90,15 +117,51 @@ class A2AChannelStore(Protocol):
         """
         ...
 
-    async def close(self, channel_id: str) -> bool:
-        """Mark closed. Returns whether this call was the one that did it."""
+    async def close(self, channel_id: str) -> A2AChannel | None:
+        """Close it, returning the closed row — ``None`` if this call was
+        not the one that closed it (already closed, or never existed).
+
+        The ROW rather than a bool, because the caller publishes the
+        conversation's closing event and the row is what names its
+        parties, its message count and its ``closed_at``. Returning a
+        bool meant the caller had to have read the channel beforehand,
+        and on the idle-sweep path it never had — so every idle close
+        was announced with no participants, no count and a zero
+        duration, on exactly the channels an operator wants to trace
+        (the ones a crash left open).
+        """
         ...
 
     async def count_message(self, channel_id: str) -> int: ...
 
-    async def close_idle(self, older_than_seconds: float) -> list[str]: ...
+    async def close_idle(self, older_than_seconds: float) -> list[A2AChannel]:
+        """Close every channel idle past ``older_than_seconds``.
+
+        Returns the closed rows, for the same reason :meth:`close` does.
+        """
+        ...
 
     async def purge(self, older_than_seconds: float) -> int: ...
+
+
+def _row_to_channel(row: Any) -> A2AChannel:
+    """One place that turns a database row into an :class:`A2AChannel`.
+
+    Three statements return this shape and every one of them used to
+    build the object by hand — which is how ``get`` came to drop
+    ``opened_at`` and hand back a channel that claimed to have opened at
+    whatever moment it was read.
+    """
+    closed_at = row["closed_at"]
+    return A2AChannel(
+        channel_id=str(row["channel_id"]),
+        requester=str(row["requester"]),
+        target=str(row["target"]),
+        state=str(row["state"]),
+        message_count=int(row["message_count"] or 0),
+        opened_at=row["opened_at"],
+        closed_at=closed_at if closed_at is not None else None,
+    )
 
 
 class PostgresA2AChannelStore:
@@ -123,31 +186,27 @@ class PostgresA2AChannelStore:
     async def get(self, channel_id: str) -> A2AChannel | None:
         row = await self._db.fetchrow(
             """
-            SELECT channel_id, requester, target, state, message_count
+            SELECT channel_id, requester, target, state, message_count,
+                   opened_at, closed_at
             FROM a2a_channels WHERE channel_id = $1
             """,
             channel_id,
         )
         if row is None:
             return None
-        return A2AChannel(
-            channel_id=str(row["channel_id"]),
-            requester=str(row["requester"]),
-            target=str(row["target"]),
-            state=str(row["state"]),
-            message_count=int(row["message_count"] or 0),
-        )
+        return _row_to_channel(row)
 
-    async def close(self, channel_id: str) -> bool:
+    async def close(self, channel_id: str) -> A2AChannel | None:
         rows = await self._db.execute(
             """
             UPDATE a2a_channels SET state = 'closed', closed_at = now()
             WHERE channel_id = $1 AND state = 'open'
-            RETURNING channel_id
+            RETURNING channel_id, requester, target, state, message_count,
+                      opened_at, closed_at
             """,
             channel_id,
         )
-        return bool(rows)
+        return _row_to_channel(rows[0]) if rows else None
 
     async def count_message(self, channel_id: str) -> int:
         value = await self._db.fetchval(
@@ -159,17 +218,18 @@ class PostgresA2AChannelStore:
         )
         return int(value or 0)
 
-    async def close_idle(self, older_than_seconds: float) -> list[str]:
+    async def close_idle(self, older_than_seconds: float) -> list[A2AChannel]:
         rows = await self._db.execute(
             """
             UPDATE a2a_channels SET state = 'closed', closed_at = now()
             WHERE state = 'open'
               AND opened_at < now() - make_interval(secs => $1)
-            RETURNING channel_id
+            RETURNING channel_id, requester, target, state, message_count,
+                      opened_at, closed_at
             """,
             float(older_than_seconds),
         )
-        return [str(row["channel_id"]) for row in rows]
+        return [_row_to_channel(row) for row in rows]
 
     async def purge(self, older_than_seconds: float) -> int:
         rows = await self._db.execute(
@@ -201,10 +261,12 @@ class MemoryA2AChannelStore:
 
     async def get(self, channel_id: str) -> A2AChannel | None:
         found = self._rows.get(channel_id)
-        if found is None:
-            return None
-        # A copy: callers must not be able to mutate stored state by
-        # holding the object the Postgres store could never hand them.
+        return self._copy(found) if found is not None else None
+
+    @staticmethod
+    def _copy(found: A2AChannel) -> A2AChannel:
+        """A detached copy, so callers cannot mutate stored state by
+        holding an object the Postgres store could never hand them."""
         return A2AChannel(
             channel_id=found.channel_id,
             requester=found.requester,
@@ -212,14 +274,16 @@ class MemoryA2AChannelStore:
             state=found.state,
             message_count=found.message_count,
             opened_at=found.opened_at,
+            closed_at=found.closed_at,
         )
 
-    async def close(self, channel_id: str) -> bool:
+    async def close(self, channel_id: str) -> A2AChannel | None:
         found = self._rows.get(channel_id)
         if found is None or not found.is_open:
-            return False
+            return None
         found.state = "closed"
-        return True
+        found.closed_at = datetime.now(UTC)
+        return self._copy(found)
 
     async def count_message(self, channel_id: str) -> int:
         found = self._rows.get(channel_id)
@@ -228,17 +292,23 @@ class MemoryA2AChannelStore:
         found.message_count += 1
         return found.message_count
 
-    async def close_idle(self, older_than_seconds: float) -> list[str]:
-        cutoff = time.monotonic() - max(older_than_seconds, 0.0)
-        closed: list[str] = []
+    async def close_idle(self, older_than_seconds: float) -> list[A2AChannel]:
+        # Wall clock, matching the SQL twin's `opened_at < now() - …`.
+        # This used to be monotonic while the real store compared
+        # timestamps, so the two backends were measuring different
+        # quantities under one contract suite.
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=max(older_than_seconds, 0.0))
+        closed: list[A2AChannel] = []
         for channel in self._rows.values():
             if channel.is_open and channel.opened_at < cutoff:
                 channel.state = "closed"
-                closed.append(channel.channel_id)
+                channel.closed_at = now
+                closed.append(self._copy(channel))
         return closed
 
     async def purge(self, older_than_seconds: float) -> int:
-        cutoff = time.monotonic() - max(older_than_seconds, 0.0)
+        cutoff = datetime.now(UTC) - timedelta(seconds=max(older_than_seconds, 0.0))
         stale = [cid for cid, c in self._rows.items() if c.opened_at < cutoff]
         for cid in stale:
             del self._rows[cid]

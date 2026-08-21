@@ -320,22 +320,25 @@ class A2AService:
                 f"'{closer}' is not a participant of channel '{channel_id}'"
             )
 
-        participants = channel.participants if channel else []
-        message_count = channel.message_count if channel else 0
-        if not await self._channels.close(channel_id):
+        closed = await self._channels.close(channel_id)
+        if closed is None:
             # Already closed, or never existed. Closing is idempotent —
             # both sides may reasonably try — so this is not an error,
             # but it must not publish a second closed event either.
             logger.debug("channel_close_noop", channel_id=channel_id)
             return
 
+        # Everything on the event comes from the row the close returned,
+        # including the duration: both of its endpoints are then readings
+        # of ONE clock (the database's, on the Postgres path) rather than
+        # the opening node's and the closing node's opinions of the time.
         closed_event = A2AChannelClosed(
             source=closer or "system",
             channel_id=channel_id,
             closed_by=closer,
-            participants=participants,
-            message_count=message_count,
-            duration_ms=0.0,
+            participants=closed.participants,
+            message_count=closed.message_count,
+            duration_ms=closed.duration_ms,
         )
         await self._queue.publish("crewlet.events.a2a_channel_closed", closed_event)
 
@@ -343,8 +346,9 @@ class A2AService:
             "channel_closed",
             channel_id=channel_id,
             closed_by=closer or "system",
-            participants=participants,
-            message_count=message_count,
+            participants=closed.participants,
+            message_count=closed.message_count,
+            duration_ms=round(closed.duration_ms),
         )
 
     async def close_idle_channels(self, older_than_seconds: float) -> int:
@@ -357,16 +361,29 @@ class A2AService:
         that a reply may still arrive.
         """
         closed = await self._channels.close_idle(older_than_seconds)
-        for channel_id in closed:
-            with_event = A2AChannelClosed(
-                source="system",
-                channel_id=channel_id,
-                closed_by="",
-                participants=[],
-                message_count=0,
-                duration_ms=0.0,
+        for channel in closed:
+            # Named, counted and timed like any other close. These used
+            # to publish with no participants, no count and a zero
+            # duration — on precisely the channels worth tracing, since
+            # a channel only reaches the idle sweep because the turn
+            # that should have answered it never finished. "Who was
+            # waiting on whom when that node died" was unanswerable from
+            # the one event that exists to answer it.
+            await self._queue.publish(
+                "crewlet.events.a2a_channel_closed",
+                A2AChannelClosed(
+                    source="system",
+                    channel_id=channel.channel_id,
+                    closed_by="",
+                    participants=channel.participants,
+                    message_count=channel.message_count,
+                    duration_ms=channel.duration_ms,
+                ),
             )
-            await self._queue.publish("crewlet.events.a2a_channel_closed", with_event)
         if closed:
-            logger.info("a2a_channels_closed_idle", count=len(closed))
+            logger.info(
+                "a2a_channels_closed_idle",
+                count=len(closed),
+                channels=[c.channel_id for c in closed],
+            )
         return len(closed)

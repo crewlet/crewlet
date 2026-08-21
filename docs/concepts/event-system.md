@@ -241,6 +241,8 @@ Both hops are ordinary inbox deliveries: durable, ordered per conversation, rout
 
 A channel is closed by the answering turn. One whose answer never came — a crashed turn, a node that died between the wake and the reply — is closed by the maintenance sweep after `A2A_CHANNEL_IDLE_TIMEOUT_SECONDS` (1 hour, three times the longest a turn can legitimately still be running), and the row is deleted after seven days. Closed rows outlive the conversation on purpose: *closed* is the answer to "why did my reply bounce", while a vanished row is indistinguishable from a typo'd channel id.
 
+Either way the close publishes `a2a_channel_closed` naming both participants, the message count and how long the channel was open — including on the sweep path, which is where it matters most, since a channel only reaches the sweep because a turn did not finish. The duration is the difference between the store's own `opened_at` and `closed_at`, not between two nodes' clocks: a channel is opened on one node and closed on another as a matter of course, and the difference of two machines' opinions of the time is skew rather than a duration.
+
 | Aspect | External Channels (Slack) | A2A channels |
 |---|---|---|
 | **Lifetime** | Permanent (Slack workspace) | Ephemeral (one question and its answer) |
