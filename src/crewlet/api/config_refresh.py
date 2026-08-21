@@ -47,6 +47,7 @@ from typing import Any
 from crewlet._logging import get_logger
 from crewlet.events.types import ConfigRevisionApplied
 from crewlet.secrets.resolver import refresh_secret_snapshot
+from crewlet.tools.registry import BUILTIN_ORIGIN, extension_origin, mcp_origin
 
 logger = get_logger("api.config_refresh")
 
@@ -236,6 +237,15 @@ def _tools_data_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
       learning builtins (registered unconditionally when ``learning.*``
       is enabled).
     - One entry per shared MCP server listed under ``mcp_servers``.
+    - One entry per configured extension.
+
+    The MCP-server and extension entries are surface markers, not tools:
+    what each contributes is known only once a process has actually
+    launched the server or imported the module.  They are listed anyway
+    because the alternative is a Tools screen that shows four builtins
+    and no sign that the company has any other tool surface at all — an
+    operator reading it cannot tell a company with ten MCP servers and
+    an extension from one with none.
 
     Per-role MCP tools (atlassian, slack, github) are NOT visible here —
     they're derived from the ``jira:`` / ``confluence:`` / ``slack:`` /
@@ -259,7 +269,7 @@ def _tools_data_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
         ),
     ]
     out: list[dict[str, Any]] = [
-        {"name": name, "description": desc, "source": "builtin"}
+        {"name": name, "description": desc, "source": BUILTIN_ORIGIN}
         for name, desc in builtin_tool_names
     ]
     for mcp_srv in payload.get("mcp_servers", []) or []:
@@ -268,7 +278,20 @@ def _tools_data_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "name": srv_name,
                 "description": f"MCP server: {srv_name}",
-                "source": f"mcp:{srv_name}",
+                "source": mcp_origin(srv_name),
+            }
+        )
+    for entry in payload.get("extensions", []) or []:
+        # ``extensions:`` entries are single-key ``{name: {settings}}``
+        # maps; anything else was rejected by ``parse_extensions``.
+        if not isinstance(entry, dict) or len(entry) != 1:
+            continue
+        ext_name = next(iter(entry))
+        out.append(
+            {
+                "name": ext_name,
+                "description": f"Extension: {ext_name}",
+                "source": extension_origin(ext_name),
             }
         )
     return out
@@ -322,6 +345,7 @@ def _apply_payload_to_app(app: Any, payload: dict[str, Any]) -> None:
     app.state.org_data = _serialize_org_data(readable)
     app.state.agent_roles = _serialize_agent_roles(readable)
     app.state.schedules_data = _serialize_schedules(cfg, org)
+    app.state.integrations_data = _serialize_integrations(readable)
     # ``NodeRuntime.tools_data`` returns [] rather than raising when the
     # spawn cascade hasn't run yet (it runs after this handler returns),
     # so an empty result is the signal to use the payload-derived view.
@@ -364,6 +388,34 @@ def _broadcast_config_change(app: Any) -> None:
             stream.push(kind, data)
         except Exception:  # pragma: no cover - defensive
             logger.exception("config_change_broadcast_failed", kind=kind)
+
+
+def _serialize_integrations(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The SHAPE of each configured integration, never its credentials.
+
+    Only the three fields an operator needs to recognise a surface —
+    whether it is on, which host or workspace it points at, and nothing
+    else. Built from the already-redacted payload, and then narrowed
+    again here: a block copied wholesale would carry whatever key a
+    future integration adds, and the redactor's key-name heuristic is a
+    denylist, so the safe default is to name what goes out.
+    """
+    integrations = payload.get("integrations") or {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, block in integrations.items():
+        if not isinstance(block, dict):
+            continue
+        out[str(key)] = {
+            "enabled": block.get("enabled", True) is not False,
+            "url": str(block.get("url") or block.get("base_url") or ""),
+            "workspace": str(
+                block.get("workspace")
+                or block.get("team")
+                or block.get("project")
+                or ""
+            ),
+        }
+    return out
 
 
 def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:

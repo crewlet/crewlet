@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import types
 
-from crewlet.api.config_refresh import _apply_payload_to_app, _serialize_agent_roles
+from crewlet.api.config_refresh import (
+    _apply_payload_to_app,
+    _serialize_agent_roles,
+    _tools_data_from_payload,
+)
 
 
 def _app() -> types.SimpleNamespace:
@@ -163,3 +167,45 @@ def test_serialize_agent_roles_skips_human_seats() -> None:
         }
     )
     assert [r["name"] for r in rows] == ["Engineer", "Dev"]
+
+
+# ── the payload-only tools fallback ───────────────────────────────────
+
+
+def test_tools_fallback_tags_only_real_builtins_as_builtin() -> None:
+    """A node with no engine can only name surfaces, but it must not
+    name them all ``builtin``: an operator who cannot tell the engine's
+    own tools from a configured surface cannot tell a tool that
+    disappeared with an extension from one the engine dropped."""
+    rows = _tools_data_from_payload(
+        {
+            "name": "Acme",
+            "mcp_servers": [{"name": "atlassian"}],
+            "extensions": [{"acme_metrics": {"export": "prometheus"}}, {"bridge": {}}],
+        }
+    )
+    by_source: dict[str, list[str]] = {}
+    for row in rows:
+        by_source.setdefault(row["source"], []).append(row["name"])
+
+    assert by_source["mcp:atlassian"] == ["atlassian"]
+    assert by_source["extension:acme_metrics"] == ["acme_metrics"]
+    assert by_source["extension:bridge"] == ["bridge"]
+    assert "reflect_and_persist" in by_source["builtin"]
+    assert "acme_metrics" not in by_source["builtin"]
+
+
+def test_tools_fallback_skips_malformed_extension_entries() -> None:
+    """``parse_extensions`` drops anything that is not a single-key map,
+    so a surface row for one would name an extension the engine will
+    never load."""
+    rows = _tools_data_from_payload(
+        {"name": "Acme", "extensions": ["bare-string", {"a": {}, "b": {}}, {"ok": {}}]}
+    )
+    assert [r["name"] for r in rows if r["source"].startswith("extension:")] == ["ok"]
+
+
+def test_tools_fallback_without_surfaces_is_builtins_only() -> None:
+    rows = _tools_data_from_payload({"name": "Acme"})
+    assert rows
+    assert {r["source"] for r in rows} == {"builtin"}

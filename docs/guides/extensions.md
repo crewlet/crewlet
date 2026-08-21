@@ -35,7 +35,7 @@ Every hook receives the same context object exposing the engine's subsystems:
 | `ctx.event_queue` | Publish/subscribe engine events (the full [EventQueue](../concepts/event-system.md) surface) |
 | `ctx.agent_pool` | Live agent instances **on this node** — see [The agent pool is per-node](#the-agent-pool-is-per-node) |
 | `ctx.execution_tracker` | Agent ↔ issue mappings and the dependency graph |
-| `ctx.tool_registry` | Register custom agent tools (`ctx.tool_registry.register(tool)`) |
+| `ctx.tool_registry` | Register custom agent tools (`ctx.tool_registry.register(tool)`) — see [Tool origins](#tool-origins) |
 | `ctx.role_mcp_tools` | Per-role MCP tool maps |
 | `ctx.storage` | Persist arbitrary data via the storage backend |
 | `ctx.notification_service` | Send outbound notifications |
@@ -152,6 +152,29 @@ class ReviewCodeTool:
 
 engine = Engine(organization=org, tools=[ReviewCodeTool()])
 ```
+
+### Tool origins
+
+Every registered tool records **who registered it**. `GET /tools` reports it as
+each tool's `source`, and the dashboard's Tools screen groups on it:
+
+| `source` | Where the tool came from |
+|---|---|
+| `builtin` | Shipped by the engine |
+| `custom` | Passed to `Engine(tools=[...])` by the application embedding the engine |
+| `extension:<name>` | Registered through an extension's `ctx.tool_registry` — `<name>` is the extension's `name` property |
+| `mcp:<server>` | Discovered on an MCP server |
+
+Nothing has to be declared for this: the registry an extension is handed
+through `ctx.tool_registry` stamps that extension's name on everything
+registered through it, in `on_register` and `on_engine_start` alike. The origin
+cannot be worked out afterwards — a tool an extension registers is structurally
+identical to one the engine ships — so an extension that registers tools
+against a registry it obtained some other way (a captured reference, the engine
+object directly) will report them as `builtin`. Register through the context.
+
+The Tools screen is also where a **failed** extension shows: its group is
+absent, rather than its tools quietly going missing from the builtin group.
 
 ### Observability hooks
 
