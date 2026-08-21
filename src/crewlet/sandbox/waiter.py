@@ -210,28 +210,38 @@ class SandboxWaiter:
             paused_for = (now - run.paused_at).total_seconds()
             if paused_for < run.pause_ttl_seconds:
                 continue
-            # Kill by id: ``connect`` would auto-resume the snapshot, booting
-            # the VM back up purely to shut it down.
-            try:
-                await self._manager.provider.kill(run.sandbox_id)
-            except Exception:
-                # An already-gone box is the normal case for an old snapshot;
-                # release the row either way so we stop tracking a dead id.
-                logger.warning(
-                    "sandbox_pause_reap_kill_failed",
-                    turn_id=run.turn_id,
-                    sandbox_id=run.sandbox_id,
-                )
-            # Compare-and-set on the status this row was READ in. The
-            # reaper decides from a snapshot taken seconds ago, and the
-            # clarification answer that un-pauses the run may have
-            # arrived since — without the precondition it would stamp
-            # ``reseed`` over a run that is already back to ``running``.
+            # Claim FIRST, destroy second. The reaper decides from a
+            # snapshot taken seconds ago, and the clarification answer
+            # that un-pauses the run may have arrived since:
+            # ``claim_for_resume`` has already flipped the row to
+            # ``resumed`` and the Execute loop is reconnecting to this
+            # very box. Killing before the compare-and-set destroyed it
+            # underneath that resume — and then the CAS refused, so the
+            # reaper walked away silently and the answered run failed on
+            # a box that no longer existed. The CAS is the authority for
+            # the whole reap, not just for the status write.
             if not await self._pending_store.set_status(
                 run.turn_id, "reseed", expect=run.status
             ):
                 continue
+            # Release before the kill, for the same reason in the other
+            # direction: an answer claiming a ``reseed`` row must not
+            # find a ``sandbox_id`` we are about to destroy. Cleared, it
+            # provisions a fresh box and re-seeds from the pushed branch.
+            sandbox_id = run.sandbox_id
             await self._pending_store.release_box(run.turn_id)
+            # Kill by id: ``connect`` would auto-resume the snapshot, booting
+            # the VM back up purely to shut it down.
+            try:
+                await self._manager.provider.kill(sandbox_id)
+            except Exception:
+                # An already-gone box is the normal case for an old
+                # snapshot; the row is released either way.
+                logger.warning(
+                    "sandbox_pause_reap_kill_failed",
+                    turn_id=run.turn_id,
+                    sandbox_id=sandbox_id,
+                )
             reaped += 1
             logger.info(
                 "sandbox_pause_ttl_reaped",

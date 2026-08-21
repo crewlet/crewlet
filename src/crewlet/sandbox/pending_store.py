@@ -241,11 +241,12 @@ class PendingSandboxRunStore(Protocol):
         """Record that this run no longer has a sandbox (torn down / reaped).
 
         Clears ``sandbox_id`` and ``paused_at`` without touching ``status``,
-        so the two concerns stay orthogonal: the reaper releases the box and
-        *then* decides the run is ``reseed``, teardown releases it and *then*
-        marks the run ``done``. Clearing ``sandbox_id`` is what makes the
-        next ``run_sandbox`` provision a fresh box rather than trying to
-        reattach to a dead id.
+        so the two concerns stay orthogonal and each caller can order them
+        as its own race requires: the pause reaper claims the run into
+        ``reseed`` and *then* releases, so nothing can adopt the box it is
+        about to kill; teardown releases and *then* marks the run ``done``.
+        Clearing ``sandbox_id`` is what makes the next ``run_sandbox``
+        provision a fresh box rather than trying to reattach to a dead id.
         """
         ...
 
