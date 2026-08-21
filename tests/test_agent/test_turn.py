@@ -1918,6 +1918,53 @@ async def test_turn_parked_at_concurrency_gate_aborts_on_shutdown() -> None:
     concurrency.release("post")
 
 
+async def test_a_failing_completion_publish_still_frees_the_slot() -> None:
+    """The publish is reporting; the slot and the agent state are the
+    invariants — so the reporting must not stand in front of them.
+
+    A concurrency slot that is not handed back is gone for the life of
+    the process. Enough of them and ``acquire`` blocks forever and the
+    engine stops running turns at all, with no error to point at; the
+    agent would be left ``WORKING`` just as permanently, and nothing
+    reaps that state either.
+    """
+    import asyncio
+
+    import pytest
+
+    from crewlet.agent.instance import AgentState
+    from crewlet.concurrency import ConcurrencyController
+
+    concurrency = ConcurrencyController(max_concurrent=1)
+    agent = _mk_agent()
+    engine = TurnEngine(
+        llm_providers={
+            "default": _PhaseScriptedProvider(plan=[], execute=[], review=[])
+        },
+        tool_registry=_mk_registry(),
+        event_queue=_QueueStub(),
+        concurrency=concurrency,
+    )
+
+    async def _explodes(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("reporting is broken")
+
+    engine._publish_agent_turn_completed = _explodes  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError):
+        await engine.run_turn(
+            agent,
+            task_id="t-report-fail",
+            task_description="the completion publish will raise",
+            org=agent.definition.org,
+        )
+
+    assert agent.state == AgentState.IDLE, "the agent was left WORKING forever"
+    # The only slot must be free again — a leak would hang here.
+    await asyncio.wait_for(concurrency.acquire("post"), timeout=1.0)
+    concurrency.release("post")
+
+
 async def test_running_turn_finishes_despite_begin_shutdown() -> None:
     """``begin_shutdown`` must not interrupt a turn that is already
     past the concurrency gate -- the whole point of the drain is to

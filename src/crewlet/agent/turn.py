@@ -162,6 +162,26 @@ async def _end_typing(session: Any, *, keep_alive: bool = False) -> None:
         logger.exception("working_status_end_failed")
 
 
+def _settle_agent_after_turn(turn: Any, agent: Any) -> None:
+    """Return the agent to a resting state when its turn ends.
+
+    A turn that SUSPENDED for a detached sandbox run goes to
+    ``AWAITING_SANDBOX`` synchronously — the state never passes through
+    ``IDLE``, so a queued event cannot slip a turn in between the suspend
+    and the coordinator processing the ``SandboxRunStarted`` event. Every
+    other outcome frees the agent.
+
+    A function rather than four inline lines because it runs from a
+    ``finally`` that must not be able to skip it: an agent left
+    ``WORKING`` never takes another turn for the life of the process, and
+    nothing reaps that state.
+    """
+    if getattr(turn.last_execute_result, "status", "") == "detached":
+        agent.await_sandbox(turn.task_id)
+    else:
+        agent.finish_working()
+
+
 class SeatLost(RuntimeError):
     """A turn was abandoned because this node stopped owning the seat.
 
@@ -1211,15 +1231,31 @@ class TurnEngine:
             )
             raise
         finally:
-            await self._publish_agent_turn_completed(
-                turn,
-                final_text,
-                decision,
-                turn_succeeded=turn_succeeded,
-                failure=failure,
-            )
-            if self._concurrency is not None:
-                self._concurrency.release(agent.role_name)
+            # Publishing the completion is reporting; releasing the slot
+            # and settling the agent's state are the invariants. So the
+            # reporting gets its own guard rather than standing in front
+            # of them: a concurrency slot is never handed back if this
+            # raises, and one that leaks is gone for the life of the
+            # process — enough of them and ``acquire`` blocks forever
+            # and the engine stops running turns at all. The agent would
+            # be left WORKING with the same permanence.
+            #
+            # The publish itself is internally guarded; what this covers
+            # is everything around those guards (the failure
+            # description, the tracer, a future edit) plus cancellation
+            # landing on the await. None of that is worth an engine.
+            try:
+                await self._publish_agent_turn_completed(
+                    turn,
+                    final_text,
+                    decision,
+                    turn_succeeded=turn_succeeded,
+                    failure=failure,
+                )
+            finally:
+                if self._concurrency is not None:
+                    self._concurrency.release(agent.role_name)
+                _settle_agent_after_turn(turn, agent)
             # A turn that SUSPENDED for a detached sandbox run transitions its
             # OWN agent to AWAITING_SANDBOX here, synchronously — the state
             # never passes through IDLE, so a queued event can't slip a turn
@@ -1227,12 +1263,10 @@ class TurnEngine:
             # SandboxRunStarted event.  The coordinator's on_run_started then
             # only pauses the inbox (and handles post-restart recovery where
             # this transition never ran).  Every other outcome frees the
-            # agent as before.
+            # agent as before.  Done in ``_settle_agent_after_turn`` above,
+            # inside the inner ``finally``; read here only to decide
+            # whether the typing indicator is held across the wait.
             suspended = getattr(turn.last_execute_result, "status", "") == "detached"
-            if suspended:
-                agent.await_sandbox(turn.task_id)
-            else:
-                agent.finish_working()
             # The Slack indicator ends when the agent has replied or given
             # up.  A turn that SUSPENDED for a detached sandbox run has
             # done neither — the same turn_id resumes when the coding job
