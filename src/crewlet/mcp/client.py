@@ -10,6 +10,7 @@ transport and converts results to Crewlet's plain-dict contract.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import AsyncExitStack
 from typing import Any
@@ -21,6 +22,10 @@ from crewlet._logging import get_logger
 from crewlet.mcp._content import extract_content, list_tool_dicts
 from crewlet.mcp._identity import crewlet_client_info
 from crewlet.mcp._stderr import ServerStderrRelay
+from crewlet.mcp.timeouts import (
+    DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+)
 
 logger = get_logger("mcp.client")
 
@@ -48,11 +53,15 @@ class MCPClient:
         command: str,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        startup_timeout_seconds: float = DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+        request_timeout_seconds: float = DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
     ) -> None:
         self.name = name
         self.command = command
         self.args = args or []
         self.env = env or {}
+        self.startup_timeout_seconds = startup_timeout_seconds
+        self.request_timeout_seconds = request_timeout_seconds
         self._client: Client | None = None
         self._exit_stack: AsyncExitStack | None = None
         self._tools: list[dict[str, Any]] = []
@@ -113,12 +122,39 @@ class MCPClient:
             relay = await self._exit_stack.enter_async_context(
                 ServerStderrRelay(self.name)
             )
-            self._client = await self._exit_stack.enter_async_context(
-                Client(
-                    stdio_client(server_params, errlog=relay.errlog),
-                    client_info=crewlet_client_info(),
+
+            # Bounded: a subprocess that launches and never speaks would
+            # otherwise hold this await forever, and the engine starts
+            # MCP servers on the seat-acquisition path — so one silent
+            # server does not merely lose its own tools, it holds up
+            # every seat behind it for the life of the process. Nothing
+            # raises while it hangs, so the caller's ``except`` around
+            # this is dead code without a deadline.
+            #
+            # ``read_timeout_seconds`` bounds each REQUEST on the
+            # session (the SDK enforces it per round-trip at the
+            # JSON-RPC layer, whatever the transport); ``wait_for``
+            # bounds the part no request covers — spawning the process
+            # and getting as far as sending one.
+            async def _connect() -> None:
+                self._client = await self._exit_stack.enter_async_context(  # type: ignore[union-attr]
+                    Client(
+                        stdio_client(server_params, errlog=relay.errlog),  # type: ignore[union-attr]
+                        client_info=crewlet_client_info(),
+                        read_timeout_seconds=self.request_timeout_seconds,
+                    )
                 )
-            )
+
+            try:
+                await asyncio.wait_for(_connect(), self.startup_timeout_seconds)
+            except TimeoutError as exc:
+                msg = (
+                    f"MCP server '{self.name}' did not connect within "
+                    f"{self.startup_timeout_seconds:g}s (command: "
+                    f"{self.command}). Raise startup_timeout_seconds on the "
+                    "server if it legitimately takes longer to start."
+                )
+                raise TimeoutError(msg) from exc
 
             # server_info is None when a modern (2026-era) server chooses
             # not to identify itself — that's a valid connection.
@@ -174,7 +210,20 @@ class MCPClient:
         # engine can derive tool behaviour (e.g. the sub-agent
         # shared-write guard) from the server rather than a hardcoded
         # tool-name list.
-        self._tools = await list_tool_dicts(self._client)
+        # Discovery is bring-up, so it answers to the startup budget
+        # rather than the per-call one: a server that connects and then
+        # never answers ``tools/list`` is the same outage as one that
+        # never connects, and it happens after ``start()`` has returned.
+        try:
+            self._tools = await asyncio.wait_for(
+                list_tool_dicts(self._client), self.startup_timeout_seconds
+            )
+        except TimeoutError as exc:
+            msg = (
+                f"MCP server '{self.name}' did not answer tool discovery "
+                f"within {self.startup_timeout_seconds:g}s"
+            )
+            raise TimeoutError(msg) from exc
         logger.info(
             "tools_listed",
             server=self.name,

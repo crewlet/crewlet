@@ -19,6 +19,10 @@ from crewlet.env_refs import (
     env_var_reference,
     has_env_reference,
 )
+from crewlet.mcp.timeouts import (
+    DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+)
 from crewlet.notifications.typing_status import StatusPhrases, WorkingStatusMode
 from crewlet.org.hierarchy import get_effective_lead
 from crewlet.org.models import (
@@ -1693,6 +1697,35 @@ class MCPServerConfig(AuthoredModel):
     Accepts snake_case (``read_only``) or the MCP camelCase
     (``readOnlyHint``) keys.  Overrides win over server-advertised
     hints."""
+
+    startup_timeout_seconds: float = Field(
+        default=DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS, gt=0
+    )
+    """How long to wait for the server to connect and answer discovery.
+
+    Covers launching the process (or opening the HTTP session), the
+    protocol handshake, and the first ``tools/list``.  A server that
+    never speaks is the failure this bounds: nothing raises, so without
+    a deadline the engine's own per-server ``try/except`` never runs and
+    one silent server holds up every seat that follows it.
+
+    The default suits a ``uvx`` / ``npx`` server whose package is not
+    yet in the local cache, which is the slow case for a healthy
+    server.  Lower it for a server you launch from a local checkout;
+    raise it if you deliberately fetch large images on first run."""
+
+    request_timeout_seconds: float = Field(
+        default=DEFAULT_MCP_REQUEST_TIMEOUT_SECONDS, gt=0
+    )
+    """How long any one tool call may take before it is failed.
+
+    Matches the MCP SDK's own SSE-friendly HTTP read default, so a
+    stdio server and an HTTP one have the same ceiling rather than one
+    per transport.  Raise it for a server whose tools genuinely run
+    long (a large code search, a slow report); lower it for one that
+    should always answer quickly, so a wedged call surfaces as a failed
+    tool result the agent can react to instead of a turn that never
+    ends."""
 
     def annotation_overrides(self) -> dict[str, ToolAnnotations]:
         """Parse :attr:`tool_annotations` into resolved

@@ -4333,6 +4333,8 @@ class Engine:
                         headers=resolved_headers,
                         tool_prefix=cfg.tool_prefix,
                         annotation_overrides=cfg.annotation_overrides(),
+                        startup_timeout_seconds=cfg.startup_timeout_seconds,
+                        request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 else:
                     resolved_env = resolve_env_vars(cfg.env)
@@ -4344,6 +4346,8 @@ class Engine:
                         env=resolved_env,
                         tool_prefix=cfg.tool_prefix,
                         annotation_overrides=cfg.annotation_overrides(),
+                        startup_timeout_seconds=cfg.startup_timeout_seconds,
+                        request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 for tool in tools:
                     self.tool_registry.register(tool)
@@ -4435,6 +4439,8 @@ class Engine:
                     headers=resolve_env_vars(merged_headers),
                     tool_prefix=base_cfg.tool_prefix,
                     annotation_overrides=base_cfg.annotation_overrides(),
+                    startup_timeout_seconds=base_cfg.startup_timeout_seconds,
+                    request_timeout_seconds=base_cfg.request_timeout_seconds,
                 )
             else:
                 merged_env = {**base_cfg.env, **overrides}
@@ -4447,6 +4453,8 @@ class Engine:
                     env=resolved_env,
                     tool_prefix=base_cfg.tool_prefix,
                     annotation_overrides=base_cfg.annotation_overrides(),
+                    startup_timeout_seconds=base_cfg.startup_timeout_seconds,
+                    request_timeout_seconds=base_cfg.request_timeout_seconds,
                 )
             logger.info(
                 "mcp_role_server_started",
@@ -5170,6 +5178,8 @@ class Engine:
                         headers=resolve_env_vars(cfg.headers),
                         tool_prefix=cfg.tool_prefix,
                         annotation_overrides=cfg.annotation_overrides(),
+                        startup_timeout_seconds=cfg.startup_timeout_seconds,
+                        request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 else:
                     # Resolve ``${VAR}`` env references the same way
@@ -5185,6 +5195,8 @@ class Engine:
                         env=resolved_env,
                         tool_prefix=cfg.tool_prefix,
                         annotation_overrides=cfg.annotation_overrides(),
+                        startup_timeout_seconds=cfg.startup_timeout_seconds,
+                        request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 # Re-register the new wrapped tools with the engine
                 # tool registry so subsequent turns see them.
