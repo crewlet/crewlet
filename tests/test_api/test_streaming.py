@@ -709,6 +709,32 @@ class TestStreamQueries:
             assert "schedules" in env["data"]
             assert "recent_runs" in env["data"]
 
+    def test_fleet_query_answers_over_the_socket(self, app) -> None:
+        """The lease table is a query, not a view's private HTTP call.
+
+        Fleet was the last view reading over its own transport, and that
+        is where it cost: it took its client from a context field the
+        shell never populated, so every poll threw before reaching the
+        network and the page held a loading skeleton for ever. Answering
+        here means the view uses the one seam every other view uses.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "fleet")
+            assert env["kind"] == "result"
+            # Without a database there is no lease table, which is a real
+            # answer about a single-process deployment rather than an error.
+            assert "nodes" in env["data"]
+            assert "this_node" in env["data"]
+
+    def test_fleet_query_and_rest_route_agree(self, app) -> None:
+        """One function behind both surfaces, so they cannot drift."""
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            over_socket = self._query(ws, "fleet")["data"]
+            over_http = client.get("/fleet").json()
+            assert over_socket == over_http
+
     def test_tokens_query_answers_for_another_window(self, app) -> None:
         with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
             ws.receive_text()

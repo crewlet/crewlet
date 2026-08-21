@@ -22,7 +22,7 @@ const ROLE_HUE = {
 // worth alarming about on its own.
 const STALE_SECONDS = 15;
 
-export function createFleetView({ store, api }) {
+export function createFleetView({ query }) {
   let root;
   let data = null;
   // When `data` was actually read, and whether the last read failed.
@@ -105,7 +105,7 @@ export function createFleetView({ store, api }) {
       out.push(
         `<div class="card" style="border-left:3px solid var(--amber-ink)">
            <b>This view is not live.</b> The last read of
-           <code>/fleet</code> failed, so everything below is the fleet as
+           the lease table failed, so everything below is the fleet as
            it was, not as it is.
          </div>`,
       );
@@ -146,7 +146,7 @@ export function createFleetView({ store, api }) {
         ? empty(
             "cpu",
             "Could not read the fleet",
-            "The request to /fleet failed. The lease table is the only source for this view, so there is nothing to fall back to — retrying every 15s.",
+            "The fleet query failed. The lease table is the only source for this view, so there is nothing to fall back to — retrying every 15s.",
           )
         : skeletonRows(4);
       return;
@@ -245,19 +245,15 @@ export function createFleetView({ store, api }) {
   }
 
   async function load() {
-    const d = await api.fleet();
-    if (d) {
-      // `api.fleet()` answers `null` on any failure — a bad status, a
-      // refused connection, a proxy returning HTML. The old guard here
-      // was `!d._error`, from a convention api.js removed precisely
-      // because `!0` is true, so an `{_error: 0}` (network entirely
-      // gone) was applied as if it were data.
-      data = d;
+    try {
+      data = await query("fleet");
       fetchedAt = new Date().toISOString();
       stale = false;
-    } else {
+    } catch {
       // Keep what we have — the last fleet is the only thing the
-      // operator still has — but stop claiming it is current.
+      // operator still has — but stop claiming it is current. Every
+      // failure lands here: a socket that is down, a lease store that
+      // cannot be read, a query that timed out.
       stale = true;
     }
     if (root && root.isConnected) render();

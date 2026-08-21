@@ -30,10 +30,22 @@ from crewlet._logging import get_logger
 logger = get_logger("api.routes.fleet")
 
 
-def _database(request: Request) -> Any:
+class FleetUnavailable(Exception):
+    """The lease store could not be read at all.
+
+    Distinct from the degraded no-database answer: without a database
+    there is genuinely no fleet, and saying so is the truth. A lease
+    store that is configured and failing is an outage, and every surface
+    has to report it as one rather than as an empty fleet — an empty
+    node list reads as "nothing is running", which is the opposite of
+    what an unreadable lease table means.
+    """
+
+
+def _database(app: Any) -> Any:
     from crewlet.db.client import Database
 
-    db = getattr(request.app.state, "database", None)
+    db = getattr(app.state, "database", None)
     return db if isinstance(db, Database) else None
 
 
@@ -45,7 +57,21 @@ def _seconds_left(expires_at: Any, now: datetime) -> float:
 
 
 async def get_fleet(request: Request) -> JSONResponse:
-    """GET /fleet — nodes, their roles and labels, and their seats.
+    """GET /fleet — nodes, their roles and labels, and their seats."""
+    try:
+        return JSONResponse(await fleet_payload(request.app))
+    except FleetUnavailable:
+        return JSONResponse({"error": "lease store unavailable"}, status_code=503)
+
+
+async def fleet_payload(app: Any) -> dict[str, Any]:
+    """The fleet, as both surfaces answer it.
+
+    One function behind the REST route and the websocket query, for the
+    reason every other read in ``api/queries.py`` shares one: two
+    implementations of "what is the fleet" can disagree, and the moment
+    they do, which answer an operator gets depends on which transport
+    their browser happened to use.
 
     Degrades rather than fails. Without a database there is no lease
     table and therefore no fleet — the answer is this one node, which is
@@ -55,20 +81,19 @@ async def get_fleet(request: Request) -> JSONResponse:
     from crewlet.config import DEFAULT_NODE_ID
     from crewlet.seat.placement import NodeProfile
 
-    db = _database(request)
-    this_node = str(getattr(request.app.state, "node_id", "") or DEFAULT_NODE_ID)
+    db = _database(app)
+    this_node = str(getattr(app.state, "node_id", "") or DEFAULT_NODE_ID)
 
     if db is None:
-        return JSONResponse(
-            {
-                "nodes": [],
-                "seats": [],
-                "duties": [],
-                "unplaceable": [],
-                "this_node": this_node,
-                "degraded": "no database configured — leases are process-local",
-            }
-        )
+        return {
+            "nodes": [],
+            "seats": [],
+            "duties": [],
+            "unplaceable": [],
+            "unmanned_roles": [],
+            "this_node": this_node,
+            "degraded": "no database configured — leases are process-local",
+        }
 
     from crewlet.db.leases import LeaseError, LeaseStore
 
@@ -80,7 +105,7 @@ async def get_fleet(request: Request) -> JSONResponse:
         duty_rows = await leases.list_live("worker:")
     except LeaseError as exc:
         logger.warning("fleet_read_failed", error=str(exc))
-        return JSONResponse({"error": "lease store unavailable"}, status_code=503)
+        raise FleetUnavailable(str(exc)) from exc
 
     # owner is an incarnation (``{node_id}:{random}``); the node id is
     # what an operator recognises, and what everything else is keyed on.
@@ -122,6 +147,12 @@ async def get_fleet(request: Request) -> JSONResponse:
                 "config_epoch": status.get("epoch", 0),
                 "config_status": status.get("status", ""),
                 "config_error": status.get("error", ""),
+                # When this node last reported an apply outcome. Fetched
+                # and then dropped before: a node that stopped reporting
+                # is exactly the one an operator is looking for, and
+                # without this its stale row is indistinguishable from a
+                # node that reported the same epoch a second ago.
+                "config_reported_at": status.get("reported_at", ""),
             }
         )
     nodes.sort(key=lambda n: str(n["id"]))
@@ -138,16 +169,29 @@ async def get_fleet(request: Request) -> JSONResponse:
         key=lambda d: str(d["duty"]),
     )
 
-    return JSONResponse(
-        {
-            "nodes": nodes,
-            "seats": seats,
-            "duties": duties,
-            "unplaceable": _unplaceable(request, nodes, seats),
-            "unmanned_roles": _unmanned_roles(nodes),
-            "this_node": this_node,
-        }
-    )
+    return {
+        "nodes": nodes,
+        "seats": seats,
+        "duties": duties,
+        "unplaceable": _unplaceable(app, nodes, seats),
+        "unmanned_roles": _unmanned_roles(nodes),
+        "this_node": this_node,
+        # What the fleet is converging ON, so a lagging node reads as
+        # "3 epochs behind 41" rather than as a number with nothing to
+        # compare it to.
+        "target_epoch": await _target_epoch(db),
+    }
+
+
+async def _target_epoch(db: Any) -> int:
+    """The newest activation epoch — the one every node is heading for."""
+    try:
+        from crewlet.db.config_plane import ConfigPlaneStore
+
+        return int(await ConfigPlaneStore(db).target() or 0)
+    except Exception:
+        logger.exception("fleet_target_epoch_failed")
+        return 0
 
 
 async def _apply_status(db: Any) -> dict[str, dict[str, Any]]:
@@ -169,9 +213,17 @@ async def _apply_status(db: Any) -> dict[str, dict[str, Any]]:
             "epoch": int(row["epoch"] or 0),
             "status": str(row["status"] or ""),
             "error": str(row["error"] or ""),
+            "reported_at": _iso(row.get("updated_at")),
         }
         for row in rows
     }
+
+
+def _iso(value: Any) -> str:
+    try:
+        return value.isoformat() if value is not None else ""
+    except Exception:
+        return ""
 
 
 def _unmanned_roles(nodes: list[dict[str, Any]]) -> list[str]:
@@ -183,7 +235,7 @@ def _unmanned_roles(nodes: list[dict[str, Any]]) -> list[str]:
 
 
 def _unplaceable(
-    request: Request, nodes: list[dict[str, Any]], seats: list[dict[str, Any]]
+    app: Any, nodes: list[dict[str, Any]], seats: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
     """Seats in the org that no live node is eligible to run.
 
@@ -212,7 +264,7 @@ def _unplaceable(
     held = {str(s["handle"]) for s in seats}
 
     out: list[dict[str, str]] = []
-    for role in getattr(request.app.state, "agent_roles", None) or []:
+    for role in getattr(app.state, "agent_roles", None) or []:
         handle = str(role.get("handle") or "")
         raw = role.get("placement") or {}
         if not handle or handle in held or not raw:
