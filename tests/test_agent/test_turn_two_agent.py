@@ -7,14 +7,14 @@ in-process and therefore reliable to test without real transports):
       -> a2a_ask -> A2AService.request_channel
       -> wake event lands on bob.inbox with depth+1
       -> Agent B's TurnEngine runs Plan/Execute/Review
-      -> delegation.edge events recorded for the handoff
 
 The test verifies that:
 
 - Both agents' turns run end-to-end through the TurnEngine.
-- Bob's inbox wake event carries ``delegation_depth == A.depth + 1``
-  and ``alice`` is appended to the chain.
-- A ``delegation.edge`` event with ``surface="a2a"`` is published.
+- Bob's inbox receives exactly one wake, and it is typed
+  ``a2a_request``.
+- That wake carries ``delegation_depth == A.depth + 1`` with ``alice``
+  appended to ``delegation_chain``.
 - Both agents emit ``AgentTurnCompleted`` with populated model-field
   summaries.
 """
