@@ -111,12 +111,27 @@ jobs:
         # that a wedged consumer holds its prefetch for the ack timeout.
         # The memory twin models all three, and a twin agreeing with itself
         # proves nothing about Pulsar.
+        #
+        # The two PULSAR_PREFIX settings are the reason this goes through
+        # `apply-config-from-env.py` rather than running the binary
+        # straight, and they are not optional. `brokerDeleteInactiveTopics`
+        # ships ON with a 60 s sweep, and a suite that takes minutes has
+        # idle topics in it; compose disables it because it was OBSERVED
+        # deleting a test topic. Its default mode spares a topic that still
+        # has a subscription, which is what makes the hazard intermittent
+        # rather than certain — the worst kind to leave in CI. Expiry is
+        # already 0 by default and pinned anyway, for the reason compose
+        # gives: between owners a seat's inbox has no connected consumer,
+        # and the retained backlog IS how an unowned seat keeps its mail.
         run: |
           docker run -d --name pulsar \
             -p 6650:6650 -p 8080:8080 \
             -e PULSAR_MEM="-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m" \
+            -e PULSAR_PREFIX_subscriptionExpirationTimeMinutes=0 \
+            -e PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled=false \
             apachepulsar/pulsar:latest \
-            bin/pulsar standalone --no-functions-worker --no-stream-storage
+            bash -c "bin/apply-config-from-env.py conf/standalone.conf && \
+                     exec bin/pulsar standalone --no-functions-worker --no-stream-storage"
           for i in $(seq 1 60); do
             if curl -sf http://localhost:8080/admin/v2/clusters >/dev/null; then
               echo "broker ready after ${i}s"; exit 0
