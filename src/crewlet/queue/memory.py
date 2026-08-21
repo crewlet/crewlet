@@ -261,6 +261,18 @@ class MemoryEventQueue:
         """
         return set(self._pauses.get((topic, group), ()))
 
+    def quiescing(self, topic: str, group: str) -> bool:
+        """Whether THIS client has stopped taking work on a subscription.
+
+        Public for the same reason as :meth:`pause_holds`: a quiesced
+        attachment is a seat that is owned, attached and silent, which is
+        indistinguishable from a healthy idle one from outside. Distinct
+        from a pause — a pause is reason-counted and released by the
+        subsystem that took it; a quiesce is cleared by detaching or by
+        attaching again.
+        """
+        return (topic, group) in self._quiescing
+
     def dead_letters(self, topic: str, group: str) -> list[Event]:
         """Events this subscription gave up on. See :func:`dlq_topic`."""
         return list(self._dead_letters.get(dlq_topic(topic, group), []))

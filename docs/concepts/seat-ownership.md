@@ -86,6 +86,8 @@ raise DeferDelivery(f"seat {handle!r} is not owned here")
 
 The delivery is left **unacked** and the attachment stops consuming. Measured against a real broker, a close-driven handoff does *not* increment `redeliveryCount`: the messages return to the seat's next owner in order, at count 0. A NAK would burn the budget on messages nothing is wrong with.
 
+Three paths use it, and they are the three ways this node can be the wrong one to run a delivery it was just handed: the seat is not owned here, the in-turn fence tripped mid-dispatch, or the config posture went `shed`/`stuck`. Each also calls `note_delivery_deferred`, because a deferral quiesces the consumer and the resume is edge-triggered on the next successful renew — without it the seat is owned, attached and deaf.
+
 ## Admission: freshness, not membership
 
 "Do I hold this seat?" is a question about a local snapshot refreshed on a 15-second heartbeat against a 45-second TTL, so the honest answer can be a full TTL stale — precisely the window an ownership check exists to close. A membership check cannot meet its own exit criterion.

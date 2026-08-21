@@ -114,7 +114,9 @@ A shedding node refuses work at **trigger admission**, not at `run_turn`. Two re
 - A stale node still *consumes* inbound messages. Slack HMAC verification happens consume-side against that node's cached secret, and a failure is a skip plus an ack — so gating later means the node silently eats its share of the fleet's inbound.
 - Refusing at `run_turn` would permanently wedge a seat whose sandbox run just completed: the pending row is already flipped to `resumed`, the box collected, the agent `AWAITING_SANDBOX` with its inbox paused, and nothing reaps a `resumed` row in-process.
 
-Refusal is **republish-then-ack**, never NAK — three redeliveries at one second dead-letter a perfectly healthy event, and a shed can last minutes. The copy waits on the topic for a node that can read it.
+Refusal **defers**: the delivery is left unacked and this node stops consuming that inbox. Never a NAK — three redeliveries at one second dead-letter a perfectly healthy event, and a shed can last minutes.
+
+And never a republish, which is the form this took first. A shed *releases* this node's seats, and a fenced release republishes nothing (see [Seat Ownership](seat-ownership.md#establishing-a-seat-and-giving-it-back)): republishing sends the events to the topic tail while the successor replays its prefetched siblings from the head, which reorders the conversation. Worse, the republished copy lands on a topic this node is still attached to at that instant — so if the release that should follow does not happen, the copy comes straight back, is shed again and republished again, at whatever rate the broker will serve. A deferral cannot spin: the consumer stops after the first one, and the seat's release (or, if the posture recovers first, the next successful lease renew) is what starts it again.
 
 Sandbox-driven turns bypass the gate entirely: a completion is dispatched directly by the `SandboxCoordinator` and never passes through inbox admission. They are the tail of a turn this node already started, and refusing them destroys durable state rather than deferring it.
 

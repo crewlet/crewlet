@@ -9,9 +9,15 @@ Three properties, each of which was a bug in an earlier draft:
    where a failure is a skip plus an ack.  So a node that missed a
    rotation does not merely lag; it silently eats its share of the
    fleet's inbound messages.
-2. **Refusal is republish-then-ack, never NAK.** Three redeliveries at
-   one second dead-letter a perfectly healthy event, and a shed can last
-   minutes.
+2. **Refusal DEFERS: unacked, consumer stopped — never NAK, and never
+   a republish.** Three redeliveries at one second dead-letter a
+   perfectly healthy event, and a shed can last minutes. A republish is
+   no better: a shed releases this node's seats and a fenced release
+   republishes nothing, because sending events to the topic tail while
+   the successor replays its prefetched siblings from the head reorders
+   the conversation — and a copy republished onto a topic this node is
+   still attached to comes straight back and is shed again, forever, if
+   the release that should have followed did not happen.
 3. **The pause is reason-scoped.** The sandbox busy gate and the config
    shed hold the same topics; if either could release the other's hold,
    a converging node would un-gate a seat mid-sandbox, or a completing
@@ -30,6 +36,7 @@ import pytest
 
 from crewlet.db.config_plane import Posture
 from crewlet.engine import Engine  # noqa: E402
+from crewlet.events.types import Event
 from crewlet.org.models import Organization, OrgUnit, Role  # noqa: E402
 from crewlet.providers.llm.protocol import (  # noqa: E402
     Completion,
@@ -123,6 +130,50 @@ async def test_shed_and_stuck_refuse_work() -> None:
         for posture in (Posture.SHED, Posture.STUCK):
             engine._posture = posture
             assert engine.admits_triggers() is False
+    finally:
+        await engine.stop()
+        await queue.stop()
+
+
+async def test_a_shed_delivery_is_deferred_not_republished() -> None:
+    """The refusal must not put the work back on a topic we still hold.
+
+    Two failures in one. A shed releases this node's seats, and a fenced
+    release republishes nothing — republishing sends the events to the
+    topic tail while the successor replays its prefetched siblings from
+    the head, which reorders a conversation. And the requeued copy lands
+    on an inbox this node is still attached to at that instant, so if the
+    release that follows does not happen (an undead seat, a handoff that
+    raised) the copy is redelivered, shed, republished, redelivered — a
+    hot loop bounded only by how fast the broker will serve it.
+
+    Deferring cannot spin: the delivery stays unacked and the consumer
+    stops after the first one.
+    """
+    engine, queue = await _engine_with_queue()
+    try:
+        handle = engine.agent_pool.agents[0].handle
+        topic = agent_inbox_topic(handle)
+        group = agent_inbox_group(handle)
+        engine._posture = Posture.SHED
+
+        await queue.publish(
+            topic,
+            Event(type="task_assigned", source="test", payload={"task": "x"}),
+        )
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+        assert len(queue.backlog(topic, group)) == 1, (
+            "a shed delivery was acked away instead of being left for a "
+            "node that can serve it"
+        )
+        assert queue.quiescing(topic, group), (
+            "the inbox kept consuming, so the next delivery sheds too"
+        )
+        # And the seat host knows to resume it if the posture recovers
+        # without the seat ever changing hands.
+        assert handle in engine._seat_host._unproven_admission
     finally:
         await engine.stop()
         await queue.stop()

@@ -52,7 +52,7 @@ from crewlet.notifications.service import NotificationService
 from crewlet.observability import ObservabilityManager
 from crewlet.org.models import Organization
 from crewlet.providers.llm.protocol import LLMProvider
-from crewlet.queue.protocol import BatchOptions, EventQueue
+from crewlet.queue.protocol import BatchOptions, DeferDelivery, EventQueue
 from crewlet.queue.topics import (
     agent_control_group,
     agent_control_topic,
@@ -2932,8 +2932,6 @@ class Engine:
             # consuming — the successor gets them in order, at
             # redeliveryCount 0.
             if not self._may_serve_seat(agent.handle):
-                from crewlet.queue.protocol import DeferDelivery
-
                 # Tell the host the consumer is stopping, so the next
                 # successful renew resumes it. Freshness refuses inside
                 # an ordinary heartbeat window on a perfectly healthy
@@ -2968,9 +2966,22 @@ class Engine:
                 return
             # Config posture: this node cannot apply an epoch its peers
             # have, so it must not start NEW work under a stale company.
-            # Park by requeue + ack, never NAK — three redeliveries at 1s
-            # dead-letter a perfectly healthy event, and the node may be
-            # shedding for minutes.
+            # Defer — leave the delivery unacked and stop consuming this
+            # inbox — rather than requeue it, and never NAK (three
+            # redeliveries at 1 s dead-letter a perfectly healthy event,
+            # and the node may be shedding for minutes).
+            #
+            # Requeue was wrong here twice over. A shed RELEASES this
+            # node's seats, and a release is fenced, so this is exactly
+            # the case the fenced rule already covers: republishing sends
+            # the events to the topic tail while the successor replays
+            # its prefetched siblings from the head, which reorders a
+            # conversation. And a requeue lands back on a topic this node
+            # is still attached to — so if the release that follows fails
+            # (an undead seat, a handoff exception) the copy comes
+            # straight back, is shed again, and republished again, at
+            # whatever rate the broker will serve. Deferring cannot spin:
+            # the consumer stops after the first one.
             #
             # This sits AFTER the AWAITING_SANDBOX branch on purpose: a
             # seat mid-sandbox is already parked there, so a clarification
@@ -2986,8 +2997,12 @@ class Engine:
                     posture=str(self.posture),
                     count=len(events),
                 )
-                await self._requeue_inbox_events(agent, events)
-                return
+                # The resume edge, same as the other two defer paths: a
+                # posture that recovers without the seat ever changing
+                # hands leaves nothing else to un-quiesce the inbox.
+                if self._seat_host is not None:
+                    self._seat_host.note_delivery_deferred(agent.handle)
+                raise DeferDelivery(f"config posture {self.posture}")
             # Re-entrancy guard (memory backend): a publish to this agent's
             # OWN inbox from inside its running turn dispatches inline in
             # the same task — waiting for the agent there would deadlock on
@@ -3083,8 +3098,6 @@ class Engine:
                 # dead-letter budget on a handoff would kill a healthy
                 # event after enough of them. The seat's new owner picks
                 # the delivery up, in order, at redeliveryCount 0.
-                from crewlet.queue.protocol import DeferDelivery
-
                 logger.warning(
                     "turn_abandoned_seat_lost",
                     agent_handle=agent.handle,
