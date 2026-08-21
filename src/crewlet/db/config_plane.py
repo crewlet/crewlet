@@ -172,27 +172,44 @@ def decide_posture(view: FleetView) -> Posture:
     if view.applied_epoch >= view.target_epoch:
         return Posture.SERVE
 
-    if view.attempts >= MAX_APPLY_ATTEMPTS:
-        return Posture.STUCK
-
-    confirmed = (
-        view.self_status in (ApplyStatus.ERROR, ApplyStatus.DEGRADED)
-        or view.ticks_behind >= LAG_GRACE_TICKS
-    )
+    tried_and_failed = view.self_status in (ApplyStatus.ERROR, ApplyStatus.DEGRADED)
+    confirmed = tried_and_failed or view.ticks_behind >= LAG_GRACE_TICKS
     if not confirmed:
         # Ordinary propagation. Never shed here.
         return Posture.WAIT
 
     if view.peers_ok > 0:
-        # Peers have this epoch, so the work can go to them.
-        return Posture.SHED
+        # Peers have this epoch, so the work CAN go to them. Only here
+        # is giving it up an improvement — and exhausted retries mean
+        # this node is the anomaly rather than the revision, which is
+        # exactly what STUCK reports.
+        return Posture.STUCK if view.attempts >= MAX_APPLY_ATTEMPTS else Posture.SHED
 
-    if view.peers_reported > 0:
-        # Everyone who tried, failed. The revision is the problem.
+    if view.peers_reported > 0 or tried_and_failed:
+        # Everyone who tried, failed — and on a single-node deployment
+        # "everyone" is this node. The revision is the problem, so keep
+        # serving what rollback preserved.
+        #
+        # This outranks exhausted attempts, and used not to. Shedding
+        # exists to move work to a HEALTHY PEER; with ``peers_ok == 0``
+        # there is no healthy peer, so it is not shedding, it is
+        # stopping. Every node in a fleet that cannot apply a revision
+        # reaches this state at the same time, so the old ordering took
+        # the whole company dark roughly 45 s after a bad activation —
+        # the outcome this branch exists to prevent, and the one the
+        # docstring above has always described. A lone node reached it
+        # by a shorter path still: with no peer to report anything, its
+        # own failure was the only evidence there ever would be.
+        #
+        # The retry bound is untouched: ``_apply_attempts`` gates
+        # ``_converge_to`` directly, so a node still stops re-applying
+        # (and restarting its MCP children) after MAX_APPLY_ATTEMPTS
+        # whatever posture it reports.
         return Posture.ISOLATED
 
-    # Nobody has reported at all — including us, if we have not attempted
-    # yet. No evidence of anything; do not shed on silence.
+    # Behind for longer than propagation explains, but this node has not
+    # attempted the epoch and no peer has reported one way or the other.
+    # That is silence, not evidence — keep polling.
     return Posture.WAIT
 
 

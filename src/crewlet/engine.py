@@ -432,6 +432,10 @@ class Engine:
         self._apply_attempts_epoch: int = 0
         self._ticks_behind: int = 0
         self._apply_status: Any = None
+        # What the last recorded status was ABOUT, so the per-tick
+        # heartbeat can re-assert it verbatim rather than inventing one.
+        self._applied_revision_id: Any = None
+        self._apply_error: str = ""
         self._posture: Any = None
         self._reconcile_task: asyncio.Task[Any] | None = None
         # Set by the broadcast activation nudge to shorten the next poll.
@@ -1527,6 +1531,18 @@ class Engine:
         self._ticks_behind = (
             self._ticks_behind + 1 if self._applied_epoch < target.epoch else 0
         )
+        # Re-stamp this node's status EVERY tick, not only when it
+        # converges. ``peer_health`` reads these rows to answer "is there
+        # a healthy peer right now", and bounds them on freshness because
+        # ``record_apply`` upserts on node_id and a terminated node's
+        # ``ok`` would otherwise stand forever. That bound is only honest
+        # if a live node keeps writing: a converged node used to record
+        # once and go quiet, so its perfectly good status aged out and a
+        # lagging peer read ``peers_ok=0`` off a healthy fleet — WAIT or
+        # ISOLATED where the truth is SHED. One idempotent upsert per
+        # node per tick is what makes the row mean "alive, at this
+        # epoch" instead of "was alive, once".
+        await self._heartbeat_apply_status(plane)
         peers_ok, peers_reported = await plane.peer_health(
             target.epoch, exclude_node=self._node_id
         )
@@ -1552,6 +1568,28 @@ class Engine:
             )
         await self._apply_posture(posture)
         return posture
+
+    async def _heartbeat_apply_status(self, plane: Any) -> None:
+        """Re-assert this node's last apply outcome, unchanged.
+
+        Never fatal: a plane that cannot take the write leaves the
+        previous row, which ages out and makes this node look absent —
+        the same conservative direction the freshness bound already
+        takes. Failing the tick instead would stop the reconcile loop
+        that is the only way out of a divergence.
+        """
+        if self._apply_status is None or not self._applied_epoch:
+            return
+        try:
+            await plane.record_apply(
+                self._node_id,
+                epoch=self._applied_epoch,
+                revision_id=self._applied_revision_id,
+                status=self._apply_status,
+                error=self._apply_error,
+            )
+        except Exception:
+            logger.debug("config_status_heartbeat_failed", node=self._node_id)
 
     async def _converge_to(self, target: Any, plane: Any, store: Any) -> None:
         """Apply ``target`` and record the outcome for the fleet."""
@@ -1609,6 +1647,8 @@ class Engine:
             )
 
         self._apply_status = status
+        self._applied_revision_id = target.revision_id
+        self._apply_error = error
         try:
             await plane.record_apply(
                 self._node_id,
@@ -1710,6 +1750,8 @@ class Engine:
                 return
             self._applied_epoch = target.epoch
             self._apply_status = ApplyStatus.OK
+            self._applied_revision_id = target.revision_id
+            self._apply_error = ""
             await plane.record_apply(
                 self._node_id,
                 epoch=target.epoch,

@@ -57,6 +57,10 @@ The append runs **inside the activation's own transaction**, so the `is_active` 
 | `error` | Failed and rolled back. The node still serves the prior epoch — a legitimate degraded-but-correct state, and one work can safely route to. |
 | `degraded` | Failed **after** a restart-required subsystem was mutated. Rollback restores and restarts transports, but it cannot respawn the per-role MCP children the failed revision already started. So this node's declared epoch is not the whole truth — it reports the prior config while its tool surface may be amputated. Never counted as converged, and never counted as somewhere work can go. |
 
+Each node **re-stamps its row every tick**, not only when it converges, and the posture decision only counts rows written in the last four intervals (~60 s). Both halves are needed together. The table is keyed by node rather than by event, so nothing sweeps it — a node that is scaled in, redeployed or crashed leaves its last `ok` behind forever, and a surviving node that cannot apply the current epoch would read that ghost as "there is a healthy peer to shed to" and step out of rotation to hand work to a process that no longer exists. Bounding on freshness fixes that, but only if a live node keeps writing: a converged node that reported once and went quiet would age out of its own fleet's view, and a lagging peer would read `peers_ok = 0` off a perfectly healthy fleet. One idempotent upsert per node per tick is what makes a row mean *"alive, at this epoch"* rather than *"was alive, once"*.
+
+The bound applies to the **decision**, not to the display: the operator view and the `config_apply_status` query below still show a node that stopped reporting, because that is precisely what an operator needs to see.
+
 ---
 
 ## Posture: what a lagging node does
@@ -66,22 +70,22 @@ Reading those two tables together is what lets a node distinguish *"I am behind 
 ```mermaid
 flowchart TD
     START{"applied ≥ target?"}
-    ATT{"attempts<br/>exhausted?"}
     CONF{"lag <b>confirmed</b>?<br/>(own failure, or<br/>behind &gt; 3 ticks)"}
     PEERS{"any peer<br/>applied it?"}
-    ANY{"any peer<br/>reported at all?"}
+    ATT{"attempts<br/>exhausted?"}
+    ANY{"any peer reported,<br/>or did <i>we</i> fail?"}
     SERVE["<b>SERVE</b><br/>take work"]
-    STUCK["<b>STUCK</b><br/>stop retrying, fail /ready"]
     WAIT["<b>WAIT</b><br/>keep serving"]
     SHED["<b>SHED</b><br/>refuse new work"]
+    STUCK["<b>STUCK</b><br/>stop retrying, fail /ready"]
     ISO["<b>ISOLATED</b><br/>keep serving, alarm"]
     START -->|yes| SERVE
-    START -->|no| ATT
-    ATT -->|yes| STUCK
-    ATT -->|no| CONF
+    START -->|no| CONF
     CONF -->|no| WAIT
     CONF -->|yes| PEERS
-    PEERS -->|yes| SHED
+    PEERS -->|yes| ATT
+    ATT -->|yes| STUCK
+    ATT -->|no| SHED
     PEERS -->|no| ANY
     ANY -->|yes| ISO
     ANY -->|no| WAIT
@@ -98,6 +102,10 @@ So lag has to be **confirmed** before it means anything: either this node record
 Only then does peer health pick the action. And when *no* peer managed the epoch either, the honest conclusion is that the **revision** is bad rather than this node — so it keeps serving what rollback preserved and raises divergence loudly. Shedding there would take the whole fleet down over one bad revision, which is precisely what the rollback path exists to avoid.
 
 Retry is **bounded** (three attempts). Without a bound, a revision that fails on one node only — a missing per-node env var, an MCP binary absent from that image — would re-apply every tick forever, restarting that node's MCP children each time.
+
+Note where exhaustion sits in that chart: **after** peer health, not before it. The bound itself is unconditional — a node stops re-applying at three attempts whatever posture it reports — but `STUCK` is a claim about *this node* being the anomaly, and that claim is only true when the epoch demonstrably applies somewhere else. With no healthy peer there is nowhere for the work to go, so stepping out of rotation is not shedding, it is stopping; and every node in a fleet that cannot apply a revision exhausts its attempts at roughly the same moment, so ranking exhaustion first took the whole company dark about 45 s after a bad activation. A single-node deployment reaches the same place by a shorter path: no peer will ever report anything, so its own failure is the only evidence there is, and it stays `isolated` — serving the config it already had — rather than failing readiness over a revision nothing else in the fleet ever saw.
+
+The budget is **per epoch**, not per process. Activating a fixed revision resets it, so the runbook's answer to a stuck node — push a corrected revision — is one the node actually acts on.
 
 ### Where the gate sits
 

@@ -220,11 +220,20 @@ async def test_engine_publishes_error_when_apply_fails() -> None:
 
 
 async def test_a_failing_epoch_is_retried_a_bounded_number_of_times() -> None:
-    """Retry must be bounded, then the node goes STUCK.
+    """Retry must be bounded, and the node must keep serving.
 
+    Two independent things, and only the first is about the bound.
     Without a bound, a revision that fails on one node only (a per-node
     env var, an MCP binary missing from that image) re-applies every
     reconcile tick forever — restarting MCP children each time.
+
+    The posture is the second. This engine is alone: no peer has
+    reported, so there is nowhere for its work to go, and the config it
+    was already serving is untouched by the failed apply. Reporting
+    STUCK here would stop trigger admission and fail readiness over a
+    revision that nothing else in the fleet even saw — a single-node
+    company taken dark by a bad activation, which is exactly what
+    ISOLATED exists to prevent.
     """
     queue = MemoryEventQueue()
     store = MagicMock()
@@ -245,10 +254,11 @@ async def test_a_failing_epoch_is_retried_a_bounded_number_of_times() -> None:
             await engine._reconcile_config_once()
         assert store.get_revision.await_count == 3
 
-        # Attempts exhausted: stop trying, and say so.
-        assert await engine._reconcile_config_once() is Posture.STUCK
+        # Attempts exhausted: stop trying, and say so — while still
+        # serving the config this node has.
+        assert await engine._reconcile_config_once() is Posture.ISOLATED
         assert store.get_revision.await_count == 3
-        assert engine.admits_triggers() is False
+        assert engine.admits_triggers() is True
     finally:
         await engine.stop()
         await queue.stop()

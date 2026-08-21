@@ -136,25 +136,82 @@ def test_a_degraded_peer_does_not_count_as_healthy() -> None:
 # ── bounded retry ────────────────────────────────────────────────────
 
 
-def test_exhausted_attempts_go_stuck() -> None:
-    """Retry is bounded, and exhaustion outranks every other signal.
+def test_exhausted_attempts_go_stuck_when_a_peer_can_take_the_work() -> None:
+    """Exhaustion means THIS node is the anomaly — but only when the
+    epoch demonstrably applies somewhere else.
 
-    Without a bound, a revision that fails on one node only (a missing
-    per-node env var, an MCP binary absent from that image) re-applies
-    every reconcile tick forever — restarting MCP children each time.
+    Retry is bounded either way: `_apply_attempts` gates `_converge_to`
+    directly, so a node stops re-applying (and restarting its MCP
+    children) after the ceiling whatever posture it reports. Posture
+    decides who serves, not whether to retry.
     """
-    view = _view(attempts=MAX_APPLY_ATTEMPTS, peers_ok=0, peers_reported=0)
+    view = _view(
+        attempts=MAX_APPLY_ATTEMPTS,
+        self_status=ApplyStatus.ERROR,
+        peers_ok=2,
+        peers_reported=3,
+    )
     assert decide_posture(view) is Posture.STUCK
 
 
-def test_stuck_outranks_isolated() -> None:
+def test_isolated_outranks_exhausted_attempts() -> None:
+    """The inversion that mattered, and the reason it did.
+
+    Shedding exists to move work to a HEALTHY PEER. With `peers_ok == 0`
+    there is no healthy peer, so shedding is not shedding — it is
+    stopping. And every node in a fleet that cannot apply a revision
+    reaches this state at the same time, so ranking STUCK above ISOLATED
+    took the whole company dark roughly 45 s after a bad activation:
+    all seats released, inbound paused, `/ready` 503, on a fleet whose
+    previous config was serving perfectly well.
+
+    That is precisely the outcome ISOLATED exists to prevent, and what
+    `decide_posture`'s own docstring has always said it does — "when no
+    peer managed the epoch either, the honest conclusion is that the
+    revision is bad, not this node, so it keeps serving what rollback
+    preserved."
+    """
     view = _view(
         attempts=MAX_APPLY_ATTEMPTS,
         self_status=ApplyStatus.ERROR,
         peers_ok=0,
         peers_reported=4,
     )
-    assert decide_posture(view) is Posture.STUCK
+    assert decide_posture(view) is Posture.ISOLATED
+
+
+def test_exhaustion_alone_on_the_fleet_is_isolated_not_stuck() -> None:
+    """The single-node deployment, which is the common one.
+
+    No peer has reported, so there is nobody to shed to — but this node
+    DID try and DID fail, and with no peers there will never be any
+    other evidence. STUCK here fails readiness and stops admitting
+    triggers, so one bad revision takes a single-node company entirely
+    dark while the config it was already serving is still perfectly
+    good. ISOLATED is the same conclusion the multi-node case reaches
+    (the revision is the problem, not the node) by a shorter path.
+    """
+    view = _view(
+        attempts=MAX_APPLY_ATTEMPTS,
+        self_status=ApplyStatus.ERROR,
+        peers_ok=0,
+        peers_reported=0,
+    )
+    assert decide_posture(view) is Posture.ISOLATED
+
+
+def test_silence_without_an_attempt_of_our_own_is_not_evidence() -> None:
+    """Past grace, but this node never attempted the epoch and no peer
+    reported either. Nothing has failed anywhere that we know of, so
+    there is nothing to conclude — keep polling."""
+    view = _view(
+        ticks_behind=LAG_GRACE_TICKS + 5,
+        attempts=MAX_APPLY_ATTEMPTS,
+        self_status=None,
+        peers_ok=0,
+        peers_reported=0,
+    )
+    assert decide_posture(view) is Posture.WAIT
 
 
 def test_converged_outranks_exhausted_attempts() -> None:

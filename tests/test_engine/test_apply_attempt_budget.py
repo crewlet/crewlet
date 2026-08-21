@@ -105,3 +105,62 @@ async def test_the_budget_still_bounds_one_revision() -> None:
         assert engine._apply_attempts == MAX_APPLY_ATTEMPTS
     finally:
         await engine.stop()
+
+
+async def test_a_converged_node_keeps_re_asserting_its_status() -> None:
+    """`peer_health` bounds status rows on freshness, and that bound is
+    only honest if a live node keeps writing.
+
+    `record_apply` runs on CONVERGENCE, not per tick, so a node that
+    applied the current epoch and is sitting happily wrote its row once
+    and went quiet. Its perfectly good `ok` then aged out, and a lagging
+    peer read `peers_ok=0, peers_reported=0` off a healthy fleet — WAIT
+    or ISOLATED where the truth is SHED, with ISOLATED's "no node
+    applied this" log line printed about a fleet where every other node
+    had.
+    """
+    plane = _Plane(epoch=7)
+    recorded: list[int] = []
+
+    async def _record(node_id: str, **kw: Any) -> None:
+        recorded.append(int(kw["epoch"]))
+
+    plane.record_apply = _record  # type: ignore[method-assign]
+    engine = await _engine(plane)
+    try:
+        # Converged: nothing left to apply.
+        engine._applied_epoch = 7
+        from crewlet.db.config_plane import ApplyStatus
+
+        engine._apply_status = ApplyStatus.OK
+        recorded.clear()
+
+        for _ in range(3):
+            await engine._reconcile_config_once()
+        assert recorded == [7, 7, 7], (
+            "a converged node stopped reporting, so its status aged out "
+            "of its own fleet's health check"
+        )
+    finally:
+        await engine.stop()
+
+
+async def test_a_node_with_nothing_applied_reports_nothing() -> None:
+    """An unconfigured node has no outcome to assert, and inventing one
+    would put a fabricated `ok` into every peer's health count."""
+    plane = _Plane(epoch=7)
+    recorded: list[int] = []
+
+    async def _record(node_id: str, **kw: Any) -> None:
+        recorded.append(int(kw["epoch"]))
+
+    plane.record_apply = _record  # type: ignore[method-assign]
+    engine = await _engine(plane)
+    try:
+        engine._applied_epoch = 0
+        engine._apply_status = None
+        recorded.clear()
+        await engine._reconcile_config_once()
+        assert recorded == []
+    finally:
+        await engine.stop()
