@@ -51,7 +51,7 @@ The Dashboard reads, top to bottom, in order of urgency:
 | **Company pulse** (the lead panel) | Is anything happening, and did anything break? |
 | **In flight** | What is running right now, how far through its turn, and how long since it last moved |
 | **The team** | Who is on the roster and what each seat is doing |
-| **Running sandboxes** | Which detached coding jobs are open, and which are blocked on an answer |
+| **Running sandboxes** | Which detached coding jobs are open, and which are blocked on an answer. An entry is cleared by the run's completion event, and expires after 12 hours if that event never arrives — a panel that shows a job which finished hours ago is claiming work that is not happening, and no operator can clear it |
 | **Engine activity** | What just happened |
 
 ### The pulse

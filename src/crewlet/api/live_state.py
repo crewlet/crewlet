@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from crewlet._logging import get_logger
@@ -96,6 +96,31 @@ LIVE_SPEND_WINDOW_HOURS = 24
 # records, so an org past the cap sees a rollup covering slightly less
 # than a day rather than a wrong total.
 _SPEND_RECORD_LIMIT = 8_000
+
+# How long an in-flight sandbox entry survives without a completion.
+#
+# The set is keyed by kick-off ``turn_id`` and cleared by
+# ``sandbox_run_completed``. Every other structure in this projection is
+# explicitly bounded; this one was not, and its input stream is lossy in
+# both directions — the code right below the insert already accounts for
+# a MISSED start ("the API started mid-run"), and a missed completion has
+# the mirror-image effect with nothing to compensate it.
+#
+# The cost is not really the memory. It is the dashboard's Running
+# Sandboxes panel, where a ghost entry is a false report of work in
+# flight that no operator can clear and no restart of the engine fixes,
+# only a restart of the API. Claiming activity that is not happening is
+# the same defect the turn rail's staleness rule exists to prevent.
+#
+# Twelve hours, against a detached coding run whose own ceiling is the
+# turn's token budget plus a buffer, and a clarification pause bounded by
+# ``pause_ttl`` (30 min by default, raised to hours by deployments whose
+# humans answer slowly). Long enough that a genuinely long job is never
+# swept out from under an operator watching it; short enough that a lost
+# run does not outlive the working day it started in. Eviction is a
+# display correction, never a control action — nothing about the run
+# itself is touched.
+_SANDBOX_ENTRY_MAX_AGE_HOURS = 12
 
 # Window the projection hydrates per-agent token totals over, in days.
 # Matches the dashboard's default token-rollup window
@@ -358,10 +383,46 @@ class LiveState:
         Oldest-first so the longest-running job (most likely to need
         attention, e.g. one blocked on a clarification) sorts to the top
         of the dashboard panel.
+
+        Entries past ``_SANDBOX_ENTRY_MAX_AGE_HOURS`` are dropped on the
+        way out: the set is cleared by a completion event, and an event
+        stream that can miss a start can miss a completion too. Swept on
+        READ rather than on a timer because this is a display projection
+        — the correction is only ever observed here, and a projection
+        does not need a loop of its own to stop lying.
         """
+        self._sweep_stale_sandboxes()
         return sorted(
             self._active_sandboxes.values(), key=lambda s: s.get("started_at", "")
         )
+
+    def _sweep_stale_sandboxes(self) -> None:
+        """Drop in-flight entries whose completion never arrived."""
+        if not self._active_sandboxes:
+            return
+        cutoff = (
+            datetime.now(UTC) - timedelta(hours=_SANDBOX_ENTRY_MAX_AGE_HOURS)
+        ).isoformat()
+        stale = [
+            turn_id
+            for turn_id, entry in self._active_sandboxes.items()
+            # An entry with no usable timestamp cannot be aged out on
+            # time, and dropping it on that basis would be arbitrary —
+            # so it is kept, and the count cap is what bounds it.
+            if str(entry.get("started_at", "")) and str(entry["started_at"]) < cutoff
+        ]
+        for turn_id in stale:
+            self._active_sandboxes.pop(turn_id, None)
+        if stale:
+            logger.info(
+                "sandbox_projection_entries_expired",
+                count=len(stale),
+                max_age_hours=_SANDBOX_ENTRY_MAX_AGE_HOURS,
+                hint=(
+                    "no sandbox_run_completed arrived for these runs; the "
+                    "dashboard was showing them as still in flight"
+                ),
+            )
 
     # -- write side ------------------------------------------------------
 

@@ -7,6 +7,7 @@ LLM call so it survives a dashboard refresh.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -824,6 +825,19 @@ class TestHydration:
         assert live.agent_overlay("Lead") is None
 
 
+def _recent_iso(*, minutes_ago: float = 0.0) -> str:
+    """A timestamp relative to NOW, for projections that age entries out.
+
+    The fixed date in ``_env`` is fine everywhere the projection only
+    orders or dedupes timestamps. It is not fine where one is compared
+    against the wall clock — the in-flight sandbox set expires entries
+    whose completion never arrived, so a hardcoded date silently becomes
+    "expired" the moment it falls behind that bound, and the test starts
+    failing for a reason that has nothing to do with what it covers.
+    """
+    return (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat()
+
+
 class TestSandboxProjection:
     """The in-flight detached-sandbox set behind the dashboard panel."""
 
@@ -841,6 +855,7 @@ class TestSandboxProjection:
                     "sandbox_id": "sb-1",
                     "task": "Build the thing",
                 },
+                ts=_recent_iso(),
                 event_id="s1",
             )
         )
@@ -855,7 +870,12 @@ class TestSandboxProjection:
         assert r["started_at"]  # carries the envelope timestamp
 
         live.apply_event(
-            _env("sandbox_run_completed", {"turn_id": "t1"}, event_id="s2")
+            _env(
+                "sandbox_run_completed",
+                {"turn_id": "t1"},
+                ts=_recent_iso(),
+                event_id="s2",
+            )
         )
         assert live.active_sandboxes() == []
 
@@ -865,6 +885,7 @@ class TestSandboxProjection:
             _env(
                 "sandbox_run_started",
                 {"turn_id": "t1", "role": "Eng", "coding_agent": "opencode"},
+                ts=_recent_iso(),
                 event_id="s1",
             )
         )
@@ -877,6 +898,7 @@ class TestSandboxProjection:
                     "question": "Which repo?",
                     "audience": "requester",
                 },
+                ts=_recent_iso(),
                 event_id="s2",
             )
         )
@@ -892,6 +914,7 @@ class TestSandboxProjection:
             _env(
                 "sandbox_clarification_requested",
                 {"turn_id": "t9", "role": "Eng", "question": "?"},
+                ts=_recent_iso(),
                 event_id="s1",
             )
         )
@@ -906,7 +929,7 @@ class TestSandboxProjection:
             _env(
                 "sandbox_run_started",
                 {"turn_id": "a", "role": "E1"},
-                ts="2026-06-14T12:00:00+00:00",
+                ts=_recent_iso(minutes_ago=10),
                 event_id="s1",
             )
         )
@@ -914,7 +937,7 @@ class TestSandboxProjection:
             _env(
                 "sandbox_run_started",
                 {"turn_id": "b", "role": "E2"},
-                ts="2026-06-14T12:05:00+00:00",
+                ts=_recent_iso(minutes_ago=5),
                 event_id="s2",
             )
         )
@@ -922,8 +945,78 @@ class TestSandboxProjection:
 
     def test_started_without_turn_id_ignored(self) -> None:
         live = LiveState()
-        live.apply_event(_env("sandbox_run_started", {"role": "Eng"}, event_id="s1"))
+        live.apply_event(
+            _env(
+                "sandbox_run_started",
+                {"role": "Eng"},
+                ts=_recent_iso(),
+                event_id="s1",
+            )
+        )
         assert live.active_sandboxes() == []
+
+    def test_a_run_whose_completion_never_arrived_is_eventually_dropped(self) -> None:
+        """The set is cleared by ``sandbox_run_completed``, and the event
+        stream can lose one — the synthesize-on-missing-start case right
+        beside it exists because it can lose a START.
+
+        Unbounded, the entry is not merely a leak: the dashboard's
+        Running Sandboxes panel shows a job in flight that finished (or
+        died) hours ago, which no operator can clear and no engine
+        restart fixes. Claiming work that is not happening is the defect
+        the turn rail's staleness rule exists to prevent.
+        """
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "sandbox_run_started",
+                {"turn_id": "ghost", "role": "Eng"},
+                ts=_recent_iso(minutes_ago=60 * 24),
+                event_id="s1",
+            )
+        )
+        live.apply_event(
+            _env(
+                "sandbox_run_started",
+                {"turn_id": "live-one", "role": "Eng"},
+                ts=_recent_iso(minutes_ago=30),
+                event_id="s2",
+            )
+        )
+        assert [r["turn_id"] for r in live.active_sandboxes()] == ["live-one"]
+
+    def test_a_long_running_job_is_not_swept_out_from_under_an_operator(
+        self,
+    ) -> None:
+        """The bound is generous on purpose: a coding run can legitimately
+        sit for hours, and one blocked on a clarification sits for as long
+        as the human takes."""
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "sandbox_run_started",
+                {"turn_id": "slow", "role": "Eng"},
+                ts=_recent_iso(minutes_ago=60 * 6),
+                event_id="s1",
+            )
+        )
+        assert [r["turn_id"] for r in live.active_sandboxes()] == ["slow"]
+
+    def test_an_entry_with_no_timestamp_is_kept_rather_than_guessed_at(
+        self,
+    ) -> None:
+        """Ageing needs a timestamp. Dropping an entry that has none would
+        be arbitrary rather than correct."""
+        live = LiveState()
+        live.apply_event(
+            _env(
+                "sandbox_run_started",
+                {"turn_id": "no-ts", "role": "Eng"},
+                ts="",
+                event_id="s1",
+            )
+        )
+        assert [r["turn_id"] for r in live.active_sandboxes()] == ["no-ts"]
 
 
 class TestSpendWindow:
