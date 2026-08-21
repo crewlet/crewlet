@@ -5,6 +5,7 @@ restart recovery."""
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -274,6 +275,140 @@ async def test_completion_keeps_agent_busy_until_resume_dispatch() -> None:
     assert observed[0] == f"collect:{AgentState.AWAITING_SANDBOX}"
     assert observed[1] == str(AgentState.IDLE)
     # Settled (no re-suspend): the box is done and the inbox resumed.
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+    await queue.stop()
+
+
+async def test_a_collect_failure_releases_the_inbox_even_if_cleanup_fails() -> None:
+    """The other half of the same rule, on the other exit.
+
+    Collection failing is already the bad day; the cleanup that follows
+    is two more calls that can fail on their own, and neither of them
+    failing is a reason to leave the seat parked on a run that is over.
+    """
+    queue = MemoryEventQueue()
+    await queue.start()
+    agent = _mk_agent()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run())
+    manager, _ = _mk_manager()  # no result: collection fails
+
+    async def _unavailable(turn_id: str, status: str, **kw: Any) -> Any:
+        raise RuntimeError("database is unreachable")
+
+    store.set_status = _unavailable  # type: ignore[method-assign]
+
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+    await coord.on_run_started(
+        SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+    )
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+
+    with contextlib.suppress(RuntimeError):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
+
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+    assert agent.state is not AgentState.AWAITING_SANDBOX, (
+        "the agent stayed parked on a run that had already failed"
+    )
+    await queue.stop()
+
+
+async def test_a_failed_box_release_still_releases_the_inbox() -> None:
+    """The seat must not go deaf because cleanup failed.
+
+    The inbox pause is reason-scoped, so nothing else in the engine can
+    release it, and by this point the resumed turn has already run — the
+    completion is settled, and neither the waiter nor a seat handoff
+    comes back for it. So a release that only happened on the happy path
+    meant one failed store write during teardown left the seat owned,
+    attached and silent until the process restarted, with an agent that
+    was otherwise perfectly idle.
+    """
+    queue = MemoryEventQueue()
+    await queue.start()
+    agent = _mk_agent()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run())
+    # Collect must SUCCEED here: the failure under test is in the settle
+    # tail, and a run whose collection fails never reaches it.
+    manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
+    await provider.create(manager.build_spec())
+    provider._by_id["sbx-1"] = provider.sandboxes[0]
+
+    async def _unavailable(turn_id: str) -> None:
+        raise RuntimeError("database is unreachable")
+
+    store.release_box = _unavailable  # type: ignore[method-assign]
+
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+    await coord.on_run_started(
+        SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+    )
+    assert queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
+
+    with contextlib.suppress(RuntimeError):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
+
+    assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng")), (
+        "a seat was left deaf because releasing its sandbox row failed"
+    )
+    await queue.stop()
+
+
+async def test_a_failed_final_status_write_still_releases_the_inbox() -> None:
+    """Same rule, the other unguarded write in the settle tail. Marking
+    the run done is bookkeeping; the seat's ability to hear is not."""
+    queue = MemoryEventQueue()
+    await queue.start()
+    agent = _mk_agent()
+    store = MemoryPendingSandboxRunStore()
+    await store.create(_run())
+    manager, provider = _mk_manager(CodingAgentResult(text="done", success=True))
+    await provider.create(manager.build_spec())
+    provider._by_id["sbx-1"] = provider.sandboxes[0]
+
+    real_set_status = store.set_status
+
+    async def _fail_on_done(turn_id: str, status: str, **kw: Any) -> Any:
+        if status == "done":
+            raise RuntimeError("database is unreachable")
+        return await real_set_status(turn_id, status, **kw)
+
+    store.set_status = _fail_on_done  # type: ignore[method-assign]
+
+    coord = _coordinator(
+        queue=queue,
+        store=store,
+        manager=manager,
+        agent=agent,
+        turn_engine=_TurnEngineStub(),
+    )
+    await coord.on_run_started(
+        SandboxRunStarted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+    )
+
+    with contextlib.suppress(RuntimeError):
+        await coord.on_run_completed(
+            SandboxRunCompleted(agent_handle="eng", turn_id="t-1", sandbox_id="sbx-1")
+        )
+
     assert not queue.pause_holds(agent_inbox_topic("eng"), agent_inbox_group("eng"))
     await queue.stop()
 

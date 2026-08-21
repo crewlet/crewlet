@@ -266,20 +266,21 @@ class SandboxCoordinator:
             )
         except Exception:
             logger.exception("sandbox_collect_failed", turn_id=run.turn_id)
-            await self._pending_store.set_status(
-                run.turn_id, "failed", epoch=run.owner_epoch or None
-            )
-            await teardown_sandbox_run(
-                run=run, manager=self._manager, pending_store=self._pending_store
-            )
             # The job is over even though collection failed — free the
-            # agent and let its inbox flow again.
-            self._free_agent(agent)
-            await self._event_queue.resume_topic(
-                agent_inbox_topic(run.agent_handle),
-                agent_inbox_group(run.agent_handle),
-                reason=_SANDBOX_PAUSE_REASON,
-            )
+            # agent and let its inbox flow again, whatever the cleanup
+            # below manages. Both of those are DB and network calls that
+            # can fail on their own, and neither failing is a reason to
+            # leave the seat parked on a run that is finished.
+            try:
+                await self._pending_store.set_status(
+                    run.turn_id, "failed", epoch=run.owner_epoch or None
+                )
+                await teardown_sandbox_run(
+                    run=run, manager=self._manager, pending_store=self._pending_store
+                )
+            finally:
+                self._free_agent(agent)
+                await self._resume_inbox(run.agent_handle)
             return
 
         await self._account(run, result)
@@ -302,11 +303,7 @@ class SandboxCoordinator:
             # A clarification wait frees the agent (a human reply can take
             # days) and lets its inbox flow so the answer can arrive.
             self._free_agent(agent)
-            await self._event_queue.resume_topic(
-                agent_inbox_topic(run.agent_handle),
-                agent_inbox_group(run.agent_handle),
-                reason=_SANDBOX_PAUSE_REASON,
-            )
+            await self._resume_inbox(run.agent_handle)
             await self._handle_clarification(agent, run, result, event)
             return
 
@@ -326,6 +323,31 @@ class SandboxCoordinator:
         """AWAITING_SANDBOX → IDLE, tolerating an agent already free."""
         if agent is not None and agent.state == AgentState.AWAITING_SANDBOX:
             agent.resume_from_sandbox()
+
+    async def _resume_inbox(self, handle: str) -> None:
+        """Release this subsystem's pause hold on a seat's inbox.
+
+        Never raises, and never skipped on a path that is done with the
+        box. The hold is reason-scoped, so nothing else in the engine can
+        release it: a seat that keeps one is owned, attached and deaf,
+        and stays that way until the process restarts — the run's row is
+        already terminal, so neither the waiter nor a seat handoff comes
+        back for it.
+
+        Which is why every caller releases it from a ``finally``. The
+        release used to be the last statement of a happy path, so a
+        teardown that raised — one E2B call failing to kill a box, which
+        is a network call like any other — took the seat out of service
+        permanently as a side effect of failing to free a sandbox.
+        """
+        try:
+            await self._event_queue.resume_topic(
+                agent_inbox_topic(handle),
+                agent_inbox_group(handle),
+                reason=_SANDBOX_PAUSE_REASON,
+            )
+        except Exception:
+            logger.exception("sandbox_inbox_resume_failed", agent_handle=handle)
 
     async def _handle_clarification(
         self,
@@ -488,18 +510,16 @@ class SandboxCoordinator:
             # and the suspend persist). Can't continue the turn — fail + reap,
             # free the agent, and let its inbox flow again.
             logger.warning("sandbox_resume_no_execute_state", turn_id=run.turn_id)
-            await self._pending_store.set_status(
-                run.turn_id, "failed", epoch=run.owner_epoch or None
-            )
-            await teardown_sandbox_run(
-                run=run, manager=self._manager, pending_store=self._pending_store
-            )
-            self._free_agent(agent)
-            await self._event_queue.resume_topic(
-                agent_inbox_topic(run.agent_handle),
-                agent_inbox_group(run.agent_handle),
-                reason=_SANDBOX_PAUSE_REASON,
-            )
+            try:
+                await self._pending_store.set_status(
+                    run.turn_id, "failed", epoch=run.owner_epoch or None
+                )
+                await teardown_sandbox_run(
+                    run=run, manager=self._manager, pending_store=self._pending_store
+                )
+            finally:
+                self._free_agent(agent)
+                await self._resume_inbox(run.agent_handle)
             return
         # Free the agent only NOW, immediately before the resume dispatch, so
         # no queued event can take the WORKING slot first (the inbox is still
@@ -530,13 +550,22 @@ class SandboxCoordinator:
                 run.turn_id, revert_to, epoch=run.owner_epoch or None
             )
             raise
-        latest = await self._pending_store.get(run.turn_id)
-        if latest is not None and latest.status == "running":
-            # The resumed executor called run_sandbox AGAIN: a new detached
-            # job owns the box and the suspending turn re-parked the agent —
-            # leave the inbox paused for the next completion.
-            logger.info("sandbox_reused_in_turn", turn_id=run.turn_id)
-        else:
+        # From here the hold is released on EVERY exit but one: the box is
+        # either finished with the seat or a new run owns it, and any
+        # other outcome — a store read that fails, a teardown that
+        # raises — is a reason to let the seat work, not to park it
+        # forever.
+        keep_paused = False
+        try:
+            latest = await self._pending_store.get(run.turn_id)
+            if latest is not None and latest.status == "running":
+                # The resumed executor called run_sandbox AGAIN: a new
+                # detached job owns the box and the suspending turn
+                # re-parked the agent — leave the inbox paused for the
+                # next completion. The ONE deliberate exit.
+                keep_paused = True
+                logger.info("sandbox_reused_in_turn", turn_id=run.turn_id)
+                return
             # Tear down the box the RESUMED row points at: a re-seeded run
             # provisioned a fresh one, so ``run``'s (possibly reaped) id is
             # stale.
@@ -548,11 +577,9 @@ class SandboxCoordinator:
             await self._pending_store.set_status(
                 run.turn_id, "done", epoch=run.owner_epoch or None
             )
-            await self._event_queue.resume_topic(
-                agent_inbox_topic(run.agent_handle),
-                agent_inbox_group(run.agent_handle),
-                reason=_SANDBOX_PAUSE_REASON,
-            )
+        finally:
+            if not keep_paused:
+                await self._resume_inbox(run.agent_handle)
 
     async def _dispatch_resume_execute(
         self,
