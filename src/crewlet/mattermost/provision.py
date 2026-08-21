@@ -43,6 +43,13 @@ logger = get_logger("mattermost.provision")
 #: engine-managed credentials from ones a human created by hand.
 TOKEN_DESCRIPTION = "crewlet-engine"
 
+#: The operator's own credential, never a seat's.  ``crewlet mattermost
+#: provision`` reads it (``ADMIN_TOKEN_ENV`` in ``provision_cli``) and
+#: ``scripts/mattermost-dev-bootstrap.sh`` writes it into the same env
+#: file a seat's token is minted into, so a seat that references it must
+#: never be minted over.
+ADMIN_TOKEN_VAR = "MATTERMOST_ADMIN_TOKEN"
+
 #: Description stamped on bot accounts the provisioner creates, for the
 #: same reason.
 BOT_DESCRIPTION = "Crewlet agent seat"
@@ -102,7 +109,13 @@ def seat_token_vars(role: Any) -> list[str]:
     for key, value in mcp_env.items():
         if key.upper() in _TOKEN_ENV_KEYS:
             scan[key] = value
-    return referenced_env_vars(scan)
+    # A mint overwrites every var it lands in, including ones that
+    # already hold a value, so a config pointing a seat's credential key
+    # at the OPERATOR's admin var would replace a system-admin token with
+    # a bot's — in the same .env the bootstrap writes both into, silently
+    # and unrecoverably. Naming that var is a config mistake; making it
+    # cost the admin credential is ours.
+    return [var for var in referenced_env_vars(scan) if var != ADMIN_TOKEN_VAR]
 
 
 def seat_username(role: Any, username_prefix: str = "") -> str:
@@ -462,33 +475,34 @@ async def _ensure_token(
     the docs — over a hazard that cannot exist.  "Fail closed on
     unknowable state" does not apply to a state that is known.
     """
-    missing = [var for var in token_vars if not sink.existing(var)]
+    values = {var: sink.existing(var) for var in token_vars}
+    missing = [var for var, value in values.items() if not value]
+    distinct = {value for value in values.values() if value}
     stale, unreadable = await _our_token_ids(client, user_id)
-    if not missing and stale is None:
-        # Unknowable is not the same as absent: minting here would strand
-        # the credential the config already carries.
-        result.token_action = "exists"
+
+    if not missing and len(distinct) > 1:
+        # The vars disagree, so at most one of them is the credential the
+        # engine will use and nothing says which consumer got the other.
+        # Replace both rather than pick.
         result.notes.append(
-            f"could not read the bot's token list ({unreadable}) — left the "
-            "recorded token in place, unverified"
+            "the seat's ${VAR}s hold different values — replacing them with one token"
         )
-        return
-    if not missing and stale:
-        result.token_action = "exists"
-        if len(stale) > 1:
-            # Nothing here will clean these up: a fully provisioned seat
-            # returns before the supersede loop, so surplus tokens of
-            # ours survive every future run. Saying so is the difference
-            # between an operator who can revoke them and one who never
-            # learns they exist — they carry the same description as the
-            # live one, so only this listing distinguishes them.
+    elif not missing:
+        works, why = await _recorded_token_works(client, next(iter(distinct)), user_id)
+        if works is None:
+            result.token_action = "exists"
             result.notes.append(
-                f"{len(stale)} crewlet-engine tokens are active on this bot; "
-                "only one is referenced by the config. Revoke the surplus in "
-                "Profile > Security > Personal Access Tokens, or re-provision "
-                "the seat with its ${VAR}s cleared to replace them all"
+                f"could not verify the recorded token ({why}) — left it in place"
             )
-        return
+            return
+        if works:
+            result.token_action = "exists"
+            _note_surplus_tokens(stale, result)
+            return
+        result.notes.append(
+            f"the recorded token no longer authenticates ({why}) — minting a fresh one"
+        )
+
     if stale is None and result.bot_action != "created":
         result.token_action = "skipped"
         raise MattermostError(
@@ -504,16 +518,24 @@ async def _ensure_token(
             f"could not read the token list ({unreadable}) — minted anyway, "
             "which is safe because this run created the account"
         )
-    if not missing:
-        result.notes.append(
-            "the recorded token is no longer active on the server — minting a fresh one"
-        )
-
-    created = await client.create_user_access_token(user_id, TOKEN_DESCRIPTION)
-    token = str((created or {}).get("token") or "")
-    token_id = str((created or {}).get("id") or "")
-    if not token:
-        raise MattermostError("token creation returned no token value")
+    # The pre-mint inventory. When ``stale`` is None we only reach here
+    # via the created-this-run exemption, where the account is seconds
+    # old — so "nothing of ours existed before" is exact, not a guess.
+    before = stale if stale is not None else []
+    try:
+        created = await client.create_user_access_token(user_id, TOKEN_DESCRIPTION)
+        token = str((created or {}).get("token") or "")
+        token_id = str((created or {}).get("id") or "")
+        if not token:
+            raise MattermostError("token creation returned no token value")
+    except BaseException:
+        # The call can fail AFTER the server minted the token — a read
+        # timeout on the response, a proxy that drops it — and the value
+        # is then live on the account and readable by nobody, forever.
+        # The inventory above is what makes it identifiable: it is the
+        # token carrying our description that was not there a moment ago.
+        await _reclaim_lost_mint(client, user_id, before=before, result=result)
+        raise
 
     # Write-through before anything else can fail: the value is
     # unretrievable from here on, so the window between "minted" and
@@ -562,6 +584,103 @@ async def _ensure_token(
         result.notes.append(f"revoked {superseded} superseded token(s)")
 
 
+def _note_surplus_tokens(stale: list[str] | None, result: SeatResult) -> None:
+    """Name tokens of ours the config does not reference.
+
+    Nothing here will clean them up: a seat whose recorded token works
+    returns before the supersede loop, so a surplus survives every future
+    run. They carry the same description as the live one, so this listing
+    is the only thing that can distinguish them — staying quiet is how an
+    operator never learns they exist.
+    """
+    if stale is None or len(stale) <= 1:
+        return
+    result.notes.append(
+        f"{len(stale)} crewlet-engine tokens are active on this bot; only one "
+        "is referenced by the config. Revoke the surplus in Profile > Security "
+        "> Personal Access Tokens, or re-provision the seat with its ${VAR}s "
+        "cleared to replace them all"
+    )
+
+
+async def _recorded_token_works(
+    client: MattermostClient, token: str, user_id: str
+) -> tuple[bool | None, str]:
+    """Whether the value the sink holds authenticates AS THIS BOT.
+
+    ``None`` when that could not be established, with the reason.
+
+    "Does the recorded value work" and "does the bot have any live token
+    of ours" are different questions, and they come apart exactly where
+    it hurts: a run whose mint reached the server but whose response was
+    lost leaves a live token the sink never saw. Reading that token as
+    proof the recorded value is good reports ``exists`` on a seat holding
+    a dead credential — for every run after, since nothing revisits it.
+
+    Only a 401 is treated as proof the value is bad. A 5xx, a proxy, a
+    transport error leave the answer unknown, and re-minting on unknown
+    would destroy a credential that works. An identity MISMATCH is proof
+    of a different mistake — the var holds someone else's token — and is
+    reported as such rather than as a dead one.
+    """
+    probe = client.with_token(token)
+    try:
+        me = await probe.me()
+    except MattermostError as exc:
+        if exc.status == 401:
+            return False, "the server rejected it"
+        return None, str(exc)
+    finally:
+        await probe.close()
+    actual = str((me or {}).get("id") or "")
+    if actual != user_id:
+        return False, (
+            f"it authenticates as {actual or 'an unknown account'}, not this bot"
+        )
+    return True, ""
+
+
+async def _reclaim_lost_mint(
+    client: MattermostClient,
+    user_id: str,
+    *,
+    before: list[str],
+    result: SeatResult,
+) -> None:
+    """Revoke anything of ours that appeared since *before* was taken.
+
+    Called when the mint call failed but may still have created a token
+    whose value never reached this process.  Every outcome is reported:
+    an un-revokable or un-enumerable orphan is precisely the credential
+    nobody can name, and a log line is not a record an operator reads.
+    """
+    ids, unreadable = await _our_token_ids(client, user_id)
+    if ids is None:
+        result.notes.append(
+            f"the mint failed and the token list could not be re-read "
+            f"({unreadable}) — if the server did create one, it is live on the "
+            "account with a value nobody has; check Profile > Security > "
+            "Personal Access Tokens"
+        )
+        return
+    known = set(before)
+    for token_id in (i for i in ids if i not in known):
+        try:
+            await client.revoke_user_access_token(token_id)
+        except MattermostError as exc:
+            result.notes.append(
+                f"the mint failed after the server created {token_id}, and "
+                f"revoking it failed too ({exc}) — it is live on the account "
+                "with a value nobody has; revoke it in Profile > Security > "
+                "Personal Access Tokens"
+            )
+        else:
+            result.notes.append(
+                f"the mint failed after the server created {token_id}; its "
+                "value was never readable, so it was revoked"
+            )
+
+
 async def _roll_back_mint(
     client: MattermostClient,
     sink: TokenSink,
@@ -601,10 +720,24 @@ async def _roll_back_mint(
                 "revoke it in Profile > Security > Personal Access Tokens"
             )
             logger.exception("mattermost_token_revoke_failed", user=user_id)
+    else:
+        # No id came back with the value, so there is nothing to revoke
+        # BY id — and the token is live regardless. Silence here was the
+        # worst case of all: the report showed only the persist failure.
+        result.notes.append(
+            "the token minted for this seat could not be persisted, and the "
+            "server returned no id to revoke it by — it is live on the "
+            "account; revoke it in Profile > Security > Personal Access Tokens"
+        )
     for var in recorded:
         try:
             await sink.discard(var)
-        except Exception:
+        except Exception as exc:
+            result.notes.append(
+                f"${{{var}}} still holds the token that was just revoked "
+                f"({exc}) — a dead token reads exactly like a live one, so "
+                "clear it before the engine next boots"
+            )
             logger.exception("mattermost_token_discard_failed", user=user_id, var=var)
 
 

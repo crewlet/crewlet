@@ -153,7 +153,7 @@ _MAX_SEAT_RESTARTS = 5
 #: consumer ends instead of waiting forever on a dead connection.
 _SOCKET_CLOSED = object()
 
-#: How many unhandled frames the pump may buffer for one seat.
+#: How many unhandled FORWARDABLE frames the pump may buffer for one seat.
 #:
 #: The buffer exists so the socket keeps being drained while the backfill
 #: walks a seat's channels serially (see :meth:`_connect_once`), and it
@@ -163,6 +163,13 @@ _SOCKET_CLOSED = object()
 #: What actually fills this buffer is CONSUMER lag — ``_handle_frame``
 #: publishes onto the event queue, so a stalled or back-pressured broker
 #: makes one seat's buffer grow for as long as the connection lives.
+#:
+#: It counts only what :data:`_FORWARDED_EVENTS` admits, because the pump
+#: applies that filter before queueing.  Counting raw frames would let
+#: presence changes, typing indicators and channel-viewed bookkeeping —
+#: which a busy team emits far faster than posts — exhaust the buffer
+#: during the very backfill it exists to survive, and blocking the pump
+#: there is the stall the buffer was added to prevent.
 #:
 #: 1024 is four times what the server itself is willing to queue for one
 #: connection (``sendQueueSize``), which is the point past which holding
@@ -187,6 +194,25 @@ _MAX_BUFFERED_FRAMES = 1024
 #: post that had aged out, so the behaviour was decided by how much
 #: traffic had passed since the original.
 _FORWARDED_EVENTS = frozenset({"posted"})
+
+
+def _is_forwardable(raw: str | bytes, handle: str = "") -> bool:
+    """Whether a frame can possibly wake an agent.
+
+    The same decision :meth:`MattermostEventFleet._handle_frame` makes,
+    hoisted in front of the pump's buffer so chatter cannot consume it.
+    Cheap: the decode is one small JSON object, and the survivors — the
+    posts — are the rare ones, so the consumer's second decode costs
+    nothing measurable.
+    """
+    try:
+        frame = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.debug("mattermost_ws_undecodable_frame", handle=handle)
+        return False
+    if not isinstance(frame, dict):
+        return False
+    return str(frame.get("event") or "") in _FORWARDED_EVENTS
 
 
 class MattermostAuthError(MattermostError):
@@ -645,14 +671,38 @@ class MattermostEventFleet:
                     await self._handle_frame(seat, raw)
             finally:
                 pump.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await pump
+                # ``asyncio.wait``, not ``await pump``: awaiting the task
+                # re-raises ITS ``CancelledError`` here, which is
+                # indistinguishable from one delivered to THIS task — and
+                # suppressing that turned a seat decommission into a
+                # hang. ``unregister_seat`` cancels the seat task once and
+                # then waits for it; if the cancellation landed while it
+                # was parked here it was swallowed, ``_connect_once``
+                # returned normally, and the loop went back to
+                # reconnecting a seat whose role no longer exists while
+                # the caller waited on it forever. Nothing raises out of
+                # ``asyncio.wait`` except a cancellation of our own.
+                await asyncio.wait({pump})
+                if not pump.cancelled() and pump.exception() is not None:
+                    logger.debug(
+                        "mattermost_pump_failed",
+                        handle=seat.handle,
+                        error=str(pump.exception()),
+                    )
 
     @staticmethod
     async def _pump_frames(
         socket: Any, inbox: asyncio.Queue[Any], handle: str = ""
     ) -> None:
         """Read frames into *inbox* until the socket closes.
+
+        Only frames :data:`_FORWARDED_EVENTS` admits are queued.  The
+        filter used to live in ``_handle_frame``, past the buffer, so the
+        buffer's whole capacity was available to presence changes, typing
+        indicators and channel-viewed bookkeeping — chatter a busy team
+        emits far faster than posts, and none of which survives one line
+        into the consumer.  Filtering here is what makes the bound a
+        count of frames that can actually wake an agent.
 
         Bounded at :data:`_MAX_BUFFERED_FRAMES`; see there for why the
         server's send queue does not bound it for us, and why blocking at
@@ -679,6 +729,8 @@ class MattermostEventFleet:
         cancelled = False
         try:
             async for raw in socket:
+                if not _is_forwardable(raw, handle):
+                    continue
                 if stalled:
                     if inbox.qsize() * 2 <= inbox.maxsize:
                         stalled = False

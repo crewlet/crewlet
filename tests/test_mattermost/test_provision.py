@@ -69,6 +69,16 @@ class FakeClient:
         self._next_token = 0
         #: Tokens the bot already holds, per user id.
         self.existing_tokens: dict[str, list[dict[str, Any]]] = {}
+        #: Recorded values the server REJECTS (401) when used.
+        self.dead_tokens: set[str] = set()
+        #: Recorded values that authenticate as somebody else.
+        self.foreign_tokens: dict[str, str] = {}
+        #: When set, every verification probe fails with this — the
+        #: "cannot tell" answer, distinct from "the token is bad".
+        self.probe_error: MattermostError | None = None
+        #: Who a recorded value authenticates as by default — the bot the
+        #: seat resolved to, i.e. "the recorded token is this seat's".
+        self.probe_user_id: str = ""
         #: Server settings the preflight reads.
         self.service_settings: dict[str, Any] = {
             "EnableBotAccountCreation": True,
@@ -79,6 +89,10 @@ class FakeClient:
 
     async def me(self) -> dict[str, Any]:
         return {"id": "adminid", "roles": self._roles}
+
+    def with_token(self, token: str) -> Any:
+        """Stand-in for the real client's verification seam."""
+        return _TokenProbe(self, token)
 
     async def get_team_by_name(self, name: str) -> dict[str, Any] | None:
         return {"id": TEAM_ID, "name": name} if self._team_found else None
@@ -105,6 +119,9 @@ class FakeClient:
         )
 
     async def list_user_access_tokens(self, user_id: str) -> list[dict[str, Any]]:
+        # Remember who is being asked about, so a verification probe with
+        # no explicit script answers "yes, this is that bot's token".
+        self.probe_user_id = self.probe_user_id or user_id
         return list(self.existing_tokens.get(user_id, []))
 
     async def revoke_user_access_token(self, token_id: str) -> None:
@@ -121,6 +138,7 @@ class FakeClient:
         self, username: str, display_name: str, description: str = ""
     ) -> dict[str, Any]:
         user_id = f"user-{username}"
+        self.probe_user_id = user_id
         self.created_bots.append({"username": username, "display_name": display_name})
         return {"user_id": user_id, "username": username}
 
@@ -151,10 +169,33 @@ class FakeClient:
     ) -> dict[str, Any]:
         self._next_token += 1
         self.tokens_created.append(user_id)
+        self.probe_user_id = user_id
         return {
             "id": f"tok-id-{self._next_token}",
             "token": f"minted-{self._next_token}",
         }
+
+
+class _TokenProbe:
+    """What `client.with_token(value).me()` answers in tests."""
+
+    def __init__(self, parent: FakeClient, token: str) -> None:
+        self._parent = parent
+        self._token = token
+        self.closed = False
+
+    async def me(self) -> dict[str, Any]:
+        if self._parent.probe_error is not None:
+            raise self._parent.probe_error
+        if self._token in self._parent.dead_tokens:
+            raise MattermostError(
+                "Invalid or expired session", method="GET", path="/users/me", status=401
+            )
+        other = self._parent.foreign_tokens.get(self._token)
+        return {"id": other or self._parent.probe_user_id}
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def _org(**identity: Any) -> Any:
@@ -475,6 +516,7 @@ class TestReconcile:
             ]
         )
         client.existing_tokens["user-engineer"] = []
+        client.dead_tokens = {"revoked-value"}
         sink = FakeSink({"MM_TOKEN_ENGINEER": "revoked-value"})
 
         report = await provision(
@@ -495,6 +537,7 @@ class TestReconcile:
         client.existing_tokens["user-engineer"] = [
             {"id": "t1", "description": TOKEN_DESCRIPTION, "is_active": False}
         ]
+        client.dead_tokens = {"stale"}
         sink = FakeSink({"MM_TOKEN_ENGINEER": "stale"})
 
         report = await provision(
@@ -616,6 +659,31 @@ class TestTokenMintIsAllOrNothing:
         assert any("revoked 1 superseded" in n for n in report.seats[0].notes)
 
     @pytest.mark.asyncio
+    async def test_a_superseded_token_that_cannot_be_revoked_is_named(self):
+        """It is live, unreferenced, and carries the same description as
+        the good one — so the report is the only thing that can point at
+        it. The mint itself succeeded, so the seat is not failed."""
+
+        class _StuckRevoke(FakeClient):
+            async def revoke_user_access_token(self, token_id: str) -> None:
+                raise MattermostError("gateway timeout", status=504)
+
+        sink = FakeSink({"MM_IDENTITY": "older-token"})  # MM_MCP empty -> mint
+        client = _StuckRevoke(bots=[_EXISTING_BOT])
+        client.probe_user_id = "existing-id"
+        client.existing_tokens["existing-id"] = [
+            {"id": "tok-old", "description": "crewlet-engine", "is_active": True}
+        ]
+
+        report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
+
+        assert report.seats[0].token_action == "minted"
+        assert any(
+            "could not revoke the superseded token tok-old" in n
+            for n in report.seats[0].notes
+        )
+
+    @pytest.mark.asyncio
     async def test_a_foreign_token_is_never_revoked(self):
         """Only tokens carrying this tool's description are ours."""
         sink = FakeSink({"MM_IDENTITY": "older-token"})
@@ -673,22 +741,107 @@ class TestTokenMintIsAllOrNothing:
         assert client.revoked == ["tok-id-1"]
 
     @pytest.mark.asyncio
-    async def test_an_unreadable_token_list_neither_mints_nor_revokes(self):
-        """Unknowable is not absent: minting would strand the credential
-        the config carries, and revoking would tear down a working seat."""
+    async def test_a_working_recorded_token_settles_it_without_the_list(self):
+        """The recorded VALUE is the thing that matters. Proving it works
+        answers the question the token listing was only ever a proxy
+        for — so an unreadable list is no longer a reason to do anything."""
         sink = FakeSink({"MM_IDENTITY": "live", "MM_MCP": "live"})
         client = _BlindClient()
 
         report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
 
+        assert report.ok
         assert report.seats[0].token_action == "exists"
         assert client.tokens_created == []
         assert client.revoked == []
         assert sink.values == {"MM_IDENTITY": "live", "MM_MCP": "live"}
-        # ...and the operator is told the check did not actually happen,
-        # naming the cause, rather than reading a clean "exists".
+
+    @pytest.mark.asyncio
+    async def test_a_live_token_is_not_proof_the_recorded_one_works(self):
+        """The two questions come apart exactly where it hurts: a run
+        whose mint reached the server but whose response was lost leaves
+        a live token the sink never saw. Reading THAT as proof the
+        recorded value is good reports `exists` on a seat holding a dead
+        credential — on every run after, since nothing revisits it."""
+        sink = FakeSink({"MM_IDENTITY": "orphaned-run", "MM_MCP": "orphaned-run"})
+        client = FakeClient(bots=[_EXISTING_BOT])
+        client.probe_user_id = "existing-id"
+        client.dead_tokens = {"orphaned-run"}
+        client.existing_tokens["existing-id"] = [
+            {"id": "tok-live", "description": "crewlet-engine", "is_active": True}
+        ]
+
+        report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
+
+        assert report.seats[0].token_action == "minted"
+        assert sink.values["MM_IDENTITY"] not in ("", "orphaned-run")
+        assert client.revoked == ["tok-live"]
+        assert any("no longer authenticates" in n for n in report.seats[0].notes)
+
+    @pytest.mark.asyncio
+    async def test_a_token_that_belongs_to_another_account_is_replaced(self):
+        sink = FakeSink({"MM_IDENTITY": "someone-elses", "MM_MCP": "someone-elses"})
+        client = FakeClient(bots=[_EXISTING_BOT])
+        client.probe_user_id = "existing-id"
+        client.foreign_tokens = {"someone-elses": "a-different-account"}
+
+        report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
+
+        assert report.seats[0].token_action == "minted"
         assert any(
-            "could not read the bot's token list" in n and "forbidden" in n
+            "authenticates as a-different-account" in n for n in report.seats[0].notes
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unverifiable_token_is_left_alone(self):
+        """ "Cannot tell" is not "is bad": re-minting on a 5xx would
+        destroy a credential that works."""
+        sink = FakeSink({"MM_IDENTITY": "live", "MM_MCP": "live"})
+        client = FakeClient(bots=[_EXISTING_BOT])
+        client.probe_error = MattermostError("bad gateway", status=502)
+
+        report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
+
+        assert report.ok
+        assert report.seats[0].token_action == "exists"
+        assert client.tokens_created == []
+        assert client.revoked == []
+        assert any("could not verify" in n for n in report.seats[0].notes)
+
+    @pytest.mark.asyncio
+    async def test_vars_holding_different_values_are_replaced_with_one(self):
+        sink = FakeSink({"MM_IDENTITY": "one-token", "MM_MCP": "another-token"})
+        client = FakeClient(bots=[_EXISTING_BOT])
+        client.probe_user_id = "existing-id"
+
+        report = await provision(client, _org_two_vars(), team="nimbus", sink=sink)
+
+        assert report.seats[0].token_action == "minted"
+        assert sink.values["MM_IDENTITY"] == sink.values["MM_MCP"]
+        assert any("hold different values" in n for n in report.seats[0].notes)
+
+    @pytest.mark.asyncio
+    async def test_a_mint_that_fails_after_the_server_created_it_is_reclaimed(self):
+        """create_user_access_token can fail AFTER the server minted the
+        token — a read timeout on the response — and the value is then
+        live on the account and readable by nobody, forever."""
+
+        class _LosesTheResponse(FakeClient):
+            async def create_user_access_token(self, user_id, description):
+                self.existing_tokens.setdefault(user_id, []).append(
+                    {"id": "tok-orphan", "description": description, "is_active": True}
+                )
+                raise MattermostError("transport error: ReadTimeout", status=0)
+
+        client = _LosesTheResponse()
+        report = await provision(
+            client, _org_two_vars(), team="nimbus", sink=FakeSink()
+        )
+
+        assert not report.ok
+        assert client.revoked == ["tok-orphan"]
+        assert any(
+            "value was never readable, so it was revoked" in n
             for n in report.seats[0].notes
         )
 
@@ -1029,6 +1182,51 @@ class TestDecommission:
             sink=FakeSink(),
         )
         assert report.seats == []
+
+
+class TestTheAdminVarIsNeverMintedInto:
+    """A mint overwrites every var it lands in, populated or not. A
+    config pointing a seat's credential key at the OPERATOR's var would
+    replace a system-admin token with a bot's — in the same .env the
+    bootstrap writes both into."""
+
+    @staticmethod
+    def _org_naming_the_admin_var() -> Any:
+        cfg = CompanyConfig.model_validate(
+            {
+                "name": "Acme",
+                "roles": [
+                    {
+                        "name": "Engineer",
+                        "handle": "engineer",
+                        "integrations": {"mattermost": {"bot_token": "${MM_SWE}"}},
+                        "mcp_env": {
+                            "mattermost": {
+                                "MATTERMOST_TOKEN": "${MATTERMOST_ADMIN_TOKEN}"
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+        return config_to_organization(cfg)
+
+    def test_the_scan_excludes_it(self):
+        org = self._org_naming_the_admin_var()
+        assert seat_token_vars(org.all_roles()[0]) == ["MM_SWE"]
+
+    @pytest.mark.asyncio
+    async def test_the_operators_token_survives_a_mint(self):
+        sink = FakeSink({"MATTERMOST_ADMIN_TOKEN": "the-operators-admin-pat"})
+        client = FakeClient()
+
+        report = await provision(
+            client, self._org_naming_the_admin_var(), team="nimbus", sink=sink
+        )
+
+        assert report.ok
+        assert sink.values["MATTERMOST_ADMIN_TOKEN"] == "the-operators-admin-pat"
+        assert sink.values["MM_SWE"] != "the-operators-admin-pat"
 
 
 class TestSeatScanPrecision:

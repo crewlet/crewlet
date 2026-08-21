@@ -125,8 +125,11 @@ class EnvFileSink:
     without the prefix, values may be single- or double-quoted, and an
     update rewrites the line in place *keeping* the ``export`` prefix.
 
-    The file is created ``0600`` and rewritten on every ``record``, so a
-    crash mid-run can never leave a minted-but-unrecorded credential.
+    The file is held at ``0600`` — applied at creation, and re-applied on
+    every write, because the common case is an env file the operator
+    already made by hand under the default umask. Every ``record`` writes
+    through, so a crash mid-run can never leave a minted-but-unrecorded
+    credential.
     """
 
     def __init__(self, path: str) -> None:
@@ -190,15 +193,25 @@ class EnvFileSink:
     async def discard(self, var: str) -> None:
         """Drop ``var``'s lines entirely, rather than blanking them.
 
-        A blank ``VAR=`` still claims the name, and :meth:`existing`
-        would fall through to ``os.environ`` — which, for the operator
-        who sourced the last run's file, still holds the dead value.
-        Removing the lines is what makes the next run re-mint.
+        A blank ``VAR=`` would leave a dead credential's name standing in
+        a secrets file for no reason, and a shell sourcing it would still
+        set the variable — to the empty string, shadowing nothing but
+        claiming the name. Removing the lines leaves the file saying
+        nothing about the var, which is the truth.
 
         *Every* line for the key goes, not just the effective one:
         removing only the last would promote a shadowed assignment, so a
         discard meant to erase a dead token would instead hand the shell
         an older one.
+
+        What this canNOT undo is a value already exported in the calling
+        shell: :meth:`existing` falls back to ``os.environ``, so an
+        operator who ran ``source .env`` before the run still has the
+        dead token in their environment and the next run in that same
+        shell will read the var as provisioned. Removing the line is
+        necessary, not sufficient — which is why the caller that needs
+        this guarantee (Mattermost's token rollback) also revokes the
+        credential upstream, where no shell can resurrect it.
         """
         indexes = self._index.get(var, [])
         if not indexes:
@@ -233,11 +246,19 @@ class EnvFileSink:
         self._write()
 
     def _write(self) -> None:
-        """Rewrite the file, creating it ``0600`` when it is new.
+        """Rewrite the file, holding it at ``0600``.
 
         ``os.open`` with the mode applies it at creation; a plain
         ``open()`` + later ``chmod`` would leave the secrets
         world-readable for the window in between.
+
+        The ``fchmod`` is the other half, and it is the one that matters
+        in practice: ``O_CREAT`` without ``O_EXCL`` ignores the mode
+        argument for a file that already exists, so an ``.env`` the
+        operator created by hand — ``touch``, an editor, ``0644`` under
+        the default umask — kept that mode while every minted personal
+        access token was written into it. Done on the descriptor, not the
+        path, so nothing can be swapped underneath it.
         """
         fd = os.open(
             self._path,
@@ -245,6 +266,7 @@ class EnvFileSink:
             _SECRET_FILE_MODE,
         )
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            os.fchmod(fh.fileno(), _SECRET_FILE_MODE)
             fh.write("\n".join(self._lines) + "\n")
 
 

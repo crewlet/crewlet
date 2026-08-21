@@ -210,6 +210,23 @@ async def test_env_file_sink_record_is_write_through(tmp_path):
     assert EnvFileSink(str(path)).existing("PENDING") == "already-persisted"
 
 
+async def test_env_file_sink_tightens_an_existing_world_readable_file(tmp_path):
+    # O_CREAT without O_EXCL ignores the mode argument for a file that
+    # already exists, so an .env made by hand (touch, an editor, 0644
+    # under the default umask) kept that mode while every minted PAT was
+    # written into it.
+    import stat
+
+    path = tmp_path / ".env"
+    path.write_text("EXISTING=1\n")
+    path.chmod(0o644)
+
+    sink = EnvFileSink(str(path))
+    await sink.record("SECRET_TOKEN", "glpat-xyz")
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 async def test_env_file_sink_creates_file_owner_only(tmp_path):
     # Minted PATs must never be world-readable. The mode is applied at
     # CREATION (os.open), not chmod'd afterwards — a later chmod leaves a

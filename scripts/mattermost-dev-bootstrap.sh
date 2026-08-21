@@ -159,10 +159,34 @@ print(value if isinstance(value, str) else json.dumps(value))
 ' "$1"
 }
 
+api() {
+  # api <token> <curl args...> — one authenticated call.
+  #
+  # The bearer reaches curl on STDIN, through `--config -`, and never as
+  # `-H "Authorization: Bearer ..."`. /proc/<pid>/cmdline is readable by
+  # EVERY account on the host, and these are a system-admin session and a
+  # system-admin personal access token — the same argument that moved the
+  # JSON bodies off argv in json_get, applied to the credential itself.
+  # (/proc/<pid>/environ is 0400, owner-only, which is why the env-file
+  # writer below takes its token that way instead.)
+  local token="$1"
+  shift
+  printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -K - "$@"
+}
+
+#: Page size for the token listing.  Mattermost caps ``per_page`` at 200
+#: and defaults it to 60; asking for the cap and refusing on a FULL page
+#: (see has_token) is what keeps the "does our token already exist?"
+#: answer honest without paging in shell. An account with 200 personal
+#: access tokens is pathological, and refusing there is the same
+#: fail-closed call the read itself makes.
+TOKEN_PAGE_SIZE=200
+
 has_token() {
-  # has_token <description> — reads a personal-access-token list on
-  # STDIN. Exit 0 = one carries this description, 1 = none does,
-  # 2 = the payload is not a token list, so the answer is UNKNOWN.
+  # has_token <description> <page_size> — reads a personal-access-token
+  # list on STDIN. Exit 0 = one carries this description, 1 = none does,
+  # 2 = the answer is UNKNOWN (the payload is not a token list, or it
+  # filled the page so there may be more on the next one).
   #
   # Parsed, not grepped, and three-valued on purpose. A grep for the raw
   # JSON depends on Mattermost keeping its current field order and
@@ -178,14 +202,11 @@ except ValueError:
     sys.exit(2)
 if not isinstance(tokens, list):
     sys.exit(2)
-sys.exit(
-    0
-    if any(
-        isinstance(t, dict) and t.get("description") == sys.argv[1] for t in tokens
-    )
-    else 1
-)
-' "$1"
+if any(isinstance(t, dict) and t.get("description") == sys.argv[1] for t in tokens):
+    sys.exit(0)
+# A full page is not proof of absence — the match may be on the next one.
+sys.exit(2 if len(tokens) >= int(sys.argv[2]) else 1)
+' "$1" "$2"
 }
 
 # ---------------------------------------------------------------------------
@@ -212,8 +233,10 @@ say "Creating the admin account (${ADMIN_USER}) ..."
 create_body=$(printf '{"email":"%s","username":"%s","password":"%s"}' \
   "$ADMIN_EMAIL" "$ADMIN_USER" "$ADMIN_PASS")
 # Tolerate "already exists" — this script is re-runnable.
-curl -fsS -o /dev/null -X POST "${API}/users" \
-  -H 'Content-Type: application/json' -d "$create_body" 2>/dev/null \
+# `-d @-`, not `-d "$create_body"`: the body carries the admin PASSWORD,
+# and argv is world-readable (see api() above).
+printf '%s' "$create_body" | curl -fsS -o /dev/null -X POST "${API}/users" \
+  -H 'Content-Type: application/json' -d @- 2>/dev/null \
   && echo "    created" \
   || echo "    already exists (or signup closed) — continuing"
 
@@ -221,9 +244,16 @@ say "Logging in ..."
 login_body=$(printf '{"login_id":"%s","password":"%s"}' "$ADMIN_USER" "$ADMIN_PASS")
 # The session token comes back in a RESPONSE HEADER, not the body.
 headers=$(mktemp)
-user_json=$(curl -fsS -D "$headers" -X POST "${API}/users/login" \
-  -H 'Content-Type: application/json' -d "$login_body")
-SESSION=$(awk 'BEGIN{IGNORECASE=1} /^token:/ {print $2}' "$headers" | tr -d '\r')
+user_json=$(printf '%s' "$login_body" | curl -fsS -D "$headers" \
+  -X POST "${API}/users/login" -H 'Content-Type: application/json' -d @-)
+# Case-insensitive with sed, not `awk BEGIN{IGNORECASE=1}`: IGNORECASE is
+# a GAWK extension. mawk (the default awk on Debian and Ubuntu) and BSD
+# awk (macOS) treat it as an ordinary variable and leave the match
+# case-sensitive — and Go canonicalises the header to `Token:`, so on the
+# distributions this script targets it matched nothing and every run
+# failed at "Login failed", with the server perfectly healthy.
+SESSION=$(tr -d '\r' < "$headers" \
+  | sed -n 's/^[Tt][Oo][Kk][Ee][Nn]:[[:space:]]*//p' | head -n 1)
 rm -f "$headers"
 if [ -z "$SESSION" ]; then
   echo "Login failed for ${ADMIN_USER}. If you changed the password after a" >&2
@@ -232,8 +262,6 @@ if [ -z "$SESSION" ]; then
 fi
 USER_ID=$(printf '%s' "$user_json" | json_get id)
 echo "    logged in as ${ADMIN_USER} (${USER_ID})"
-
-auth=(-H "Authorization: Bearer ${SESSION}")
 
 # ---------------------------------------------------------------------------
 # 3. A durable personal access token for the provisioner
@@ -249,7 +277,8 @@ TOKEN_DESC="crewlet-dev-bootstrap"
 # none", and the branch below would mint a second admin PAT — whose
 # value Mattermost reveals exactly once — leaving a live, unrecoverable
 # credential behind every transient error.
-if ! existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens"); then
+if ! existing=$(api "$SESSION" -fsS \
+    "${API}/users/${USER_ID}/tokens?page=0&per_page=${TOKEN_PAGE_SIZE}"); then
   echo "Could not list ${ADMIN_USER}'s personal access tokens." >&2
   echo "Refusing to mint one blind: Mattermost shows a token's value only" >&2
   echo "at creation, so a duplicate minted here would be a live admin" >&2
@@ -259,9 +288,13 @@ if ! existing=$(curl -fsS "${auth[@]}" "${API}/users/${USER_ID}/tokens"); then
   exit 1
 fi
 token_exists=0
-printf '%s' "$existing" | has_token "$TOKEN_DESC" || token_exists=$?
+printf '%s' "$existing" | has_token "$TOKEN_DESC" "$TOKEN_PAGE_SIZE" \
+  || token_exists=$?
 if [ "$token_exists" -gt 1 ]; then
-  echo "Mattermost did not answer with a token list for ${ADMIN_USER}." >&2
+  echo "Could not tell whether ${ADMIN_USER} already has a" >&2
+  echo "'${TOKEN_DESC}' token — Mattermost did not answer with a token" >&2
+  echo "list, or returned a full page of ${TOKEN_PAGE_SIZE} and the answer" >&2
+  echo "may be on the next one." >&2
   echo "Refusing to mint one blind, for the same reason as above." >&2
   exit 1
 fi
@@ -279,8 +312,7 @@ if [ "$token_exists" -eq 0 ]; then
   # revoked in the System Console, or one minted against a different
   # server — and every step below would then fail with a bare 401 far
   # from the cause.
-  if ! curl -fsS -o /dev/null -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-      "${API}/users/me"; then
+  if ! api "$ADMIN_TOKEN" -fsS -o /dev/null "${API}/users/me"; then
     echo "    ...but the MATTERMOST_ADMIN_TOKEN in ${ENV_FILE} does not" >&2
     echo "    authenticate — it was revoked, or belongs to another server." >&2
     echo "    Revoke the '${TOKEN_DESC}' token in Profile > Security >" >&2
@@ -290,7 +322,7 @@ if [ "$token_exists" -eq 0 ]; then
   fi
   echo "    reusing the value in ${ENV_FILE}"
 else
-  token_json=$(curl -fsS -X POST "${API}/users/${USER_ID}/tokens" "${auth[@]}" \
+  token_json=$(api "$SESSION" -fsS -X POST "${API}/users/${USER_ID}/tokens" \
     -H 'Content-Type: application/json' \
     -d "{\"description\":\"${TOKEN_DESC}\"}")
   ADMIN_TOKEN=$(printf '%s' "$token_json" | json_get token)
@@ -318,10 +350,16 @@ fi
 say "Writing MATTERMOST_URL + MATTERMOST_PUBLIC_URL + MATTERMOST_ADMIN_TOKEN to ${ENV_FILE}"
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
-python3 - "$ENV_FILE" "$URL" "$ADMIN_TOKEN" <<'PY'
-import pathlib, sys
+# The token travels in the ENVIRONMENT, not argv: /proc/<pid>/environ is
+# 0400 (owner only) while /proc/<pid>/cmdline is world-readable — the same
+# reason api() puts the bearer on curl's stdin.
+MM_ENV_PATH="$ENV_FILE" MM_SITE_URL="$URL" MM_ADMIN_TOKEN="$ADMIN_TOKEN" \
+python3 - <<'PY'
+import os, pathlib
 
-path, url, token = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+path = pathlib.Path(os.environ["MM_ENV_PATH"])
+url = os.environ["MM_SITE_URL"]
+token = os.environ["MM_ADMIN_TOKEN"]
 values = {
     "MATTERMOST_URL": url,
     "MATTERMOST_PUBLIC_URL": url,
@@ -342,9 +380,16 @@ for i, line in enumerate(lines):
 lines.extend(f"{k}={v}" for k, v in values.items() if k not in seen)
 # Atomic: a crash mid-write must not leave a truncated env file holding
 # the only copy of a token Mattermost will never show again.
+#
+# Created 0600 by os.open, never written-then-chmod'd: write_text() makes
+# the file 0666 & ~umask (0644 on a normal box), so the admin token was
+# world-readable for the window in between — and permanently, at 0644, if
+# the run died between the two calls. Same rule as EnvFileSink._write in
+# src/crewlet/provisioning.py: the mode goes on at creation.
 tmp = path.with_name(path.name + ".tmp")
-tmp.write_text("\n".join(lines) + "\n")
-tmp.chmod(0o600)
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(lines) + "\n")
 tmp.replace(path)
 PY
 
@@ -422,16 +467,15 @@ if [ "${CURRENT_SITE_URL%/}" != "$URL" ]; then
   # PATCH verb here, and `PUT /config` would demand — and clobber — the
   # whole config document.
   if [ -z "$fixed" ] && [ "$repairable" = "1" ]; then
-    env_report=$(curl -fsS "${API}/config/environment" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || echo '{}')
+    env_report=$(api "$ADMIN_TOKEN" -fsS "${API}/config/environment" \
+      2>/dev/null || echo '{}')
     env_managed=$(printf '%s' "$env_report" | json_get ServiceSettings.SiteURL)
     if [ "$env_managed" = "true" ]; then
       warn "SiteURL is set from the environment (MM_SERVICESETTINGS_SITEURL);"
       warn "the API cannot change it — the container has to be recreated."
     else
       say "Patching ServiceSettings.SiteURL over the API"
-      if curl -fsS -o /dev/null -X PUT "${API}/config/patch" \
-          -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+      if api "$ADMIN_TOKEN" -fsS -o /dev/null -X PUT "${API}/config/patch" \
           -H 'Content-Type: application/json' \
           -d "{\"ServiceSettings\":{\"SiteURL\":\"${URL}\"}}" 2>/dev/null; then
         CURRENT_SITE_URL=$(site_url)
@@ -479,9 +523,9 @@ fi
 # 6. Team + channels
 # ---------------------------------------------------------------------------
 say "Creating the '${TEAM}' team ..."
-team_json=$(curl -fsS "${auth[@]}" "${API}/teams/name/${TEAM}" 2>/dev/null || echo '')
+team_json=$(api "$SESSION" -fsS "${API}/teams/name/${TEAM}" 2>/dev/null || echo '')
 if [ -z "$team_json" ]; then
-  team_json=$(curl -fsS -X POST "${API}/teams" "${auth[@]}" \
+  team_json=$(api "$SESSION" -fsS -X POST "${API}/teams" \
     -H 'Content-Type: application/json' \
     -d "{\"name\":\"${TEAM}\",\"display_name\":\"${TEAM_DISPLAY}\",\"type\":\"O\"}")
   echo "    created"
@@ -491,18 +535,18 @@ fi
 TEAM_ID=$(printf '%s' "$team_json" | json_get id)
 
 # The admin has to be IN the team to administer its channels.
-curl -fsS -o /dev/null -X POST "${API}/teams/${TEAM_ID}/members" "${auth[@]}" \
+api "$SESSION" -fsS -o /dev/null -X POST "${API}/teams/${TEAM_ID}/members" \
   -H 'Content-Type: application/json' \
   -d "{\"team_id\":\"${TEAM_ID}\",\"user_id\":\"${USER_ID}\"}" 2>/dev/null || true
 
 say "Creating channels: ${CHANNELS}"
 for ch in $CHANNELS; do
-  if curl -fsS -o /dev/null "${auth[@]}" \
+  if api "$SESSION" -fsS -o /dev/null \
       "${API}/teams/${TEAM_ID}/channels/name/${ch}" 2>/dev/null; then
     echo "    ${ch}: exists"
     continue
   fi
-  curl -fsS -o /dev/null -X POST "${API}/channels" "${auth[@]}" \
+  api "$SESSION" -fsS -o /dev/null -X POST "${API}/channels" \
     -H 'Content-Type: application/json' \
     -d "{\"team_id\":\"${TEAM_ID}\",\"name\":\"${ch}\",\"display_name\":\"${ch}\",\"type\":\"O\"}"
   echo "    ${ch}: created"
