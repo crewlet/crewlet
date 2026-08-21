@@ -660,10 +660,21 @@ async def spawn_subagent_batch(
 
     semaphore = asyncio.Semaphore(max(1, max_parallel))
 
-    async def _run_one(task: SubagentTask) -> SubagentResult:
+    # Per-task result slots, filled as each child settles.
+    #
+    # The aggregate timeout below cancels the ``gather``, which discards
+    # the return value of every child — including the ones that had
+    # already FINISHED. Reporting those as timed-out with empty text
+    # throws away work that completed and was paid for: the tokens are
+    # spent either way, and the planner is told a child produced nothing
+    # when it produced an answer. A slot each is what lets the timeout
+    # path tell the two apart.
+    settled: list[SubagentResult | None] = [None] * len(tasks)
+
+    async def _run_one(index: int, task: SubagentTask) -> SubagentResult:
         async with semaphore:
             try:
-                return await spawn_subagent(
+                result = await spawn_subagent(
                     parent_turn=parent_turn,
                     task_prompt=task.task_prompt,
                     system_prompt=task.system_prompt,
@@ -692,7 +703,7 @@ async def spawn_subagent_batch(
                 )
             except Exception as exc:
                 logger.exception("subagent_batch_child_failed")
-                return SubagentResult(
+                result = SubagentResult(
                     text="",
                     turns_used=0,
                     tokens_used=0,
@@ -700,10 +711,12 @@ async def spawn_subagent_batch(
                     timed_out=isinstance(exc, TimeoutError),
                     error=str(exc)[:500],
                 )
+            settled[index] = result
+            return result
 
     try:
         results = await asyncio.wait_for(
-            asyncio.gather(*(_run_one(task) for task in tasks)),
+            asyncio.gather(*(_run_one(i, task) for i, task in enumerate(tasks))),
             timeout=batch_timeout_seconds,
         )
     except TimeoutError:
@@ -716,8 +729,14 @@ async def spawn_subagent_batch(
             batch_timeout_seconds=batch_timeout_seconds,
             task_count=len(tasks),
         )
+        # Children that already settled keep their real result; only the
+        # ones still running when the deadline landed are reported as
+        # timed out. Overwriting the lot would discard answers that were
+        # produced and paid for.
         results = [
-            SubagentResult(
+            done
+            if (done := settled[index]) is not None
+            else SubagentResult(
                 text="",
                 turns_used=0,
                 tokens_used=0,
@@ -725,7 +744,7 @@ async def spawn_subagent_batch(
                 timed_out=True,
                 error=f"batch wall-clock exceeded {batch_timeout_seconds}s",
             )
-            for _ in tasks
+            for index in range(len(tasks))
         ]
 
     # Publish the batch summary event for both the normal and the
