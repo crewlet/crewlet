@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -533,7 +536,28 @@ def test_health_flips_to_true_after_priming(
 # ── webhook unconfigured early-out ───────────────────────────────────
 
 
-def test_jira_webhook_rejected_when_unconfigured(client: TestClient) -> None:
+_JIRA_SECRET = "jira-webhook-secret"
+
+
+def _signed_jira(body: dict) -> tuple[bytes, dict[str, str]]:
+    """A correctly-signed Jira delivery.
+
+    The signature check runs at the route, ahead of the unconfigured
+    gate — deliberately, and the same order the Plane route documents.
+    So a test about the CONFIG gate has to get past the signature first,
+    or it asserts 503 while actually receiving a 500 about a missing
+    secret.
+    """
+    raw = json.dumps(body).encode()
+    signature = (
+        "sha256=" + hmac.new(_JIRA_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+    )
+    return raw, {"content-type": "application/json", "x-hub-signature": signature}
+
+
+def test_jira_webhook_rejected_when_unconfigured(
+    queue: _MockQueue, store: MagicMock
+) -> None:
     """An unconfigured process answers 503 so the sender RETRIES.
 
     The old 200-and-drop told Jira the delivery had been accepted while
@@ -541,10 +565,14 @@ def test_jira_webhook_rejected_when_unconfigured(client: TestClient) -> None:
     deployment, and silent unrecoverable loss the moment one process of
     several has simply not caught up yet.
     """
-    resp = client.post(
-        "/webhooks/jira",
-        json={"webhookEvent": "jira:issue_created", "issue": {}},
+    app = create_app(
+        event_queue=queue,
+        bootstrap=_bootstrap(),
+        company_config_store=store,
+        jira_webhook_secret=_JIRA_SECRET,
     )
+    raw, headers = _signed_jira({"webhookEvent": "jira:issue_created", "issue": {}})
+    resp = TestClient(app).post("/webhooks/jira", content=raw, headers=headers)
     assert resp.status_code == 503
     body = resp.json()
     assert body["status"] == "unavailable"
@@ -555,23 +583,32 @@ def test_jira_webhook_rejected_when_unconfigured(client: TestClient) -> None:
 def test_webhook_passes_through_after_configured(
     queue: _MockQueue, store: MagicMock
 ) -> None:
-    """Once primed, webhook routes process normally (no drop)."""
+    """Once primed, webhook routes process normally (no drop).
+
+    The revision carries the Jira webhook secret, so this also covers the
+    projection that puts it on ``app.state``: the route verifies against
+    whatever the active config resolved, and a secret the refresher
+    failed to project would surface here as a 500.
+    """
     import asyncio
 
     from crewlet.api.app import attach_config_refresh
     from tests.test_api.helpers import create_app
 
-    store.get_active.return_value = _make_revision({"name": "Acme"})
+    store.get_active.return_value = _make_revision(
+        {
+            "name": "Acme",
+            "integrations": {"jira": {"webhook_secret": _JIRA_SECRET}},
+        }
+    )
     app = create_app(
         event_queue=queue,
         bootstrap=_bootstrap(),
         company_config_store=store,
     )
     asyncio.new_event_loop().run_until_complete(attach_config_refresh(app))
-    resp = TestClient(app).post(
-        "/webhooks/jira",
-        json={"webhookEvent": "jira:issue_created", "issue": {}},
-    )
+    raw, headers = _signed_jira({"webhookEvent": "jira:issue_created", "issue": {}})
+    resp = TestClient(app).post("/webhooks/jira", content=raw, headers=headers)
     assert resp.status_code == 200
     assert resp.json().get("status") != "dropped"
 

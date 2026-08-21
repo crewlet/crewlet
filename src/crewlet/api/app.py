@@ -70,6 +70,7 @@ def create_app(
     gitlab_signing_secret: str | None = None,
     plane_webhook_secret: str | None = None,
     confluence_webhook_secret: str | None = None,
+    jira_webhook_secret: str | None = None,
     slack_signing_secrets: dict[str, str] | None = None,
     sandbox_otel_receiver: Any = None,
     forge_app_id: str = "",
@@ -117,6 +118,9 @@ def create_app(
         returns 500.  Cloud events arrive through the Forge app on
         ``/webhooks/forge`` and carry a JWT instead, so they are
         unaffected by this.
+    jira_webhook_secret:
+        The same, for ``POST /webhooks/jira`` — one scheme, one header,
+        one verifier.
     slack_signing_secrets:
         ``{handle: signing_secret}`` for Slack-enabled agent seats, used
         to verify inbound Slack webhooks at the edge.  Slack is the only
@@ -249,6 +253,7 @@ def create_app(
     app.state.gitlab_signing_secret = gitlab_signing_secret
     app.state.plane_webhook_secret = plane_webhook_secret
     app.state.confluence_webhook_secret = confluence_webhook_secret
+    app.state.jira_webhook_secret = jira_webhook_secret
     # Per-AGENT, unlike every other inbound secret: one Slack app per
     # seat means one signing secret per seat, so the edge needs a map
     # keyed by the handle the webhook URL path carries.

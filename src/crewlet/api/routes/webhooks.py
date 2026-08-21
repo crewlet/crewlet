@@ -385,8 +385,22 @@ def _build_confluence_summary(body: dict[str, Any]) -> str:
 
 
 async def jira_webhook(request: Request) -> JSONResponse:
-    """POST /webhooks/jira — publish to EventQueue."""
+    """POST /webhooks/jira — verify then publish to EventQueue.
+
+    Verified at the route for the same reason its Confluence twin is:
+    this path is exempt from the API's bearer token because it
+    authenticates by provider HMAC, so the check has to run before the
+    delivery is recorded and published. The ``JiraTransport`` keeps its
+    own check on the consume side as defence in depth.
+    """
     body_raw = await request.body()
+
+    refused = _atlassian_signature_failure(
+        request, body_raw, source="jira", state_attr="jira_webhook_secret"
+    )
+    if refused is not None:
+        return refused
+
     body_data = _parse_json_object(body_raw)
     if body_data is None:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
@@ -951,23 +965,54 @@ async def plane_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
-# ``sha256=`` + 64 hex, the Data Center ``X-Hub-Signature`` shape. Same
-# prefilter rationale as ``_PLANE_SIGNATURE_RE``: keeps the compare
-# total, so a header the client made up cannot turn a 401 into a 500.
-_CONFLUENCE_SIGNATURE_RE = re.compile(r"sha256=[0-9a-fA-F]{64}")
+# ``sha256=`` + 64 hex, the ``X-Hub-Signature`` shape Atlassian Data
+# Center uses for both Jira and Confluence. Same prefilter rationale as
+# ``_PLANE_SIGNATURE_RE``: keeps the compare total, so a header the
+# client made up cannot turn a 401 into a 500.
+_ATLASSIAN_SIGNATURE_RE = re.compile(r"sha256=[0-9a-fA-F]{64}")
 
 
-def _verify_confluence_signature(
+def _verify_atlassian_signature(
     body_raw: bytes, webhook_secret: str, signature: str
 ) -> bool:
-    """``X-Hub-Signature`` = ``sha256=`` + HMAC-SHA256 of the raw body."""
-    if _CONFLUENCE_SIGNATURE_RE.fullmatch(signature) is None:
+    """``X-Hub-Signature`` = ``sha256=`` + HMAC-SHA256 of the raw body.
+
+    One implementation for Jira and Confluence, because it is one
+    scheme. Two copies of a signature check is how they come to disagree
+    — the same reasoning ``_verify_slack_signature`` gives for delegating
+    to the transport rather than reimplementing Slack's.
+    """
+    if _ATLASSIAN_SIGNATURE_RE.fullmatch(signature) is None:
         return False
     expected = (
         "sha256="
         + hmac.new(webhook_secret.encode("utf-8"), body_raw, hashlib.sha256).hexdigest()
     )
     return hmac.compare_digest(expected, signature)
+
+
+def _atlassian_signature_failure(
+    request: Request, body_raw: bytes, *, source: str, state_attr: str
+) -> JSONResponse | None:
+    """The shared route-level gate, or ``None`` when the request passes.
+
+    Both Atlassian routes sit in the API's unguarded set, exempt from the
+    bearer token on the grounds that they authenticate by provider HMAC —
+    so this runs before the delivery is recorded or published, which is
+    where GitHub, GitLab and Plane put theirs.
+    """
+    secret: str | None = getattr(request.app.state, state_attr, None)
+    if not secret:
+        logger.error(f"{source}_webhook_no_secret_configured")
+        return JSONResponse(
+            {"error": "webhook signature verification not configured"},
+            status_code=500,
+        )
+    signature = request.headers.get("x-hub-signature", "")
+    if not signature or not _verify_atlassian_signature(body_raw, secret, signature):
+        logger.warning(f"{source}_webhook_signature_invalid")
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
+    return None
 
 
 async def confluence_webhook(request: Request) -> JSONResponse:
@@ -987,21 +1032,11 @@ async def confluence_webhook(request: Request) -> JSONResponse:
     """
     body_raw = await request.body()
 
-    webhook_secret: str | None = getattr(
-        request.app.state, "confluence_webhook_secret", None
+    refused = _atlassian_signature_failure(
+        request, body_raw, source="confluence", state_attr="confluence_webhook_secret"
     )
-    if not webhook_secret:
-        logger.error("confluence_webhook_no_secret_configured")
-        return JSONResponse(
-            {"error": "webhook signature verification not configured"},
-            status_code=500,
-        )
-    signature = request.headers.get("x-hub-signature", "")
-    if not signature or not _verify_confluence_signature(
-        body_raw, webhook_secret, signature
-    ):
-        logger.warning("confluence_webhook_signature_invalid")
-        return JSONResponse({"error": "invalid signature"}, status_code=401)
+    if refused is not None:
+        return refused
 
     body_data = _parse_json_object(body_raw)
     if body_data is None:

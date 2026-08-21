@@ -16,7 +16,7 @@ integrations:
     url: "${JIRA_URL}"                    # Jira instance URL
     token: "${JIRA_API_TOKEN}"            # API token (admin/service account)
     email: "${JIRA_EMAIL}"                # Cloud only — admin email for Basic Auth
-    webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
+    webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # Data Center: required, HMAC-SHA256
 
 mcp_servers:
   - name: atlassian                     # shared by Jira + Confluence (one mcp-atlassian)
@@ -86,7 +86,9 @@ Events are delivered via Forge Remote to `POST /webhooks/forge`. The Forge platf
 3. Select events: Issue created, updated, commented
 4. Set a **Secret** for HMAC-SHA256 signature verification
 
-When `webhook_secret` is configured, inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header. Invalid or missing signatures are rejected.
+Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header, at the route, before the delivery is recorded or published — the same point at which the GitHub, GitLab and Plane webhooks verify theirs. `POST /webhooks/jira` is exempt from the API's bearer token precisely *because* it authenticates by provider HMAC, so the check belongs there. Invalid or missing signatures are rejected with `401`.
+
+`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers `500`, exactly as its peers do, rather than accepting deliveries it cannot verify. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 
 ### Programmatic Transport Setup
 

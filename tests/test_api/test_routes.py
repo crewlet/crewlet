@@ -798,12 +798,42 @@ class TestEventEndpoints:
 
 
 class TestJiraWebhook:
+    """Jira Data Center webhook — the same ``X-Hub-Signature`` scheme as
+    Confluence, verified at the route ahead of the work."""
+
+    SECRET = "jira-webhook-secret"
+
+    @pytest.fixture
+    def jira_app(self, event_queue: MockEventQueue, event_store: MemoryEventStore):
+        return create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            jira_webhook_secret=self.SECRET,
+        )
+
+    @pytest.fixture
+    def jira_client(self, jira_app) -> TestClient:
+        return TestClient(jira_app, raise_server_exceptions=False)
+
+    def _sign(self, body: bytes) -> str:
+        digest = hmac.new(self.SECRET.encode(), body, hashlib.sha256).hexdigest()
+        return "sha256=" + digest
+
+    def _headers(self, body: bytes) -> dict[str, str]:
+        return {
+            "content-type": "application/json",
+            "x-hub-signature": self._sign(body),
+        }
+
     def test_jira_webhook_publishes(
-        self, client: TestClient, event_queue: MockEventQueue
+        self, jira_client: TestClient, event_queue: MockEventQueue
     ):
-        resp = client.post(
-            "/webhooks/jira",
-            json={"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-1"}},
+        body = json.dumps(
+            {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-1"}}
+        ).encode()
+        resp = jira_client.post(
+            "/webhooks/jira", content=body, headers=self._headers(body)
         )
         assert resp.status_code == 200
 
@@ -816,13 +846,36 @@ class TestJiraWebhook:
         assert "body_raw_b64" in event.payload
         assert event.payload["body"]["issue"]["key"] == "PROJ-1"
 
-    def test_jira_webhook_invalid_json(self, client: TestClient):
-        resp = client.post(
-            "/webhooks/jira",
-            content=b"not json",
-            headers={"content-type": "application/json"},
+    def test_jira_webhook_invalid_json(self, jira_client: TestClient):
+        body = b"not json"
+        resp = jira_client.post(
+            "/webhooks/jira", content=body, headers=self._headers(body)
         )
         assert resp.status_code == 400
+
+    def test_a_bad_signature_publishes_nothing(
+        self, jira_client: TestClient, event_queue: MockEventQueue
+    ):
+        body = json.dumps({"webhookEvent": "jira:issue_updated"}).encode()
+        resp = jira_client.post(
+            "/webhooks/jira",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": "sha256=" + "0" * 64,
+            },
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == [], (
+            "an unverified delivery reached the inbound topic"
+        )
+
+    def test_no_secret_configured_returns_500(
+        self, client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = client.post("/webhooks/jira", json={"webhookEvent": "x"})
+        assert resp.status_code == 500
+        assert event_queue.published == []
 
 
 class TestSlackWebhook:
@@ -1649,11 +1702,26 @@ class TestClientDisconnect:
 
 class TestWebhookPersistence:
     def test_jira_webhook_persists_event(
-        self, client: TestClient, event_store: MemoryEventStore
+        self, event_queue: MockEventQueue, event_store: MemoryEventStore
     ):
-        client.post(
+        secret = "persist-test-secret"
+        app = create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            jira_webhook_secret=secret,
+        )
+        body = json.dumps({"webhookEvent": "jira:issue_created"}).encode()
+        signature = (
+            "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        )
+        TestClient(app, raise_server_exceptions=False).post(
             "/webhooks/jira",
-            json={"webhookEvent": "jira:issue_created"},
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature": signature,
+            },
         )
         loop = asyncio.new_event_loop()
         events = loop.run_until_complete(event_store.list_events())
