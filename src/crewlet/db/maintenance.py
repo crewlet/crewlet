@@ -171,7 +171,7 @@ class MaintenanceWorker:
         if self._running:
             return
         self._running = True
-        self._task = asyncio.get_event_loop().create_task(
+        self._task = asyncio.get_running_loop().create_task(
             self._run_loop(), name="maintenance"
         )
         logger.info(

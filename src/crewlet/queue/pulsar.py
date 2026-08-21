@@ -495,6 +495,23 @@ class PulsarEventQueue:
         """
         return set(self._paused_subs.get((topic, group), ()))
 
+    def quiescing(self, topic: str, group: str) -> bool:
+        """Whether this process has stopped taking work on a subscription.
+
+        The twin of :meth:`~crewlet.queue.memory.MemoryEventQueue.quiescing`,
+        and public for the same reason as :meth:`pause_holds`: a quiesced
+        attachment is a seat that is owned, attached and silent, which is
+        indistinguishable from a healthy idle one from outside. Distinct
+        from a pause — a pause is reason-counted and released by the
+        subsystem that took it; a quiesce is cleared by
+        :meth:`unquiesce` or by detaching.
+        """
+        return any(
+            s.quiescing
+            for s in self._subscriptions
+            if s.topic == topic and s.group == group
+        )
+
     async def pause_topic(
         self, topic: str, group: str, *, reason: str = "default"
     ) -> None:

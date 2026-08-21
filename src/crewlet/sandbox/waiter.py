@@ -101,7 +101,7 @@ class SandboxWaiter:
         if self._running:
             return
         self._running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run_loop(), name="sandbox_waiter")
         logger.info("sandbox_waiter_started", poll_seconds=self._poll_seconds)
 

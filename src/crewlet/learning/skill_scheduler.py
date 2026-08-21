@@ -102,7 +102,7 @@ class SkillClusteringScheduler:
         if self._running:
             return
         self._running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run_loop(), name="skill-scheduler")
         logger.info(
             "skill_scheduler_started",
