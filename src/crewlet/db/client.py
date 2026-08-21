@@ -236,5 +236,23 @@ class Database:
             try:
                 yield conn
             finally:
-                await conn.fetchval("SELECT pg_advisory_unlock($1)", key)
-                logger.debug("advisory_lock_released", key=key)
+                # The unlock must never replace the block's own
+                # exception.  A migration that fails because the
+                # connection dropped mid-statement would otherwise
+                # surface as ``ConnectionDoesNotExistError`` from *this*
+                # line, and the operator would never see which file
+                # failed or why.  Losing the unlock costs nothing that
+                # matters: the lock is session-scoped, so a backend that
+                # cannot answer has already released it by dying.
+                try:
+                    released = await conn.fetchval("SELECT pg_advisory_unlock($1)", key)
+                except Exception as exc:
+                    logger.debug("advisory_unlock_failed", key=key, error=str(exc))
+                else:
+                    if not released:
+                        # We held it on entry, so a false here means the
+                        # session was reset underneath us — worth saying,
+                        # since the next waiter's timeout would otherwise
+                        # be the first hint.
+                        logger.warning("advisory_lock_not_held_at_release", key=key)
+                    logger.debug("advisory_lock_released", key=key)
