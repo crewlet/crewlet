@@ -3091,6 +3091,16 @@ class Engine:
                     event_type=events[0].type,
                     event_count=len(events),
                 )
+                # Same edge the ownership branch above records, and for
+                # the same reason: this deferral quiesces the consumer,
+                # and the resume hook is edge-triggered on a set the
+                # deferral would otherwise never enter. `SeatLost` is
+                # not always a real handoff — the in-turn fence trips in
+                # the ordinary freshness window too, and there the node
+                # still holds the seat, so nothing detaches and nothing
+                # resumes. The seat goes deaf on a healthy node.
+                if self._seat_host is not None:
+                    self._seat_host.note_delivery_deferred(agent.handle)
                 raise DeferDelivery(str(exc)) from exc
 
         return handle

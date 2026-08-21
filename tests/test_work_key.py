@@ -217,3 +217,33 @@ class TestTheEngineBindsIt:
 
 async def _done() -> str:
     return "ok"
+
+
+def test_every_deferral_records_the_edge_that_resumes_it() -> None:
+    """A `DeferDelivery` quiesces the seat's consumer, and the resume
+    hook is edge-triggered on a set the deferral must enter.
+
+    Miss the call on one path and that path's seats go permanently deaf
+    on a healthy node — silently, with the lease still held and still
+    renewed. It shipped that way on the ownership branch, and again on
+    the `SeatLost` branch after the first was fixed, because nothing
+    tied the two together. This does.
+
+    Structural rather than behavioural on purpose: a new defer path is
+    exactly the thing a behavioural test cannot know to cover.
+    """
+    engine_src = (_SRC / "engine.py").read_text().splitlines()
+    misses: list[str] = []
+    for i, line in enumerate(engine_src):
+        if "raise DeferDelivery(" not in line:
+            continue
+        # The bookkeeping sits just above the raise, inside the same
+        # branch. Twelve lines is generous for a comment plus the call.
+        window = "\n".join(engine_src[max(0, i - 12) : i])
+        if "note_delivery_deferred" not in window:
+            misses.append(f"engine.py:{i + 1}: {line.strip()}")
+    assert not misses, (
+        "these deferrals quiesce a consumer without recording the edge "
+        "that resumes it, so the seat goes deaf on a healthy node:\n"
+        + "\n".join(misses)
+    )
