@@ -32,6 +32,36 @@ jobs:
         # Every interpreter the package advertises a classifier for. Adding one
         # here and to the classifiers in pyproject.toml is the same change.
         python-version: ["3.12", "3.13"]
+    services:
+      # The storage contract suites are parameterised over three backends: the
+      # memory twin, a SQL fake, and a REAL PostgreSQL — and the third one only
+      # appears when CREWLET_TEST_DSN is set. Without this service every one of
+      # those cases skipped here, silently, which is exactly the failure mode
+      # CONTRIBUTING warns about ("a skip is not a pass"): the fake can confirm
+      # that SQL means what its author thought, but only a server rejects a
+      # statement it cannot parse. Leases, the config plane, the completion
+      # ledger, budgets, webhook dedupe, rate limits and A2A channels are all
+      # SQL, and all of them coordinate a fleet.
+      #
+      # Same image as the bundled docker-compose.yml, which is where its
+      # version is pinned and where Dependabot proposes the pg major — service
+      # images in a workflow are not a surface Dependabot watches, so tracking
+      # compose keeps one source of truth rather than adding an unwatched one.
+      postgres:
+        image: timescale/timescaledb:latest-pg18
+        env:
+          POSTGRES_USER: crewlet
+          POSTGRES_PASSWORD: crewlet
+          POSTGRES_DB: crewlet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crewlet"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      CREWLET_TEST_DSN: postgresql://crewlet:crewlet@localhost:5432/crewlet
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -39,7 +69,41 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: pip install -e ".[dev,all]"
+      - name: Apply database migrations
+        # The pgvector columns bake their width into the DDL and the sequence
+        # is forward-only, so the migrator refuses to guess one: without a
+        # width it stops before them and everything after stays pending. Any
+        # width works for the suite — the tests exercise the SQL, not the
+        # embeddings — so this names the model default from config.py.
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+
+          from crewlet.db.client import Database
+          from crewlet.db.migrator import migrate
+
+
+          async def main() -> None:
+              db = await Database.connect(os.environ["CREWLET_TEST_DSN"])
+              try:
+                  applied = await migrate(
+                      db, template_vars={"embedding_dimensions": "1536"}
+                  )
+              finally:
+                  await db.close()
+              print(f"applied {len(applied)} migrations")
+
+
+          asyncio.run(main())
+          PY
       - name: Run tests
+        # Pulsar is deliberately NOT here. The broker-behaviour suite and the
+        # real-broker half of tests/test_fleet still skip in CI: a standalone
+        # broker is a minute of startup and a service container cannot supply
+        # the command it needs, so those stay a `docker compose up -d` run per
+        # CONTRIBUTING. The memory twin models the broker and the same suite
+        # runs against both, which is what keeps that gap bounded.
         run: python -m pytest
 
   package:

@@ -1,6 +1,8 @@
 -- Crewlet initial schema.  Requires the ``vector`` and ``timescaledb``
--- extensions; the bundled ``timescale/timescaledb-ha:pg17`` image ships
--- with both preloaded.
+-- extensions; the image the bundled ``docker-compose.yml`` runs ships with
+-- both preloaded.  (That image, and the pg major it pins, are named there
+-- and nowhere else -- this comment used to name a different one at a
+-- different major, which is how a reader learns the wrong prerequisite.)
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS timescaledb;

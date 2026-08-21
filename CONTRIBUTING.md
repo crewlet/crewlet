@@ -45,12 +45,22 @@ uv run pytest -m integration -s                         # -s to see measurements
   contract suites, running them against a real PostgreSQL alongside the
   memory twin and the SQL fake. The fake can only confirm that SQL means
   what its author thought; it cannot catch a statement PostgreSQL rejects.
+  **CI runs this one**: the `test` job brings up the same PostgreSQL image
+  the compose file uses, applies the migrations and sets the variable, so a
+  statement the server rejects fails the pull request rather than the
+  deployment. Setting it locally still matters — it is how you find that out
+  before pushing.
 - **`tests/test_queue/test_broker_behavior.py`** measures the broker
   behaviours the multi-node design rests on (redelivery timing, cursor
   continuity across a subscription's change of owner, prefetch size) and
   prints the numbers under `-s`. Run it after any Pulsar upgrade: it is
   where a changed broker behaviour should fail, rather than in a
-  production handoff.
+  production handoff. **CI does not run this one**, nor the real-broker half
+  of `tests/test_fleet`: a standalone broker is a minute of startup and a
+  workflow service container cannot supply the command it needs. The memory
+  twin models the broker and the same suite runs against both, which is what
+  keeps that gap bounded — but a Pulsar upgrade is still something to run
+  locally.
 
 CI also builds the distributions on every pull request, because a packaging
 break is otherwise invisible until the tag that publishes it. If you touched
