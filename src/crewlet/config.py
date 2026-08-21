@@ -864,7 +864,15 @@ class NodeConfig(BaseModel):
                 f"with no roles does nothing at all. Omit the key to run "
                 f"every role, which is the single-process default."
             )
-        return v
+        # Deduplicated and sorted, because this is a SET written as a
+        # list. It is advertised to every peer on the presence lease, so
+        # two nodes running the same thing must describe it identically
+        # — otherwise `[workers, ingress]` and `[ingress, workers]` are
+        # two different strings for one fact, and the default (already
+        # stored sorted) reads differently from an explicit list naming
+        # the same three. A repeated name is a typo either way, and one
+        # that reached the fleet view as a duplicated badge.
+        return sorted(set(v))
 
     @field_validator("labels")
     @classmethod

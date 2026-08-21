@@ -237,3 +237,38 @@ async def test_an_ingress_node_with_the_same_config_would_bind_it() -> None:
         assert engine._api_port > 0 and engine.runs_role(NodeRole.INGRESS)
     finally:
         await engine.stop()
+
+
+# ── the field is a SET written as a list ─────────────────────────────
+
+
+def test_roles_are_deduplicated_and_sorted() -> None:
+    """Two nodes running the same thing must describe it identically.
+
+    The list is advertised to every peer on the presence lease, so
+    ``[workers, ingress]`` and ``[ingress, workers]`` would be two
+    strings for one fact — and an explicit list naming all three would
+    read differently from the default, which is already stored sorted. A
+    repeated name is a typo either way, and one that reached the fleet
+    view as a duplicated badge.
+    """
+    node = NodeConfig(id="n", roles=["workers", "ingress", "workers"])
+    assert node.roles == [NodeRole.INGRESS, NodeRole.WORKERS]
+
+
+def test_an_explicit_full_list_matches_the_default() -> None:
+    """The default is stored sorted; naming the same three by hand has to
+    produce the same value, or two identically-configured nodes advertise
+    different meta."""
+    assert NodeConfig(id="n", roles=["workers", "seats", "ingress"]).roles == (
+        NodeConfig(id="n").roles
+    )
+
+
+def test_a_node_with_no_roles_is_rejected() -> None:
+    """It would claim no seats, run no duties and serve no API — a
+    process that starts, reports healthy, and does nothing at all."""
+    import pytest
+
+    with pytest.raises(ValueError, match="at least one"):
+        NodeConfig(id="n", roles=[])
