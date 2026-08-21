@@ -25,6 +25,17 @@ const STALE_SECONDS = 15;
 export function createFleetView({ store, api }) {
   let root;
   let data = null;
+  // When `data` was actually read, and whether the last read failed.
+  //
+  // The footer used to stamp `new Date()` at RENDER time, so a view
+  // rendering month-old leases said "Refreshed just now" — and a failed
+  // poll was swallowed silently, so the one moment this view is most
+  // likely to be looked at (nodes dying, API struggling) is the moment
+  // it most confidently lied. Same defect the health surface documents
+  // at length: a page that cannot see the engine must not report on the
+  // engine's behalf.
+  let fetchedAt = null;
+  let stale = false;
 
   function roleBadges(roles) {
     if (!roles || !roles.length) return '<span class="badge">none</span>';
@@ -90,6 +101,15 @@ export function createFleetView({ store, api }) {
          </div>`,
       );
     }
+    if (stale) {
+      out.push(
+        `<div class="card" style="border-left:3px solid var(--amber-ink)">
+           <b>This view is not live.</b> The last read of
+           <code>/fleet</code> failed, so everything below is the fleet as
+           it was, not as it is.
+         </div>`,
+      );
+    }
     if (data.degraded) {
       out.push(
         `<div class="card" style="border-left:3px solid var(--amber-ink)">
@@ -107,9 +127,28 @@ export function createFleetView({ store, api }) {
       "Nothing fires on a schedule, no sandbox run is collected, and the retention sweeps do not run.",
   };
 
+  // What the footer says about the data's age, and whether to say it at
+  // all. Read from when the fetch LANDED, never from render time.
+  function freshness() {
+    if (!fetchedAt) return "";
+    const when = esc(relTime(fetchedAt));
+    return stale
+      ? `<b style="color:var(--amber-ink)">Could not refresh</b> — showing the fleet as of ${when}.`
+      : `Refreshed ${when}.`;
+  }
+
   function render() {
     if (!data) {
-      root.innerHTML = skeletonRows(4);
+      // A skeleton means "loading". If the first read already failed
+      // there is nothing still loading, and a spinner that never
+      // resolves is the most patient lie a page can tell.
+      root.innerHTML = stale
+        ? empty(
+            "cpu",
+            "Could not read the fleet",
+            "The request to /fleet failed. The lease table is the only source for this view, so there is nothing to fall back to — retrying every 15s.",
+          )
+        : skeletonRows(4);
       return;
     }
     const nodes = data.nodes || [];
@@ -201,13 +240,26 @@ export function createFleetView({ store, api }) {
       <p style="color:var(--text-muted);font-size:12px;margin-top:12px">
         Read from the lease table, so it is the same answer from every
         node. In-flight turn counts are per process and stay on
-        <code>/health</code>. Refreshed ${esc(relTime(new Date().toISOString()))}.
+        <code>/health</code>. ${freshness()}
       </p>`;
   }
 
   async function load() {
     const d = await api.fleet();
-    if (d && !d._error) data = d;
+    if (d) {
+      // `api.fleet()` answers `null` on any failure — a bad status, a
+      // refused connection, a proxy returning HTML. The old guard here
+      // was `!d._error`, from a convention api.js removed precisely
+      // because `!0` is true, so an `{_error: 0}` (network entirely
+      // gone) was applied as if it were data.
+      data = d;
+      fetchedAt = new Date().toISOString();
+      stale = false;
+    } else {
+      // Keep what we have — the last fleet is the only thing the
+      // operator still has — but stop claiming it is current.
+      stale = true;
+    }
     if (root && root.isConnected) render();
   }
 
@@ -228,5 +280,9 @@ export function createFleetView({ store, api }) {
       if (timer) clearInterval(timer);
       timer = null;
     },
+    // One poll, awaited. The interval cannot be awaited and a test that
+    // slept for it would be a 15-second test; this is the same `load`
+    // the timer calls, exposed so the refresh paths are assertable.
+    __loadForTest: load,
   };
 }
