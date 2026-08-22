@@ -105,6 +105,30 @@ function tri(value, whenTrue, whenFalse) {
  * `stream` is the reply to the `stream` query — per-socket facts that
  * cannot ride the shared health tick — or `null` while it is in flight.
  */
+/**
+ * What this browser is holding, or the fact that nobody said.
+ *
+ * Separated out because it is the one row whose input comes from the
+ * client rather than from the engine, and it takes the same three-valued
+ * reading as the rest: `true` held, `false` not set, anything else
+ * unknown — no value, and no action, since an action implies a state.
+ */
+function tokenRow(auth) {
+  if (auth && auth.held === true) {
+    return (
+      row("API token", "held", "sent with every request from this browser") +
+      `<div class="hp-action" data-action="clear-token">Forget this token</div>`
+    );
+  }
+  if (auth && auth.held === false) {
+    return (
+      row("API token", "not set", "writes and the configuration will be refused") +
+      `<div class="hp-action" data-action="set-token-chrome">Set a token</div>`
+    );
+  }
+  return row("API token", "—", "not reported");
+}
+
 export function renderHealthPopover(health, stream, events, connected, auth = {}) {
   const h = health || {};
   const status = connected ? h.status || "unknown" : "disconnected";
@@ -185,15 +209,15 @@ export function renderHealthPopover(health, stream, events, connected, auth = {}
            invisible. There was nothing on any screen that said a
            credential was being held, and no way to drop it: the only
            honest reading of "it never asks me for a token" was to open
-           devtools. */
-        auth.held
-          ? row("API token", "held", "sent with every request from this browser") +
-            `<div class="hp-action" data-action="clear-token">Forget this token</div>`
-          : row(
-              "API token",
-              "not set",
-              "writes and the configuration will be refused",
-            ) + `<div class="hp-action" data-action="set-token-chrome">Set a token</div>`
+           devtools.
+
+           THREE-VALUED, like every other field here. `auth.held` is a
+           fact about the caller's own storage, and a caller that does
+           not pass one has not reported "no token" — it has reported
+           nothing. Rendering the absent case as "not set" states a
+           credential is missing on a page that never looked, and offers
+           an action for a state nobody established. */
+        tokenRow(auth)
       }
 
       <div class="eyebrow hp-section">This connection</div>

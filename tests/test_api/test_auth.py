@@ -619,6 +619,45 @@ class TestTheRuleItself:
         assert requires_token(self._Closed, path=path + "-admin", method="GET") is True
         assert requires_token(self._Closed, path=path + "x", method="POST") is True
 
+    @pytest.mark.parametrize("path", ["/health", "/ready", "/dashboard"])
+    def test_a_trailing_slash_still_reaches_the_probe(self, path: str) -> None:
+        """A slash must not be the difference between healthy and evicted.
+
+        The middleware runs BEFORE routing, so the router's redirect from
+        a trailing-slash spelling to the real path only happens if the
+        request survives the guard first. Making these exemptions exact
+        (to stop a future /health-admin inheriting one) meant the
+        trailing-slash spelling stopped matching, and in the closed
+        posture a load balancer probing /health/ got a 401 and took the
+        node out of rotation.
+        """
+        assert requires_token(self._Closed, path=path + "/", method="GET") is False
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/config/",
+            "/config//",
+            "/config/roles/",
+            "/health//",
+            "/ready//",
+            "//health",
+            "//config",
+            "/healthz",
+            "/health-admin/",
+            "/webhooks",
+            "/otlp",
+            "/static",
+        ],
+    )
+    def test_the_slash_normalisation_opens_nothing_else(self, path: str) -> None:
+        # One slash, off the exact set only. Anything else a client might
+        # spell to slip past the guard still needs a token. The three
+        # bare prefixes are in the list on purpose: each exemption ends
+        # in a slash, so the stem alone is not exempt.
+        assert requires_token(self._Closed, path=path, method="GET") is True
+        assert requires_token(self._Open, path=path, method="POST") is True
+
     @pytest.mark.parametrize("prefix", ["/webhooks/", "/otlp/", "/static/"])
     def test_the_prefix_exemptions_cover_their_subtree_only(self, prefix: str) -> None:
         assert requires_token(self._Closed, path=prefix + "a/b", method="POST") is False

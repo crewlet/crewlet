@@ -275,10 +275,21 @@ test("the popover says whether this browser is holding a token", () => {
 
 test("a popover rendered with no auth argument claims nothing", () => {
   // Every other field here is three-valued for the same reason: an
-  // absent fact must not render as the reassuring one. A caller that
-  // does not pass the token state must not produce "held".
+  // absent fact must not render as a confident one.
+  //
+  // This assertion used to check only that "held" was absent, which the
+  // "not set" branch satisfies — so it passed while the popover was
+  // stating, to a caller that had not looked, that no credential exists.
+  // Checking one side of a two-sided claim is how a test certifies the
+  // half of the bug it was written to catch.
   const html = renderHealthPopover(OK, null, [], true);
   assert.ok(!/>held</.test(html), "invented a credential nobody reported");
+  assert.ok(!/not set/.test(html), "declared a credential missing without looking");
+  assert.match(html, /not reported/);
+  assert.ok(
+    !/data-action="clear-token"|data-action="set-token-chrome"/.test(html),
+    "offered an action for a state nobody established",
+  );
 });
 
 run();
