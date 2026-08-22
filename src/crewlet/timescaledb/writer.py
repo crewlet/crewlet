@@ -209,6 +209,15 @@ def extract_tags(event: Event) -> dict[str, str]:
         tags["channel_id"] = channel_id
     if sender := getattr(event, "sender", ""):
         tags["sender"] = sender
+    # Which conversation (Slack thread / Jira issue / GitHub PR) the
+    # event belongs to.  A tag rather than a payload read for the same
+    # reason ``failed`` is one: ``list_events`` never selects the
+    # payload, so this is the only way a caller can ask history for one
+    # thread's turns.  ``channel_id`` above does not cover it — it is
+    # set only on A2A events, and never on the phase records that carry
+    # the model's reasoning.
+    if conversation_key := getattr(event, "conversation_key", ""):
+        tags["conversation_key"] = conversation_key
     # A2A-specific tags for richer filtering.
     if requester := getattr(event, "requester", ""):
         tags["requester"] = requester

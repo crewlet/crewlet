@@ -885,6 +885,11 @@ class AgentTurnCompleted(Event):
     error_kind: str = ""
     """Machine-readable failure class — the classified provider error
     (``rate_limit`` / ``auth`` / ...) or the guard-breach kind."""
+    conversation_key: str = ""
+    """Which conversation the turn served — ``{source}:{local}``, see
+    :func:`crewlet.notifications.coalesce.conversation_key`.  Stamped so
+    the event store can answer "what has this seat done on this thread"
+    by tag, which no field on this event could answer before."""
 
     @property
     def summary(self) -> str:
@@ -961,6 +966,11 @@ class TurnCompleted(Event):
     # ticks, system events).  See
     # ``crewlet.learning.interaction.InboundInteraction``.
     interactions: list[InboundInteraction] = Field(default_factory=list)
+
+    conversation_key: str = ""
+    """Which conversation the turn served — ``{source}:{local}``, see
+    :func:`crewlet.notifications.coalesce.conversation_key`.  Empty when
+    the trigger has no conversation a later message could reproduce."""
 
     @property
     def summary(self) -> str:
@@ -1594,8 +1604,11 @@ class AgentPhaseCompleted(Event):
     # ``describe_trigger``) — the dashboard renders it as the LLM
     # invocation's source.
     trigger: dict[str, Any] = Field(default_factory=dict)
-    system_prompt: str = ""  # truncated
-    user_prompt: str = ""  # truncated (first user message text)
+    # Verbatim, not truncated: phase telemetry ships the full prompt and
+    # response so the dashboard can show what the model actually saw.
+    # Only ``error`` below is capped (``_ERROR_TEXT_LIMIT``).
+    system_prompt: str = ""
+    user_prompt: str = ""  # first user message text
     response: str = ""  # final assistant text / artifact
     tool_executions: list[dict] = Field(default_factory=list)
     input_tokens: int = 0
@@ -1652,6 +1665,15 @@ class AgentPhaseCompleted(Event):
     """Machine-readable failure class.  For an exhausted provider chain
     this is the classified LLM error (``rate_limit`` / ``auth`` /
     ``timeout`` / ...); otherwise the exception's type name."""
+    conversation_key: str = ""
+    """Which conversation this phase's turn served — ``{source}:{local}``,
+    see :func:`crewlet.notifications.coalesce.conversation_key`.
+
+    This event is where the model's reasoning is durably kept (as the
+    ``<think>`` prefix of ``response``), and until this field existed it
+    was addressable only by agent id and time: the store's tags carry a
+    ``channel_id`` only for A2A events, so no query could ask for one
+    thread's phases."""
 
     @property
     def summary(self) -> str:
