@@ -137,6 +137,11 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   let threadsAsked = false;
   let openThread = ""; // conversation_key whose entries are loaded
   let threadEntries = null;
+  // Scoped to the OPEN thread, deliberately separate from
+  // `threadsError` above: the list read and the entry read fail
+  // independently, and folding them into one flag let a failed expand
+  // silently claim the whole list was unreadable.
+  let threadError = "";
 
   let cost = null; // the `tokens` rollup for this seat
   let costError = "";
@@ -239,7 +244,13 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   }
 
   async function loadThreads() {
-    const handle = data?.handle || "";
+    // `seatHandle()`, not `data?.handle`: the seat reply is still in
+    // flight when a direct link lands on this tab, and reading it
+    // straight left the panel a permanent skeleton — nothing re-runs
+    // `ensureTabData` once the reply arrives, so only clicking away and
+    // back ever loaded it. The helper falls back to the route key,
+    // which on this page IS the handle.
+    const handle = seatHandle();
     if (!handle) return;
     threadsAsked = true;
     try {
@@ -254,18 +265,26 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
     if (!disposed) refresh();
   }
 
-  async function loadThread(key) {
-    const handle = data?.handle || "";
-    if (!handle || !key) return;
-    openThread = key;
+  async function loadThread(convKey) {
+    const handle = seatHandle();
+    if (!handle || !convKey) return;
+    openThread = convKey;
     threadEntries = null;
+    threadError = "";
     refresh();
     try {
-      const reply = await query("conversations", { handle, key });
-      if (openThread === key) threadEntries = reply?.entries || [];
+      const reply = await query("conversations", { handle, key: convKey });
+      if (openThread === convKey) {
+        threadEntries = reply?.entries || [];
+        threadError = "";
+      }
     } catch (err) {
-      if (openThread === key) threadEntries = [];
-      threadsError = (err && err.message) || "failed";
+      // The same rule the list read follows: a failed query must not
+      // render as "this seat said nothing here". Leaving `threadEntries`
+      // null keeps the empty-vs-unreadable distinction the renderer
+      // needs — setting it to [] drew a database outage as a thread the
+      // seat had never spoken in.
+      if (openThread === convKey) threadError = (err && err.message) || "failed";
     }
     if (!disposed) refresh();
   }
@@ -1027,6 +1046,9 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   }
 
   function threadBody() {
+    if (threadError) {
+      return `<div class="mem-entry"><span class="empty-sub">Could not read this conversation — ${esc(threadError)}. This says nothing about what the seat replied here, only that it could not be read.</span></div>`;
+    }
     if (threadEntries === null) return skeletonRows(2);
     if (!threadEntries.length) {
       return '<div class="mem-entry"><span class="empty-sub">No entries</span></div>';
@@ -1050,7 +1072,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
           ${line("Reasoning", e.plan_reasoning, "tr")}
           ${e.tool_calls && e.tool_calls !== "(none)" ? `<div class="mem-label">Called</div><pre class="mem-pre">${esc(e.tool_calls)}</pre>` : ""}
           ${line("Replied", e.reply, "ty")}
-          ${line("Reviewer", e.completed_work || e.review_notes, "tv")}
+          ${line("Reviewer", e.completed_work, "tv")}
         </div>`;
       })
       .join("");
@@ -1461,6 +1483,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
         if (openThread === key) {
           openThread = "";
           threadEntries = null;
+          threadError = "";
           refresh();
         } else {
           loadThread(key);
