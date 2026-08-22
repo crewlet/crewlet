@@ -191,11 +191,20 @@ class A2AService:
         content: str,
         sender_role: str = "",
         *,
+        question: str = "",
         delegation_depth: int = 0,
         delegation_chain: list[str] | None = None,
         parent_turn_id: str = "",
     ) -> None:
         """Answer on a channel and wake the other party.
+
+        ``question`` echoes the original ask back to the asker. Its turn
+        ended when it asked, and nothing rehydrates it — so without the
+        echo the woken turn receives an answer with no record of what it
+        asked, and has to reconstruct that from memory retrieval or act
+        on the answer blind. This is the one wake path with no external
+        surface to re-read, so the echo is the only way that context
+        survives the round trip.
 
         The reply carries the ask's delegation depth UNCHANGED. The ask
         is the delegation; the answer is that same hop completing, and
@@ -253,6 +262,7 @@ class A2AService:
                 "sender": sender,
                 "content": content,
                 "sender_role": sender_role,
+                "question": question,
             },
             delegation_depth=delegation_depth,
             delegation_chain=chain,

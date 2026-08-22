@@ -132,6 +132,20 @@ def _parse_otlp_headers(raw: str) -> dict[str, str]:
     return headers
 
 
+# The echoed A2A question. Shares the iteration ledger's note budget:
+# an ask is one or two sentences, so this is a guard against a
+# pathological one rather than a routine trim.
+_A2A_QUESTION_LIMIT = 2000
+
+
+def _elide_a2a_question(text: str) -> str:
+    """Trim the echoed ask with a visible marker."""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= _A2A_QUESTION_LIMIT:
+        return collapsed
+    return collapsed[:_A2A_QUESTION_LIMIT].rstrip() + "…"
+
+
 def _scheduled_deadline(event: Event) -> float | None:
     """Wall-clock cap (seconds) for a scheduled ``TaskAssigned``, else ``None``.
 
@@ -3414,6 +3428,16 @@ class Engine:
             f"A2A Channel: {channel_id}",
             "",
         ]
+        # On the ANSWER leg, lead with what this agent asked. Its asking
+        # turn ended when it asked and nothing rehydrates it, so without
+        # this the wake is an answer to a question the turn cannot see —
+        # and unlike every other wake there is no external surface to
+        # re-read it from.
+        question = str(event.payload.get("question", "") or "")
+        if not is_responder and question:
+            parts.append("**You asked:**")
+            parts.append(f"- {_elide_a2a_question(question)}")
+            parts.append("")
         if content:
             parts.append("**Message:**")
             parts.append(f"- **{requester}{role_tag}:** {content}")
@@ -3438,6 +3462,10 @@ class Engine:
                     "*** INSTRUCTIONS ***",
                     "- This is the answer to a question you asked."
                     " Act on it; the channel is now closed.",
+                    "- The turn that asked has ended. What you asked is"
+                    " quoted above — everything else it had is gone, so"
+                    " re-fetch anything you need rather than assuming it"
+                    " is still to hand.",
                 ]
             )
 
@@ -3498,6 +3526,11 @@ class Engine:
                     agent.handle,
                     answer,
                     sender_role=agent.role_name,
+                    # The ask, echoed back to whoever made it. This
+                    # frame still holds the a2a_request event, so the
+                    # question is right here — while on the asker's side
+                    # its turn has ended and nothing rehydrates it.
+                    question=str(event.payload.get("content", "") or ""),
                     delegation_depth=event.delegation_depth,
                     delegation_chain=list(event.delegation_chain or []),
                     parent_turn_id=event.parent_turn_id,

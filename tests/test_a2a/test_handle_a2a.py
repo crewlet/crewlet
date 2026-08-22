@@ -175,6 +175,85 @@ async def test_the_answering_turns_text_is_delivered_as_the_reply(
     assert replies[0].payload["sender"] == "cto"
 
 
+async def test_the_reply_carries_the_original_question(engine: Engine) -> None:
+    """The asker's turn ended when it asked, and nothing rehydrates it.
+
+    Without the echo the woken turn gets an answer with no record of the
+    question — and this is the one wake path with no external surface to
+    re-read it from.
+    """
+    cto = engine.agent_pool.get_by_handle("cto")
+    assert cto is not None
+    channel_id = await _open(engine, "ceo", "cto", "how big is the migration?")
+
+    replies: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        replies.append(event)
+
+    await engine.event_queue.subscribe("crewlet.agent.ceo.inbox", "test-echo", handler)
+
+    async def _answer(agent: Any, **kwargs: Any) -> str:
+        return "about two weeks"
+
+    engine.turn_engine.run_turn = _answer  # type: ignore[method-assign]
+    await engine._handle_a2a(cto, _wake(channel_id, "ceo", "how big is the migration?"))
+
+    assert replies[0].payload["question"] == "how big is the migration?"
+
+
+async def test_the_asker_is_shown_what_it_asked(engine: Engine) -> None:
+    """The echo has to reach the PROMPT, not just the payload."""
+    ceo = engine.agent_pool.get_by_handle("ceo")
+    assert ceo is not None
+    channel_id = await _open(engine, "ceo", "cto", "how big is the migration?")
+
+    captured: dict[str, Any] = {}
+
+    async def _capture(agent: Any, **kwargs: Any) -> str:
+        captured.update(kwargs)
+        return ""
+
+    engine.turn_engine.run_turn = _capture  # type: ignore[method-assign]
+    await engine._handle_a2a(
+        ceo,
+        Event(
+            type="a2a_message",
+            source="cto",
+            payload={
+                "channel_id": channel_id,
+                "sender": "cto",
+                "content": "about two weeks",
+                "question": "how big is the migration?",
+            },
+        ),
+    )
+
+    task = captured["task_description"]
+    assert "You asked:" in task
+    assert "how big is the migration?" in task
+    assert "about two weeks" in task
+
+
+async def test_the_responder_is_not_shown_an_echo(engine: Engine) -> None:
+    """The responder is reading the ask itself — quoting it back would
+    print the same text twice."""
+    cto = engine.agent_pool.get_by_handle("cto")
+    assert cto is not None
+    channel_id = await _open(engine, "ceo", "cto", "how big?")
+
+    captured: dict[str, Any] = {}
+
+    async def _capture(agent: Any, **kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "two weeks"
+
+    engine.turn_engine.run_turn = _capture  # type: ignore[method-assign]
+    await engine._handle_a2a(cto, _wake(channel_id, "ceo", "how big?"))
+
+    assert "You asked:" not in captured["task_description"]
+
+
 async def test_the_channel_closes_after_one_round_trip(engine: Engine) -> None:
     """Ask, answer, done. Leaving it open would be a promise of a second
     reply that nothing in the design ever sends."""
