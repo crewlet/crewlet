@@ -236,7 +236,7 @@ src/crewlet/          # Main package
                       #   derivation + its inverse is what lets routing
                       #   address a seat this process is not running)
   agent/              # Agent runtime (definition, instance, pool, turn engine)
-                      #   definition.py, instance.py, pool.py, memory.py,
+                      #   definition.py, instance.py, pool.py,
                       #   turn.py (TurnEngine; resume_state re-enters Execute
                       #     mid-loop on sandbox completion), plan.py,
                       #   iteration_log.py (prior-work ledger —
