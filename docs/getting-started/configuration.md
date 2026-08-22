@@ -75,7 +75,7 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
     enabled: true                       # feature gate — a live kill switch; off restores the
                                         #   pre-ledger prompt exactly
     max_entries: 20                     # entries KEPT per conversation, trimmed at write time
-    injected_max_entries: 5             # entries rendered into the prompt, newest first
+    injected_max_entries: 5             # how many reach the prompt: the newest N, rendered oldest-first
     injected_max_chars: 6000            # byte budget for the block; oldest entries drop first
     retention_days: 30                  # matches the event store's horizon; applied at next start
 

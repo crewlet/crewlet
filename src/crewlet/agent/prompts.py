@@ -423,9 +423,10 @@ def build_phase_user_message(
     :func:`crewlet.agent.conversation_log.render_conversation_history`
     block — prior TURNS of this same conversation, empty on its first
     turn and whenever the trigger has no reproducible conversation key.
-    It sits before the prior-work ledger so the two read
-    chronologically: earlier conversations, then earlier rounds of this
-    turn, then the ask.
+    The three parts are ordered oldest to newest — earlier turns of
+    this conversation, then the ask, then earlier rounds of THIS turn
+    (which happened after the ask arrived) — so the most recent context
+    sits nearest the model's answer.
 
     Both ride the USER message, never the system prompt: the Plan
     system prompt is deliberately frozen at turn start

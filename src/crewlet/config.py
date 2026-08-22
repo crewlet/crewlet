@@ -1034,7 +1034,9 @@ class ConversationSessionConfig(BaseModel):
     """
 
     injected_max_entries: int = Field(default=5, ge=1)
-    """Entries rendered into the prompt, newest first.
+    """How many entries reach the prompt: the newest N of the
+    conversation, then rendered OLDEST first so the block reads forward
+    into the task beneath it.
 
     Five covers the run of exchanges a follow-up plausibly needs to
     avoid repeating itself, without turning the user message into a

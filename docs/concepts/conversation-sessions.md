@@ -140,8 +140,10 @@ Task:
 …the within-turn ledger, on iterations after the first…
 ```
 
-Chronological, so the newest thing said sits nearest the model's answer. The
-header states the contract explicitly: do not repeat a reply already given,
+Oldest to newest top to bottom — the ask is the newest thing *said*, and the
+within-turn ledger below it is the newest thing *done*, so the most recent
+context sits nearest the model's answer. The header states the contract
+explicitly: do not repeat a reply already given,
 `(read)` calls may be stale, everything else already took effect, and where
 the history and the task disagree the task wins.
 
@@ -174,7 +176,7 @@ turn_engine:
   conversation_session:
     enabled: true            # the feature gate — a live kill switch
     max_entries: 20          # kept per conversation, trimmed at write time
-    injected_max_entries: 5  # rendered into the prompt, newest first
+    injected_max_entries: 5  # how many reach the prompt: newest N, rendered oldest-first
     injected_max_chars: 6000 # byte budget; oldest entries drop first
     retention_days: 30       # matches the event store's own horizon
 ```
@@ -229,7 +231,9 @@ curl -s 'localhost:8000/conversations?handle=eng&key=jira:POC-7'
 ```
 
 `available: false` means this node cannot see the ledger — never that the seat
-has said nothing.
+has said nothing. The tab keeps that distinction at both levels: the list of
+conversations and each expanded conversation's entries are separate reads, and
+either failing says so rather than drawing an empty thread.
 
 ---
 
