@@ -3538,6 +3538,12 @@ class Engine:
                     # question is right here — while on the asker's side
                     # its turn has ended and nothing rehydrates it.
                     question=str(event.payload.get("content", "") or ""),
+                    # The ask carries the exchange's trace; this frame
+                    # runs after the turn's spans closed, so without
+                    # passing it the reply is published with no trace at
+                    # all and the exchange splits in two on the
+                    # dashboard.
+                    caused_by=event,
                     delegation_depth=event.delegation_depth,
                     delegation_chain=list(event.delegation_chain or []),
                     parent_turn_id=event.parent_turn_id,
@@ -3556,7 +3562,9 @@ class Engine:
             )
         finally:
             with contextlib.suppress(Exception):
-                await self.a2a_service.close_channel(channel_id, closer=agent.handle)
+                await self.a2a_service.close_channel(
+                    channel_id, closer=agent.handle, caused_by=event
+                )
 
     async def _handle_notification(self, agent: AgentInstance, event: Event) -> None:
         """Handle an external notification: wake the agent and run a turn.

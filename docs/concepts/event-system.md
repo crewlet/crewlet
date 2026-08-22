@@ -182,6 +182,19 @@ flowchart TD
 2. When events cross async boundaries (EventQueue → handler), the receiving component restores the OTel context from the event's `trace_id`/`span_id`
 3. The Event model's `trace_id` field defaults to `current_trace_id()` which reads the active OTel span
 
+**Where "automatic" stops.** Point 3 is a read of the *ambient* span, so it
+only works while one is open. An event constructed outside every span gets an
+**empty** `trace_id` — and an event with no trace is unreachable from the work
+it belongs to, which on the dashboard shows up as a trace link that goes
+nowhere. Phases open spans, the engine itself does not, so anything published
+from engine code *after* `run_turn` has returned is in that state. Those call
+sites copy the causing event's context forward explicitly
+(`trace_id` / `span_id` / `parent_span_id`) rather than relying on capture —
+the A2A reply and channel-close do this from the ask, and
+`A2AMessageDelivered` from the wake. Copy it **verbatim**: `run_turn` calls
+`restore_context` with those values, so the woken turn becomes a child of the
+span that caused it.
+
 **When notifications are dropped** (own message, not following thread, rate limit), a `NotificationSkipped` event is emitted with the skip reason — visible in the trace so you can see why a webhook didn't reach an agent.
 
 The dashboard groups events by `trace_id` into collapsible trace trees. See [Deployment — Tracing](../guides/deployment.md#tracing) for OTLP export configuration.

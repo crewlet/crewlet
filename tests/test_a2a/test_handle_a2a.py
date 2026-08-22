@@ -202,6 +202,48 @@ async def test_the_reply_carries_the_original_question(engine: Engine) -> None:
     assert replies[0].payload["question"] == "how big is the migration?"
 
 
+async def test_the_reply_stays_in_the_asks_trace(engine: Engine) -> None:
+    """One exchange, one trace.
+
+    An A2A event is not an LLM call and never renders one — the detail
+    view dispatches on type, and the only bridge from an A2A event to
+    the turns around it is its trace link. The reply is published from
+    ``_answer_a2a``, which runs after the answering turn's phase spans
+    have closed, and the engine opens no span of its own — so the
+    ambient trace is empty and the reply used to carry none at all,
+    leaving that link pointing nowhere.
+    """
+    cto = engine.agent_pool.get_by_handle("cto")
+    assert cto is not None
+    channel_id = await _open(engine, "ceo", "cto", "how big?")
+
+    replies: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        replies.append(event)
+
+    await engine.event_queue.subscribe("crewlet.agent.ceo.inbox", "test-trace", handler)
+
+    async def _answer(agent: Any, **kwargs: Any) -> str:
+        return "about two weeks"
+
+    engine.turn_engine.run_turn = _answer  # type: ignore[method-assign]
+
+    ask = _wake(channel_id, "ceo", "how big?")
+    # A real ask is published from inside the asker's Execute phase, so
+    # it carries that turn's trace. Nothing downstream can invent one.
+    ask.trace_id = "0af7651916cd43dd8448eb211c80319c"
+    ask.span_id = "b7ad6b7169203331"
+
+    await engine._handle_a2a(cto, ask)
+
+    assert replies, "the reply never reached the asker"
+    assert replies[0].trace_id == ask.trace_id
+    # Verbatim, so ``restore_context`` makes the woken turn a child of
+    # the span that caused it rather than a sibling of it.
+    assert replies[0].span_id == ask.span_id
+
+
 async def test_the_asker_is_shown_what_it_asked(engine: Engine) -> None:
     """The echo has to reach the PROMPT, not just the payload."""
     ceo = engine.agent_pool.get_by_handle("ceo")
