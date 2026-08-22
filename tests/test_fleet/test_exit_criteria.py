@@ -454,3 +454,51 @@ def test_the_criteria_run_on_both_backends(fleet: _Node | Fleet) -> None:
     assert len(fleet.nodes) == 2
     assert len({n.engine._incarnation for n in fleet.nodes}) == 2
     assert len({n.engine._node_id for n in fleet.nodes}) == 2
+
+
+# ── criterion: a conversation survives the seat moving ───────────────
+
+
+async def test_a_conversation_ledger_survives_a_handoff(fleet: Fleet) -> None:
+    """What a seat said on a thread is still there after it moves.
+
+    The per-conversation ledger exists so a follow-up on a Jira issue or
+    a Slack thread does not arrive at a seat with no memory of what it
+    already answered there. A seat moves between nodes as a matter of
+    course, so a ledger the successor cannot read would make every
+    handoff look to the agent like a brand-new conversation — and it
+    would look healthy from the outside, because "no history" is also
+    what a genuinely new conversation renders.
+
+    That is the whole reason the ledger is a shared table rather than
+    per-process state, and this is the test that keeps it one: the write
+    happens while the first node owns the seat, the read runs on the
+    second node's own turn engine after the handoff.
+    """
+    from crewlet.agent.turn_context import TurnContext
+
+    await fleet.balance()
+    handle, first, second = fleet.movable_seat()
+    key = "jira:POC-7"
+
+    # Node A records a turn on the conversation.
+    await first.engine._conversation_sessions.append(
+        agent_handle=handle,
+        conversation_key=key,
+        work_key="w1",
+        turn_id="t1",
+        entry={"reply": "the failure is in the retry path", "at": "2026-08-20T09:30"},
+    )
+
+    await first.engine._seat_host.release(handle, ReleaseReason.DRAIN)
+    await second.sweep()
+    assert handle in second.held
+
+    # Node B reads it back through the REAL prompt-building path, on the
+    # agent instance it is now running.
+    agent = second.engine.agent_pool.get_by_handle(handle)
+    assert agent is not None
+    turn = TurnContext(agent=agent, org=second.engine.org, conversation_key=key)
+    rendered = await second.engine.turn_engine._load_conversation_history(turn)
+
+    assert "the failure is in the retry path" in rendered

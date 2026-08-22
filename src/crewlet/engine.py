@@ -385,6 +385,7 @@ class Engine:
         embeddings: Any = None,
         lease_store: Any = None,
         turn_completion_store: Any = None,
+        conversation_session_store: Any = None,
     ) -> None:
         self.debug = debug
         self._turn_engine_config = turn_engine_config
@@ -563,11 +564,15 @@ class Engine:
 
         # Per-conversation session ledger — what this seat already did in
         # a given Slack thread / issue / PR, rendered back into that
-        # conversation's next turn.  Built at start() from ``storage``:
-        # Postgres when there is one, the memory twin otherwise (see
-        # ``_build_conversation_session_store`` for why the twin is
-        # acceptable here and not for the completion ledger).
-        self._conversation_sessions: Any = None
+        # conversation's next turn.  Derived at start() from ``storage``
+        # when not injected: Postgres when there is one, the memory twin
+        # otherwise (see ``_build_conversation_session_store`` for why
+        # the twin is acceptable here and not for the completion
+        # ledger).  Injectable for the same reason the lease store and
+        # the completion ledger are — a fleet test needs the two nodes
+        # to share ONE store, which is what the Postgres table is in
+        # production.
+        self._conversation_sessions: Any = conversation_session_store
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -703,6 +708,7 @@ class Engine:
         company_config_store: Any = None,
         lease_store: Any = None,
         turn_completion_store: Any = None,
+        conversation_session_store: Any = None,
     ) -> Engine:
         """Construct an engine from Tier A bootstrap state only.
 
@@ -729,6 +735,7 @@ class Engine:
             api_host=bootstrap.api.host,
             lease_store=lease_store,
             turn_completion_store=turn_completion_store,
+            conversation_session_store=conversation_session_store,
         )
         engine._bootstrap = bootstrap
         engine._company_config_store = company_config_store
