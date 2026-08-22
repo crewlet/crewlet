@@ -1139,8 +1139,21 @@ src/crewlet/          # Main package
                       #   about spacing) at that price. Theme keeps its
                       #   button — it is flipped by the light in the room.
                       #   Commands rank below rooms/seats and vanish on an
-                      #   empty query; buildResults takes {theme,density}
-                      #   as an ARGUMENT so it stays DOM-free.
+                      #   empty query; buildResults takes {theme,density,
+                      #   tokenHeld} as an ARGUMENT so it stays DOM-free.
+                      #   THE API TOKEN is the one piece of state a reader
+                      #   holds that no screen mentioned: localStorage,
+                      #   sent on every handshake and query frame, so a
+                      #   browser given one once is authenticated for ever
+                      #   and never prompted again — which is exactly what
+                      #   "it never asks me for a token" means, and it
+                      #   could only be diagnosed from devtools. The health
+                      #   popover reports held/not-set and both it and the
+                      #   palette offer the action; forgetting reaches
+                      #   storage AND socket.setToken AND a reconnect,
+                      #   since the handshake carries the credential and an
+                      #   open socket stays authenticated until it
+                      #   re-dials.
                       #   modal.js replaced the window.prompt/confirm that
                       #   were the only unstyled UI in the product.
                       #   router.js OWNS THE BACK BUTTON, which is a

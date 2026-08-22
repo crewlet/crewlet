@@ -337,6 +337,7 @@ function paletteGroups() {
   return buildResults(store.state, paletteQuery, {
     theme: document.documentElement.getAttribute("data-theme") || "dark",
     density: document.documentElement.getAttribute("data-density") || "comfortable",
+    tokenHeld: Boolean(apiToken()),
   });
 }
 
@@ -354,6 +355,10 @@ function runPaletteHit(hit) {
     toggleTheme();
   } else if (hit.command === "toggle-density") {
     toggleDensity();
+  } else if (hit.command === "clear-token") {
+    forgetToken();
+  } else if (hit.command === "set-token") {
+    askForToken();
   } else if (hit.route) {
     navigate(hit.route);
   }
@@ -499,7 +504,9 @@ function renderChrome() {
     if (healthOpen) {
       patch(
         pop,
-        renderHealthPopover(health, healthStream, state.events, state.connected),
+        renderHealthPopover(health, healthStream, state.events, state.connected, {
+          held: Boolean(apiToken()),
+        }),
       );
     } else if (pop.firstChild) {
       pop.innerHTML = "";
@@ -605,6 +612,25 @@ function setDensity(density) {
 // One flow, shared by the chrome banner and by any view that discovers
 // it needs a credential. It used to be a `window.prompt` in one place
 // and a re-implementation in two views.
+/**
+ * Drop the stored token and re-dial as an anonymous client.
+ *
+ * There was no way to do this at all: the token went into
+ * `localStorage` and stayed there, so a browser that had been given one
+ * was authenticated for ever with nothing on screen saying so. Clearing
+ * it has to reach three places — storage, the socket's own copy, and the
+ * live connection — because the handshake carries the credential, so a
+ * socket that is already open stays authenticated until it re-dials.
+ */
+function forgetToken() {
+  storeToken("");
+  socket.setToken("");
+  store.setAuthRejected(false);
+  socket.reconnect();
+  toggleHealth(false);
+  renderView();
+}
+
 async function askForToken() {
   const entered = await promptModal({
     title: "API token",
@@ -707,6 +733,8 @@ function initDelegation() {
     } else if (action === "reconnect") {
       socket.reconnect();
       toggleHealth(false);
+    } else if (action === "clear-token") {
+      forgetToken();
     } else if (action === "set-token-chrome") {
       // Its own action name, not the views' `set-token`: this delegate
       // runs before the branch that forwards to the active view, so

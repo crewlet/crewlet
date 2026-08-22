@@ -177,6 +177,17 @@ beats a word boundary beats a substring. The current `{theme, density}` is
 passed *in* rather than read off `document`, so a command whose label depends
 on the current setting is not the thing that drags a DOM into the ranking.
 
+**The API token is state the reader holds, and the page must say so.** It
+lives in `localStorage`, rides every WebSocket handshake and every query frame,
+and so a browser given one once is authenticated on every later visit and is
+never prompted again. That is correct, and it was invisible: nothing on any
+screen said a credential was being held, and nothing could drop it — "why does
+it never ask me for a token?" could only be answered from devtools. The health
+popover now reports `API token: held / not set`, and both the popover and the
+palette offer the matching action. Clearing it reaches three places — storage,
+the socket's own copy, and the live connection — because the handshake carries
+the credential, so an already-open socket stays authenticated until it re-dials.
+
 **A chrome preference is a command, not a topbar button.** The topbar is the
 most valuable strip on every screen and a preference is set once and then
 never again. Density spent a permanent, icon-only slot there next to the theme

@@ -252,4 +252,33 @@ test("the skeleton is a thunk, so it is not built on the branch not taken", () =
   assert.strictEqual(built, 0);
 });
 
+test("the popover says whether this browser is holding a token", () => {
+  // The answer to "why does it never ask me for a token": because it
+  // already has one. The credential lives in localStorage and rides
+  // every handshake and every query, so a reader who set one once is
+  // authenticated on every later visit — correct, and previously
+  // invisible. Nothing on any screen said a credential was being held,
+  // and nothing could drop it, so the only way to find out was devtools.
+  const held = renderHealthPopover(OK, null, [], true, { held: true });
+  assert.match(held, /API token/);
+  assert.match(held, /held/);
+  assert.match(held, /data-action="clear-token"/);
+
+  const none = renderHealthPopover(OK, null, [], true, { held: false });
+  assert.match(none, /not set/);
+  assert.match(none, /data-action="set-token-chrome"/);
+  assert.ok(
+    !/data-action="clear-token"/.test(none),
+    "offered to forget a token that is not there",
+  );
+});
+
+test("a popover rendered with no auth argument claims nothing", () => {
+  // Every other field here is three-valued for the same reason: an
+  // absent fact must not render as the reassuring one. A caller that
+  // does not pass the token state must not produce "held".
+  const html = renderHealthPopover(OK, null, [], true);
+  assert.ok(!/>held</.test(html), "invented a credential nobody reported");
+});
+
 run();

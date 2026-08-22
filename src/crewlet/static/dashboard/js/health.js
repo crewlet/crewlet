@@ -105,7 +105,7 @@ function tri(value, whenTrue, whenFalse) {
  * `stream` is the reply to the `stream` query — per-socket facts that
  * cannot ride the shared health tick — or `null` while it is in flight.
  */
-export function renderHealthPopover(health, stream, events, connected) {
+export function renderHealthPopover(health, stream, events, connected, auth = {}) {
   const h = health || {};
   const status = connected ? h.status || "unknown" : "disconnected";
   const trouble = providerTrouble(events);
@@ -175,6 +175,26 @@ export function renderHealthPopover(health, stream, events, connected) {
         // deployment shape the operator chose.
         h.feed_hydrated === false ? "warn-ink" : "",
       )}
+
+      <div class="eyebrow hp-section">This browser</div>
+      ${
+        /* WHY THE PAGE STOPPED ASKING. The token is kept in
+           `localStorage` and sent on every handshake and every query, so
+           a reader who set one months ago is authenticated on every
+           visit and is never prompted again — correct, and completely
+           invisible. There was nothing on any screen that said a
+           credential was being held, and no way to drop it: the only
+           honest reading of "it never asks me for a token" was to open
+           devtools. */
+        auth.held
+          ? row("API token", "held", "sent with every request from this browser") +
+            `<div class="hp-action" data-action="clear-token">Forget this token</div>`
+          : row(
+              "API token",
+              "not set",
+              "writes and the configuration will be refused",
+            ) + `<div class="hp-action" data-action="set-token-chrome">Set a token</div>`
+      }
 
       <div class="eyebrow hp-section">This connection</div>
       ${socketRows}
