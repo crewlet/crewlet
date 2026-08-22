@@ -170,18 +170,23 @@ def create_app(
 
     auth_tokens: dict[str, str] = {}
     auth_disabled = False
-    auth_anonymous_read = False
-    auth_enabled = False
+    # No Tier A means no tokens, and a guard with no token that can ever
+    # match would refuse reads as well — so the token-less app takes the
+    # posture ``load_tokens`` documents for a read-only deployment:
+    # reads serve, every write and the whole ``/config`` surface is
+    # refused outright. See the unconditional mount below.
+    auth_anonymous_read = True
     if company_config_store is not None:
         routes.extend(build_config_routes())
         routes.extend(build_config_entity_routes())
         routes.extend(build_config_audit_routes())
     if bootstrap is not None:
-        # Mounted whenever Tier A is present, not only alongside the
-        # config routes: what it guards is a policy decision the whole
-        # API is subject to (see ``requires_token``), and ``/events`` /
-        # ``/agents/{id}/memory`` / ``/ws/stream`` carry full LLM
-        # transcripts regardless of whether a config store is wired.
+        # Tier A decides the POSTURE; it does not decide whether there is
+        # a guard at all (see below).  What the guard applies is a policy
+        # the whole API is subject to (see ``requires_token``), and
+        # ``/events`` / ``/agents/{id}/memory`` / ``/ws/stream`` carry
+        # full LLM transcripts regardless of whether a config store is
+        # wired.
         auth_tokens = load_tokens(bootstrap)
         auth_disabled = bootstrap.api.auth.disabled
         auth_anonymous_read = bool(
@@ -208,8 +213,27 @@ def create_app(
                     "reads too."
                 ),
             )
-        auth_enabled = True
-        middleware.append(Middleware(ApiAuthMiddleware))
+
+    # MOUNTED UNCONDITIONALLY, and that is the whole point.
+    #
+    # It used to be mounted only when ``bootstrap`` was passed, while the
+    # ``/config`` write surface was registered whenever
+    # ``company_config_store`` was passed. Two independent conditions
+    # decided one security property, and they only happened to coincide:
+    # every caller today passes both or neither, so nothing was exposed —
+    # but a caller passing a store without a bootstrap got the entire
+    # config write surface (``PUT /config``, ``POST
+    # /config/{rev}/activate``, every entity route) with no guard in
+    # front of it and no warning that it had happened. Nothing failed;
+    # the routes simply served.
+    #
+    # A guard whose absence is silent is a guard that will one day be
+    # absent. With no Tier A there is no token, so the middleware refuses
+    # every write and the whole ``/config`` surface — which is the only
+    # safe reading of "an app was built without being told who may write
+    # to it".
+    auth_enabled = True
+    middleware.append(Middleware(ApiAuthMiddleware))
 
     @contextlib.asynccontextmanager
     async def _lifespan(app: Starlette) -> Any:

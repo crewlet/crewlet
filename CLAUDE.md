@@ -893,7 +893,25 @@ src/crewlet/          # Main package
                       #   two halves can't disagree about the epoch;
                       #   auth guards EVERY route bar probes, webhooks
                       #   (HMAC), /otlp (signed token) and the dashboard
-                      #   shell —
+                      #   shell. The middleware is mounted
+                      #   UNCONDITIONALLY: it used to be gated on
+                      #   `bootstrap`, while the /config WRITE surface
+                      #   was gated on `company_config_store` — two
+                      #   independent conditions deciding one security
+                      #   property, coinciding only because every caller
+                      #   happens to pass both. Tier A supplies the
+                      #   POSTURE, never the existence of a check; with
+                      #   no Tier A no token can match, so reads serve
+                      #   and every write + all of /config is refused.
+                      #   Same rule for the seven inbound webhooks: a
+                      #   route whose secret is unset has nothing to
+                      #   verify with and answers 503+Retry-After. Slack
+                      #   was the one that skipped verification entirely
+                      #   in that case and returned 200 — no agent woke
+                      #   (the transport re-verifies) but the payload
+                      #   still reached the event store and every
+                      #   dashboard socket, which is the pollution the
+                      #   edge check exists to stop —
                       #   routes/ (per-domain handlers: agents, events,
                       #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
                       #     GitLab/Plane/Confluence/Forge inbound, incl.
@@ -1121,8 +1139,21 @@ src/crewlet/          # Main package
                       #   about spacing) at that price. Theme keeps its
                       #   button — it is flipped by the light in the room.
                       #   Commands rank below rooms/seats and vanish on an
-                      #   empty query; buildResults takes {theme,density}
-                      #   as an ARGUMENT so it stays DOM-free.
+                      #   empty query; buildResults takes {theme,density,
+                      #   tokenHeld} as an ARGUMENT so it stays DOM-free.
+                      #   THE API TOKEN is the one piece of state a reader
+                      #   holds that no screen mentioned: localStorage,
+                      #   sent on every handshake and query frame, so a
+                      #   browser given one once is authenticated for ever
+                      #   and never prompted again — which is exactly what
+                      #   "it never asks me for a token" means, and it
+                      #   could only be diagnosed from devtools. The health
+                      #   popover reports held/not-set and both it and the
+                      #   palette offer the action; forgetting reaches
+                      #   storage AND socket.setToken AND a reconnect,
+                      #   since the handshake carries the credential and an
+                      #   open socket stays authenticated until it
+                      #   re-dials.
                       #   modal.js replaced the window.prompt/confirm that
                       #   were the only unstyled UI in the product.
                       #   router.js OWNS THE BACK BUTTON, which is a

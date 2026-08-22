@@ -50,8 +50,16 @@ GUARDED_PREFIX = "/config"
 # - the dashboard shell + its assets: the page that prompts for the
 #   token cannot itself require one. It ships no data — every byte it
 #   renders comes from an authenticated fetch.
-UNGUARDED_EXACT = frozenset({"/", "/dashboard", "/favicon.ico"})
-UNGUARDED_PREFIXES = ("/health", "/ready", "/webhooks/", "/otlp/", "/static/")
+#
+# The split is deliberate: a PREFIX exempts everything beneath it, so
+# only the three that genuinely have sub-paths get one — and each ends in
+# a slash, which is what stops it exempting a sibling. ``/health`` and
+# ``/ready`` are single endpoints, so they are exact: as prefixes they
+# would have exempted any future route merely STARTING with those
+# letters (a ``/health-admin``, a ``/readyz-reset``) from authentication,
+# silently, on the day it was added.
+UNGUARDED_EXACT = frozenset({"/", "/dashboard", "/favicon.ico", "/health", "/ready"})
+UNGUARDED_PREFIXES = ("/webhooks/", "/otlp/", "/static/")
 
 # Methods treated as reads for ``allow_anonymous_read``.
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -69,8 +77,24 @@ def bind_is_loopback(host: str) -> bool:
 
 
 def is_unguarded_path(path: str) -> bool:
-    """Whether ``path`` is served without a bearer token."""
-    return path in UNGUARDED_EXACT or path.startswith(UNGUARDED_PREFIXES)
+    """Whether ``path`` is served without a bearer token.
+
+    A single trailing slash is normalised away before the exact set is
+    consulted, because the middleware runs BEFORE routing: Starlette
+    redirects ``/health/`` to ``/health``, but only if the request
+    survives long enough to be routed. Without this, a load balancer
+    configured to probe ``/health/`` gets a 401 in the closed posture and
+    takes the node out of rotation — an outage caused by a slash.
+
+    Only the exact set is normalised, and only by one slash. The
+    ``/config`` guard reads the raw path (``/config/`` starts with
+    ``/config`` either way), and the prefix exemptions already end in a
+    slash, so nothing here can widen what is exempt beyond the trailing-
+    slash spelling of a path that was exempt already.
+    """
+    if path in UNGUARDED_EXACT or path.startswith(UNGUARDED_PREFIXES):
+        return True
+    return len(path) > 1 and path.endswith("/") and path[:-1] in UNGUARDED_EXACT
 
 
 class TokenLoadError(RuntimeError):

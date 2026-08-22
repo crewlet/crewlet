@@ -75,16 +75,42 @@ test("a human seat is offered, and says it is one", () => {
 
 // ---- commands -------------------------------------------------------
 
+// Looked up by `command`, never by position: the list grows, and a test
+// that indexes it re-reads a different command than it asserts about.
+const cmd = (opts, name) => commands(opts).find((c) => c.command === name);
+
 test("a command states what it will DO, not what is currently set", () => {
   // The same rule an icon button's tooltip follows. A control labelled
   // with its current value asks the reader to work out the inverse.
-  const dark = commands({ theme: "dark", density: "comfortable" });
-  assert.match(dark[0].label, /Switch to the light theme/);
-  assert.match(dark[1].label, /Switch to compact spacing/);
+  const dark = { theme: "dark", density: "comfortable" };
+  assert.match(cmd(dark, "toggle-theme").label, /Switch to the light theme/);
+  assert.match(cmd(dark, "toggle-density").label, /Switch to compact spacing/);
 
-  const light = commands({ theme: "light", density: "compact" });
-  assert.match(light[0].label, /Switch to the dark theme/);
-  assert.match(light[1].label, /Switch to comfortable spacing/);
+  const light = { theme: "light", density: "compact" };
+  assert.match(cmd(light, "toggle-theme").label, /Switch to the dark theme/);
+  assert.match(cmd(light, "toggle-density").label, /Switch to comfortable spacing/);
+});
+
+test("the stored token is offered as something to FORGET when one is held", () => {
+  // The question this answers is "why does it never ask me for a token".
+  // Because the browser already has one, kept in localStorage, sent on
+  // every handshake and every query — and until now nothing said so and
+  // nothing could drop it.
+  assert.equal(cmd({ tokenHeld: true }, "set-token"), undefined);
+  const forget = cmd({ tokenHeld: true }, "clear-token");
+  assert.ok(forget, "no way to drop a held token");
+  assert.match(forget.label, /Forget/);
+
+  assert.equal(cmd({ tokenHeld: false }, "clear-token"), undefined);
+  assert.ok(cmd({ tokenHeld: false }, "set-token"), "no way to set one either");
+});
+
+test("the token command is findable by the words for it", () => {
+  for (const term of ["token", "forget"]) {
+    const hits = group(buildResults(state(), term, { tokenHeld: true }), "Commands");
+    assert.ok(hits, `nothing matched "${term}"`);
+    assert.ok(hits.items.some((i) => i.command === "clear-token"), term);
+  }
 });
 
 test("density is reachable by the words somebody would type for it", () => {

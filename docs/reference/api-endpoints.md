@@ -20,6 +20,19 @@ plane is a WebSocket (see [`WS /ws/stream`](#ws-wsstream)).
 > guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
+>
+> **The guard is always mounted**, whether or not Tier A is present. An API
+> built without `api.auth` configuration has no token, and a route that needs
+> one is therefore refused rather than served: reads work, every write and the
+> whole `/config` surface answers `401`. There is no way to start a process
+> that serves `/config` writes without a guard in front of them.
+>
+> **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
+> token because each verifies its provider's signature instead — so a route
+> whose secret is not configured has nothing to verify with, and answers `503`
+> with `Retry-After` rather than accepting the delivery. The sender retries and
+> the delivery flows once the secret is set; nothing is discarded, and nothing
+> unsigned is ever recorded, published, or shown on the dashboard.
 
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |

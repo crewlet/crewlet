@@ -41,8 +41,31 @@ export const ROOMS = [
 // Each states its DESTINATION — what clicking does — rather than its
 // current value, the same rule the icon buttons' tooltips follow, so the
 // label is the answer to "what happens if I pick this".
-export function commands({ theme = "dark", density = "comfortable" } = {}) {
+export function commands({
+  theme = "dark",
+  density = "comfortable",
+  tokenHeld = false,
+} = {}) {
   return [
+    // The credential, which is the one piece of state a reader can hold
+    // without any screen ever mentioning it: it lives in `localStorage`,
+    // rides every handshake and every query, and so stops the dashboard
+    // ever prompting again. Reachable here as well as from the health
+    // popover, because "why does it not ask me for a token" is a
+    // question people type before they think to click a status dot.
+    tokenHeld
+      ? {
+          id: "cmd:token-clear",
+          command: "clear-token",
+          label: "Forget the stored API token",
+          hint: "this browser is authenticating every request with it",
+        }
+      : {
+          id: "cmd:token-set",
+          command: "set-token",
+          label: "Set the API token",
+          hint: "needed for writes and for the configuration",
+        },
     {
       id: "cmd:theme",
       command: "toggle-theme",

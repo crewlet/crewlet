@@ -252,4 +252,44 @@ test("the skeleton is a thunk, so it is not built on the branch not taken", () =
   assert.strictEqual(built, 0);
 });
 
+test("the popover says whether this browser is holding a token", () => {
+  // The answer to "why does it never ask me for a token": because it
+  // already has one. The credential lives in localStorage and rides
+  // every handshake and every query, so a reader who set one once is
+  // authenticated on every later visit — correct, and previously
+  // invisible. Nothing on any screen said a credential was being held,
+  // and nothing could drop it, so the only way to find out was devtools.
+  const held = renderHealthPopover(OK, null, [], true, { held: true });
+  assert.match(held, /API token/);
+  assert.match(held, /held/);
+  assert.match(held, /data-action="clear-token"/);
+
+  const none = renderHealthPopover(OK, null, [], true, { held: false });
+  assert.match(none, /not set/);
+  assert.match(none, /data-action="set-token-chrome"/);
+  assert.ok(
+    !/data-action="clear-token"/.test(none),
+    "offered to forget a token that is not there",
+  );
+});
+
+test("a popover rendered with no auth argument claims nothing", () => {
+  // Every other field here is three-valued for the same reason: an
+  // absent fact must not render as a confident one.
+  //
+  // This assertion used to check only that "held" was absent, which the
+  // "not set" branch satisfies — so it passed while the popover was
+  // stating, to a caller that had not looked, that no credential exists.
+  // Checking one side of a two-sided claim is how a test certifies the
+  // half of the bug it was written to catch.
+  const html = renderHealthPopover(OK, null, [], true);
+  assert.ok(!/>held</.test(html), "invented a credential nobody reported");
+  assert.ok(!/not set/.test(html), "declared a credential missing without looking");
+  assert.match(html, /not reported/);
+  assert.ok(
+    !/data-action="clear-token"|data-action="set-token-chrome"/.test(html),
+    "offered an action for a state nobody established",
+  );
+});
+
 run();
