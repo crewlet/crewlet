@@ -536,15 +536,26 @@ async def slack_webhook(request: Request) -> JSONResponse:
     #
     # It is a MAP rather than a scalar because Slack's key is per-agent
     # (one app per seat), and the handle comes from the URL path.
-    signing_secrets = getattr(request.app.state, "slack_signing_secrets", None)
-    if signing_secrets:
-        secret = signing_secrets.get(handle, "")
-        if not secret:
-            logger.warning("slack_webhook_unknown_handle", handle=handle)
-            return JSONResponse({"error": "unknown handle"}, status_code=401)
-        if not _verify_slack_signature(body_raw, dict(request.headers), secret):
-            logger.warning("slack_webhook_signature_invalid", handle=handle)
-            return JSONResponse({"error": "invalid signature"}, status_code=401)
+    #
+    # AN EMPTY MAP IS "CANNOT VERIFY", NOT "NOTHING TO VERIFY". This
+    # block used to be wrapped in ``if signing_secrets:``, so a
+    # deployment with no Slack secret configured skipped the check
+    # entirely and this route answered 200 to an unsigned POST — the one
+    # webhook of the seven that failed open. Anyone who could reach the
+    # port could publish a ``raw_webhook`` addressed at any seat, and the
+    # engine treats that as a message from Slack: it wakes the agent and
+    # drives a turn. The other six route a missing secret to
+    # :func:`_no_secret_response`; so does this one now.
+    signing_secrets = getattr(request.app.state, "slack_signing_secrets", None) or {}
+    if not signing_secrets:
+        return _no_secret_response("slack")
+    secret = signing_secrets.get(handle, "")
+    if not secret:
+        logger.warning("slack_webhook_unknown_handle", handle=handle)
+        return JSONResponse({"error": "unknown handle"}, status_code=401)
+    if not _verify_slack_signature(body_raw, dict(request.headers), secret):
+        logger.warning("slack_webhook_signature_invalid", handle=handle)
+        return JSONResponse({"error": "invalid signature"}, status_code=401)
 
     with tracer.start_as_current_span(
         "webhook.slack",

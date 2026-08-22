@@ -50,8 +50,16 @@ GUARDED_PREFIX = "/config"
 # - the dashboard shell + its assets: the page that prompts for the
 #   token cannot itself require one. It ships no data — every byte it
 #   renders comes from an authenticated fetch.
-UNGUARDED_EXACT = frozenset({"/", "/dashboard", "/favicon.ico"})
-UNGUARDED_PREFIXES = ("/health", "/ready", "/webhooks/", "/otlp/", "/static/")
+#
+# The split is deliberate: a PREFIX exempts everything beneath it, so
+# only the three that genuinely have sub-paths get one — and each ends in
+# a slash, which is what stops it exempting a sibling. ``/health`` and
+# ``/ready`` are single endpoints, so they are exact: as prefixes they
+# would have exempted any future route merely STARTING with those
+# letters (a ``/health-admin``, a ``/readyz-reset``) from authentication,
+# silently, on the day it was added.
+UNGUARDED_EXACT = frozenset({"/", "/dashboard", "/favicon.ico", "/health", "/ready"})
+UNGUARDED_PREFIXES = ("/webhooks/", "/otlp/", "/static/")
 
 # Methods treated as reads for ``allow_anonymous_read``.
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

@@ -275,6 +275,14 @@ The API states which posture it took at startup, on `api_anonymous_read_enabled`
 and an internet-facing bind are not the same decision, and a warning that fires
 identically for both is one nobody reads by the third deployment.
 
+**The guard is mounted whether or not `api.auth` is configured.** It applies one
+rule — `requires_token` — and what Tier A supplies is the *posture*, not the
+existence of a check. An API built with no Tier A at all therefore has no token
+that can match, which means reads serve and every write plus the whole `/config`
+surface answers `401`. That is the only safe reading of "an app was built
+without being told who may write to it", and it removes the possibility of a
+process that serves `/config` writes with nothing in front of them.
+
 Served **without** a token in either posture, because they authenticate by other
 means or must be reachable to obtain one:
 
@@ -282,6 +290,7 @@ means or must be reachable to obtain one:
 |------|-----|
 | `/health`, `/ready` | Probes. An orchestrator has no token, and a liveness check that 401s is a liveness check that fails |
 | `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
+| | **A route whose secret is unset has nothing to verify with, so it fails closed**: `503` + `Retry-After`, never an accepted delivery. The sender retries and the delivery flows once the secret is configured — a deployment that has not set one is stalled, not damaged, and nothing unsigned is ever recorded, published, or shown on the dashboard |
 | `/otlp/*` | The signed per-run token in the path *is* the credential |
 | `/`, `/dashboard`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch |
 

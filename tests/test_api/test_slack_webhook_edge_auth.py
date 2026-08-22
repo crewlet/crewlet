@@ -148,13 +148,31 @@ def test_url_verification_challenge_needs_no_signature():
     assert resp.json()["challenge"] == "abc123"
 
 
-def test_no_configured_secrets_leaves_verification_to_the_transport():
-    """An engine that never populated the map (an older embedded start, a
-    company with no Slack seats) must keep working: the route defers, and
-    the transport still refuses to act on an unverified payload.
+def test_no_configured_secrets_is_refused_not_deferred():
+    """An empty secret map means "cannot verify", never "nothing to verify".
 
-    This is the one deliberate fail-open, and it is scoped to "the edge
-    has nothing to check with" — never to "the check failed".
+    This used to be the one deliberate fail-open, on the reasoning that a
+    deployment which never populated the map must keep working and that
+    the transport re-verifies anyway. Both halves were checked against
+    the code, and neither holds:
+
+    - The transport does refuse: ``verify_signature`` returns False on an
+      empty secret, so no agent is ever woken. But an agent wake was
+      never the whole of what an unsigned POST bought. Everything BETWEEN
+      the route and the transport still ran — the event-store row, the
+      Pulsar publish, the fan-out to every connected dashboard socket —
+      which is precisely the pollution this module's own docstring says
+      these tests exist to stop. Attacker-controlled text reached durable
+      storage and rendered in the operator's console under a Slack badge.
+    - "Must keep working" assumed those deliveries worked. They did not:
+      with no secret the transport dropped every one of them at the far
+      end. The fail-open preserved no functioning path — only the
+      pollution — so refusing costs a real deployment nothing and makes a
+      mis-wired one visible instead of silently lossy.
+
+    503, not 401, for the same reason the other six use it: the sender's
+    request is fine, this side has nothing to check it with, and a 4xx
+    would make Slack discard a delivery nobody else holds a copy of.
     """
     queue = _QueueStub()
     app = create_app(event_queue=queue, event_store=_EventStoreStub())
@@ -167,5 +185,37 @@ def test_no_configured_secrets_leaves_verification_to_the_transport():
         content=body,
         headers={"content-type": "application/json"},
     )
-    assert resp.status_code == 200
-    assert queue.published, "without edge secrets the payload still flows"
+    assert resp.status_code == 503
+    assert resp.headers.get("Retry-After"), "a held delivery must say when to retry"
+    assert queue.published == [], "an unverifiable payload reached the queue"
+
+
+def test_every_webhook_fails_closed_with_no_secret():
+    """The seven inbound routes answer a missing secret the same way.
+
+    Slack was the one that did not, and nothing compared them — each
+    provider's tests live in their own class and assert their own
+    handler. A rule that is only ever checked one route at a time is a
+    rule the seventh route can quietly opt out of.
+    """
+    queue = _QueueStub()
+    app = create_app(event_queue=queue, event_store=_EventStoreStub())
+    app.state.configured = True
+    client = TestClient(app)
+
+    posts = {
+        "/webhooks/github": {"action": "opened"},
+        "/webhooks/gitlab": {"object_kind": "push"},
+        "/webhooks/jira": {"webhookEvent": "jira:issue_created"},
+        "/webhooks/confluence": {"webhookEvent": "page_created"},
+        "/webhooks/plane": {"event": "issue", "action": "created"},
+        "/webhooks/forge": {"eventType": "x"},
+        "/webhooks/slack/engineer": _EVENT,
+    }
+    served = {}
+    for path, body in posts.items():
+        queue.published.clear()
+        resp = client.post(path, json=body)
+        if resp.status_code < 400 or queue.published:
+            served[path] = (resp.status_code, len(queue.published))
+    assert served == {}, f"these accepted an unauthenticated delivery: {served}"

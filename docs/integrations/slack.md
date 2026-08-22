@@ -207,6 +207,17 @@ For each app:
 
 Then export each `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` pair (or put them in `.env`) under the names your YAML references.
 
+> **The `signing_secret` is what makes the endpoint usable.** `/webhooks/slack/{handle}` is
+> exempt from the API's bearer token because it verifies Slack's own signature instead — so
+> until the secret is set there is nothing to verify with, and the route answers `503` with
+> `Retry-After` rather than accepting the delivery. Slack retries, and deliveries flow the
+> moment the secret is configured; nothing is lost in the meantime.
+>
+> An unsigned delivery is never recorded, published, or shown on the dashboard. Earlier
+> releases let one through when *no* Slack secret was configured anywhere — the payload could
+> not wake an agent (the transport re-verifies and refuses), but it did reach the event store
+> and every connected dashboard, attacker-controlled text and all.
+
 ---
 
 ## Reaching humans on Slack

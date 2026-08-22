@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -895,12 +896,39 @@ class TestJiraWebhook:
 
 
 class TestSlackWebhook:
+    SECRET = "slack-signing-secret"
+
+    @pytest.fixture
+    def signed_client(
+        self, event_queue: MockEventQueue, event_store: MemoryEventStore
+    ) -> TestClient:
+        app = create_app(
+            event_queue=event_queue,
+            event_store=event_store,
+            agent_roles=AGENT_ROLES,
+            slack_signing_secrets={"my-bot": self.SECRET},
+        )
+        return TestClient(app)
+
+    def _headers(self, body: bytes) -> dict[str, str]:
+        ts = str(int(time.time()))
+        digest = hmac.new(
+            self.SECRET.encode(), b"v0:" + ts.encode() + b":" + body, hashlib.sha256
+        ).hexdigest()
+        return {
+            "x-slack-request-timestamp": ts,
+            "x-slack-signature": f"v0={digest}",
+            "content-type": "application/json",
+        }
+
     def test_slack_webhook_publishes(
-        self, client: TestClient, event_queue: MockEventQueue
+        self, signed_client: TestClient, event_queue: MockEventQueue
     ):
-        resp = client.post(
-            "/webhooks/slack/my-bot",
-            json={"type": "event_callback", "event": {"type": "message"}},
+        body = json.dumps(
+            {"type": "event_callback", "event": {"type": "message"}}
+        ).encode()
+        resp = signed_client.post(
+            "/webhooks/slack/my-bot", content=body, headers=self._headers(body)
         )
         assert resp.status_code == 200
 
@@ -911,6 +939,16 @@ class TestSlackWebhook:
         assert event.source == "slack"
         assert event.payload["handle"] == "my-bot"
         assert "body_raw_b64" in event.payload
+
+    def test_an_unsigned_delivery_is_refused(
+        self, signed_client: TestClient, event_queue: MockEventQueue
+    ):
+        resp = signed_client.post(
+            "/webhooks/slack/my-bot",
+            json={"type": "event_callback", "event": {"type": "message"}},
+        )
+        assert resp.status_code == 401
+        assert event_queue.published == []
 
     def test_slack_url_verification(self, client: TestClient):
         resp = client.post(

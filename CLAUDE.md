@@ -893,7 +893,25 @@ src/crewlet/          # Main package
                       #   two halves can't disagree about the epoch;
                       #   auth guards EVERY route bar probes, webhooks
                       #   (HMAC), /otlp (signed token) and the dashboard
-                      #   shell —
+                      #   shell. The middleware is mounted
+                      #   UNCONDITIONALLY: it used to be gated on
+                      #   `bootstrap`, while the /config WRITE surface
+                      #   was gated on `company_config_store` — two
+                      #   independent conditions deciding one security
+                      #   property, coinciding only because every caller
+                      #   happens to pass both. Tier A supplies the
+                      #   POSTURE, never the existence of a check; with
+                      #   no Tier A no token can match, so reads serve
+                      #   and every write + all of /config is refused.
+                      #   Same rule for the seven inbound webhooks: a
+                      #   route whose secret is unset has nothing to
+                      #   verify with and answers 503+Retry-After. Slack
+                      #   was the one that skipped verification entirely
+                      #   in that case and returned 200 — no agent woke
+                      #   (the transport re-verifies) but the payload
+                      #   still reached the event store and every
+                      #   dashboard socket, which is the pollution the
+                      #   edge check exists to stop —
                       #   routes/ (per-domain handlers: agents, events,
                       #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
                       #     GitLab/Plane/Confluence/Forge inbound, incl.
