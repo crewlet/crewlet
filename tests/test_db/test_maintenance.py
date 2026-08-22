@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 
+from crewlet.db.chat_thread_follows import FOLLOW_RETENTION_SECONDS
 from crewlet.db.maintenance import (
     DELIVERY_RETENTION_SECONDS,
+    MAINTENANCE_INTERVAL_SECONDS,
     RATE_LIMIT_RETENTION_SECONDS,
     SCHEDULED_RUN_RETENTION_SECONDS,
     MaintenanceWorker,
@@ -65,6 +67,61 @@ async def test_the_scheduled_run_ledger_outlives_the_catchup_window() -> None:
     two hours.
     """
     assert SCHEDULED_RUN_RETENTION_SECONDS > 7200.0
+
+
+async def test_chat_thread_follows_is_swept() -> None:
+    """The table that grew for the life of the deployment.
+
+    ``ChatThreadFollowRepository`` shipped ``upsert`` and
+    ``is_following`` and nothing else, and this worker never named it —
+    so follow rows accumulated forever on a table read on the hot path
+    of every inbound chat message.
+    """
+    follows = _Purgeable(deleted=4)
+    worker = MaintenanceWorker(chat_thread_follows=follows)
+
+    deleted = await worker.tick_once()
+
+    assert follows.calls == [FOLLOW_RETENTION_SECONDS]
+    assert deleted == {"chat_thread_follows": 4}
+
+
+async def test_conversation_session_retention_is_configurable() -> None:
+    """The one retention an operator sets rather than the module.
+
+    A company running quarter-long tickets has a real reason to remember
+    a conversation past the event store's 30-day horizon, so this is
+    ``turn_engine.conversation_session.retention_days`` rather than a
+    constant like every other target.
+    """
+    sessions = _Purgeable()
+    worker = MaintenanceWorker(
+        conversation_sessions=sessions,
+        conversation_session_retention_seconds=90 * 24 * 3600.0,
+    )
+
+    await worker.tick_once()
+
+    assert sessions.calls == [90 * 24 * 3600.0]
+
+
+async def test_a_configured_retention_cannot_undercut_the_sweep() -> None:
+    """The module's invariant survives a hostile config.
+
+    Every retention here must exceed the tick, or a table sits past its
+    horizon for the difference and the retention stops describing it.
+    A configured value is the one that could break that, so it is
+    floored rather than trusted.
+    """
+    sessions = _Purgeable()
+    worker = MaintenanceWorker(
+        conversation_sessions=sessions,
+        conversation_session_retention_seconds=1.0,
+    )
+
+    await worker.tick_once()
+
+    assert sessions.calls == [MAINTENANCE_INTERVAL_SECONDS]
 
 
 async def test_a_table_that_cannot_be_swept_does_not_stop_the_others() -> None:

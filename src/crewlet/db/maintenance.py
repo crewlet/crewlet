@@ -57,7 +57,9 @@ from crewlet.a2a.channels import (
     A2A_CHANNEL_IDLE_TIMEOUT_SECONDS,
     A2A_CHANNEL_RETENTION_SECONDS,
 )
+from crewlet.db.chat_thread_follows import FOLLOW_RETENTION_SECONDS
 from crewlet.db.config_plane import APPLY_STATUS_RETENTION_SECONDS
+from crewlet.db.conversation_sessions import CONVERSATION_SESSION_RETENTION_SECONDS
 from crewlet.db.deliveries import DEFAULT_DEDUPE_TTL_SECONDS
 from crewlet.db.turn_completions import TURN_COMPLETION_RETENTION_SECONDS
 
@@ -135,6 +137,11 @@ class MaintenanceWorker:
         turn_completions: PurgeableStore | None = None,
         a2a_channels: PurgeableStore | None = None,
         apply_status: PurgeableStore | None = None,
+        chat_thread_follows: PurgeableStore | None = None,
+        conversation_sessions: PurgeableStore | None = None,
+        conversation_session_retention_seconds: float = (
+            CONVERSATION_SESSION_RETENTION_SECONDS
+        ),
         close_idle_a2a: Any = None,
         expire_diary: Any = None,
         interval_seconds: float = MAINTENANCE_INTERVAL_SECONDS,
@@ -171,6 +178,33 @@ class MaintenanceWorker:
                     "config_apply_status",
                     apply_status,
                     APPLY_STATUS_RETENTION_SECONDS,
+                )
+            )
+        if chat_thread_follows is not None:
+            self._targets.append(
+                (
+                    "chat_thread_follows",
+                    chat_thread_follows,
+                    FOLLOW_RETENTION_SECONDS,
+                )
+            )
+        if conversation_sessions is not None:
+            # The one target whose retention is CONFIGURED rather than a
+            # module constant: an operator running long-lived tickets may
+            # legitimately want a conversation remembered past the event
+            # store's own horizon. Read once here, so a live config change
+            # lands on the next process start like every other target.
+            self._targets.append(
+                (
+                    "conversation_sessions",
+                    conversation_sessions,
+                    # Floored at the tick so the module's own invariant
+                    # (interval < every retention) survives a config that
+                    # asks for a shorter horizon than the sweep itself.
+                    max(
+                        float(conversation_session_retention_seconds),
+                        MAINTENANCE_INTERVAL_SECONDS,
+                    ),
                 )
             )
         self._close_idle_a2a = close_idle_a2a
