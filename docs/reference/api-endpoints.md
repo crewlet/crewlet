@@ -49,6 +49,7 @@ plane is a WebSocket (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable `pending_sandbox_run` row (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
+| `GET` | `/conversations` | What a seat already said in each thread / issue / pull request it works — the same [conversation-session](../concepts/conversation-sessions.md) rows the engine renders into that conversation's next turn. `?handle=` lists them; `?handle=&key=` returns one conversation's entries. `available: false` means this node cannot see the ledger, never that the seat has said nothing |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
@@ -451,6 +452,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
 | `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
 | `budgets` | — | `GET /budgets` |
+| `conversations` | `{handle, key}` | `GET /conversations` — the seat page's **Threads** tab |
 | `integrations` | — | `GET /integrations` |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |

@@ -29,6 +29,7 @@ channel lifecycle for a model to manage, and the promise is kept.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 from crewlet._logging import get_logger
@@ -44,6 +45,38 @@ from crewlet.queue.protocol import EventQueue
 from crewlet.queue.topics import agent_inbox_topic
 
 logger = get_logger("a2a.service")
+
+
+def _trace_of(event: Any) -> dict[str, str]:
+    """Trace context to stamp on an event caused by ``event``.
+
+    ``Event``'s trace fields default to the AMBIENT span, which is the
+    right answer everywhere a span is open — the ``a2a_ask`` tool runs
+    inside the asker's Execute phase, so the ask inherits that trace for
+    free. The reply does not: it is published from ``_answer_a2a``,
+    which runs after ``run_turn`` has returned and its phase spans have
+    closed, and the engine opens no span of its own. The ambient trace
+    is then empty, and an event with no trace is unreachable from the
+    exchange it belongs to — which is exactly what made an A2A event's
+    trace link dead-end on the dashboard.
+
+    So the causing event's context is copied forward explicitly, the
+    same way ``A2AMessageDelivered`` already does it. Verbatim rather
+    than re-parented: ``TurnEngine.run_turn`` calls ``restore_context``
+    with these, so the woken turn becomes a child of the span that
+    caused it, which is the true shape of the causal chain.
+
+    Returns ``{}`` when there is nothing to copy, so the field defaults
+    (ambient capture) still apply for callers that DO have a span.
+    """
+    trace_id = getattr(event, "trace_id", "") if event is not None else ""
+    if not trace_id:
+        return {}
+    return {
+        "trace_id": trace_id,
+        "span_id": getattr(event, "span_id", "") or "",
+        "parent_span_id": getattr(event, "parent_span_id", "") or "",
+    }
 
 
 class A2AService:
@@ -191,11 +224,28 @@ class A2AService:
         content: str,
         sender_role: str = "",
         *,
+        question: str = "",
+        caused_by: Any = None,
         delegation_depth: int = 0,
         delegation_chain: list[str] | None = None,
         parent_turn_id: str = "",
     ) -> None:
         """Answer on a channel and wake the other party.
+
+        ``caused_by`` is the ask event this answers. Its trace context is
+        copied onto the reply so the whole exchange — the ask, the
+        answering turn's phases, the reply, and the turn it wakes — reads
+        as ONE trace. Without it the reply is published outside any span
+        (see :func:`_trace_of`) and carries no trace at all, which leaves
+        an A2A event's trace link on the dashboard pointing nowhere.
+
+        ``question`` echoes the original ask back to the asker. Its turn
+        ended when it asked, and nothing rehydrates it — so without the
+        echo the woken turn receives an answer with no record of what it
+        asked, and has to reconstruct that from memory retrieval or act
+        on the answer blind. This is the one wake path with no external
+        surface to re-read, so the echo is the only way that context
+        survives the round trip.
 
         The reply carries the ask's delegation depth UNCHANGED. The ask
         is the delegation; the answer is that same hop completing, and
@@ -239,8 +289,11 @@ class A2AService:
                 f"Sender '{sender}' is not a participant of channel '{channel_id}'"
             )
 
+        trace = _trace_of(caused_by)
         await self._channels.count_message(channel_id)
-        await self._publish_sent(channel_id, sender, recipient, content, sender_role)
+        await self._publish_sent(
+            channel_id, sender, recipient, content, sender_role, trace
+        )
 
         chain = list(delegation_chain or [])
         if sender and sender not in chain:
@@ -253,10 +306,12 @@ class A2AService:
                 "sender": sender,
                 "content": content,
                 "sender_role": sender_role,
+                "question": question,
             },
             delegation_depth=delegation_depth,
             delegation_chain=chain,
             parent_turn_id=parent_turn_id,
+            **trace,
         )
         await self._queue.publish(agent_inbox_topic(recipient), wake_event)
 
@@ -276,6 +331,7 @@ class A2AService:
         recipient: str,
         content: str,
         sender_role: str,
+        trace: dict[str, str] | None = None,
     ) -> None:
         msg = ChannelMessage(
             channel=channel_id,
@@ -293,16 +349,23 @@ class A2AService:
                 recipient=recipient,
                 message_id=str(msg.id),
                 content=content,
+                **(trace or {}),
             ),
         )
 
-    async def close_channel(self, channel_id: str, closer: str = "") -> None:
+    async def close_channel(
+        self, channel_id: str, closer: str = "", *, caused_by: Any = None
+    ) -> None:
         """Close a channel and record it.
 
         Args:
             channel_id: The channel to close.
             closer: Handle of the agent requesting the close. When
                 provided, must be a participant of the channel.
+            caused_by: The event this close answers, if any. The close
+                is published from the same traceless frame as the reply
+                (see :func:`_trace_of`), so without it the event that
+                ends the exchange falls outside the exchange's trace.
 
         Raises:
             ValueError: If *closer* is provided and is not a
@@ -339,6 +402,7 @@ class A2AService:
             participants=closed.participants,
             message_count=closed.message_count,
             duration_ms=closed.duration_ms,
+            **_trace_of(caused_by),
         )
         await self._queue.publish("crewlet.events.a2a_channel_closed", closed_event)
 

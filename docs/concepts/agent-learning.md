@@ -273,6 +273,8 @@ Personal memory still does its cheap diary recency list on a thin trigger (a DB 
 
 This makes the prefetch honest about its role: it's an **optimization for rich triggers**, and for event-driven turns the tool-call path is the *primary* retrieval path — re-query-after-recon is the expected pattern, not a fallback. That re-query happens two ways: the planner *pulls* mid-Plan via `refresh_memory` / the knowledge backend's search tools / `query_episodes` (guided by the [retrieval re-search guidance](#prompt-scaffolding)), and for relevant knowledge the `TurnEngine` also *pushes* — the [post-Plan re-fetch](#post-plan-re-fetch-thin-triggers) re-runs the search keyed on the plan summary and injects the result into the Execute prompt, so Execute is covered whether or not the planner pulled.
 
+**One block is not gated, deliberately.** A pointer-shaped trigger is very often a *follow-up on a conversation this seat already worked* — the second comment on POC-518, the reply in a thread it answered yesterday. [Conversation sessions](conversation-sessions.md) render what the seat itself already said there, and that lookup is a keyed read rather than a similarity match: no embedding, no aux LLM, nothing for the gate to save. So on exactly the turns where all three prefetches above go quiet, the seat still arrives knowing what it last said and did in this conversation — which is what stops it answering the same question twice while it goes off to re-read the thread.
+
 ---
 
 ## Salient-body sourcing

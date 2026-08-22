@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 from crewlet._logging import get_logger
 from crewlet.agent.definition import AgentDefinition
-from crewlet.agent.memory import AgentMemory
 
 logger = get_logger("agent.instance")
 
@@ -31,8 +30,11 @@ class AgentState(StrEnum):
 class AgentInstance:
     """A single running agent instance.
 
-    Each instance has a unique ID, a definition (from Role),
-    a current state, and working memory.
+    Each instance has a unique ID, a definition (from Role), and a
+    current state.  Cross-turn context is NOT held here: it lives in
+    the durable stores (``agent_diary``, ``episodes``, and the
+    per-conversation ``conversation_sessions`` ledger), because a seat
+    moves between nodes and anything process-local is lost with it.
     """
 
     def __init__(
@@ -55,7 +57,6 @@ class AgentInstance:
         self.email = email
         self.handle = handle
         self.state = AgentState.CREATED
-        self.memory = AgentMemory()
         self.current_task_id: str | None = None
         self.input_tokens: int = 0
         self.output_tokens: int = 0

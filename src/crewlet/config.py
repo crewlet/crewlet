@@ -1000,6 +1000,68 @@ def new_node_incarnation(bootstrap: BootstrapConfig | None = None) -> str:
     return f"{resolve_node_id(bootstrap)}:{uuid4().hex[:8]}"
 
 
+class ConversationSessionConfig(BaseModel):
+    """Per-conversation session ledger settings.
+
+    Carries what a seat already did in one conversation (a Slack thread,
+    a Jira issue, a GitHub PR) into the NEXT turn of that conversation,
+    as a ``## Earlier in this conversation`` block on the Plan and
+    Execute user messages.
+
+    This is the cross-turn counterpart of the within-turn prior-work
+    ledger, and it is deliberately structured rather than a transcript
+    replay — see ``docs/concepts/conversation-sessions.md``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    """Whether completed turns are recorded and replayed.
+
+    On by default: the block is deterministic, bounded, and is the only
+    context a thin-trigger turn gets (those turns gate the aux-LLM
+    prefetches off).  Turning it off restores the pre-ledger prompt
+    exactly, which is why it is a safe live kill switch.
+    """
+
+    max_entries: int = Field(default=20, ge=1)
+    """Entries KEPT per conversation, trimmed at write time.
+
+    Larger than what any prompt injects, so the dashboard can show a
+    conversation's history beyond what a single turn carried.  The trim
+    is what bounds a chat DM, whose conversation key is the whole
+    channel rather than a thread and so never stops receiving entries.
+    """
+
+    injected_max_entries: int = Field(default=5, ge=1)
+    """How many entries reach the prompt: the newest N of the
+    conversation, then rendered OLDEST first so the block reads forward
+    into the task beneath it.
+
+    Five covers the run of exchanges a follow-up plausibly needs to
+    avoid repeating itself, without turning the user message into a
+    transcript.
+    """
+
+    injected_max_chars: int = Field(default=6000, ge=500)
+    """Byte budget for the rendered block; oldest entries drop first.
+
+    ~1.5k tokens — the order of one iteration of the prior-work ledger.
+    It is re-sent on every round of every phase (Anthropic bills cache
+    reads at full token value), so the cost is multiplied by
+    ``max_tool_rounds``; this is the knob that bounds that product.
+    """
+
+    retention_days: int = Field(default=30, ge=1)
+    """How long a conversation is remembered.
+
+    Matches the event store's own 30-day horizon, so the engine's memory
+    of a conversation and the telemetry showing what it did there forget
+    together.  Applied when the maintenance worker is built, i.e. at the
+    next process start — like every other retention.
+    """
+
+
 class TurnEngineConfig(BaseModel):
     """Configuration for the Plan/Execute/Review turn engine.
 
@@ -1176,6 +1238,16 @@ class TurnEngineConfig(BaseModel):
     sandbox_min_budget_tokens: int = 2000
     """Pre-flight floor: refuse to launch a sandboxed Execute when the
     agent's remaining budget is below this."""
+
+    conversation_session: ConversationSessionConfig = ConversationSessionConfig()
+    """Per-conversation session ledger — see
+    :class:`ConversationSessionConfig`.
+
+    Nested under ``turn_engine`` rather than beside it because it is
+    read by the turn engine on every turn: it therefore rides the live
+    ``TurnEngineSettings`` cell and hot-reloads through the existing
+    ``_apply_turn_engine_diff`` handler with no new apply-config wiring.
+    """
 
 
 class EpisodicConfig(BaseModel):

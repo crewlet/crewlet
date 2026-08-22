@@ -579,7 +579,9 @@ broadcast as a personal address is exactly what
 The thread key is `root_id`, which is immutable and equals the parent post's
 id — so the follow model maps 1:1 onto the one Slack uses. State is persisted
 in PostgreSQL (`chat_thread_follows`, rows keyed `backend = 'mattermost'`) and
-survives engine restarts.
+survives engine restarts — including the 90-day inactivity sweep described in
+[the Slack analog](slack.md#thread-routing), which is backend-neutral because
+the table is.
 
 For **backfilled** posts the mention list is unavailable (they are re-read
 over REST), so the text alone decides — the same `@username` grammar, doing

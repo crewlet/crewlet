@@ -110,6 +110,19 @@ class TurnContext:
     notification_metadata: dict[str, Any] | None = None
     a2a_context: dict[str, Any] | None = None
 
+    conversation_key: str = ""
+    """Which conversation this turn belongs to — the Slack thread, Jira
+    issue, GitHub PR (``{source}:{local}``, see
+    :func:`crewlet.notifications.coalesce.conversation_key`).
+
+    Derived once by the engine at dispatch and carried here so every
+    consumer reads ONE derivation: the per-conversation session ledger,
+    the ``run_sandbox`` clarification round-trip, the episode row, and
+    the turn's telemetry.  Empty, or ``event:``-prefixed, when the
+    trigger has no conversation a later message could reproduce (a
+    scheduled fire, a task assignment, an A2A wake).
+    """
+
     # Per-phase model keys populated lazily by the engine once
     # ``phase_model.resolve_phase_provider`` runs.
     model_keys: dict[str, str] = field(default_factory=dict)
@@ -158,6 +171,22 @@ class TurnContext:
     last_plan: Any = None
     last_execute_result: Any = None
 
+    # The ReviewOutcome of the round that ENDED the turn.  Stashed for
+    # the same reason as the two above: ``_drive_phases`` returns only
+    # ``(final_artifact, decision)``, and a ``done`` round appends no
+    # ``IterationRecord`` — so without this the reviewer's own prose
+    # about what landed never reaches the turn-completion frame, which
+    # is exactly what the conversation ledger wants to record.
+    last_review: Any = None
+
+    # Prior turns of this conversation, rendered once at turn start and
+    # frozen for the whole turn (the ``plan_prefetch`` rule: a block that
+    # changed between iterations would invalidate the provider prompt
+    # cache on every self_iterate loop).  Empty when the ledger is off,
+    # when the trigger has no reproducible conversation, or on the first
+    # turn of one.  See :mod:`crewlet.agent.conversation_log`.
+    conversation_history: str = ""
+
     # Set once the dedicated first-turn onboarding pass has run this turn
     # (see agent.onboarding_phase). Suppresses the Plan-prompt onboarding hint
     # for the rest of the turn so onboarding can't also happen inside Plan and
@@ -202,6 +231,14 @@ class TurnContext:
     # :mod:`crewlet.agent.iteration_log`.
     iteration_history: list[IterationRecord] = field(default_factory=list)
 
+    # Tool names MCP annotations positively mark read-only, among those
+    # actually called this turn — accumulated across iterations by the
+    # phase driver, which is the only frame where the role's MCP
+    # wrappers are in scope to resolve them.  The conversation ledger is
+    # built after that frame returns and marks its ``(read)`` lines from
+    # here; the per-iteration ``IterationRecord`` carries its own copy.
+    read_only_names: tuple[str, ...] = ()
+
     # The engine-detected guard breach that ended this turn, as
     # ``{"kind": ..., "detail": ...}``, or ``None``.  A stall abort and an
     # exhausted iteration cap end a turn by RETURNING ``decision="failed"``
@@ -230,6 +267,22 @@ class TurnContext:
     _trigger_interactions: list[InboundInteraction] | None = field(
         default=None, init=False, repr=False
     )
+
+    @property
+    def stored_conversation_key(self) -> str:
+        """:attr:`conversation_key`, or ``""`` when it identifies nothing.
+
+        The raw key falls back to ``event:{id}`` for any trigger with no
+        derivable conversation — a scheduled fire, a task assignment, an
+        A2A wake.  That value is unique per emission, so no later
+        message can reproduce it: storing it would key a row nothing can
+        look up, and every read of one would miss.  Every consumer that
+        PERSISTS or indexes the key (the session ledger, the episode
+        column, the turn's telemetry tags) wants that filtered answer,
+        so the rule lives here rather than in each of them.
+        """
+        key = self.conversation_key or ""
+        return "" if key.startswith("event:") else key
 
     def trigger_interactions(self) -> list[InboundInteraction]:
         """Canonical interactions derived from ``trigger_event``, memoized.

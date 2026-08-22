@@ -241,6 +241,7 @@ async def _publish_subagent_failure(
         event_queue=event_queue,
         agent=parent_turn.agent,
         turn_id=parent_turn.turn_id,
+        conversation_key=parent_turn.stored_conversation_key,
         iteration=parent_turn.iteration,
         phase="subagent",
         provider_key=provider_key,
@@ -394,6 +395,7 @@ async def spawn_subagent(
         phase="subagent",
         provider_key=provider_key,
         trigger=trigger,
+        conversation_key=parent_turn.stored_conversation_key,
     ) as sub_progress:
         with tracer.start_as_current_span(
             "agent.subagent",
@@ -520,6 +522,7 @@ async def spawn_subagent(
         event_queue=event_queue,
         agent=parent_turn.agent,
         turn_id=parent_turn.turn_id,
+        conversation_key=parent_turn.stored_conversation_key,
         iteration=parent_turn.iteration,
         phase="subagent",
         provider_key=provider_key,

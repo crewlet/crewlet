@@ -52,6 +52,9 @@ from crewlet.config import (  # noqa: E402
     ProvidersConfig,
     SandboxProviderConfig,
 )
+from crewlet.db.conversation_sessions import (  # noqa: E402
+    MemoryConversationSessionStore,
+)
 from crewlet.db.leases import MemoryLeaseStore  # noqa: E402
 from crewlet.db.turn_completions import (  # noqa: E402
     MemoryTurnCompletionStore,
@@ -205,6 +208,7 @@ class Fleet:
     handles: tuple[str, ...]
     leases: MemoryLeaseStore
     completions: MemoryTurnCompletionStore
+    sessions: MemoryConversationSessionStore
     company: CompanyConfig
     _published: dict[str, list[Any]] = field(default_factory=dict)
 
@@ -378,6 +382,12 @@ async def fleet(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
     # deduplicates nothing across a takeover, which is the only thing it
     # is for — and would look from the outside exactly as though it did.
     completions = MemoryTurnCompletionStore()
+    # ONE conversation ledger for the fleet, for the same reason: a seat
+    # moves between nodes as a matter of course, so a per-node ledger
+    # would make every handoff look to the agent like a brand-new
+    # conversation — which is exactly what the Postgres table exists to
+    # stop, and what a per-node store would hide.
+    sessions = MemoryConversationSessionStore()
     journal: list[tuple[str, str, str]] = []
     nodes: list[_Node] = []
     for name in ("node-a", "node-b"):
@@ -394,6 +404,7 @@ async def fleet(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
             event_queue=queue,
             lease_store=leases,
             turn_completion_store=completions,
+            conversation_session_store=sessions,
         )
         await engine.apply_config(company)
         await engine.start()
@@ -406,6 +417,7 @@ async def fleet(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
         handles=handles,
         leases=leases,
         completions=completions,
+        sessions=sessions,
         company=company,
     )
     try:

@@ -414,6 +414,7 @@ async def _run_pass(
         event_queue=event_queue,
         agent=turn.agent,
         turn_id=turn.turn_id,
+        conversation_key=turn.stored_conversation_key,
         iteration=iteration,
         phase="onboarding",
         provider_key=provider_key,

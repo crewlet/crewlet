@@ -754,14 +754,17 @@ async def run_plan_phase(
         Message(role="system", content=system_prompt),
         Message(
             role="user",
-            # The prior-work ledger rides the USER message so the frozen
-            # system prefix above stays byte-stable across self_iterate
-            # loops (provider prefix caching); empty on iteration 1.
+            # The prior-work ledger and the conversation history both
+            # ride the USER message so the frozen system prefix above
+            # stays byte-stable across self_iterate loops (provider
+            # prefix caching); the ledger is empty on iteration 1, and
+            # the history is frozen at turn start for the same reason.
             content=build_phase_user_message(
                 task_description=turn.task_description,
                 prior_work=render_iteration_ledger(
                     turn.iteration_history, skip_names=PLAN_META_TOOL_NAMES
                 ),
+                conversation_history=turn.conversation_history,
             ),
         ),
     ]
@@ -964,6 +967,7 @@ async def run_plan_phase(
         event_queue=event_queue,
         agent=turn.agent,
         turn_id=turn.turn_id,
+        conversation_key=turn.stored_conversation_key,
         iteration=turn.iteration,
         phase="plan",
         provider_key=provider_key,

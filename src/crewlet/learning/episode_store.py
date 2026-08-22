@@ -65,7 +65,7 @@ _EPISODE_COLUMNS = """
     duration_ms, embedding,
     kind, count, exemplar_turn_ids, consolidated_into_skill_id,
     common_task_pattern, common_outcome, success_rate,
-    subjects_involved, notable_patterns, work_key
+    subjects_involved, notable_patterns, work_key, conversation_key
 """
 
 _EPISODE_VALUES = """
@@ -75,7 +75,7 @@ _EPISODE_VALUES = """
     $13, $14::vector,
     $15, $16, $17::jsonb, $18,
     $19, $20, $21,
-    $22::jsonb, $23, $24
+    $22::jsonb, $23, $24, $25
 """
 
 _INSERT_EPISODE_SQL = f"""
@@ -132,6 +132,7 @@ def _insert_args(episode: Episode, embedding_literal: str | None) -> tuple[Any, 
         json.dumps(episode.subjects_involved),
         episode.notable_patterns,
         episode.work_key,
+        episode.conversation_key,
     )
 
 
@@ -159,6 +160,7 @@ class EpisodeStoreProtocol(Protocol):
         limit: int = 5,
         outcome_filter: str | None = None,
         kinds: list[str] | None = None,
+        conversation_key: str = "",
     ) -> list[Episode]: ...
 
     async def list_recent_by_outcome(
@@ -466,6 +468,7 @@ class EpisodeStore:
         limit: int = 5,
         outcome_filter: str | None = None,
         kinds: list[str] | None = None,
+        conversation_key: str = "",
     ) -> list[Episode]:
         """Return episodes most similar to ``query_text`` for this agent.
 
@@ -475,6 +478,14 @@ class EpisodeStore:
         to ``["raw", "compacted"]`` -- both physical shapes -- so
         ``query_episodes`` recall surfaces aggregate patterns
         alongside individual turns.
+
+        ``conversation_key`` narrows to one conversation (a Slack
+        thread, a Jira issue).  Deliberately NOT plumbed to the
+        ``query_episodes`` tool: the planner never sees a raw key, and
+        the per-conversation ledger already puts that history in the
+        prompt.  It serves callers that hold a key — the API, and any
+        future recall that wants "on this ticket" rather than "like
+        this".
         """
         kinds = list(kinds) if kinds else ["raw", "compacted"]
         embedding_literal = await self._embed_or_none(query_text)
@@ -491,12 +502,15 @@ class EpisodeStore:
         if outcome_filter is not None:
             clauses.append(f"review_outcome = ${len(params) + 1}")
             params.append(outcome_filter)
+        if conversation_key:
+            clauses.append(f"conversation_key = ${len(params) + 1}")
+            params.append(conversation_key)
         params.append(limit)
         sql = f"""
             SELECT id, agent_handle, agent_role, task_id, turn_id,
                    started_at, ended_at, plan_summary, task_summary,
                    tool_sequence, skills_used, review_outcome,
-                   duration_ms,
+                   duration_ms, work_key, conversation_key,
                    kind, count, exemplar_turn_ids,
                    consolidated_into_skill_id,
                    common_task_pattern, common_outcome, success_rate,
@@ -541,7 +555,7 @@ class EpisodeStore:
             SELECT id, agent_handle, agent_role, task_id, turn_id,
                    started_at, ended_at, plan_summary, task_summary,
                    tool_sequence, skills_used, review_outcome,
-                   duration_ms,
+                   duration_ms, work_key, conversation_key,
                    kind, count, exemplar_turn_ids,
                    consolidated_into_skill_id,
                    common_task_pattern, common_outcome, success_rate,
@@ -579,7 +593,7 @@ class EpisodeStore:
             SELECT id, agent_handle, agent_role, task_id, turn_id,
                    started_at, ended_at, plan_summary, task_summary,
                    tool_sequence, skills_used, review_outcome,
-                   duration_ms,
+                   duration_ms, work_key, conversation_key,
                    kind, count, exemplar_turn_ids,
                    consolidated_into_skill_id,
                    common_task_pattern, common_outcome, success_rate,
@@ -795,6 +809,7 @@ def _row_to_episode(row: dict) -> Episode:
         # never read back is how a model quietly stops describing its
         # own table.
         work_key=row.get("work_key") or "",
+        conversation_key=row.get("conversation_key") or "",
         agent_handle=row["agent_handle"],
         agent_role=row["agent_role"],
         task_id=row.get("task_id") or "",

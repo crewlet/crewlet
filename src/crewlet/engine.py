@@ -24,6 +24,7 @@ from crewlet.agent.turn import TurnEngine
 from crewlet.budget_reporter import BudgetReporter
 from crewlet.concurrency import BudgetManager, ConcurrencyController
 from crewlet.config import (
+    ConversationSessionConfig,
     MCPServerConfig,
     config_to_organization,
     parse_mcp_servers,
@@ -129,6 +130,20 @@ def _parse_otlp_headers(raw: str) -> dict[str, str]:
         if sep and key.strip():
             headers[key.strip()] = value.strip()
     return headers
+
+
+# The echoed A2A question. Shares the iteration ledger's note budget:
+# an ask is one or two sentences, so this is a guard against a
+# pathological one rather than a routine trim.
+_A2A_QUESTION_LIMIT = 2000
+
+
+def _elide_a2a_question(text: str) -> str:
+    """Trim the echoed ask with a visible marker."""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= _A2A_QUESTION_LIMIT:
+        return collapsed
+    return collapsed[:_A2A_QUESTION_LIMIT].rstrip() + "…"
 
 
 def _scheduled_deadline(event: Event) -> float | None:
@@ -370,6 +385,7 @@ class Engine:
         embeddings: Any = None,
         lease_store: Any = None,
         turn_completion_store: Any = None,
+        conversation_session_store: Any = None,
     ) -> None:
         self.debug = debug
         self._turn_engine_config = turn_engine_config
@@ -546,6 +562,18 @@ class Engine:
         # across a fleet or it deduplicates nothing across a takeover.
         self._turn_completions: Any = turn_completion_store
 
+        # Per-conversation session ledger — what this seat already did in
+        # a given Slack thread / issue / PR, rendered back into that
+        # conversation's next turn.  Derived at start() from ``storage``
+        # when not injected: Postgres when there is one, the memory twin
+        # otherwise (see ``_build_conversation_session_store`` for why
+        # the twin is acceptable here and not for the completion
+        # ledger).  Injectable for the same reason the lease store and
+        # the completion ledger are — a fleet test needs the two nodes
+        # to share ONE store, which is what the Postgres table is in
+        # production.
+        self._conversation_sessions: Any = conversation_session_store
+
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
         # the TurnEngine so every per-phase prompt builder can consult it.
@@ -680,6 +708,7 @@ class Engine:
         company_config_store: Any = None,
         lease_store: Any = None,
         turn_completion_store: Any = None,
+        conversation_session_store: Any = None,
     ) -> Engine:
         """Construct an engine from Tier A bootstrap state only.
 
@@ -706,6 +735,7 @@ class Engine:
             api_host=bootstrap.api.host,
             lease_store=lease_store,
             turn_completion_store=turn_completion_store,
+            conversation_session_store=conversation_session_store,
         )
         engine._bootstrap = bootstrap
         engine._company_config_store = company_config_store
@@ -2699,6 +2729,11 @@ class Engine:
             action="setup_turn_engine",
             llm_providers=len(self._llm_providers),
         )
+        # Before the turn engine, not with the other stores below: the
+        # TurnEngine takes it as a constructor argument, and the live
+        # rebuild path (``_ensure_turn_engine_after_providers``) would
+        # otherwise construct one with no ledger and keep it.
+        self._build_conversation_session_store()
         if self._llm_providers:
             self._build_turn_engine(
                 summarize_enabled=summarize_enabled,
@@ -3400,6 +3435,16 @@ class Engine:
             f"A2A Channel: {channel_id}",
             "",
         ]
+        # On the ANSWER leg, lead with what this agent asked. Its asking
+        # turn ended when it asked and nothing rehydrates it, so without
+        # this the wake is an answer to a question the turn cannot see —
+        # and unlike every other wake there is no external surface to
+        # re-read it from.
+        question = str(event.payload.get("question", "") or "")
+        if not is_responder and question:
+            parts.append("**You asked:**")
+            parts.append(f"- {_elide_a2a_question(question)}")
+            parts.append("")
         if content:
             parts.append("**Message:**")
             parts.append(f"- **{requester}{role_tag}:** {content}")
@@ -3424,6 +3469,10 @@ class Engine:
                     "*** INSTRUCTIONS ***",
                     "- This is the answer to a question you asked."
                     " Act on it; the channel is now closed.",
+                    "- The turn that asked has ended. What you asked is"
+                    " quoted above — everything else it had is gone, so"
+                    " re-fetch anything you need rather than assuming it"
+                    " is still to hand.",
                 ]
             )
 
@@ -3484,6 +3533,17 @@ class Engine:
                     agent.handle,
                     answer,
                     sender_role=agent.role_name,
+                    # The ask, echoed back to whoever made it. This
+                    # frame still holds the a2a_request event, so the
+                    # question is right here — while on the asker's side
+                    # its turn has ended and nothing rehydrates it.
+                    question=str(event.payload.get("content", "") or ""),
+                    # The ask carries the exchange's trace; this frame
+                    # runs after the turn's spans closed, so without
+                    # passing it the reply is published with no trace at
+                    # all and the exchange splits in two on the
+                    # dashboard.
+                    caused_by=event,
                     delegation_depth=event.delegation_depth,
                     delegation_chain=list(event.delegation_chain or []),
                     parent_turn_id=event.parent_turn_id,
@@ -3502,7 +3562,9 @@ class Engine:
             )
         finally:
             with contextlib.suppress(Exception):
-                await self.a2a_service.close_channel(channel_id, closer=agent.handle)
+                await self.a2a_service.close_channel(
+                    channel_id, closer=agent.handle, caused_by=event
+                )
 
     async def _handle_notification(self, agent: AgentInstance, event: Event) -> None:
         """Handle an external notification: wake the agent and run a turn.
@@ -5432,6 +5494,7 @@ class Engine:
         corrupt anything — it would simply be N times the write
         amplification and vacuum churn for one table's worth of benefit.
         """
+        from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
         from crewlet.db.client import Database
         from crewlet.db.deliveries import PostgresDeliveryDedupeStore
         from crewlet.db.maintenance import MaintenanceWorker
@@ -5445,6 +5508,16 @@ class Engine:
         a2a_channels = (
             self.a2a_service.channels if self.a2a_service is not None else None
         )
+        # Only the Postgres store accumulates; the memory twin the
+        # engine wires without a database prunes itself with the process.
+        conversation_sessions = self._conversation_sessions
+        if not hasattr(conversation_sessions, "purge"):
+            conversation_sessions = None
+        retention_days = int(
+            self._turn_engine_config.conversation_session.retention_days
+            if self._turn_engine_config is not None
+            else ConversationSessionConfig().retention_days
+        )
         self._maintenance_worker = MaintenanceWorker(
             deliveries=PostgresDeliveryDedupeStore(self.storage),
             rate_limits=PostgresRateLimitStore(self.storage),
@@ -5452,6 +5525,13 @@ class Engine:
             turn_completions=self._turn_completions,
             a2a_channels=a2a_channels,
             apply_status=self._config_plane(),
+            # A fresh repository over the same pool: the one the chat
+            # transports hold is built in ``build_notification_transports``
+            # and is stateless, so a second instance is equivalent and
+            # avoids making the sweep depend on chat being configured.
+            chat_thread_follows=ChatThreadFollowRepository(self.storage),
+            conversation_sessions=conversation_sessions,
+            conversation_session_retention_seconds=retention_days * 24 * 3600.0,
             # Closing a channel nothing finished is housekeeping on the
             # same shared table, on the same singleton, for the same
             # reason: N nodes closing the same abandoned channels would
@@ -5504,6 +5584,33 @@ class Engine:
         if not isinstance(self.storage, Database):
             return
         self._turn_completions = PostgresTurnCompletionStore(self.storage)
+
+    def _build_conversation_session_store(self) -> None:
+        """Wire the per-conversation ledger.
+
+        Unlike the completion ledger above, the memory twin IS wired
+        when there is no database, and the difference is what each one
+        would do wrong without one.  A process-local completion ledger
+        silently fails to deduplicate across the takeover it exists for.
+        A process-local conversation ledger just forgets when the seat
+        moves — the same "no history" every turn had before it existed,
+        which is this feature's own fail-open answer anyway.  So the
+        single-node deployment gets the feature, and a fleet without a
+        database already has the loud ``seat_placement_is_process_local``
+        warning telling it what it is running.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.conversation_sessions import (
+            MemoryConversationSessionStore,
+            PostgresConversationSessionStore,
+        )
+
+        if self._conversation_sessions is not None:
+            return
+        if isinstance(self.storage, Database):
+            self._conversation_sessions = PostgresConversationSessionStore(self.storage)
+        else:
+            self._conversation_sessions = MemoryConversationSessionStore()
 
     def _refresh_jira_routing(self, jira_transport: Any) -> None:
         """Re-seed a freshly-rebuilt JiraTransport's routing state.
@@ -6387,6 +6494,7 @@ class Engine:
             execution_tracker=self.execution_tracker,
             token_usage_repo=token_usage_repo,
             episode_store=self._episode_store,
+            conversation_sessions=self._conversation_sessions,
             counterparty_store=getattr(self, "_counterparty_store", None),
             synthesized_skill_store=getattr(self, "_synthesized_skill_store", None),
             agent_diary=getattr(self, "_agent_diary", None),
