@@ -1086,10 +1086,35 @@ src/crewlet/          # Main package
                       #   than a search box per view with its own ranking.
                       #   modal.js replaced the window.prompt/confirm that
                       #   were the only unstyled UI in the product.
-                      #   router.js REDIRECTS every old path (#/events,
-                      #   #/tokens, #/agents/:id, #/people, #/company,
-                      #   #/audit) with its query string intact: those
-                      #   links are in bookmarks and chat threads.
+                      #   router.js OWNS THE BACK BUTTON, which is a
+                      #   decision every navigation makes whether or not
+                      #   anyone notices making it. Three rules, and all
+                      #   three shipped wrong: a MOVED path REPLACES
+                      #   (#/events, #/tokens, #/agents/:id, #/people,
+                      #   #/company, #/audit — query string intact,
+                      #   because those links are in bookmarks and chat
+                      #   threads); pushing one instead made Back land on
+                      #   the dead URL, redirect forward and arrive back
+                      #   — measured: Back could not escape at all. A
+                      #   SECTION (lens, tab — what the reader calls a
+                      #   screen) PUSHES; replacing made Back skip every
+                      #   lens and leave the room. A FILTER REPLACES:
+                      #   four ticked pills are one screen. Scroll is a
+                      #   property of a history ENTRY, not of a URL, so
+                      #   takeRoute() keys it on one stamped into
+                      #   history.state — an entry with no key IS the
+                      #   test for "somewhere new", which is the only
+                      #   thing that starts at the top. parseRoute merges
+                      #   the query into EVERY route: it used to do so
+                      #   only on the last branch, so a seat route
+                      #   arrived with ?tab= thrown away and the view
+                      #   re-read location.hash itself to get it back.
+                      #   The shell absorbs a section change via
+                      #   sameScreen() + view.setParams() rather than
+                      #   remounting — identity is the PATH, never the
+                      #   query, so a different tab of one seat keeps its
+                      #   loaded LLM history and a different seat does
+                      #   not.
                       #   A seat's raw event list belongs to Activity ALONE
                       #   (#/activity?actor=<role> seeds its actor filter);
                       #   the seat page links there rather than rendering

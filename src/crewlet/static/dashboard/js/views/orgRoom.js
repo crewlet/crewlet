@@ -26,7 +26,7 @@ import { icon } from "../icons.js";
 import { seatCard } from "../cards.js";
 import { flattenSeats, flattenUnits, managerOf } from "../org.js";
 import { buildPulse } from "../pulse.js";
-import { replaceParams } from "../router.js";
+import { pushParams, replaceParams } from "../router.js";
 import {
   CONTACT_FIELDS,
   avatarFor,
@@ -116,11 +116,15 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
   let kind = KIND_KEYS.has(params.kind) ? params.kind : "all";
 
   // The lens and the directory's filter live in the URL, so any view of
-  // this room can be handed to somebody else as a link. `replaceParams`
-  // rather than a push: a reader who tried three lenses and then pressed
-  // Back expects to leave the room, not to walk back out through them.
-  function syncUrl() {
-    replaceParams("org", { lens, kind: kind === "all" ? "" : kind });
+  // this room can be handed to somebody else as a link — and the two are
+  // not the same kind of move. A lens is a screen: four of them, each
+  // answering a different question about the company, and Back after
+  // three of them should walk out through them rather than leave the
+  // room. The directory's agent/human filter is a filter.
+  function syncUrl(section = false) {
+    const params = { lens, kind: kind === "all" ? "" : kind };
+    if (section) pushParams("org", params);
+    else replaceParams("org", params);
   }
 
   // ---- the lens bar ----
@@ -497,11 +501,23 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
       return bar + body;
     },
 
+    // Back and Forward land here rather than remounting the room, so
+    // the lens and filter are re-read from the URL. Idempotent: the
+    // action handler has usually set them already, and the push it made
+    // is what brought us back through.
+    setParams(next = {}) {
+      lens = LENS_KEYS.has(next.lens) ? next.lens : DEFAULT_LENS;
+      kind = KIND_KEYS.has(next.kind) ? next.kind : "all";
+      refresh();
+    },
+
     onAction(action, target) {
+      let section = false;
       if (action === "org-lens") {
         const next = target.dataset.k;
         if (!LENS_KEYS.has(next) || next === lens) return;
         lens = next;
+        section = true;
       } else if (action === "org-kind") {
         const next = target.dataset.k;
         if (!KIND_KEYS.has(next) || next === kind) return;
@@ -516,7 +532,7 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
       } else {
         return;
       }
-      syncUrl();
+      syncUrl(section);
       refresh();
     },
   };

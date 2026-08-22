@@ -57,7 +57,7 @@ import {
   stateLabel,
 } from "../state.js";
 import { flattenSeats } from "../org.js";
-import { replaceParams } from "../router.js";
+import { pushParams } from "../router.js";
 import {
   empty,
   emptyOrPending,
@@ -110,10 +110,10 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   // The router threads the path — the seat key, and for the llm
   // sub-route the record's coordinates — but not the query string, so
   // the tab is read off the location once here and written back with
-  // `replaceParams`. Replace rather than push: a reader who looked at
-  // three tabs and pressed Back expects to leave the seat, not to walk
-  // back out through them.
-  let tab = TAB_KEYS.has(params.tab) ? params.tab : tabFromUrl() || DEFAULT_TAB;
+  // `pushParams`. A push, because a tab is a screen: Now, Memory, Cost
+  // and Access answer four different questions about this seat, and Back
+  // after opening three of them should walk out through them.
+  let tab = TAB_KEYS.has(params.tab) ? params.tab : DEFAULT_TAB;
 
   let data = null; // the `agent` query's reply
   let llm = []; // history records, newest first
@@ -184,7 +184,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   }
 
   function syncUrl() {
-    replaceParams(`seats/${encodeURIComponent(key)}`, {
+    pushParams(`seats/${encodeURIComponent(key)}`, {
       tab: tab === DEFAULT_TAB ? "" : tab,
     });
   }
@@ -1266,6 +1266,19 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       if (tab === "now") refresh();
     },
 
+    // Back and Forward move between tabs without a remount — which is
+    // the point of absorbing the change here rather than rebuilding the
+    // view: this page's `agent` read carries an LLM history, and
+    // refetching it to move between tabs of one seat is the cost the
+    // shell's teardown would charge.
+    setParams(next = {}) {
+      const wanted = TAB_KEYS.has(next.tab) ? next.tab : DEFAULT_TAB;
+      if (wanted === tab) return;
+      tab = wanted;
+      ensureTabData();
+      refresh();
+    },
+
     onAction(action, target) {
       if (action === "seat-tab") {
         const next = target.dataset.tab;
@@ -1340,9 +1353,3 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
 // `parseRoute` carries the seat route's PATH — the key, and the record's
 // coordinates on the llm sub-route — and does not thread a query string
 // through it, so this reads the one parameter that belongs to the view.
-function tabFromUrl() {
-  const hash = (globalThis.location && globalThis.location.hash) || "";
-  const query = String(hash).split("?")[1] || "";
-  const found = new URLSearchParams(query).get("tab") || "";
-  return TAB_KEYS.has(found) ? found : "";
-}

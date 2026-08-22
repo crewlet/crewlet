@@ -78,6 +78,46 @@ with its unit chain, effective unit lead, its configured `token_budget`, and
 the MCP surfaces it inherits. Views consume seats, never the raw payload, so
 lead inheritance and `mcp_env` inheritance are resolved once.
 
+### Moving, and going back
+
+Every room, section and filter is in the URL, so a screen can be refreshed,
+bookmarked, and handed to somebody else as a link. That much is easy. What
+takes deciding is the **session stack** — which navigations leave an entry
+behind — because that, not the URL, is what the Back button reads.
+
+Three rules, one per kind of move:
+
+| Move | Stack | Why |
+|---|---|---|
+| A **moved** path (`#/events`, `#/tokens`, `#/agents/:id`, `#/people`, `#/company`, `#/audit`) | replaces | The entry names a route that no longer exists. Leaving it behind means Back lands on it, it redirects forward, and you arrive where you started. |
+| A **section** — a lens, a tab | pushes | The reader calls these screens. Back after three of them should walk out through them. |
+| A **filter** — pills, sort, a search box | replaces | Four ticked pills are one screen; Back means "take me off this list", not "untick one". |
+
+The line between the last two is whether the reader would call it a
+different screen, and it is the only judgement call in the router.
+
+All three shipped wrong, and none of them is visible in a URL. Measured in a
+browser: from a redirected route Back could not escape *at all*; Back from a
+room's fourth lens left the room entirely; and Back to a list the reader had
+scrolled halfway down landed at the top, because the shell reset the scroll
+on every mount.
+
+**Scroll is a property of a history entry, not of a URL.** The same room
+reached twice is two places the reader has been, and keying a position by URL
+collapses them onto one. `takeRoute()` stamps a key into `history.state` and
+files the outgoing position under it; an entry with *no* key is exactly the
+test for "somewhere new", which is the only case that starts at the top. A
+restored position is re-applied for a short window while the view's rows
+arrive — a scroll is clamped to the height that exists, so one attempt lands
+short — and abandoned the moment the reader touches the page.
+
+**A section change does not remount the view.** The shell compares the
+route's *path* parameters (`sameScreen`) and hands a match to
+`view.setParams()` instead of tearing the view down. Identity is the path and
+never the query: a different tab of one seat is the same screen and keeps its
+loaded LLM history, a different seat is not. A view that cannot absorb the
+change simply does not implement `setParams` and gets the full mount.
+
 ### The attention queue
 
 `js/attention.js` is the one genuinely new idea, and it exists because the
@@ -836,3 +876,10 @@ operator went looking for them.
     used as 10px type — and both were found by walking every rendered
     element in a browser, compositing its colour against the stack behind
     it, and sorting by ratio. Nothing under 4.5:1, nothing over 16.5:1.
+17. **New navigation? Decide whether it pushes or replaces.** A section
+    (`pushParams`) or a filter (`replaceParams`), by the rule in
+    [Moving, and going back](#moving-and-going-back) — and a redirect always
+    replaces. Nothing about a wrong choice shows up in the URL, in a
+    screenshot, or in a render test; it shows up the first time somebody
+    presses Back, which is why `routing.test.mjs` asserts stacks and scroll
+    positions rather than URLs.

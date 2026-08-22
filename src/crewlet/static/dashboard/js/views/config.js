@@ -29,7 +29,7 @@ import { toast } from "../dom.js";
 import { apiToken, tokenGate, tokenRejected } from "../authToken.js";
 import { confirmModal } from "../modal.js";
 import { empty, sectionHead, skeletonRows } from "../ui.js";
-import { replaceParams } from "../router.js";
+import { pushParams } from "../router.js";
 
 // Errors worth retrying on a timer rather than surfacing: the socket is
 // down, or the query outlived its answer window.
@@ -98,7 +98,10 @@ export function createConfigView({ query, refresh, setToken, params }) {
 
   function setLens(next) {
     lens = next;
-    replaceParams("config", { lens });
+    // A push: the three lenses here are three screens — what is running,
+    // what ran before, and an editor — and Back out of the editor should
+    // land on the one you opened it from.
+    pushParams("config", { lens });
     if (lens === "history" && revisions === null) loadHistory();
     if (lens === "edit" && entities === null) loadEntities();
     refresh();
@@ -448,6 +451,16 @@ export function createConfigView({ query, refresh, setToken, params }) {
 
   return {
     slices: ["health"],
+
+    // Back and Forward move between the three lenses without a
+    // remount, so what each one needs is loaded here the same way
+    // `setLens` loads it — lazily, and once.
+    setParams(next = {}) {
+      lens = LENSES.some((l) => l.key === next.lens) ? next.lens : "active";
+      if (lens === "history" && revisions === null) loadHistory();
+      if (lens === "edit" && entities === null) loadEntities();
+      refresh();
+    },
 
     mount() {
       loadActive();

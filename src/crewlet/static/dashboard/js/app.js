@@ -19,7 +19,14 @@
 
 import { Store } from "./store.js";
 import { LiveSocket } from "./socket.js";
-import { parseRoute, navigate, onRouteChange } from "./router.js";
+import {
+  parseRoute,
+  navigate,
+  onRouteChange,
+  takeRoute,
+  restoreScroll,
+  sameScreen,
+} from "./router.js";
 import { patch } from "./patch.js";
 import { schedule, cancel } from "./scheduler.js";
 import { $, delegate } from "./dom.js";
@@ -115,11 +122,37 @@ function renderView() {
 }
 
 function mountRoute() {
+  // File the outgoing scroll and adopt the incoming entry before
+  // anything renders — the position read here is still the screen the
+  // reader is leaving.
+  const restoreTo = takeRoute();
+
   const route = parseRoute();
   if (route.redirect) {
-    navigate(route.redirect);
+    // Replace, never push. This entry names a route that no longer
+    // exists; leaving it in the stack makes Back land on it, redirect
+    // forward, and land here again — a loop with no way out, which is
+    // what shipped.
+    navigate(route.redirect, { replace: true });
     return;
   }
+  // A section change inside the room you are already in is a new history
+  // entry but the same screen. Tearing the view down for it would drop
+  // everything it has loaded and fetch it again — the seat page would
+  // re-read a whole LLM history to move between its own tabs — so a view
+  // that can absorb the change says so, and keeps its data.
+  //
+  // Identity is the PATH, never the query: a different seat is a
+  // different page, a different tab of one seat is not.
+  if (active && active.setParams && sameScreen(activeRoute, route)) {
+    activeRoute = route;
+    active.setParams(route.params);
+    setTitle(route);
+    renderNav();
+    restoreScroll(restoreTo);
+    return;
+  }
+
   const root = $("#view");
 
   if (active && active.destroy) active.destroy();
@@ -144,7 +177,9 @@ function mountRoute() {
 
   setTitle(route);
   renderNav();
-  window.scrollTo(0, 0);
+  // Somewhere new starts at the top; somewhere the reader has been
+  // before starts where they left it.
+  restoreScroll(restoreTo);
   $("#app").classList.remove("nav-open");
 }
 
