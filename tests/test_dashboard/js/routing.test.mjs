@@ -99,10 +99,7 @@ test("a section PUSHES, so Back walks out one at a time", () => {
   s.location.hash = "#/org";
   pushParams("org", { lens: "directory" });
   pushParams("org", { lens: "charter" });
-  pushParams("org", { lens: "seats" });
 
-  s.history.back();
-  assert.strictEqual(s.location.hash, "#/org?lens=charter");
   s.history.back();
   assert.strictEqual(s.location.hash, "#/org?lens=directory");
   s.history.back();
@@ -225,6 +222,34 @@ test("an LLM record's coordinates are identity, not a view of one", () => {
   const a = { name: "llm", params: { key: "eng", turn: "t1", phase: "plan", iter: "0" } };
   const b = { name: "llm", params: { key: "eng", turn: "t2", phase: "plan", iter: "0" } };
   assert.ok(!sameScreen(a, b));
+});
+
+test("a lens that moved rooms redirects, and replaces", () => {
+  // `#/org?lens=seats` is a live PATH with a dead lens, so none of the
+  // moved-ROUTE machinery sees it: the room simply falls back to its
+  // default lens and lands the reader on the org chart, which is not what
+  // they clicked. The seat page's own back link emitted this exact form
+  // for the life of the seats lens, so it is in real history.
+  const s = reset("#/mission");
+  s.location.hash = "#/org?lens=seats";
+  const route = parseRoute();
+  assert.strictEqual(route.redirect, "/agents");
+
+  // And a redirect REPLACES, for the same reason every other one does:
+  // leaving the dead lens in the stack means Back returns to it, it
+  // redirects forward again, and Back can never escape.
+  navigate(route.redirect, { replace: true });
+  assert.deepStrictEqual(s.urls(), ["#/mission", "#/agents"]);
+  s.history.back();
+  assert.strictEqual(s.location.hash, "#/mission");
+});
+
+test("a lens that still exists is not redirected", () => {
+  reset("#/org?lens=directory");
+  assert.deepStrictEqual(parseRoute(), {
+    name: "org",
+    params: { lens: "directory" },
+  });
 });
 
 await run();

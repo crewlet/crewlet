@@ -272,6 +272,70 @@ test("every token a stylesheet reaches for actually exists", () => {
   }
 });
 
+test("every token the RENDERERS reach for exists too", async () => {
+  // The CSS gate above scans stylesheets for `var(--typo)`. The other
+  // half of the surface is JavaScript, and there the name is often
+  // ASSEMBLED — `var(--${hue})`, `var(--${hue}-ink)` — so no literal
+  // scan can see it. That is not a reason to leave it unchecked: it is
+  // the reason to run the renderer over its whole input domain and read
+  // what it actually emitted.
+  //
+  // This is a real bug, not a hypothetical one. The stat strip spliced
+  // the caller's word straight into `var(--${tone}-ink)`, and a caller
+  // naming the MEANING it wanted ("bad", "warn") built `--bad-ink` and
+  // `--warn-ink`. Neither is a token, so the declaration was invalid and
+  // the browser dropped it — without falling back a cascade level — and
+  // the one figure on the page that needed colour rendered plain.
+  const defined = new Set();
+  for (const [, block] of blocks) for (const [name] of block) defined.add(name);
+
+  const state = await import(
+    new URL("../../../src/crewlet/static/dashboard/js/state.js", import.meta.url)
+  );
+  const ui = await import(
+    new URL("../../../src/crewlet/static/dashboard/js/ui.js", import.meta.url)
+  );
+
+  const emitted = new Map(); // token -> what produced it
+  const note = (markup, source) => {
+    for (const hit of String(markup).matchAll(/var\((--[\w-]+)\s*(,)?/g)) {
+      if (!hit[2]) emitted.set(hit[1], source);
+    }
+  };
+
+  // Every phase the engine can report, through both steps.
+  for (const [phase, colour] of Object.entries(state.PHASE_COLOR)) {
+    note(colour, `PHASE_COLOR[${phase}]`);
+    note(state.phaseInk(phase), `phaseInk(${phase})`);
+  }
+  // A phase this file has never heard of still has to render.
+  note(state.phaseColor("a-phase-from-the-future"), "phaseColor(unknown)");
+  note(state.phaseInk("a-phase-from-the-future"), "phaseInk(unknown)");
+
+  // Every event category, through the hue the feed tints it with.
+  for (const { key } of state.EVENT_CATEGORIES) {
+    note(state.categoryInk(key), `categoryInk(${key})`);
+  }
+  note(state.categoryInk("something-new"), "categoryInk(unknown)");
+
+  // Every tone a stat figure may carry, plus one that is not a tone.
+  for (const tone of ["bad", "warn", "good", "", "chartreuse"]) {
+    note(
+      ui.statStrip([{ label: "L", value: "1", foot: "f", tone }]),
+      `statStrip(tone=${tone || "none"})`,
+    );
+  }
+
+  const missing = [...emitted]
+    .filter(([token]) => !defined.has(token))
+    .map(([token, source]) => `${token} (from ${source})`);
+  if (missing.length) {
+    throw new Error(
+      `renderers emitted tokens that do not exist:\n  ${missing.join("\n  ")}`,
+    );
+  }
+});
+
 // ---------------------------------------------------------------------
 // Gates
 // ---------------------------------------------------------------------

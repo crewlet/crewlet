@@ -370,8 +370,8 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   // ---- head ----
 
   function backLink() {
-    return `<div class="back-link" data-action="go" data-route="/org?lens=seats"
-                 role="link" tabindex="0">${icon("chevron", "sm")} Seats</div>`;
+    return `<div class="back-link" data-action="go" data-route="/agents"
+                 role="link" tabindex="0">${icon("chevron", "sm")} Agents</div>`;
   }
 
   function renderHead(state) {

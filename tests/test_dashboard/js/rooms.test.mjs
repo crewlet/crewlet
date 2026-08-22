@@ -366,27 +366,72 @@ test("mission: the attention queue leads the page", async () => {
     }),
   );
   assert.match(html, /Needs you/);
-  // Before the pulse: the first question is what needs a person, not
-  // whether anything is happening.
+  // Before anything else on the page: the first question is what needs a
+  // person, not whether the engine is well.
   assert.ok(
-    html.indexOf("Needs you") < html.indexOf("Company pulse"),
-    "the pulse was drawn above the attention queue",
+    html.indexOf("Needs you") < html.indexOf("Engine"),
+    "the engine band was drawn above the attention queue",
   );
+});
+
+test("mission: the oldest waiting item is dated, so somebody can tell nobody looked", () => {
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({
+      sandboxes: [
+        {
+          turn_id: "t1",
+          role: "Engineer",
+          status: "awaiting_input",
+          question: "Which backoff?",
+          updated_at: "2026-08-20T08:00:00Z",
+          started_at: "2026-08-20T08:00:00Z",
+        },
+      ],
+    }),
+  );
+  assert.match(html, /Oldest has been waiting/);
 });
 
 test("mission: a quiet company still gets the panel", () => {
   const view = createMissionView({ store: { state: state() } });
   const html = view.render(state());
   assert.match(html, /Nothing is waiting on you/);
+  // The sentence is not the panel. An earlier rewrite of this room kept
+  // the words and dropped the `<section class="panel">` around them, and
+  // every assertion here still passed while the attention rows — which
+  // carry separators and no surface of their own — sat directly on the
+  // page ground.
+  assert.match(html, /class="panel att-panel"/);
 });
 
-test("mission: a detached sandbox run is in flight, not idle", () => {
-  // The seat is freed the moment a run detaches, so a board keyed on
-  // live turns alone showed a company doing nothing while its most
-  // expensive work was under way.
+test("mission: the attention rows are inside the panel, not beside it", () => {
   const view = createMissionView({ store: { state: state() } });
   const html = view.render(
     state({
+      agents: [
+        { role: "Analyst", handle: "analyst", state: "afk", afk_reason: "stall" },
+      ],
+    }),
+  );
+  const open_ = html.indexOf('class="panel att-panel"');
+  const row = html.indexOf('class="att-row');
+  const close = html.indexOf("</section>", open_);
+  assert.ok(open_ !== -1 && row !== -1, "no attention panel, or no rows in it");
+  assert.ok(open_ < row && row < close, "an attention row escaped the panel");
+});
+
+test("mission: a seat doing detached code work counts as working", () => {
+  // The seat is freed the moment a run detaches, so a count keyed on
+  // live turns alone showed a company doing nothing while its most
+  // expensive work was under way. The board that used to carry this
+  // belongs to Work now; the invariant survives in the engine band's
+  // seats figure, which goes through `effectiveAgentState`.
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({
+      org: { name: "N", roles: [{ name: "Engineer", kind: "agent" }], units: [] },
+      agents: [{ role: "Engineer", handle: "eng", state: "idle" }],
       sandboxes: [
         {
           turn_id: "t1",
@@ -398,8 +443,86 @@ test("mission: a detached sandbox run is in flight, not idle", () => {
       ],
     }),
   );
-  assert.match(html, /In flight/);
-  assert.match(html, /opencode/);
+  assert.match(html, /Seats working/);
+  assert.match(html, />1 <span class="ms-on">of 1</, "the detached seat was counted idle");
+});
+
+test("mission: a disconnected page reports no engine numbers at all", () => {
+  // `store.setConnected(false)` wipes only the health slice; agents,
+  // events, tokens and budget all stay frozen. The page this replaced
+  // printed every one of them at full confidence.
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({
+      connected: false,
+      agents: [{ role: "CEO", handle: "ceo", state: "working" }],
+      health: {},
+    }),
+  );
+  assert.ok(!/Seats working<\/span>\s*<span class="ms-clause-value">\d/.test(html),
+    "a seat count was drawn on a page that cannot see the engine");
+  assert.match(html, /not a quiet hour/i);
+});
+
+test("mission: every cost tile carries its footnote", () => {
+  // The strip's key is `foot`. A rewrite of this band passed `sub`, which
+  // the renderer simply ignored — so every figure lost the line that says
+  // what span it covers, and nothing failed. A tile whose value is a bare
+  // number with no span under it is the kind of figure this dashboard
+  // exists not to print.
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({
+      tokens: {
+        totals: { total_tokens: 4200, input_tokens: 3000, output_tokens: 1200, calls: 9 },
+      },
+      budget: { org: { used: 900, max: 1000 } },
+    }),
+  );
+  assert.match(html, /3\.0k in · 1\.2k out · 9 calls/);
+  assert.match(html, /900 of 1\.0k/);
+});
+
+test("mission: a seat name in a cost tile is escaped", () => {
+  // `foot` is inserted as markup so callers can put a badge in it, which
+  // makes every caller responsible for its own data. Seat names come from
+  // company config.
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({
+      agents: [
+        {
+          role: "<img src=x onerror=1>",
+          handle: "x",
+          state: "idle",
+          budget: { used: 10, max: 10, refused_at: "2026-08-20T08:00:00Z" },
+        },
+      ],
+    }),
+  );
+  assert.ok(!html.includes("<img src=x"), "a seat name reached the DOM as markup");
+  assert.match(html, /&lt;img src=x/);
+});
+
+test("mission: a seat whose teardown was never proven is surfaced", () => {
+  // runtime.py calls unproven_seconds "the one to alert on" and it
+  // reached no screen in the product.
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({ health: { status: "ok", configured: true, engine: true,
+                      seats: { unproven: ["ceo"], unproven_seconds: { ceo: 612.4 } } } }),
+  );
+  assert.match(html, /Stuck/);
+  assert.match(html, /teardown never confirmed/);
+});
+
+test("mission: a teardown that just failed once is not called stuck", () => {
+  const view = createMissionView({ store: { state: state() } });
+  const html = view.render(
+    state({ health: { status: "ok", configured: true, engine: true,
+                      seats: { unproven: ["ceo"], unproven_seconds: { ceo: 4 } } } }),
+  );
+  assert.ok(!/teardown never confirmed/.test(html), "a 4-second retry was called stranded");
 });
 
 await run();

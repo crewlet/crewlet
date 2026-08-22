@@ -42,6 +42,14 @@ const MOVED = {
   audit: () => ({ path: "/config", query: new URLSearchParams({ lens: "history" }) }),
 };
 
+// Lenses that stopped being lenses, keyed `route?lens`. The seat list
+// left Org for a room of its own, so `#/org?lens=seats` — the form in
+// bookmarks, and the one the seat page's own back link used to emit — has
+// to travel with it.
+const MOVED_LENSES = {
+  "org?seats": "/agents",
+};
+
 const KNOWN = [
   "mission",
   "agents",
@@ -128,6 +136,13 @@ export function parseRoute() {
     const search = target.query ? target.query.toString() : "";
     return { redirect: target.path + (search ? `?${search}` : "") };
   }
+
+  // A LENS can move too, and it does not look like a moved route: the
+  // path is still a live one, so nothing above catches it and the room
+  // falls back to its default lens — silently landing somebody who
+  // followed a link to the seat list on the org chart instead.
+  const movedLens = MOVED_LENSES[`${parts[0]}?${query.lens || ""}`];
+  if (movedLens) return { redirect: movedLens };
 
   const name = KNOWN.includes(parts[0]) ? parts[0] : "mission";
   return { name, params: query };

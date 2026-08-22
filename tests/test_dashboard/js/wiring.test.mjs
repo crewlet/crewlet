@@ -201,4 +201,83 @@ test("no view READS over its own transport", () => {
   assert.deepEqual(problems, [], problems.join("\n"));
 });
 
+// ---------------------------------------------------------------------
+// Stylesheets against the markup that ships
+// ---------------------------------------------------------------------
+
+// Classes that are built ENTIRELY by interpolation, so no literal prefix
+// exists for the scan below to recognise. Each names the values that one
+// site can produce, so the list stays checkable by reading that site.
+const WHOLLY_INTERPOLATED = {
+  // llm.js: `<span class="msg-role ${esc(role)}">` — the roles an LLM
+  // conversation record can carry.
+  "msg-role": ["system", "user", "assistant", "tool"],
+};
+
+test("no stylesheet rule targets a class nothing renders", () => {
+  // Deleting a view deletes its markup and leaves its stylesheet behind,
+  // where it is invisible: dead CSS breaks nothing, so it accumulates
+  // until a later rule collides with it. Two rooms' worth of it survived
+  // the redesign that cut them.
+  //
+  // The scan has to know the difference between a class that is GONE and
+  // one that is BUILT — `cat-${category}`, `tone-${tone}`, `is-${stale}`
+  // never appear as literals — so it harvests every prefix the JS
+  // interpolates into and excuses anything starting with one. That
+  // deliberately errs toward keeping: a false "dead" is a rule deleted
+  // out from under a live element, which is a visual bug, and a false
+  // "live" is only unswept CSS.
+  const dash = join(JS, "..");
+  const readAll = (dir, ext) => {
+    const out = [];
+    const walk = (d) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const full = join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith(ext)) out.push(readFileSync(full, "utf8"));
+      }
+    };
+    walk(dir);
+    return out;
+  };
+
+  const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "");
+  const css = readAll(join(dash, "styles"), ".css").map(stripComments).join("\n");
+  const js = readAll(JS, ".js")
+    .map((t) => stripComments(t).replace(/\/\/[^\n]*/g, ""))
+    .join("\n");
+  const html = readFileSync(join(dash, "index.html"), "utf8");
+  const markup = js + "\n" + html;
+
+  // Two ways a class name gets built, and both have to be recognised:
+  //   `class="ag-chip tone-${g.tone}"`  → interpolation, prefix `tone-`
+  //   `"is-" + stale` / `"cat-" + key`  → concatenation, prefix `is-`
+  // A harvested prefix must contain a `-`, so a one-letter fragment
+  // cannot quietly excuse half the stylesheet.
+  const prefixes = [
+    ...[...markup.matchAll(/([a-zA-Z][\w-]*)\$\{/g)].map((m) => m[1]),
+    ...[...markup.matchAll(/"([a-zA-Z][\w-]*-)"\s*\+/g)].map((m) => m[1]),
+  ].filter((p) => p.includes("-"));
+  for (const [base, values] of Object.entries(WHOLLY_INTERPOLATED)) {
+    assert.ok(
+      markup.includes(base),
+      `${base} is in WHOLLY_INTERPOLATED but nothing renders it`,
+    );
+    prefixes.push(...values.map((v) => v));
+  }
+
+  const dead = [];
+  for (const cls of new Set(stripComments(css).match(/\.([a-zA-Z][\w-]*)/g) || [])) {
+    const name = cls.slice(1);
+    if (markup.includes(name)) continue;
+    if (prefixes.some((p) => name.startsWith(p) || name === p)) continue;
+    dead.push(name);
+  }
+  assert.deepEqual(
+    dead.sort(),
+    [],
+    `stylesheet rules with no markup behind them:\n  ${dead.join("\n  ")}`,
+  );
+});
+
 await run();

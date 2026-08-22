@@ -44,8 +44,10 @@ import {
 } from "../ui.js";
 
 // The lenses, in the order the segmented control draws them: the shape of
-// the company first, then its people, then what it says it is, then what
-// the engine is actually running.
+// the company first, then its people, then what it says it is. What the
+// engine is actually RUNNING is not a lens on the org — it is the Agents
+// room, because it answers a question about right now rather than about
+// how the company is arranged.
 const LENSES = [
   { key: "chart", label: "Chart", icon: "building" },
   { key: "directory", label: "Directory", icon: "users" },
@@ -62,24 +64,6 @@ const KINDS = [
   ["human", "Humans"],
 ];
 const KIND_KEYS = new Set(KINDS.map(([key]) => key));
-
-// Seat order on the `seats` lens: what needs attention, then what is
-// happening, then everything else.
-const STATE_RANK = {
-  afk: 0,
-  working: 1,
-  awaiting_sandbox: 1,
-  idle: 2,
-  offline: 3,
-  terminated: 4,
-};
-
-function rank(agent) {
-  if (!agent) return STATE_RANK.offline;
-  if (agent.last_error) return -1;
-  const r = STATE_RANK[agent.state];
-  return r === undefined ? STATE_RANK.offline : r;
-}
 
 /**
  * The reporting tree, as `{ roots, kids }`.
@@ -113,10 +97,10 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
 
   // The lens and the directory's filter live in the URL, so any view of
   // this room can be handed to somebody else as a link — and the two are
-  // not the same kind of move. A lens is a screen: four of them, each
-  // answering a different question about the company, and Back after
-  // three of them should walk out through them rather than leave the
-  // room. The directory's agent/human filter is a filter.
+  // not the same kind of move. A lens is a screen: each answers a
+  // different question about the company, and Back after visiting two of
+  // them should walk out through them rather than leave the room. The
+  // directory's agent/human filter is a filter.
   function syncUrl(section = false) {
     const params = { lens, kind: kind === "all" ? "" : kind };
     if (section) pushParams("org", params);

@@ -167,6 +167,72 @@ test("exhaustion is the refusal, not the ratio", async () => {
   assert.match(blocked.markup(), /Refusing charges/);
 });
 
+test("the live cap wins over the configured one", async () => {
+  // The engine's meter carries the cap it is actually ENFORCING. A live
+  // edit to `token_budget` leaves config and meter disagreeing until the
+  // next apply, and dividing the meter's `used` by the config's cap
+  // would pair two numbers from different sources.
+  const { markup } = mount(
+    {
+      ...SEAT,
+      token_budget: 50000,
+      budget: { used: 40000, max: 80000, refused_at: "" },
+    },
+    { key: "eng", tab: "cost" },
+  );
+  await settle();
+  assert.match(markup(), /of 80,000 tokens/);
+});
+
+test("a bar past three quarters warns before it is refused", async () => {
+  const { markup } = mount(
+    {
+      ...SEAT,
+      token_budget: 100000,
+      budget: { used: 80000, max: 100000, refused_at: "" },
+    },
+    { key: "eng", tab: "cost" },
+  );
+  await settle();
+  assert.match(markup(), /seat-meter warn/);
+});
+
+test("a meter over its cap cannot draw past the end of the track", async () => {
+  // The engine refuses an over-cap charge, but a cap LOWERED by a live
+  // edit can leave a meter above it — and a bar wider than its track
+  // overflows the panel.
+  const { markup } = mount(
+    {
+      ...SEAT,
+      token_budget: 10000,
+      budget: { used: 90000, max: 10000, refused_at: "" },
+    },
+    { key: "eng", tab: "cost" },
+  );
+  await settle();
+  const width = /seat-budget-track"><i style="width:([\d.]+)%"/.exec(markup());
+  assert.ok(width, "no bar drawn");
+  assert.ok(Number(width[1]) <= 100, `bar drawn at ${width[1]}%`);
+});
+
+test("the meter names its own span and never claims the durable one", async () => {
+  // Three numbers over three spans, and only the meter shares one with
+  // the cap. A bar that does not say which span it covers is the two-
+  // windows error waiting to be read as the other number.
+  const { markup } = mount(
+    {
+      ...SEAT,
+      token_budget: 50000,
+      budget: { used: 20000, max: 50000, refused_at: "" },
+    },
+    { key: "eng", tab: "cost" },
+  );
+  await settle();
+  const html = markup();
+  assert.match(html, /this run/);
+  assert.match(html, /durable counter that survives a restart/);
+});
+
 // ---- identity ----
 
 test("a seat resolves by handle, and the page is addressed by it", async () => {

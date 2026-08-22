@@ -1,401 +1,410 @@
-// Mission Control: what needs me, what is happening, who is doing it.
+// Mission Control: what needs me, what the engine is doing, what is stuck.
 //
-// The overview this replaces led with the company pulse, which answers
-// "is anything happening" — a good question, and not the one an operator
-// arrives with. They arrive with "is anything waiting on me", and the
-// dashboard knew the answer in four different rooms: a sandbox parked on
-// a question was a badge further down this page, a stopped seat was a
-// card among the healthy ones, a budget refusing charges was a bar on a
-// seat page, and an engine discarding every webhook was a line in a
-// popover.
+// The page this replaces was mostly other rooms' work rendered again,
+// badly. It carried a 40px "3 of 9 seats working" numeral that the Agents
+// room now answers better; a per-seat pulse grid costing ~280px and
+// scaling with headcount to deliver two integers the sentence above it
+// already printed in words — drawn TWICE, once in the hero and again as a
+// spark inside every seat card; a phase bar that belongs to Spend, where
+// the window is selectable; an in-flight board whose three row types each
+// had a better-sourced twin in Work or Agents (one of them, the sandbox
+// card, had "go read this properly in the other room" as its only
+// affordance); the full seat grid Agents owns outright; and twelve feed
+// rows that are a truncated Activity with none of Activity's machinery.
 //
-// So the attention queue leads, the pulse follows, and the live board
-// carries turns and detached sandbox runs together — "what is running"
-// has included both since code work moved into a suspended Execute loop.
+// Worse than useless, half of it was untrustworthy: `store.setConnected`
+// clears only the `health` slice, so `agents`, `events`, `tokens`,
+// `budget` and `sandboxes` stay frozen — and this page happily printed
+// them at full confidence on a dead socket.
+//
+// What is left is what no other room owns, and what changes:
+//
+//   1. what needs a person, and how long the oldest has waited
+//   2. the ENGINE's own state — in-flight turns, posture, event store,
+//      draining. Most of this reached no pixel outside a popover you had
+//      to know to click.
+//   3. what is STUCK: turns that stopped producing rounds, and seats
+//      whose teardown could not be proven — runtime.py calls the second
+//      "the one to alert on" and it reached no screen at all.
+//   4. did anything break, and how far back can this page even see
+//   5. money, in the two spans that are honest
+//
+// The rule every band keeps: a number whose precondition is absent
+// renders as an em dash, never as zero. A frozen projection is not a
+// quiet company.
 
-import { esc, escAttr, fmtCompact, fmtNum, relTime, trunc } from "../format.js";
-import {
-  afkQuip,
-  avatarFor,
-  phaseColor,
-  phaseInk,
-  staleness,
-  seatTone,
-} from "../state.js";
-import { flattenSeats } from "../org.js";
-import { seatRow } from "../cards.js";
-import { buildPulse, pulseGrid } from "../pulse.js";
+import { esc, escAttr, fmtCompact, fmtNum, relTime } from "../format.js";
+import { icon } from "../icons.js";
+import { buildPulse, MIN_LIT, PULSE_MINUTES } from "../pulse.js";
 import { buildAttention } from "../attention.js";
+import { flattenSeats } from "../org.js";
+import { staleness, STALE_MS, STALLED_MS } from "../state.js";
 import {
   attentionList,
   empty,
-  phaseBar,
   sectionHead,
-  activityRow,
   skeletonCards,
   statStrip,
-  turnRail,
 } from "../ui.js";
-import { failureLabel, stripThink } from "../llm.js";
 
-// Rows on the overview's activity strip. The full history is one click
-// away on Activity; this is a glance, not a log.
-const FEED_ROWS = 12;
+// A seat whose teardown has gone unproven this long is not a system
+// retrying — it is a seat no node in the fleet is running while this one
+// still holds its lease. Under this, a failed teardown that succeeds on
+// the next heartbeat is ordinary.
+const STRANDED_SECONDS = 60;
 
-export function createMissionView({ store }) {
-  // ---- the attention queue ----
+export function createMissionView({ store, navigate, refresh }) {
+  // ---- 1. what needs a person -----------------------------------------
 
   function attention(state) {
     const queue = buildAttention(state);
+    // The age of the head of the queue, which is the figure that says
+    // whether anybody has looked. `at` is an empty string on the
+    // config-missing item, and an unfiltered max would rank that ageless
+    // entry as the newest thing in the list.
+    const stamps = queue.items
+      .map((item) => (item.at ? Date.parse(item.at) : NaN))
+      .filter((ms) => !Number.isNaN(ms));
+    const oldest = stamps.length ? Math.min(...stamps) : null;
+    const age =
+      queue.stale || oldest === null
+        ? null
+        : relTime(new Date(oldest).toISOString());
     // The panel is drawn even when it is empty, and that is deliberate:
     // "nothing is waiting on you" is an answer, and a panel that
-    // disappears when there is nothing to do teaches the reader to
-    // check whether it is there rather than read it.
+    // disappears when there is nothing to do teaches the reader to check
+    // whether it is there rather than to read it. The rows are bare —
+    // separators, no surface of their own — so the panel is also the only
+    // thing holding them off the page ground.
     return `
       <section class="panel att-panel" data-k="attention">
-        <div class="sec">
-          <span class="sec-title">Needs you
-            ${queue.items.length ? `<span class="sec-count">${queue.items.length}</span>` : ""}
-          </span>
-        </div>
+        ${sectionHead(
+          "inbox",
+          "Needs you",
+          queue.stale ? null : queue.items.length,
+          null,
+        )}
+        ${age ? `<p class="ms-age">Oldest has been waiting ${esc(age)}.</p>` : ""}
         ${attentionList(queue)}
       </section>`;
   }
 
-  // ---- the pulse ----
+  // ---- 2. the engine's own state ---------------------------------------
+  // Every clause is three-valued. `health` is the one slice the store
+  // wipes on disconnect, which is exactly what makes it safe to read
+  // here: absent means "cannot see", and absent renders as a dash.
 
-  function headline(pulse, health) {
-    const total = pulse.rows.length;
-    const working = pulse.working;
-    if (!total) {
-      // "No agent seats configured" is true of an unconfigured engine
-      // too, and it is the wrong sentence for it: it reads as a company
-      // whose config simply has no agents in it, which sends the reader
-      // looking at YAML that is not being used at all.
-      return health && health.configured === false
-        ? { figure: "—", rest: "no company configuration is active" }
-        : { figure: "—", rest: "no agent seats configured" };
-    }
-    if (working) {
-      return { figure: String(working), rest: `of ${total} seats working` };
-    }
-    return { figure: "0", rest: `of ${total} seats working — all quiet` };
+  function clause(label, value, tone = "") {
+    return `<div class="ms-clause${tone ? " tone-" + tone : ""}" data-k="c:${escAttr(label)}">
+        <span class="ms-clause-label">${esc(label)}</span>
+        <span class="ms-clause-value">${value}</span>
+      </div>`;
   }
 
-  function hero(state, pulse) {
-    const tokens = state.tokens;
-    const totals = tokens ? tokens.totals : null;
-    const head = headline(pulse, state.health);
-    const stopped = (state.agents || []).filter(
-      (a) => a.state === "afk" || a.last_error,
-    ).length;
+  const DASH = '<span class="ms-none">—</span>';
 
-    // Claim the window the feed can actually speak for, not the nominal
-    // one: the projection keeps a bounded number of events, and a busy
-    // org fills it in minutes.
-    const sub = pulse.total
-      ? `${fmtNum(pulse.total)} event${pulse.total === 1 ? "" : "s"} in the last ${pulse.covered} minutes` +
-        (pulse.failures
-          ? ` · <span class="warn-ink">${fmtNum(pulse.failures)} failed</span>`
-          : "") +
-        (pulse.blindTo ? " · older activity is past the retained feed" : "")
-      : `nothing has happened in the last ${pulse.covered} minutes`;
+  function engineLine(state, pulse) {
+    const h = state.health || {};
+    const seen = state.connected !== false && h.status !== undefined;
+
+    // Engine state. `wait` is ordinary rollout propagation and must never
+    // be painted as trouble — every successful rollout produces it.
+    // Draining is orderly, so amber; only shed and stuck are faults.
+    let engine = DASH;
+    let tone = "";
+    if (seen) {
+      if (h.configured === false) {
+        engine = "no active configuration";
+        tone = "bad";
+      } else if (h.shutting_down === true) {
+        engine = "draining";
+        tone = "warn";
+      } else if (h.posture && !["serve", "wait"].includes(h.posture)) {
+        engine = esc(String(h.posture));
+        tone = "bad";
+      } else if (h.engine === false) {
+        engine = "API only, no engine here";
+      } else {
+        engine = "serving";
+        tone = "ok";
+      }
+    }
+
+    // In-flight is per PROCESS. Behind a load balancer a refresh answers
+    // about a different one, so it is labelled with the node that
+    // answered rather than presented as a company-wide figure.
+    const inFlight =
+      seen && h.engine === true && typeof h.in_flight === "number"
+        ? `${esc(String(h.in_flight))}${h.node ? ` <span class="ms-on">on ${esc(h.node)}</span>` : ""}`
+        : DASH;
+
+    const working =
+      state.connected === false
+        ? DASH
+        : `${esc(String(pulse.working))} <span class="ms-on">of ${esc(String(pulse.rows.length))}</span>`;
+
+    // An engine with no event store has not failed — it simply keeps no
+    // record. This is also the clause that stops the pulse below being
+    // read as "nothing happened".
+    let store_ = DASH;
+    let storeTone = "";
+    if (seen && h.event_store) {
+      store_ = esc(String(h.event_store));
+      if (h.event_store === "none") storeTone = "warn";
+    }
 
     return `
-      <section class="hero panel dot-texture" data-k="hero">
-        <div class="hero-head">
-          <div class="hero-lede">
-            <div class="eyebrow">Company pulse</div>
-            <div class="hero-figure display">
-              <span class="num">${esc(head.figure)}</span>
-              <span class="hero-rest">${esc(head.rest)}</span>
-            </div>
-            <div class="hero-sub">${sub}</div>
-          </div>
-          ${statStrip([
-            {
-              label: "LLM calls",
-              value: totals ? fmtNum(totals.calls || 0) : "—",
-              foot: "last 24h",
-            },
-            {
-              label: "Spend",
-              value: totals ? fmtCompact(totals.total_tokens) : "—",
-              foot: totals
-                ? `${fmtCompact(totals.input_tokens)} in · ${fmtCompact(totals.output_tokens)} out`
-                : "no turns yet",
-            },
-            {
-              label: "Stopped",
-              value: fmtNum(stopped),
-              foot: stopped ? "needs attention" : "all seats healthy",
-              tone: stopped ? "red" : "",
-            },
-            orgBudgetStat(state),
-          ])}
-        </div>
-        ${pulseGrid(pulse)}
-        ${
-          totals && totals.total_tokens
-            ? `<div class="hero-phases" data-k="hero:phases">${phaseBar(
-                tokens.by_phase,
-                totals.total_tokens,
-              )}</div>`
-            : ""
-        }
-      </section>`;
+      ${sectionHead("cpu", "Engine", null, null)}
+      <div class="card ms-line" data-k="engine">
+        ${clause("State", engine, tone)}
+        ${clause("Turns in flight", inFlight)}
+        ${clause("Seats working", working)}
+        ${clause("Event store", store_, storeTone)}
+      </div>`;
   }
 
-  // The org-wide token meter, when an engine is reporting one and the
-  // org has a cap at all.
-  //
-  // `statStrip` drops a falsy entry, so a company with no org cap — or
-  // an API with no engine behind it — simply has one fewer figure
-  // rather than a tile reading zero. The percentage is honest here for
-  // the same reason it is on a seat card: meter and cap cover the same
-  // engine run.
-  function orgBudgetStat(state) {
-    const org = (state.budget || {}).org;
-    if (!org || !org.max) return null;
-    const pct = Math.round(Math.min(100, (org.used / org.max) * 100));
-    return {
-      label: "Org budget",
-      value: `${pct}%`,
-      foot: `${fmtCompact(org.used)} of ${fmtCompact(org.max)} this run`,
-      tone: org.refused_at ? "red" : pct >= 75 ? "amber" : "",
-    };
+  // ---- 3. what is stuck -------------------------------------------------
+
+  function stuck(state) {
+    const rows = [];
+
+    // (a) Turns that stopped producing rounds. Applied per row on the old
+    //     board and never aggregated, so "is anything hung?" meant
+    //     scrolling and reading ages.
+    //
+    //     Deliberately empty while disconnected: `updated_at` ages
+    //     against the browser clock whether or not the projection is
+    //     moving, so a three-minute outage manufactures stalled turns out
+    //     of perfectly healthy ones.
+    if (state.connected !== false) {
+      for (const agent of state.agents || []) {
+        const call = agent.live_call;
+        if (!call || !call.updated_at) continue;
+        const how = staleness(call.updated_at);
+        if (!how) continue;
+        rows.push({
+          key: `turn:${agent.role}`,
+          tone: how === "stalled" ? "bad" : "warn",
+          who: agent.role || agent.name,
+          handle: agent.handle || agent.role,
+          what:
+            how === "stalled"
+              ? `no round in ${Math.round(STALLED_MS / 60000)} minutes — this is not coming back on its own`
+              : `no round in ${Math.round(STALE_MS / 60000)} minutes`,
+          when: relTime(call.updated_at),
+        });
+      }
+    }
+
+    // (b) Seats whose teardown could not be proven. This node holds a
+    //     lease no peer can take while possibly still consuming the seat.
+    //     Alerted on the DURATION, not the list: a teardown that fails
+    //     once and succeeds on the next heartbeat is a working system.
+    //
+    //     `health.seats` is omitted entirely on a node that does no
+    //     placement — absent means "not applicable", never "holds none".
+    const ages = ((state.health || {}).seats || {}).unproven_seconds || {};
+    for (const [handle, seconds] of Object.entries(ages)) {
+      if (!(Number(seconds) > STRANDED_SECONDS)) continue;
+      rows.push({
+        key: `seat:${handle}`,
+        tone: "warn",
+        who: handle,
+        handle,
+        what:
+          "teardown never confirmed — this node still holds the lease, so no peer can take the seat",
+        when: `${Math.round(Number(seconds))}s`,
+      });
+    }
+
+    if (!rows.length) return "";
+    return `
+      ${sectionHead("alert", "Stuck", rows.length, null)}
+      <div class="list ms-stuck">
+        ${rows
+          .map(
+            (r) => `
+          <div class="ms-stuck-row tone-${r.tone} clickable" data-k="${escAttr(r.key)}"
+               data-action="seat" data-seat="${escAttr(r.handle)}">
+            <span class="ms-stuck-who">${esc(r.who)}</span>
+            <span class="ms-stuck-what">${esc(r.what)}</span>
+            <span class="ms-stuck-when">${esc(r.when)}</span>
+          </div>`,
+          )
+          .join("")}
+      </div>`;
   }
 
-  // One bucketing pass per render, threaded through to the hero grid and
-  // every seat card's strip — deriving it twice is how the two would end
-  // up disagreeing about the same seat.
+  // ---- 4. did anything break, and how far back can this page see -------
+
   function pulseFor(state) {
+    // The org tree is walked in ONE place, `org.js`. This room had grown
+    // its own copy of the walk, which is how lead inheritance and
+    // `mcp_env` inheritance end up resolved twice and differently.
     return buildPulse({
-      seats: flattenSeats(state.org),
-      agents: state.agents,
-      events: state.events,
+      seats: flattenSeats(state.org || {}).filter((s) => s.kind === "agent"),
+      agents: state.agents || [],
+      events: state.events || [],
       tokens: state.tokens,
-      sandboxes: state.sandboxes,
+      sandboxes: state.sandboxes || [],
     });
   }
 
-  // ---- the live board ----
-
-  // One card per agent mid-turn: the turn as an object, with the phase
-  // rail showing where it has been and where it is going, its rounds as
-  // pips, and the response as it streams. Everything comes from the
-  // server's in-flight call, so it survives a refresh and needs no
-  // reconstruction from the event stream.
-  function liveCard(agent, sandboxes) {
-    const call = agent.live_call;
-    const phase = call.phase || agent.current_phase || "";
-    const roundCount = call.rounds || 0;
-    const pips = Array.from(
-      { length: Math.min(Math.max(roundCount, 1), 12) },
-      (_, i) => `<i class="pip" style="--i:${i}"></i>`,
-    ).join("");
-    const text = call.response ? trunc(stripThink(call.response, " "), 260) : "";
-    const tools = (call.tool_executions || []).slice(-4);
-    // How long since this call last moved. A row whose last round landed
-    // minutes ago drops its animation and says its age instead — pips
-    // that keep pulsing on a hung turn actively claim progress that is
-    // not happening.
-    const stale = staleness(call.updated_at);
-    return `
-      <div class="live-row clickable ${stale ? "is-" + stale : ""}" data-k="live:${escAttr(agent.role)}"
-           data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}"
-           style="--phase-color:${phaseColor(phase)}">
-        <div class="live-row-top">
-          ${avatarFor(agent.role, seatTone(agent, sandboxes))}
-          <span class="live-who">${esc(agent.role)}</span>
-          <span class="ph-pill" style="color:${phaseInk(phase)}">${esc(phase || "working")}${call.iteration ? " #" + call.iteration : ""}</span>
-          <span class="pips ${stale ? "" : "is-live"}" title="${roundCount} round${roundCount === 1 ? "" : "s"}">${pips}</span>
-          <span class="live-age" title="last round">${esc(
-            stale === "stalled"
-              ? `no round in ${relTime(call.updated_at).replace(" ago", "")}`
-              : relTime(call.updated_at),
-          )}</span>
-          <span class="live-model">${esc(call.model || "")}</span>
-          <span style="flex:1"></span>
-          <span class="live-tokens num">${fmtNum(call.total_tokens || 0)}</span>
-        </div>
-        ${turnRail(phase)}
-        ${text ? `<div class="live-text">${esc(text)}</div>` : '<div class="live-text is-waiting">thinking…</div>'}
-        ${
-          tools.length
-            ? `<div class="live-tools">${tools
-                .map(
-                  (t) =>
-                    `<span class="chip ${t.success === false ? "err" : ""}">${esc(t.name || "tool")}</span>`,
-                )
-                .join("")}</div>`
-            : ""
-        }
-      </div>`;
-  }
-
-  // A detached coding run, on the same board as the turns.
-  //
-  // A seat running one is idle by design — the engine frees it the moment
-  // the run detaches, so the box can take days without holding an agent —
-  // which means a board keyed on live turns alone showed a company doing
-  // nothing while its most expensive work was under way.
-  function sandboxCard(run) {
-    const waiting = run.status === "awaiting_input";
-    const seat = run.role || run.agent_handle || "agent";
-    return `
-      <div class="live-row clickable" data-k="sbx:${escAttr(run.turn_id)}"
-           data-action="go" data-route="/work"
-           style="--phase-color:var(--cyan)">
-        <div class="live-row-top">
-          ${avatarFor(seat, "needs")}
-          <span class="live-who">${esc(seat)}</span>
-          <span class="chip">${esc(run.coding_agent || "coding agent")}</span>
-          <span class="badge ${waiting ? "afk" : "live"}"><i class="dot"></i>${waiting ? "needs an answer" : "sandbox"}</span>
-          <span style="flex:1"></span>
-          <span class="row-ts">${esc(relTime(run.started_at))}</span>
-        </div>
-        <div class="live-text">${esc(
-          trunc(waiting ? run.question || "waiting on an answer" : run.task || "writing code", 220),
-        )}</div>
-      </div>`;
-  }
-
-  // A seat the engine stopped, and why. This is the counterpart to the
-  // live board: an agent that is not working because something broke
-  // should be as visible as one that is working.
-  function stoppedRow(agent, sandboxes) {
-    // `last_error` is the full record and is what a live failure sets. It
-    // does not survive an API restart — the projection hydrates an
-    // agent's state and AFK reason from the store, not the payload that
-    // caused it — so a seat that is merely known to be AFK still renders
-    // here, with the reason it does have. Keying the board on
-    // `last_error` alone hid every broken seat after a restart, which is
-    // exactly when an operator goes looking for them.
-    const failure = agent.last_error || {};
-    const kind = failure.kind || agent.afk_reason || "error";
-    const message =
-      failure.message || (agent.state === "afk" ? afkQuip(agent.afk_reason) : "");
-    return `
-      <div class="live-row is-failed clickable" data-k="stopped:${escAttr(agent.role)}"
-           data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}">
-        <div class="live-row-top">
-          ${avatarFor(agent.role, seatTone(agent, sandboxes))}
-          <span class="live-who">${esc(agent.role)}</span>
-          <span class="badge failed"><i class="dot"></i>${esc(failureLabel(kind))}</span>
-          ${failure.phase ? `<span class="ph-pill" style="color:${phaseInk(failure.phase)}">${esc(failure.phase)}</span>` : ""}
-          <span style="flex:1"></span>
-          ${failure.at ? `<span class="row-ts">${esc(relTime(failure.at))}</span>` : ""}
-        </div>
-        ${message ? `<div class="live-text">${esc(trunc(message, 220))}</div>` : ""}
-      </div>`;
-  }
-
-  function liveBoard(state) {
-    const agents = state.agents || [];
-    // A failed call is still *a call* — the projection keeps it on the
-    // agent so its detail page can show what died. It is not live, so it
-    // belongs in the stopped half of this board, not the running one.
-    const isRunning = (a) =>
-      a.live_call &&
-      a.live_call.turn_id !== undefined &&
-      !a.live_call.failed &&
-      a.state !== "afk";
-    const live = agents.filter(isRunning);
-    const runs = state.sandboxes || [];
-    const stopped = agents.filter(
-      (a) => !isRunning(a) && (a.last_error || a.state === "afk"),
-    );
-    const total = live.length + runs.length + stopped.length;
-    if (!total) return "";
-    return (
-      sectionHead("activity", "In flight", total, {
-        action: "go",
-        label: "Work board",
-        route: "/work",
-      }) +
-      `<div class="live-board">
-        ${live.map((a) => liveCard(a, state.sandboxes)).join("")}
-        ${runs.map(sandboxCard).join("")}
-        ${stopped.map((a) => stoppedRow(a, state.sandboxes)).join("")}
-      </div>`
-    );
-  }
-
-  // Who is on the team and what each one is doing, as cards. Human seats
-  // sit in the row alongside agents — they hold seats in the same chart.
-  function seats(state, pulse) {
-    const all = flattenSeats(state.org);
-    if (!all.length) return "";
-    return (
-      sectionHead("users", "The team", all.length, {
-        action: "go",
-        label: "Org",
-        route: "/org",
-      }) +
-      seatRow(all, {
-        agents: state.agents,
-        sandboxes: state.sandboxes,
-        pulse,
+  function record(state, pulse) {
+    if (state.connected === false) {
+      return `
+        ${sectionHead("activity", "Recent record", null, null)}
+        <p class="ms-note">The socket is down, so the feed below stopped where
+        it stopped. It is not a quiet hour.</p>`;
+    }
+    const cells = pulse.cells || [];
+    const scale = Math.max(1, pulse.cellMax || 1);
+    const track = cells
+      .map((c, i) => {
+        const cls = c.unknown
+          ? "is-unknown"
+          : c.failed
+            ? "is-failed"
+            : c.n
+              ? "is-on"
+              : "";
+        // One floor for "a minute in which something happened", shared
+        // with every other renderer of these cells.
+        const level = c.n
+          ? MIN_LIT + (1 - MIN_LIT) * Math.min(1, c.n / scale)
+          : 0;
+        return `<i class="ms-cell ${cls}" data-k="p${i}" style="--level:${level.toFixed(2)}"></i>`;
       })
-    );
+      .join("");
+
+    // `failures / total` is the ONE ratio legal on this page: one
+    // bucketing pass, one window. It must never be divided into the 24h
+    // token rollup.
+    const line = pulse.total
+      ? `${fmtNum(pulse.total)} events in the last ${esc(String(pulse.covered))} minutes${
+          pulse.failures
+            ? ` · <b class="ms-broke">${esc(String(pulse.failures))} failed</b>`
+            : " · none failed"
+        }`
+      : `Nothing in the last ${esc(String(pulse.covered))} minutes`;
+
+    return `
+      ${sectionHead("activity", "Recent record", null, {
+        action: "go",
+        label: "Activity",
+        route: "/activity",
+      })}
+      <div class="card ms-record" data-k="record">
+        <div class="ms-track">${track}</div>
+        <div class="ms-axis" data-k="axis">
+          <span>−${esc(String(PULSE_MINUTES))}m</span>
+          <span>−${esc(String(Math.round(PULSE_MINUTES / 2)))}m</span>
+          <span>now</span>
+        </div>
+        <div class="ms-record-foot">
+          <span>${line}</span>
+          ${
+            pulse.blindTo
+              ? `<span class="ms-blind">${icon("alert", "sm")}Past the retention edge there is no record — the pale cells are not quiet, they are unknown.</span>`
+              : ""
+          }
+        </div>
+      </div>`;
   }
 
-  // Fallback for an org with no chart data: the live agent list, rendered
-  // as the same card so the two paths look alike.
-  function agentsList(state, pulse) {
-    const agents = state.agents || [];
-    if (!agents.length) return empty("user", "No agents running");
-    return seatRow(
-      agents.map((a) => ({
-        name: a.role || a.name,
-        handle: a.handle || "",
-        kind: "agent",
-        integrations: [],
-        unitPath: [],
-      })),
-      { agents, sandboxes: state.sandboxes, pulse },
-    );
-  }
+  // ---- 5. money, in the two spans that are honest -----------------------
 
-  function activityList(state) {
-    const events = (state.events || []).slice(0, FEED_ROWS);
-    if (!events.length) return empty("activity", "No engine activity yet");
-    return `<div class="list feed">${events
-      .map((ev) => activityRow(ev, { agents: state.agents }))
-      .join("")}</div>`;
+  function money(state) {
+    const totals = (state.tokens && state.tokens.totals) || null;
+    const budget = (state.budget && state.budget.org) || null;
+    const frozen = state.connected === false;
+
+    const tiles = [];
+
+    tiles.push({
+      label: "Spend · last 24h",
+      value: frozen || !totals ? DASH : fmtCompact(totals.total_tokens || 0),
+      foot:
+        frozen && state.tokens && state.tokens.aggregated_through
+          ? `as of ${esc(relTime(state.tokens.aggregated_through))}`
+          : totals
+            ? `${fmtCompact(totals.input_tokens || 0)} in · ${fmtCompact(totals.output_tokens || 0)} out · ${fmtNum(totals.calls || 0)} calls`
+            : "no rollup",
+    });
+
+    // A cap with no meter is not a cap at zero: the tile is dropped
+    // rather than drawn empty. Meter and cap share one span, which is
+    // the only reason this percentage is allowed to exist.
+    if (budget && budget.max) {
+      const pct = Math.min(100, Math.round(((budget.used || 0) / budget.max) * 100));
+      tiles.push({
+        label: "Org budget · this run",
+        value: frozen ? DASH : `${pct}%`,
+        foot: budget.refused_at
+          ? "refusing charges"
+          : `${fmtCompact(budget.used || 0)} of ${fmtCompact(budget.max)}`,
+        // A cap that is refusing has STOPPED work, which is the reserved
+        // status hue; three quarters spent is the caution one.
+        tone: budget.refused_at ? "bad" : pct >= 75 ? "warn" : "",
+      });
+    }
+
+    // Seats a cap is actively blocking. `budget === null` means no meter
+    // — no per-seat cap configured, or no engine reporting — and that is
+    // not a seat at zero, so it is not counted either way.
+    const refusing = (state.agents || []).filter(
+      (a) => a.budget && a.budget.refused_at,
+    );
+    if (refusing.length) {
+      tiles.push({
+        label: "Seats refusing charges",
+        value: esc(String(refusing.length)),
+        // Seat names come from config, and `foot` is inserted as markup.
+        foot: esc(refusing.map((a) => a.role || a.name).join(", ")),
+        tone: "bad",
+      });
+    }
+
+    return `${sectionHead("zap", "Cost", null, {
+      action: "go",
+      label: "Spend & Budgets",
+      route: "/spend",
+    })}${statStrip(tiles)}`;
   }
 
   return {
-    slices: [
-      "agents",
-      "events",
-      "sandboxes",
-      "org",
-      "tools",
-      "tokens",
-      "budget",
-      "health",
-      "connected",
-    ],
+    slices: ["agents", "events", "sandboxes", "tokens", "budget", "health", "org"],
 
     render(state) {
-      if (!state.connected && !(state.agents || []).length) {
+      // A first paint with nothing yet is a skeleton. A page that HAS
+      // seen the engine and then lost it is not — it keeps what it has
+      // and says, band by band, which parts it can no longer vouch for.
+      if (state.connected === false && !(state.agents || []).length) {
         return skeletonCards(3);
       }
-      const hasSeats = flattenSeats(state.org).length > 0;
+      if (
+        !(state.agents || []).length &&
+        !(state.events || []).length &&
+        state.health &&
+        state.health.configured === false
+      ) {
+        return (
+          attention(state) +
+          empty(
+            "building",
+            "No company configured",
+            "The engine is running and has no company to run. Every inbound webhook is being discarded.",
+          )
+        );
+      }
+
       const pulse = pulseFor(state);
       return `
         ${attention(state)}
-        ${hero(state, pulse)}
-        ${liveBoard(state)}
-        ${hasSeats ? seats(state, pulse) : sectionHead("users", "Agents", null, null) + agentsList(state, pulse)}
-        ${sectionHead("activity", "Engine activity", (state.events || []).length, {
-          action: "go",
-          label: "View all",
-          route: "/activity",
-        })}
-        ${activityList(state)}`;
+        ${engineLine(state, pulse)}
+        ${stuck(state)}
+        ${record(state, pulse)}
+        ${money(state)}`;
     },
   };
 }

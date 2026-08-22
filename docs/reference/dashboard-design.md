@@ -52,10 +52,11 @@ rendered as a placeholder or a coming-soon stub.
 
 | Zone | Nav | Route | Reads |
 |---|---|---|---|
-| **Now** — *what is happening, and what needs me?* | Mission Control | `#/` | the snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget` |
+| **Now** — *what is happening, and what needs me?* | Mission Control | `#/` | the snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget` / `health` |
+| | Agents | `#/agents?group=` | `/org` + live `agents` / `sandboxes` — who is working, who is not, and why |
 | | Work | `#/work` | the pushed `sandboxes` for live runs + the `sandbox_runs` query for the durable ones |
 | | Activity | `#/activity` | the snapshot's `events`, then live `event` pushes, then the `events` query for stored history |
-| **Company** — *who is this company?* | Org | `#/org?lens=` | `/org` + live agent state; lenses `chart` / `directory` / `charter` / `seats` |
+| **Company** — *who is this company?* | Org | `#/org?lens=` | `/org` + live agent state; lenses `chart` / `directory` / `charter` |
 | | Schedules | `#/schedules` | `/schedules` |
 | | *a seat* | `#/seats/{handle}?tab=` | the `agent` query, plus `agent_memory` and `tokens` per tab |
 | **Operations** — *is the machine healthy?* | Spend & Budgets | `#/spend` | the pushed spend rollup + the `budgets` query |
@@ -72,6 +73,12 @@ rendered as a placeholder or a coming-soon stub.
 to their new homes: those links are in bookmarks, in chat threads, and in the
 seat page's own "Events" button. A redirect costs one `hashchange`; a dead
 link costs the reader the thing they were looking for.
+
+**A lens can move too, and it does not look like a moved route.** When the
+seat list left Org for the Agents room, `#/org?lens=seats` kept resolving —
+the path is still live, so the room simply fell back to its default lens and
+put the reader on the org chart. `MOVED_LENSES` in `router.js` keys those on
+`route?lens` and redirects them like any other move.
 
 `js/org.js` is where the `/org` tree is flattened into **seats** — every role
 with its unit chain, effective unit lead, its configured `token_budget`, and
@@ -170,51 +177,106 @@ beats a word boundary beats a substring.
 
 ### Mission Control
 
-Reads top to bottom, in order of urgency:
+**A room only earns a band for a question no other room owns.** Mission
+Control's job is triage, and the way it fails is by re-rendering the rest of
+the product: a per-seat grid the Agents room answers better, an in-flight
+board with a better-sourced twin in Work, a phase bar that belongs on Spend
+where the window is selectable, and a truncated Activity with none of
+Activity's machinery. Half of that was also untrustworthy — `store.setConnected`
+clears only the `health` slice, so `agents`, `events`, `tokens`, `budget` and
+`sandboxes` stay frozen, and a page that prints them at full confidence on a
+dead socket is worse than a page that prints nothing.
 
-| Band | Answers |
-|---|---|
-| **Needs you** (the lead panel) | Is anything waiting on me? — the [attention queue](#the-attention-queue). Drawn even when it is empty: an answer that disappears when it is "nothing" teaches the reader to check whether the panel is there rather than to read it |
-| **Company pulse** | Is anything happening, and did anything break? |
-| **In flight** | What is running right now — turns *and* detached sandbox runs, on one board. A seat running one is idle by design (the engine frees it the moment the run detaches, so a box can take days without holding an agent), so a board keyed on live turns alone showed a company doing nothing while its most expensive work was under way |
-| **The team** | Who is on the roster and what each seat is doing |
-| **Engine activity** | What just happened |
+Five bands, top to bottom, in order of urgency:
 
-The pulse used to lead. It answers a good question and not the one an operator
-arrives with.
+| Band | Answers | Owned here because |
+|---|---|---|
+| **Needs you** | Is anything waiting on me, and how long has the oldest waited? — the [attention queue](#the-attention-queue) | No other room aggregates obligations across sandboxes, seats, budgets and config |
+| **Engine** | What is the *engine* doing — turns in flight, posture, event store, draining | Most of it reached no pixel outside a popover you had to know to click |
+| **Stuck** | Which turns stopped producing rounds, and which seats hold a lease whose teardown was never proven | `runtime.py` calls the second "the one to alert on" and it reached no screen at all |
+| **Recent record** | Did anything break, and how far back can this page even see? | One company-wide track, not one row per seat — the per-seat view is the Agents room's |
+| **Cost** | What is this costing, in the two spans that are honest | The 24h rollup and the org meter-against-its-own-cap; per-seat detail is Spend's |
+
+Two rules hold across all five:
+
+- **A number whose precondition is absent renders as an em dash, never as a
+  zero.** "This page cannot see the engine" and "the engine is doing nothing"
+  are opposite facts, and a `0` merges them.
+- **A frozen projection is not a quiet company.** Each band says, on its own,
+  which part of itself it can no longer vouch for once the socket drops.
+
+The attention queue is drawn even when it is empty — an answer that disappears
+when it is "nothing" teaches the reader to check whether the panel is there
+rather than to read it — and it keeps its `<section class="panel">`, because
+the rows carry separators and no surface of their own.
+
+### Agents
+
+*Who is working, who is not, and why.* This was the product's most-asked
+question and its worst-buried answer: it lived as one lens of the Org room,
+which files it under how the company is **arranged** rather than what it is
+**doing**, and the LLM calls behind it were another two clicks down in a tab of
+a seat page you could only reach from that lens. Meanwhile the most prominent
+list of agents in the product — the pulse strip on Mission Control — rendered
+every row with a pointer cursor and did nothing when clicked.
+
+So it is a room in **Now**, and the only place the seats list lives. Org keeps
+the structure (the chart, the directory, the charter); this owns the live
+state. Two screens answering "who is working" would eventually disagree.
+
+**Grouped by what a seat asks of the reader, not by the state enum.** A seat
+parked on a question and a seat that fell over are both "not working", and only
+one of them is broken — the enum cannot express that, so the grouping does:
+
+| Group | Holds | Tone |
+|---|---|---|
+| **Needs a person** | A sandbox parked on a question, a seat with `last_error`, a seat gone `afk` | amber, or red for the two that are failures |
+| **Working** | Mid-turn, including `awaiting_sandbox` — a detached run is work | the working hue |
+| **Idle** | Running, empty inbox | uncoloured — quiet is not a status |
+| **Not running** | No process is serving the seat; on a fleet, no node has claimed it | uncoloured |
+
+`classify(seat, {agent, sandbox, sandboxes})` decides the group and, separately,
+whether the row is `broken` — separately on purpose, because "needs a person"
+holds both a question (amber) and a failure (red), and red is reserved for
+failure. Inside a group, oldest first: a question asked on Friday outranks one
+asked a minute ago.
+
+Every row carries an **LLM calls** button straight to `#/seats/{handle}?tab=now`.
+The group chips are a **filter**, so they replace rather than push (see
+[Moving, and going back](#moving-and-going-back)), and their counts render as
+`–` rather than a confident `0` when the socket is down.
 
 ### The pulse
 
-`js/pulse.js` — one row per agent seat, one cell per minute of the last hour,
-lit by what that seat actually did. It is the site's masked dot field applied
-literally rather than decoratively: a cell is lit because a seat was working
-in that minute, its brightness is that minute's event count against the
-busiest cell on the grid, and a red cell is a real failure.
+`js/pulse.js` — one cell per minute of the last hour, lit by what the company
+actually did. A cell is lit because work happened in that minute, its
+brightness is that minute's event count against the busiest cell on the track,
+and a red cell is a real failure.
 
 | Element | Source |
 |---|---|
-| Rows | `flattenSeats(org)`, agents only — a seat that has done nothing still gets a row, which is itself a finding |
-| Cell brightness | Feed events for that actor in that minute, over the grid's busiest cell |
+| Cell brightness | Feed events in that minute, over the track's busiest cell |
 | Red cell | The feed row's `failed` flag (see [Failure](#failure)) |
-| Breathing cell | The current minute of a seat that is working *now* — the only cell on the grid that moves |
-| Right-hand figure | The seat's spend from the pushed rollup, or its failure count |
+| Pale cell | Past the retention edge — *unknown*, not quiet |
+| The sentence beneath | `n events in the last m minutes · k failed`, from one bucketing pass |
 
-`buildPulse` is a pure function over data the page already holds, so the panel
-costs no request and no server work. One bucketing pass per render is threaded
-through to the hero grid *and* to every seat card's strip, so a card and the
-hero can never tell different stories about the same seat.
+`buildPulse` is a pure function over data the page already holds, so the band
+costs no request and no server work. It buckets **once** and answers both the
+company-wide `cells` track and the per-seat `rows` — the count is incremented
+before the roster check, so engine-authored events with no actor are in the
+total; summing the seat rows instead would undercount every one of them.
 
-**The panel claims only what the feed can speak for.** The projection retains
+`failures / total` is the one ratio legal on Mission Control: one bucketing
+pass, one window. It must never be divided into the 24-hour token rollup.
+
+**The band claims only what the feed can speak for.** The projection retains
 a bounded number of events (`MAX_EVENTS` in `js/store.js`, matching the
 server's `EVENT_FEED_LIMIT`), and a busy org fills that in minutes — so on
 such an org the older part of the hour has *no record*, which is not the same
-as no activity. Cells past the retention edge render as a hairline marked "no
-record", the axis says so, and the headline counts the minutes actually
-covered. Drawing the gap as idle would make a company that had been flat out
-all hour look like one that woke up five minutes ago.
-
-The strip on a seat card is deliberately the **same device** at a smaller
-size, not a second chart type.
+as no activity. Cells past the retention edge render pale and say so, and the
+sentence counts the minutes actually covered. Drawing the gap as idle would
+make a company that had been flat out all hour look like one that woke up five
+minutes ago.
 
 ### Reading history
 
@@ -366,27 +428,42 @@ packet travelling the segment feeding the live phase. A phase running off that
 path — onboarding, a judge, a sub-agent — renders as its own single-node rail
 rather than being placed on a path it is not on.
 
-### The seat card
+### Colouring a seat
 
-`js/cards.js` renders one card per seat, used by both the overview's seat row
-and the Agents index. Human seats (`kind: human`) appear alongside agents —
-they hold seats in the same org chart — and are marked, never given a fake
-runtime. Everything on a card is real:
+**A seat's colour says what it is doing. Nothing on the page colours by
+identity.**
 
-| Element | Source |
-|---|---|
-| Identity hue on the name and the leading hairline | `roleColor` / `roleInk`, hashed from the seat name |
-| State dot | the live projection (`effectiveAgentState`), or `human` |
-| Marker | the live phase when the seat is working, otherwise its state badge; a human seat gets its unit |
-| Status line | `statusLine` in `state.js` — derived from live state only |
-| Activity strip | this seat's row from `buildPulse` — the same hour the pulse grid shows |
-| Budget bar | the engine's live token meter against the cap that meter enforces |
-| Integration chips | the seat's own + inherited `mcp_env` server keys; for a human seat, the `contact` identities it is reachable at |
-| Cost line | 24-hour spend, and when the seat was last active |
+The dashboard used to hash the seat name into one of the eight categorical
+hues (`roleColor` / `roleInk`) and tint the avatar, the name and a leading
+hairline with it. Two things were wrong with that, and they compounded:
 
-`statusLine` never invents activity. An agent with nothing in flight says so;
-an AFK agent shows its engine-detected cause; a seat running a detached
-sandbox says it is writing code, and says when it is blocked on an answer.
+- **Identity and status shared one palette.** The same eight families carry
+  event category, phase, and integration brand. A seat whose name happened to
+  hash to amber looked like a seat that needed attention, and an amber-hued
+  seat that genuinely needed attention looked like itself.
+- **The tint was unconditional**, so an idle seat carried a lit, saturated
+  blob that read as work in progress — on the one screen whose whole job is
+  telling working from not.
+
+`seatTone(agent, sandboxes)` in `state.js` is the single derivation, and every
+surface that draws a seat calls it:
+
+| Tone | Means | Used for |
+|---|---|---|
+| `needs` | A sandbox is parked on a question | amber — attention, not failure |
+| `broken` | `last_error`, or the seat has gone `afk` | red — reserved for failure |
+| `working` | Mid-turn, including `awaiting_sandbox` | the working hue |
+| `quiet` | Idle, not running, or a human seat | **untinted** — quiet is not a status |
+
+`avatarFor(role, tone)` defaults to `quiet`, so a caller with no state to hand
+renders an untinted tile rather than inventing one. That is the honest answer
+when the page does not know, and it is also why a seat page's header avatar is
+plain: it is identifying a seat, not reporting on one.
+
+`statusLine` never invents activity either. An agent with nothing in flight
+says so; an AFK agent shows its engine-detected cause; a seat running a
+detached sandbox says it is writing code, and says when it is blocked on an
+answer.
 
 ### The budget bar
 
@@ -456,25 +533,31 @@ at 3.55:1, under the text floor.
 **And every step is measured against the worst surface it can land on**, which
 is the part that is easy to get wrong. Because the dark panel fill is an alpha,
 panels nest; a row inside one can be hovered or selected, and a code block cuts
-an inset into it. That is eight distinct composites carrying the same tokens,
-spanning about a point and a half of contrast — so a ramp anchored to the panel
-is anchored to neither end. A browser audit across ten rooms found sixteen
-elements rendering under 4.5:1 while every token in the file "passed" its
-panel-anchored check.
+an inset into it. The **chrome** composites too, and off the sidebar rather
+than off the ground — which in the light theme makes the selected nav item the
+darkest surface in the whole design, darker than anything in the content area,
+and it is exactly where the nav's alert badge sits. That is **ten** distinct
+composites carrying the same tokens, spanning about a point and a half of
+contrast, so a ramp anchored to the panel is anchored to neither end. A browser
+audit across ten rooms found sixteen elements rendering under 4.5:1 while every
+token in the file "passed" its panel-anchored check — and twice since, an
+*incomplete* surface set has been the bug rather than the value measured
+against it (a tint measuring 4.87 rendered 4.29 on the nav surface nobody had
+listed).
 
-The ranges below are what each step covers across all eight surfaces, so the
-low figure is a guarantee rather than an average, and the high one is a ceiling
-rather than a score:
+The ranges below are what each step covers across all ten surfaces in both
+themes, so the low figure is a guarantee rather than an average, and the high
+one is a ceiling rather than a score:
 
 | Step | Range |
 |---|---|
-| body text | 10.0 – 14.5 — comfortable for sustained reading |
-| headings | 11.2 – 16.3 — larger glyphs tolerate, and want, more weight |
+| body text | 10.1 – 14.7 — comfortable for sustained reading |
+| headings | 11.2 – 16.2 — larger glyphs tolerate, and want, more weight |
 | secondary | 7.3 – 10.6 |
 | muted | 5.8 – 8.4 |
 | dim | 4.7 – 6.8 — de-emphasised meta, still a **text** step |
-| hue ink | 5.8 – 9.5 |
-| hue mark | 3.3 – 7.4 (the 3:1 non-text floor) |
+| hue ink | 5.9 – 11.0 |
+| hue mark | 3.3 – 12.2 (the 3:1 non-text floor) |
 
 An ink is held to two things, not one: the flat floor above, and a clear step
 above **its own mark**. A badge is that hue softened into a fill with that
@@ -483,7 +566,11 @@ the panel — and when the two steps converge, as `--purple` and `--purple-ink`
 did, nothing is left to clear. How strongly a hue is softened for that job is
 one token, `--tint`, because those sites are one object; they had drifted to
 six different percentages with nothing choosing between them, and the 15% one
-rendered its ink at 3.8:1. The direction flips per theme — on dark a tint
+rendered its ink at 3.8:1. The token carries its own `%`, so a consumer writes
+`var(--tint)` and never `var(--tint)%` — CSS drops an invalid declaration
+without falling back a cascade level, so a doubled unit silently deletes the
+fill rather than reverting it (a gate in `palette.test.mjs` fails the build on
+one). The direction flips per theme — on dark a tint
 lifts the ground toward the ink, on light it pulls the ground down toward it —
 so a tint judged by eye on dark has been judged for the wrong theme.
 
@@ -515,8 +602,16 @@ controls, always with `backdrop-filter: blur(…)`.
 
 `--brand-gradient` is the full seven-stop mark; `--brand-ramp` is its
 three-stop cousin for anything only a few pixels tall. Both are used as
-**light, never as a fill** — a hairline along the overview panel's top edge,
+**light, never as a fill** — a hairline along the topbar's bottom edge, and
 the packet travelling the turn rail. There is no third place for them.
+
+The topbar rather than a panel, because a panel comes and goes with the room:
+the gradient used to light the overview's hero, and when that panel was cut in
+the Mission Control redesign the mark left the product entirely except for the
+rail packet. The one edge that parts chrome from content is drawn by every
+room, so it cannot lose the mark that way. It sits *on* the border rather than
+beside it — the chrome is still parted by a single hairline; the gradient only
+says which hairline it is.
 
 ### Elevation and motion
 
@@ -535,7 +630,20 @@ Eight hue families, each shipping two steps:
 - `--<hue>-ink` — the **text** step: badge labels, links, tinted type
 
 Soft fills are derived at the use site with
-`color-mix(in srgb, var(--<hue>) 10%, transparent)`.
+`color-mix(in srgb, var(--<hue>) var(--tint), transparent)`. The strength is
+**one token**, because a badge, a chip and a severity wash are one object; the
+six percentages they had drifted to were chosen by nobody, and the 15% one
+rendered its ink at 3.8:1. `--tint` carries its own `%`, so a consumer writes
+`var(--tint)` and never `var(--tint)%`.
+
+**A hue name is never assembled at the use site.** `var(--${tone}-ink)` looks
+like it types itself and does not: a caller naming the *meaning* it wants
+("bad", "warn") builds `--bad-ink`, which is not a token, so the declaration is
+invalid and the browser drops it — without falling back a cascade level, so the
+figure that most needed colour renders plain. Renderers map a semantic word to a
+token through a closed map (`STRIP_TONES` in `ui.js`, `PHASE_HUE` and
+`EVENT_CATEGORIES` in `state.js`), and `palette.test.mjs` runs each of them over
+its whole input domain and checks every `var(--…)` they actually emit.
 
 Chroma is capped at 13.5 (OKLab ×100), because highly saturated
 light-on-dark type is what "vibrates". Only lightness is re-stepped per theme.
@@ -822,7 +930,7 @@ operator went looking for them.
 4. **New hue or reassignment?** Run
    `node tests/test_dashboard/js/palette.test.mjs`. It measures both
    adjacency orders in both themes against every gate — and each colour
-   against the worst of the eight surfaces the design composites, not
+   against the worst of the ten surfaces the design composites, not
    against the panel. Do not eyeball it: the panel-anchored version of this
    suite passed a `--pink` that renders at 2.58:1 on a selected row. A new
    *phase* or *category* needs a hue the set may not have spare — the eight
@@ -883,3 +991,11 @@ operator went looking for them.
     screenshot, or in a render test; it shows up the first time somebody
     presses Back, which is why `routing.test.mjs` asserts stacks and scroll
     positions rather than URLs.
+18. **Colouring a seat? Call `seatTone`.** Nothing colours by identity, and
+    `quiet` is untinted — see [Colouring a seat](#colouring-a-seat).
+19. **Deleted a view? Delete its stylesheet rules in the same change.** Dead
+    CSS breaks nothing, so it accumulates until a later rule collides with
+    it; two rooms' worth survived the redesign that cut them.
+    `wiring.test.mjs` fails the build on a rule with no markup behind it,
+    and understands a class that is *built* (`cat-${category}`,
+    `tone-${tone}`, `"is-" + stale`) rather than written out.

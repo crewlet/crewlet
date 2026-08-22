@@ -1,0 +1,56 @@
+/* The Work board — detached coding runs.
+ *
+ * These rules lived in `rooms/mission.css`, which owned 45 lines of a
+ * room it is not. "A room that owns a screen owns its own file" only
+ * holds if the file is the room's.
+ *
+ * No colour is defined here: every value is a token from tokens.css.
+ */
+
+.work-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.work-run {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--panel-shadow);
+  padding: var(--space-3) var(--space-4);
+}
+/* A run nobody can move without answering it wears the caution hue on
+   its leading edge — the same amber the attention queue uses, because it
+   is the same obligation seen from the other side. */
+.work-run.is-waiting {
+  border-left: 3px solid var(--amber);
+}
+.work-run-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.work-run-body {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.work-run-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.work-meta {
+  color: var(--text-muted);
+}
+.work-run-foot .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+}

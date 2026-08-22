@@ -269,23 +269,42 @@ export function turnRail(phase) {
 // strip fits inside the lead panel and leaves the room to the thing
 // worth looking at.
 
+// The tones a strip figure may carry, and the ink each resolves to.
+//
+// A closed map rather than the hue name spliced straight into
+// `var(--${tone}-ink)`: a caller reaching for the SEMANTIC word it means
+// ("bad", "warn") built `--bad-ink` and `--warn-ink`, which are not
+// tokens, so the declaration was invalid and CSS dropped it — silently,
+// and without falling back a cascade level, so the figure that most
+// needed colour was the one rendering plain. Callers now name the
+// meaning; this file owns the one translation to a hue.
+const STRIP_TONES = {
+  bad: "--red-ink",
+  warn: "--amber-ink",
+  good: "--green-ink",
+};
+
 /**
- * `items` are `{label, value, foot, tone}` — `tone` names a hue family
- * (`red`, `green`, …) for a figure whose *value* carries a warning.
+ * `items` are `{label, value, foot, tone}` — `tone` is one of
+ * `bad` / `warn` / `good`, for a figure whose *value* carries a warning.
+ *
+ * `value` and `foot` are inserted as markup, so a caller passing data
+ * escapes it. `label` is escaped here because it is also the patch key.
  */
 export function statStrip(items) {
   const cells = items
     .filter(Boolean)
-    .map(
-      (it) => `
+    .map((it) => {
+      const ink = STRIP_TONES[it.tone] || "";
+      return `
       <div class="strip-cell" data-k="strip:${escAttr(it.label)}">
         <div class="stat-label">${esc(it.label)}</div>
-        <div class="strip-value num${it.tone ? " tone" : ""}"${
-          it.tone ? ` style="color:var(--${it.tone}-ink)"` : ""
+        <div class="strip-value num${ink ? " tone" : ""}"${
+          ink ? ` style="color:var(${ink})"` : ""
         }>${it.value}</div>
         <div class="strip-foot">${it.foot || ""}</div>
-      </div>`,
-    )
+      </div>`;
+    })
     .join("");
   return `<div class="strip">${cells}</div>`;
 }

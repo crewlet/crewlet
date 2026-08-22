@@ -967,13 +967,17 @@ src/crewlet/          # Main package
                       #   than a field whitelist — four hand-maintained
                       #   whitelists are how a phase failure got deleted on
                       #   its way to the screen), pulse.js (THE COMPANY
-                      #   PULSE — the overview's lead panel: one row per
-                      #   seat, one cell per minute of the last hour, lit
-                      #   by real feed events, red where the server's
-                      #   `failed` flag says so. buildPulse is pure and
-                      #   runs ONCE per render, threaded through to the
-                      #   hero grid AND every seat card's strip so the two
-                      #   cannot disagree about a seat), health.js (THE
+                      #   PULSE — one cell per minute of the last hour,
+                      #   lit by real feed events, red where the server's
+                      #   `failed` flag says so, PALE where the feed's
+                      #   retention edge means the minute is unknown
+                      #   rather than quiet. buildPulse is pure and
+                      #   buckets ONCE, answering the company-wide `cells`
+                      #   track and the per-seat `rows` from one pass —
+                      #   the total increments BEFORE the roster check, so
+                      #   engine-authored events with no actor are counted
+                      #   (summing the rows instead undercounts every one
+                      #   of them)), health.js (THE
                       #   ENGINE HEALTH SURFACE — a popover on the live
                       #   dot, plus the two conditions that escalate into
                       #   always-on chrome because they must never wait
@@ -1063,11 +1067,35 @@ src/crewlet/          # Main package
                       #   top-level nouns meant the questions an operator
                       #   actually arrives with each needed three or four
                       #   screens and a mental join. Three zones:
-                      #     Now        Mission Control / Work / Activity
-                      #     Company    Org (chart|directory|charter|seats)
+                      #     Now        Mission Control / Agents / Work
+                      #                / Activity
+                      #     Company    Org (chart|directory|charter)
                       #                / Schedules / a seat page
                       #     Operations Spend & Budgets / Integrations /
                       #                Fleet / Configuration / Tools
+                      #   views/mission.js is TRIAGE, and the way that
+                      #   room fails is by re-rendering the rest of the
+                      #   product: it carried a per-seat grid Agents
+                      #   answers better, an in-flight board with a
+                      #   better-sourced twin in Work, a phase bar
+                      #   belonging to Spend (where the window is
+                      #   selectable) and a truncated Activity with none
+                      #   of Activity's machinery — and half of it was
+                      #   untrustworthy, since store.setConnected clears
+                      #   only the `health` slice, so agents/events/
+                      #   tokens/budget/sandboxes stay frozen and the page
+                      #   printed them at full confidence on a dead
+                      #   socket. Five bands, each owning a question no
+                      #   other room does: needs-you / ENGINE (in-flight,
+                      #   posture, event store — most of it reached no
+                      #   pixel outside a popover you had to know to
+                      #   click) / STUCK (stalled turns, plus seats whose
+                      #   teardown was never proven, which runtime.py
+                      #   calls the one to alert on and which reached no
+                      #   screen at all) / recent record / cost. An absent
+                      #   precondition renders an em dash, NEVER a zero:
+                      #   "cannot see the engine" and "the engine is doing
+                      #   nothing" are opposite facts a 0 merges.
                       #   attention.js is the one NEW idea: buildAttention
                       #   derives every open obligation — a sandbox parked
                       #   on a question, a stopped seat, a budget refusing
@@ -1145,9 +1173,39 @@ src/crewlet/          # Main package
                       #   placeholder screens. org.js flattens the /org tree
                       #   into SEATS (unit chain + effective lead + inherited
                       #   mcp_env) — views consume seats, never the raw
-                      #   payload; cards.js renders the shared seat card
-                      #   (agents + human seats), with state.js statusLine
-                      #   deriving "what it is doing" from live state only.
+                      #   payload, with state.js statusLine deriving "what
+                      #   it is doing" from live state only.
+                      #   views/agents.js is the Agents room — "who is
+                      #   working, who is not, and why", the product's
+                      #   most-asked question and formerly its worst-buried
+                      #   answer (one LENS of the Org room, which files it
+                      #   under how the company is ARRANGED rather than
+                      #   what it is DOING, with the LLM calls two clicks
+                      #   further down a tab of a seat page reachable only
+                      #   from there — while the most prominent agent list
+                      #   in the product, Mission Control's pulse strip,
+                      #   drew every row with a pointer cursor and did
+                      #   nothing when clicked). It is the ONLY seats list:
+                      #   Org keeps the structure, this owns the live
+                      #   state, and two screens answering one question
+                      #   eventually disagree. classify() groups by what a
+                      #   seat ASKS OF THE READER, not by the state enum —
+                      #   a seat parked on a question and a seat that fell
+                      #   over are both "not working" and only one is
+                      #   broken, which the enum cannot express.
+                      #   COLOUR SAYS WHAT A SEAT IS DOING, never who it
+                      #   is: state.js seatTone() is the one derivation
+                      #   (needs | broken | working | quiet) and every
+                      #   surface drawing a seat calls it. The hashed
+                      #   identity hue it replaces (roleColor/roleInk) drew
+                      #   from the SAME eight families as event category,
+                      #   phase and integration brand — so a seat whose
+                      #   name hashed to amber looked like a seat needing
+                      #   attention — and it tinted unconditionally, so an
+                      #   idle seat carried a lit blob on the one screen
+                      #   whose job is telling working from not. quiet is
+                      #   UNTINTED; avatarFor defaults to it, so a caller
+                      #   with no state renders no claim.
                       #   See docs/reference/dashboard-design.md
   extensions/         # Extension system
 tests/                # Mirror structure of src/crewlet/, plus three that
