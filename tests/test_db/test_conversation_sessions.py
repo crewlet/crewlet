@@ -294,9 +294,14 @@ async def test_a_zero_limit_reads_nothing(store: Any) -> None:
 # ── failing open ─────────────────────────────────────────────────────
 
 
-async def test_an_unreadable_store_yields_no_history() -> None:
-    """Fail OPEN. Not being able to read the ledger has one safe
-    answer and it is the pre-ledger one: no history block."""
+async def test_an_unreadable_store_raises_rather_than_reading_empty() -> None:
+    """ "Cannot read" and "nothing said yet" must not be one answer.
+
+    Each caller decides what to do about it — the turn engine renders no
+    history (the pre-ledger prompt), the API reports that it could not
+    see the ledger. Swallowing it here would take that choice away and
+    make an operator screen draw a database outage as a silent seat.
+    """
     sql = _FakeSQL()
     store = PostgresConversationSessionStore(sql)
     await store.append(
@@ -308,10 +313,10 @@ async def test_an_unreadable_store_yields_no_history() -> None:
     )
     sql.fail = True
 
-    rows = await store.recent(
-        agent_handle="eng", conversation_key="jira:POC-7", limit=5
-    )
-    assert rows == []
+    with pytest.raises(RuntimeError):
+        await store.recent(agent_handle="eng", conversation_key="jira:POC-7", limit=5)
+    with pytest.raises(RuntimeError):
+        await store.conversations(agent_handle="eng")
 
 
 async def test_an_unwritable_store_does_not_raise() -> None:

@@ -28,10 +28,14 @@ Three properties are load-bearing:
   itself rather than a thread, so an unbounded ledger would grow without
   end; ``append`` trims to the newest ``max_entries`` in the same
   statement that inserts.
-- **Both directions fail open.**  A read that cannot answer yields no
-  history, which is exactly the pre-ledger prompt; a write that fails
-  loses one entry of context.  Neither may stop a turn — this is an
-  improvement on a blank context, not a gate in front of one.
+- **Failure never stops a turn.**  A write that fails loses one entry of
+  context and is swallowed here, because it happens on a completed
+  turn's tail where there is nothing left to tell.  A read that fails
+  RAISES, and each caller decides: the turn engine catches it and
+  renders no history — exactly the pre-ledger prompt — while the API
+  reports that it could not see the ledger.  Swallowing it here instead
+  would make "unreadable" and "nothing said yet" the same answer, and an
+  operator screen would draw a database outage as a silent seat.
 
 Rows are plain JSONB payloads here; the entry's *shape* is owned by
 :mod:`crewlet.agent.conversation_log`, the same way
@@ -118,8 +122,9 @@ class ConversationSessionStore(Protocol):
     ) -> list[SessionRow]:
         """The newest ``limit`` entries, oldest-first for rendering.
 
-        Returns ``[]`` when the store cannot answer — see the module
-        docstring: no history is the pre-ledger prompt, which is safe.
+        Raises when the store cannot answer, so a caller can tell that
+        apart from a conversation with no entries — see the module
+        docstring.
         """
         ...
 
@@ -223,28 +228,18 @@ class PostgresConversationSessionStore:
     ) -> list[SessionRow]:
         if not agent_handle or not conversation_key or limit <= 0:
             return []
-        try:
-            rows = await self._db.execute(
-                """
-                SELECT turn_id, work_key, created_at, entry
-                FROM conversation_sessions
-                WHERE agent_handle = $1 AND conversation_key = $2
-                ORDER BY created_at DESC
-                LIMIT $3
-                """,
-                agent_handle,
-                conversation_key,
-                int(limit),
-            )
-        except Exception:
-            # Fail OPEN: no history renders no block, which is the prompt
-            # every turn had before this table existed.
-            logger.warning(
-                "conversation_sessions_unavailable",
-                agent=agent_handle,
-                conversation=conversation_key,
-            )
-            return []
+        rows = await self._db.execute(
+            """
+            SELECT turn_id, work_key, created_at, entry
+            FROM conversation_sessions
+            WHERE agent_handle = $1 AND conversation_key = $2
+            ORDER BY created_at DESC
+            LIMIT $3
+            """,
+            agent_handle,
+            conversation_key,
+            int(limit),
+        )
         return [_row_to_session_row(row) for row in reversed(rows)]
 
     async def conversations(
@@ -252,24 +247,20 @@ class PostgresConversationSessionStore:
     ) -> list[dict[str, Any]]:
         if not agent_handle:
             return []
-        try:
-            rows = await self._db.execute(
-                """
-                SELECT conversation_key,
-                       count(*)        AS entries,
-                       max(created_at) AS last_at
-                FROM conversation_sessions
-                WHERE agent_handle = $1
-                GROUP BY conversation_key
-                ORDER BY last_at DESC
-                LIMIT $2
-                """,
-                agent_handle,
-                int(limit),
-            )
-        except Exception:
-            logger.warning("conversation_sessions_unavailable", agent=agent_handle)
-            return []
+        rows = await self._db.execute(
+            """
+            SELECT conversation_key,
+                   count(*)        AS entries,
+                   max(created_at) AS last_at
+            FROM conversation_sessions
+            WHERE agent_handle = $1
+            GROUP BY conversation_key
+            ORDER BY last_at DESC
+            LIMIT $2
+            """,
+            agent_handle,
+            int(limit),
+        )
         return [
             {
                 "conversation_key": str(row.get("conversation_key", "")),

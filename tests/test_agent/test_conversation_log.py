@@ -50,8 +50,16 @@ def test_writes_are_recorded_and_reads_are_marked():
         plan_summary="do the thing",
         plan_reasoning="because",
         tool_executions=[
-            {"name": "jira_get_issue", "arguments": '{"key": "POC-7"}', "success": True},
-            {"name": "jira_add_comment", "arguments": '{"key": "POC-7"}', "success": True},
+            {
+                "name": "jira_get_issue",
+                "arguments": '{"key": "POC-7"}',
+                "success": True,
+            },
+            {
+                "name": "jira_add_comment",
+                "arguments": '{"key": "POC-7"}',
+                "success": True,
+            },
         ],
         read_only_names=("jira_get_issue",),
         skip_names=(),
@@ -161,7 +169,7 @@ def test_the_turn_id_is_abbreviated_not_dumped():
 
 
 def test_a_done_turn_does_not_announce_its_decision():
-    """"done" is the unremarkable case; saying so on every entry is
+    """ "done" is the unremarkable case; saying so on every entry is
     noise. A failed or iterated turn is worth flagging."""
     assert "Turn ended:" not in render_conversation_history([_entry()])
     assert "Turn ended: failed" in render_conversation_history(
