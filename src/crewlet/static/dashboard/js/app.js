@@ -330,7 +330,33 @@ function togglePalette(open) {
 }
 
 function paletteGroups() {
-  return buildResults(store.state, paletteQuery);
+  // The chrome prefs are read off the document HERE rather than inside
+  // `buildResults`, which stays pure — its ranking is tested with no DOM
+  // at all, and a command whose label depends on the current setting must
+  // not be the thing that drags one in.
+  return buildResults(store.state, paletteQuery, {
+    theme: document.documentElement.getAttribute("data-theme") || "dark",
+    density: document.documentElement.getAttribute("data-density") || "comfortable",
+  });
+}
+
+/**
+ * Act on one palette result.
+ *
+ * A hit is either a place (`route`) or a thing to do (`command`), and the
+ * palette closes either way — it is a launcher, not a settings panel, and
+ * one that stayed open after acting would have to explain why.
+ */
+function runPaletteHit(hit) {
+  if (!hit) return;
+  togglePalette(false);
+  if (hit.command === "toggle-theme") {
+    toggleTheme();
+  } else if (hit.command === "toggle-density") {
+    toggleDensity();
+  } else if (hit.route) {
+    navigate(hit.route);
+  }
 }
 
 function renderPalette() {
@@ -355,7 +381,8 @@ function renderPalette() {
             cursor++;
             return `<div class="pal-item ${cursor === paletteIndex ? "on" : ""}"
                  data-k="${escAttr(hit.id)}" data-action="palette-go"
-                 data-route="${escAttr(hit.route)}" role="option"
+                 data-route="${escAttr(hit.route || "")}"
+                 data-command="${escAttr(hit.command || "")}" role="option"
                  aria-selected="${cursor === paletteIndex}">
               <span class="pal-label">${esc(hit.label)}</span>
               <span class="pal-hint">${esc(hit.hint)}</span>
@@ -415,11 +442,7 @@ function paletteKey(ev) {
     return true;
   }
   if (ev.key === "Enter") {
-    const hit = flat[paletteIndex];
-    if (hit) {
-      togglePalette(false);
-      navigate(hit.route);
-    }
+    runPaletteHit(flat[paletteIndex]);
     return true;
   }
   return false;
@@ -540,22 +563,30 @@ function savePref(key, value) {
 function initTheme() {
   setTheme(pref("crewlet-theme", "dark"));
   setDensity(pref("crewlet-density", "comfortable"));
-  $("#theme-btn").addEventListener("click", () => {
-    const next =
-      document.documentElement.getAttribute("data-theme") === "dark"
-        ? "light"
-        : "dark";
-    setTheme(next);
-    savePref("crewlet-theme", next);
-  });
-  $("#density-btn").addEventListener("click", () => {
-    const next =
-      document.documentElement.getAttribute("data-density") === "compact"
-        ? "comfortable"
-        : "compact";
-    setDensity(next);
-    savePref("crewlet-density", next);
-  });
+  // Theme keeps its button: it is flipped by the light in the room, which
+  // changes through the day. Density does not have a button — it is set
+  // once and then never again, so it lives in the palette (see
+  // `commands` in commandPalette.js) rather than holding a permanent,
+  // icon-only slot in the most valuable strip on every screen.
+  $("#theme-btn").addEventListener("click", toggleTheme);
+}
+
+function toggleTheme() {
+  const next =
+    document.documentElement.getAttribute("data-theme") === "dark"
+      ? "light"
+      : "dark";
+  setTheme(next);
+  savePref("crewlet-theme", next);
+}
+
+function toggleDensity() {
+  const next =
+    document.documentElement.getAttribute("data-density") === "compact"
+      ? "comfortable"
+      : "compact";
+  setDensity(next);
+  savePref("crewlet-density", next);
 }
 
 function setTheme(theme) {
@@ -568,20 +599,6 @@ function setTheme(theme) {
 // is a token swap rather than a second stylesheet.
 function setDensity(density) {
   document.documentElement.setAttribute("data-density", density);
-  $("#density-btn").innerHTML = icon(
-    density === "compact" ? "rows-wide" : "rows-tight",
-    "sm",
-  );
-  // A tooltip is the whole affordance on an icon-only control, so it
-  // names the DESTINATION (what clicking does), and `aria-label` carries
-  // the same words rather than leaving a screen reader with "button".
-  // `aria-pressed` is what makes the current state readable at all
-  // without clicking to find out.
-  const label =
-    density === "compact" ? "Switch to comfortable spacing" : "Switch to compact spacing";
-  $("#density-btn").title = label;
-  $("#density-btn").setAttribute("aria-label", label);
-  $("#density-btn").setAttribute("aria-pressed", density === "compact" ? "true" : "false");
 }
 
 // ---- token entry ----
@@ -659,8 +676,17 @@ function initDelegation() {
   });
 
   // Rows are links, so they answer to the keyboard like links.
+  //
+  // A row that CONTAINS a real control is the case to get right: a
+  // <button> already fires its own click on Enter, so walking up to the
+  // enclosing row and clicking that too runs both actions — and the row's
+  // wins, because it is second. Pressing Enter on the Agents room's "LLM
+  // calls" button would open the seat's front page instead. The browser
+  // handles a native control; this handler exists only for the elements
+  // that are links by ROLE and get nothing for free.
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Enter" && ev.key !== " ") return;
+    if (ev.target.closest?.("button, a, input, select, textarea")) return;
     const el = ev.target.closest?.("[data-action][tabindex]");
     if (!el) return;
     ev.preventDefault();
@@ -674,8 +700,10 @@ function initDelegation() {
     else if (action === "palette-dismiss") {
       if (ev.target.classList.contains("modal-veil")) togglePalette(false);
     } else if (action === "palette-go") {
-      togglePalette(false);
-      navigate(el.dataset.route);
+      runPaletteHit({
+        route: el.dataset.route || "",
+        command: el.dataset.command || "",
+      });
     } else if (action === "reconnect") {
       socket.reconnect();
       toggleHealth(false);

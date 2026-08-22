@@ -1109,9 +1109,20 @@ src/crewlet/          # Main package
                       #   "nothing to do", and attentionCounts returns
                       #   null rather than a confident zero.
                       #   commandPalette.js is the answer to "no search
-                      #   anywhere" — ONE palette over rooms, seats and
-                      #   any event or trace id pasted from a log, rather
-                      #   than a search box per view with its own ranking.
+                      #   anywhere" — ONE palette over rooms, seats, any
+                      #   event or trace id pasted from a log, and
+                      #   COMMANDS, rather than a search box per view with
+                      #   its own ranking. A chrome preference is a
+                      #   command, never a topbar button: the topbar is
+                      #   the most valuable strip on every screen and a
+                      #   preference is set once, so density's permanent
+                      #   icon-only slot beside the theme toggle bought a
+                      #   mystery control (two rule glyphs saying nothing
+                      #   about spacing) at that price. Theme keeps its
+                      #   button — it is flipped by the light in the room.
+                      #   Commands rank below rooms/seats and vanish on an
+                      #   empty query; buildResults takes {theme,density}
+                      #   as an ARGUMENT so it stays DOM-free.
                       #   modal.js replaced the window.prompt/confirm that
                       #   were the only unstyled UI in the product.
                       #   router.js OWNS THE BACK BUTTON, which is a
@@ -1192,7 +1203,19 @@ src/crewlet/          # Main package
                       #   seat ASKS OF THE READER, not by the state enum —
                       #   a seat parked on a question and a seat that fell
                       #   over are both "not working" and only one is
-                      #   broken, which the enum cannot express.
+                      #   broken, which the enum cannot express. THE WHOLE
+                      #   ROW opens the seat — it was a div whose only
+                      #   target was the name, on the room whose whole job
+                      #   is reaching a seat — which also retires the
+                      #   "Open seat" button beside it, since a second
+                      #   control for what the row already does makes the
+                      #   row's own click look like it must do something
+                      #   else. The nested "LLM calls" button still wins
+                      #   (closest() resolves innermost-first, no
+                      #   stopPropagation); the shell's Enter-on-a-row
+                      #   handler now leaves NATIVE controls alone, since
+                      #   a <button> already fires its own click and the
+                      #   row's action was landing second and winning.
                       #   COLOUR SAYS WHAT A SEAT IS DOING, never who it
                       #   is: state.js seatTone() is the one derivation
                       #   (needs | broken | working | quiet) and every

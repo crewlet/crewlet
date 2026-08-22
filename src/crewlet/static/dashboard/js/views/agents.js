@@ -199,14 +199,25 @@ export function createAgentsView({ store, navigate, refresh, params = {} }) {
       ? `<span class="ag-tokens num">${esc(fmtNum(agent.total_tokens))}</span>`
       : "";
 
+    // THE WHOLE ROW OPENS THE SEAT. It used to be a plain div with the
+    // name as the only target — a row you could point anywhere in and
+    // click nothing, on the room whose entire job is getting you to a
+    // seat. That also retires the "Open seat" button: a secondary button
+    // repeating what the row already does is a second affordance for one
+    // action, and it made the row's own click look like it did something
+    // else. The chevron says the row goes somewhere; "LLM calls" is the
+    // one place it goes that ISN'T the seat's front page, so it stays a
+    // button. `closest("[data-action]")` resolves innermost-first, so
+    // that button wins inside the row without any stopPropagation.
     return `
-      <div class="ag-row${broken ? " is-broken" : ""}${
+      <div class="ag-row clickable${broken ? " is-broken" : ""}${
         reason === "question" ? " is-waiting" : ""
-      }" data-k="ag:${escAttr(handle)}">
+      }" data-k="ag:${escAttr(handle)}"
+           data-action="seat" data-seat="${escAttr(handle)}"
+           role="link" tabindex="0">
         ${avatarFor(seat.name, broken ? "broken" : TONE[entry.group] || "quiet")}
         <div class="ag-id">
-          <button class="ag-name" data-action="seat" data-seat="${escAttr(handle)}"
-            >${esc(seat.name)}</button>
+          <span class="ag-name">${esc(seat.name)}</span>
           <span class="ag-handle mono">@${esc(handle)}</span>
           ${where ? `<span class="ag-where">${esc(where)}</span>` : ""}
         </div>
@@ -220,12 +231,11 @@ export function createAgentsView({ store, navigate, refresh, params = {} }) {
           stamp(entry) === Infinity ? "" : esc(relTime(new Date(stamp(entry)).toISOString()))
         }</div>
         <div class="ag-do">
-          <button class="btn sm" data-action="seat-calls" data-seat="${escAttr(handle)}">
+          <button class="btn sm" data-action="seat-calls" data-seat="${escAttr(handle)}"
+                  title="${escAttr(`Every LLM call ${seat.name} has made`)}">
             ${icon("activity", "sm")}LLM calls
           </button>
-          <button class="btn sm ghost" data-action="seat" data-seat="${escAttr(handle)}">
-            Open seat
-          </button>
+          <span class="ag-go">${icon("chevron", "sm")}</span>
         </div>
       </div>`;
   }

@@ -166,14 +166,34 @@ the server can project.
 
 ### Search
 
-One palette (`⌘K`, or `/`), over rooms, seats, and any event or trace id
-pasted from a log. There was no search of any kind before: a thirty-seat org
-was navigated by scrolling, and an id copied out of a log could only be opened
-by hand-editing the URL. A search box per view would have meant one ranking
-rule per view and four places to keep them agreeing.
+One palette (`⌘K`, or `/`), over rooms, seats, any event or trace id pasted
+from a log, and **commands**. There was no search of any kind before: a
+thirty-seat org was navigated by scrolling, and an id copied out of a log could
+only be opened by hand-editing the URL. A search box per view would have meant
+one ranking rule per view and four places to keep them agreeing.
 
 `buildResults` is pure, so the ranking is testable without a DOM: a prefix
-beats a word boundary beats a substring.
+beats a word boundary beats a substring. The current `{theme, density}` is
+passed *in* rather than read off `document`, so a command whose label depends
+on the current setting is not the thing that drags a DOM into the ranking.
+
+**A chrome preference is a command, not a topbar button.** The topbar is the
+most valuable strip on every screen and a preference is set once and then
+never again. Density spent a permanent, icon-only slot there next to the theme
+toggle and read as a mystery control — two horizontal-rule glyphs that say
+nothing about spacing, reported as unreadable twice. A command can afford the
+words, so it says what it will *do* ("Switch to compact spacing"), the same
+rule an icon button's tooltip follows. Theme keeps its button: it is flipped by
+the light in the room, which changes through the day.
+
+Commands rank below rooms and seats — somebody typing into the palette is
+navigating — and are hidden entirely on an empty query, since the palette opens
+on navigation and a preference at the top of a blank palette is one offered
+every single time it is opened.
+
+`commandPalette.test.mjs` reads the sidebar's own list out of `app.js` and
+checks every room in it is reachable. That is not hypothetical: the Agents room
+shipped in the sidebar and was the one place `⌘K` could not take you.
 
 ### Mission Control
 
@@ -241,7 +261,22 @@ holds both a question (amber) and a failure (red), and red is reserved for
 failure. Inside a group, oldest first: a question asked on Friday outranks one
 asked a minute ago.
 
-Every row carries an **LLM calls** button straight to `#/seats/{handle}?tab=now`.
+**The whole row opens the seat.** It was a plain div with the name as its
+only target — a row you could point anywhere in and click nothing, on the room
+whose entire job is getting you to a seat. That also retires the "Open seat"
+button that sat at the end of it: a second control for what the row already
+does is one affordance too many, and it made the row's own click look like it
+must do something else. A chevron says the row goes somewhere; **LLM calls**
+stays a button because it is the one destination that *isn't* the seat's front
+page, and it lands on `#/seats/{handle}?tab=now`.
+
+A nested control inside a `role="link"` row works because
+`closest("[data-action]")` resolves innermost-first — no `stopPropagation`
+anywhere. The keyboard needed one fix for it: a `<button>` already fires its
+own click on Enter, so the shell's row handler walking up to the enclosing row
+and clicking that too ran both actions, and the row's won because it was
+second. It now leaves native controls to the browser.
+
 The group chips are a **filter**, so they replace rather than push (see
 [Moving, and going back](#moving-and-going-back)), and their counts render as
 `–` rather than a confident `0` when the socket is down.
@@ -993,7 +1028,14 @@ operator went looking for them.
     positions rather than URLs.
 18. **Colouring a seat? Call `seatTone`.** Nothing colours by identity, and
     `quiet` is untinted — see [Colouring a seat](#colouring-a-seat).
-19. **Deleted a view? Delete its stylesheet rules in the same change.** Dead
+19. **A whole row that navigates? Make the ROW the target.** `role="link"`,
+    `tabindex="0"`, `data-action` on the row itself — not a link buried in
+    one cell with the rest of the row inert. A nested control for a
+    *different* destination is fine (innermost wins); a second control for
+    the row's own destination is not.
+20. **A new chrome preference is a palette command, not a topbar button.**
+    See [Search](#search).
+21. **Deleted a view? Delete its stylesheet rules in the same change.** Dead
     CSS breaks nothing, so it accumulates until a later rule collides with
     it; two rooms' worth survived the redesign that cut them.
     `wiring.test.mjs` fails the build on a rule with no markup behind it,

@@ -17,6 +17,7 @@ import { flattenSeats } from "./org.js";
 // reader types what they see in the sidebar.
 export const ROOMS = [
   { route: "/", label: "Mission Control", hint: "what is happening now" },
+  { route: "/agents", label: "Agents", hint: "who is working, who is not" },
   { route: "/work", label: "Work", hint: "turns and sandbox runs" },
   { route: "/activity", label: "Activity", hint: "the event feed" },
   { route: "/org", label: "Org", hint: "chart, directory, charter" },
@@ -27,6 +28,41 @@ export const ROOMS = [
   { route: "/config", label: "Configuration", hint: "revisions and entities" },
   { route: "/tools", label: "Tools", hint: "the tool registry" },
 ];
+
+// Chrome preferences, as commands.
+//
+// They live here rather than as buttons in the topbar because that is the
+// most valuable strip on every screen and a preference is set once and
+// then never again. Density in particular spent a permanent slot there,
+// icon-only, next to the theme toggle, and read as a mystery control:
+// two horizontal-rule glyphs that say nothing about spacing. A command
+// can afford the words.
+//
+// Each states its DESTINATION — what clicking does — rather than its
+// current value, the same rule the icon buttons' tooltips follow, so the
+// label is the answer to "what happens if I pick this".
+export function commands({ theme = "dark", density = "comfortable" } = {}) {
+  return [
+    {
+      id: "cmd:theme",
+      command: "toggle-theme",
+      label: theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme",
+      hint: "also the sun/moon button in the top bar",
+    },
+    {
+      id: "cmd:density",
+      command: "toggle-density",
+      label:
+        density === "compact"
+          ? "Switch to comfortable spacing"
+          : "Switch to compact spacing",
+      hint:
+        density === "compact"
+          ? "more room around every row"
+          : "fit more rows on the screen",
+    },
+  ];
+}
 
 // A 32-character hex id, with or without dashes: an event id or a trace
 // id pasted from a log. Which of the two it is cannot be told apart by
@@ -54,8 +90,10 @@ function score(text, term) {
  * Everything the typed text could mean, grouped and ranked.
  *
  * `state` is the store's state; only `org` and `agents` are read.
+ * `chrome` is the current `{theme, density}`, passed in rather than read
+ * off `document` so this stays pure and testable without a DOM.
  */
-export function buildResults(state, text) {
+export function buildResults(state, text, chrome = {}) {
   const term = String(text || "").trim().toLowerCase();
   const groups = [];
 
@@ -92,6 +130,19 @@ export function buildResults(state, text) {
       route: `/seats/${encodeURIComponent(hit.seat.handle)}`,
     }));
   if (seats.length) groups.push({ title: "Seats", items: seats.slice(0, 8) });
+
+  // Commands rank below rooms and seats, and are hidden entirely on an
+  // empty query: the palette opens on navigation, and a preference at the
+  // top of a blank palette is a preference offered every single time it
+  // is opened.
+  if (term) {
+    const hits = commands(chrome)
+      .map((cmd) => ({ cmd, rank: score(cmd.label, term) }))
+      .filter((hit) => hit.rank !== null)
+      .sort((a, b) => a.rank - b.rank)
+      .map((hit) => ({ kind: "command", ...hit.cmd }));
+    if (hits.length) groups.push({ title: "Commands", items: hits });
+  }
 
   if (ID_RE.test(term)) {
     groups.push({

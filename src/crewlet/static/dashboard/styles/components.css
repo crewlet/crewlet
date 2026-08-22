@@ -459,6 +459,12 @@
   padding: 4px 10px;
   font-size: 11.5px;
 }
+/* Points back the way it reads. The one chevron symbol faces right, and
+   nothing rotated it here, so the link out of a seat rendered "› Agents"
+   — an arrow pointing away from where the link goes. */
+.back-link .ic {
+  transform: rotate(180deg);
+}
 .back-link {
   display: inline-flex;
   align-items: center;

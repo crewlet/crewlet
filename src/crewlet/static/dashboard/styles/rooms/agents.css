@@ -114,8 +114,20 @@
 .ag-row:last-child {
   border-bottom: 0;
 }
+/* The whole row opens the seat. The focus ring comes from the global
+   `:focus-visible`, which every `role="link"` row in the product gets;
+   `.clickable` is scoped per row type rather than declared once, so the
+   cursor is set here. */
+.ag-row.clickable {
+  cursor: pointer;
+}
 .ag-row:hover {
   background: var(--bg-hover);
+}
+/* The outline would otherwise be clipped by the row above and below,
+   since rows are flush against each other inside the list. */
+.ag-row:focus-visible {
+  outline-offset: -3px;
 }
 /* A rail rather than a fill: the row still has to read as a row, and a
    washed background at this size competes with the badges inside it. */
@@ -138,17 +150,17 @@
   gap: 2px;
   min-width: 0;
 }
+/* Plain text now, not a button: the row is the link, and a second
+   target inside it for the same destination is one affordance too many.
+   It underlines with the ROW's hover so the row still reads as a link. */
 .ag-name {
-  background: none;
-  border: 0;
-  padding: 0;
-  text-align: left;
-  cursor: pointer;
   font-weight: 600;
   font-size: var(--text-sm);
   letter-spacing: var(--track-body);
+  color: var(--heading);
 }
-.ag-name:hover {
+.ag-row:hover .ag-name,
+.ag-row:focus-visible .ag-name {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -214,14 +226,25 @@
   gap: var(--space-2);
   justify-content: flex-end;
 }
-.ag-do .btn.ghost {
-  background: none;
-  border-color: transparent;
-  color: var(--text-muted);
+/* The chevron is the row's own affordance — it says the row goes
+   somewhere, which is what the "Open seat" button used to say with a
+   whole control. Dim until the row is under the pointer, so a list of
+   twenty seats is not a column of twenty arrows. */
+.ag-go {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+  opacity: 0.5;
+  transition:
+    opacity var(--dur),
+    color var(--dur),
+    transform var(--dur);
 }
-.ag-do .btn.ghost:hover {
-  border-color: var(--border);
+.ag-row:hover .ag-go,
+.ag-row:focus-visible .ag-go {
+  opacity: 1;
   color: var(--text);
+  transform: translateX(2px);
 }
 
 /* Narrow: the row becomes two lines rather than five squeezed columns. */

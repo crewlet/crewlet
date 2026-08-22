@@ -196,6 +196,56 @@ test("every row offers a direct route to the LLM calls", () => {
   assert.equal(calls.length, 3, "one per agent seat");
 });
 
+test("the whole row opens the seat, not just the name", () => {
+  // The room's entire job is getting the reader to a seat, and the row
+  // used to have exactly one target in it: the name. Everywhere else on
+  // the row — the avatar, the status, the timestamp, the empty space
+  // between them — pointed at nothing and did nothing when clicked.
+  const el = parse(view().render(state()));
+  const rows = all(el, (n) => (n.getAttribute("class") || "").includes("ag-row"));
+  assert.ok(rows.length >= 3, "no rows rendered");
+  for (const row of rows) {
+    assert.equal(row.getAttribute("data-action"), "seat", "row is not the target");
+    assert.ok(row.getAttribute("data-seat"), "row names no seat");
+    assert.equal(row.getAttribute("role"), "link");
+    assert.equal(row.getAttribute("tabindex"), "0");
+  }
+});
+
+test("the row carries no second control for its own destination", () => {
+  // "Open seat" repeated what the row now does. Two affordances for one
+  // action is how the row's own click comes to look like it must do
+  // something else — which is what a reader reported it doing.
+  const html = view().render(state());
+  assert.ok(!/Open seat/.test(html), "the row still offers a duplicate target");
+
+  // And the name is no longer its own button, for the same reason.
+  const el = parse(html);
+  const names = all(el, (n) => (n.getAttribute("class") || "").includes("ag-name"));
+  assert.ok(names.length >= 3);
+  for (const name of names) {
+    assert.notEqual(name.tagName.toLowerCase(), "button");
+    assert.equal(name.getAttribute("data-action"), null);
+  }
+});
+
+test("the one action that is not the seat stays a button inside the row", () => {
+  // `closest("[data-action]")` resolves innermost-first, so a nested
+  // button wins over the row it sits in — but only if it really is
+  // nested, and only if it names a DIFFERENT action.
+  const el = parse(view().render(state()));
+  const calls = all(el, (n) => n.getAttribute("data-action") === "seat-calls");
+  assert.ok(calls.length >= 3);
+  for (const btn of calls) {
+    assert.equal(btn.tagName.toLowerCase(), "button");
+    const row = btn.parentNode?.parentNode;
+    assert.ok(
+      (row?.getAttribute("class") || "").includes("ag-row"),
+      "the calls button is not inside a row, so the row's action would win",
+    );
+  }
+});
+
 test("the calls button lands on the turns, not the seat's default tab", () => {
   const v = view();
   v.onAction("seat-calls", { dataset: { seat: "cto" } });
