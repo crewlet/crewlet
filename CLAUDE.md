@@ -236,9 +236,26 @@ src/crewlet/          # Main package
                       #   derivation + its inverse is what lets routing
                       #   address a seat this process is not running)
   agent/              # Agent runtime (definition, instance, pool, turn engine)
-                      #   definition.py, instance.py, pool.py, memory.py,
+                      #   definition.py, instance.py, pool.py,
                       #   turn.py (TurnEngine; resume_state re-enters Execute
                       #     mid-loop on sandbox completion), plan.py,
+                      #   conversation_log.py (CROSS-TURN ledger —
+                      #     SessionEntry + build_session_entry +
+                      #     render_conversation_history, the
+                      #     iteration_log doctrine one scope wider: what
+                      #     this seat already said in ONE conversation,
+                      #     rendered into that conversation's NEXT turn
+                      #     as `## Earlier in this conversation`. Rows in
+                      #     db/conversation_sessions.py; the entry SHAPE
+                      #     lives here so db/ stays free of agent
+                      #     imports, exactly as execute_state is a blob
+                      #     there and a conversation in execute.py.
+                      #     Structured, never a transcript replay: the
+                      #     thread has MOVED by the next turn, so raw
+                      #     prior context invites acting on state that is
+                      #     no longer true. Reads stay marked STRONGER
+                      #     than within a turn — a read from last Tuesday
+                      #     is stale by construction),
                       #   iteration_log.py (prior-work ledger —
                       #     IterationRecord + render_iteration_ledger. Each
                       #     phase rebuilds its LLM conversation per
@@ -377,6 +394,26 @@ src/crewlet/          # Main package
                       #   directions fail open — not knowing whether
                       #   work was done has one safe answer, and it is
                       #   the pre-ledger one;
+                      #   conversation_sessions.py — the CONVERSATION
+                      #   LEDGER: what this seat already said in ONE
+                      #   thread / issue / PR, appended at turn end and
+                      #   rendered back into that conversation's next
+                      #   turn. Keyed (agent_handle, conversation_key),
+                      #   deduped on work_key — never turn_id, same
+                      #   reason as above. NOT episodes: those are
+                      #   agent-scoped cosine similarity over two
+                      #   summaries, with no reply text and gated OFF on
+                      #   exactly the thin pointer triggers that CONTINUE
+                      #   a conversation. A regular table, so dedupe is a
+                      #   plain unique index (031's advisory lock exists
+                      #   only because episodes is a hypertable).
+                      #   Bounded twice: max_entries trims on write (a
+                      #   chat DM keys on the whole CHANNEL, so it never
+                      #   stops growing) and the sweep drops past
+                      #   retention. Writes fail open, reads RAISE — the
+                      #   caller decides, because swallowing made
+                      #   "unreadable" and "nothing said yet" one answer
+                      #   and a screen drew a DB outage as a silent seat;
                       #   maintenance.py — MaintenanceWorker, the
                       #   retention sweep for the five tables that
                       #   answer "recently" and are written on every

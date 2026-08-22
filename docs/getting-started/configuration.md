@@ -69,6 +69,15 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
   execute_max_tool_rounds_ceiling: 40   # hard ceiling for Execute rounds across extensions (2x base 20)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
+  conversation_session:                 # what this seat already said in ONE thread / issue / PR,
+                                        #   carried into that conversation's next turn
+                                        #   (see concepts/conversation-sessions.md)
+    enabled: true                       # feature gate — a live kill switch; off restores the
+                                        #   pre-ledger prompt exactly
+    max_entries: 20                     # entries KEPT per conversation, trimmed at write time
+    injected_max_entries: 5             # how many reach the prompt: the newest N, rendered oldest-first
+    injected_max_chars: 6000            # byte budget for the block; oldest entries drop first
+    retention_days: 30                  # matches the event store's horizon; applied at next start
 
 learning:                               # optional — agent-learning subsystem
   enabled: true                         # master switch (auto-disables without DB + embeddings)

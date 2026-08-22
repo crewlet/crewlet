@@ -82,6 +82,20 @@ class Episode(BaseModel):
     partial unique index, which is correct: they have no cross-node
     duplicate to collapse."""
 
+    conversation_key: str = ""
+    """Which conversation this turn served — the Slack thread, Jira
+    issue, GitHub PR (see
+    :func:`crewlet.notifications.coalesce.conversation_key`).
+
+    Recall itself is similarity-based and agent-scoped, so this is not
+    a retrieval key by default; it is what lets a caller ask the
+    narrower question ("what has this seat done on THIS ticket") that
+    cosine similarity answers only by luck.
+
+    ``""`` when the trigger has no conversation a later message could
+    reproduce, and on compacted rows, whose cluster spans conversations
+    by construction."""
+
     # --- Lifecycle / compaction fields (defaults preserve raw shape) ---
 
     kind: EpisodeKindStr = "raw"

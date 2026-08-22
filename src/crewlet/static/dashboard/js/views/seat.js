@@ -90,10 +90,18 @@ const MAX_RECORDS = 200;
 // enough that the figure describes the company as it is configured now.
 const PHASE_WINDOW = 7;
 
-// The four questions, in the order a reader arrives with them.
+// The five questions, in the order a reader arrives with them.
+//
+// Threads sits beside Memory because they answer neighbouring questions
+// and are easy to confuse: Memory is what this seat has learned across
+// every conversation, Threads is what it already said in ONE. The
+// engine renders the latter back into that conversation's next turn, so
+// this tab is the only place a person can read the context the model is
+// being given.
 const TABS = [
   { key: "now", label: "Now", icon: "activity" },
   { key: "memory", label: "Memory", icon: "database" },
+  { key: "threads", label: "Threads", icon: "message" },
   { key: "cost", label: "Cost", icon: "zap" },
   { key: "access", label: "Access", icon: "key" },
 ];
@@ -109,9 +117,10 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   // The router threads the path — the seat key, and for the llm
   // sub-route the record's coordinates — but not the query string, so
   // the tab is read off the location once here and written back with
-  // `pushParams`. A push, because a tab is a screen: Now, Memory, Cost
-  // and Access answer four different questions about this seat, and Back
-  // after opening three of them should walk out through them.
+  // `pushParams`. A push, because a tab is a screen: Now, Memory,
+  // Threads, Cost and Access answer five different questions about this
+  // seat, and Back after opening three of them should walk out through
+  // them.
   let tab = TAB_KEYS.has(params.tab) ? params.tab : DEFAULT_TAB;
 
   let data = null; // the `agent` query's reply
@@ -122,6 +131,17 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   let memory = null;
   let memoryError = "";
   let memoryAsked = false;
+
+  let threads = null; // the `conversations` query's reply
+  let threadsError = "";
+  let threadsAsked = false;
+  let openThread = ""; // conversation_key whose entries are loaded
+  let threadEntries = null;
+  // Scoped to the OPEN thread, deliberately separate from
+  // `threadsError` above: the list read and the entry read fail
+  // independently, and folding them into one flag let a failed expand
+  // silently claim the whole list was unreadable.
+  let threadError = "";
 
   let cost = null; // the `tokens` rollup for this seat
   let costError = "";
@@ -223,6 +243,52 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
     if (!disposed) refresh();
   }
 
+  async function loadThreads() {
+    // `seatHandle()`, not `data?.handle`: the seat reply is still in
+    // flight when a direct link lands on this tab, and reading it
+    // straight left the panel a permanent skeleton — nothing re-runs
+    // `ensureTabData` once the reply arrives, so only clicking away and
+    // back ever loaded it. The helper falls back to the route key,
+    // which on this page IS the handle.
+    const handle = seatHandle();
+    if (!handle) return;
+    threadsAsked = true;
+    try {
+      threads = await query("conversations", { handle });
+      threadsError = "";
+    } catch (err) {
+      // Same rule as the diary read above: a failed query must never
+      // render as "this seat has never said anything here".
+      threads = null;
+      threadsError = (err && err.message) || "failed";
+    }
+    if (!disposed) refresh();
+  }
+
+  async function loadThread(convKey) {
+    const handle = seatHandle();
+    if (!handle || !convKey) return;
+    openThread = convKey;
+    threadEntries = null;
+    threadError = "";
+    refresh();
+    try {
+      const reply = await query("conversations", { handle, key: convKey });
+      if (openThread === convKey) {
+        threadEntries = reply?.entries || [];
+        threadError = "";
+      }
+    } catch (err) {
+      // The same rule the list read follows: a failed query must not
+      // render as "this seat said nothing here". Leaving `threadEntries`
+      // null keeps the empty-vs-unreadable distinction the renderer
+      // needs — setting it to [] drew a database outage as a thread the
+      // seat had never spoken in.
+      if (openThread === convKey) threadError = (err && err.message) || "failed";
+    }
+    if (!disposed) refresh();
+  }
+
   async function loadCost() {
     const role = roleName();
     if (!role) return;
@@ -242,6 +308,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
   // for a tab nobody opened.
   function ensureTabData() {
     if (tab === "memory" && !memoryAsked) loadMemory();
+    if (tab === "threads" && !threadsAsked) loadThreads();
     if (!costAsked) loadCost();
   }
 
@@ -926,6 +993,107 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       }`;
   }
 
+  // Threads — what this seat already said in one conversation, which is
+  // exactly what the engine renders back into that conversation's next
+  // turn. Shown verbatim: a context source an operator cannot read is
+  // the invisible second memory the CLI workspace deletes on every call
+  // to avoid, and the answer to that is to make this one visible.
+  function threadsPanel() {
+    if (threadsError && !threads) {
+      return empty(
+        "message",
+        "Could not read this seat's conversations",
+        "The query failed. This says nothing about what the seat has said — only that it could not be read.",
+      );
+    }
+    if (!threads) return skeletonRows(3);
+    if (!threads.available) {
+      return empty(
+        "message",
+        "No conversation ledger on this node",
+        "The ledger lives in PostgreSQL. This node has none wired, so it cannot show what any seat has said.",
+      );
+    }
+    const list = threads.conversations || [];
+    if (!list.length) {
+      return empty(
+        "message",
+        "No conversations yet",
+        "Entries are written when a turn finishes on a thread, issue, or pull request the seat can be replied to on.",
+      );
+    }
+
+    const rows = list
+      .map((c) => {
+        const key = c.conversation_key || "";
+        const open = openThread === key;
+        return `
+        <div class="mem-card ${open ? "open" : ""}" data-k="th:${escAttr(key)}">
+          <div class="mem-head" data-action="open-thread" data-thread="${escAttr(key)}">
+            <span class="mem-icon">${icon(sourceIcon(key), "sm")}</span>
+            <div style="flex:1"><div class="mem-title mono">${esc(key)}</div></div>
+            <span class="badge">${c.entries} turn${c.entries === 1 ? "" : "s"}</span>
+            ${c.last_at ? `<span class="empty-sub">${esc(relTime(c.last_at))}</span>` : ""}
+            ${icon("chevron", "chevron")}
+          </div>
+          <div class="mem-body">${open ? threadBody() : ""}</div>
+        </div>`;
+      })
+      .join("");
+
+    return `${sectionHead("message", "Conversations", null, null)}
+      <div class="list">${rows}</div>`;
+  }
+
+  function threadBody() {
+    if (threadError) {
+      return `<div class="mem-entry"><span class="empty-sub">Could not read this conversation — ${esc(threadError)}. This says nothing about what the seat replied here, only that it could not be read.</span></div>`;
+    }
+    if (threadEntries === null) return skeletonRows(2);
+    if (!threadEntries.length) {
+      return '<div class="mem-entry"><span class="empty-sub">No entries</span></div>';
+    }
+    return threadEntries
+      .map((e) => {
+        const id = e.turn_id || e.at || "";
+        const line = (label, value, k) =>
+          value
+            ? `<div class="mem-label">${label}</div>${memText(value, `${k}:${id}`)}`
+            : "";
+        return `
+        <div class="mem-entry" data-k="te:${escAttr(id)}">
+          <div class="mem-entry-meta">
+            ${e.at ? `<span>${esc(relTime(e.at))}</span>` : ""}
+            ${e.turn_id ? `<span class="mono">${esc(shortId(e.turn_id, 10))}</span>` : ""}
+            ${e.decision && e.decision !== "done" ? `<span class="badge warn">${esc(e.decision)}</span>` : ""}
+          </div>
+          ${line("Triggered by", e.trigger, "tt")}
+          ${line("Planned", e.plan_summary, "tp")}
+          ${line("Reasoning", e.plan_reasoning, "tr")}
+          ${e.tool_calls && e.tool_calls !== "(none)" ? `<div class="mem-label">Called</div><pre class="mem-pre">${esc(e.tool_calls)}</pre>` : ""}
+          ${line("Replied", e.reply, "ty")}
+          ${line("Reviewer", e.completed_work, "tv")}
+        </div>`;
+      })
+      .join("");
+  }
+
+  // The conversation key is `{source}:{local}`, so its own prefix names
+  // the surface it came from — no extra field, and an unknown source
+  // falls back to the generic chat glyph rather than to nothing.
+  function sourceIcon(key) {
+    const source = String(key || "").split(":")[0];
+    return (
+      {
+        github: "git",
+        gitlab: "git",
+        jira: "clipboard",
+        plane: "clipboard",
+        confluence: "book",
+      }[source] || "message"
+    );
+  }
+
   function costPanel(state) {
     let body;
     if (costError) {
@@ -1238,11 +1406,13 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       const panel =
         tab === "memory"
           ? memoryPanel()
-          : tab === "cost"
-            ? costPanel(state)
-            : tab === "access"
-              ? accessPanel(state)
-              : nowPanel(state);
+          : tab === "threads"
+            ? threadsPanel()
+            : tab === "cost"
+              ? costPanel(state)
+              : tab === "access"
+                ? accessPanel(state)
+                : nowPanel(state);
       return `
         ${backLink()}
         ${renderHead(state)}
@@ -1306,6 +1476,18 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
         const k = target.dataset.pkey;
         const block = target.closest(".msg-block");
         overrides.set(`prompt:${k}`, !(block && block.classList.contains("open")));
+      } else if (action === "open-thread") {
+        // Clicking the open one closes it: the header is the toggle, so
+        // it has to work in both directions or the panel only ever grows.
+        const key = target.dataset.thread || "";
+        if (openThread === key) {
+          openThread = "";
+          threadEntries = null;
+          threadError = "";
+          refresh();
+        } else {
+          loadThread(key);
+        }
       } else if (action === "toggle-mem") {
         toggle(`mem:${target.dataset.mem}`, false);
       } else if (action === "toggle-clamp") {

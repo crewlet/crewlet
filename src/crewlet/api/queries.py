@@ -169,6 +169,24 @@ async def _budgets(app: Any, params: dict[str, Any], _client: Any = None) -> Any
     return await budgets_payload(app)
 
 
+async def _conversations(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
+    """What a seat already did in each thread it works.
+
+    The same rows the engine renders into a conversation's next turn.
+    Served because a context source an operator cannot read is the
+    invisible second memory the CLI-agent workspace deletes on every
+    call precisely to avoid — this one is engine-owned, so it can be
+    shown instead.
+    """
+    from crewlet.api.routes.conversations import conversations_payload
+
+    return await conversations_payload(
+        app,
+        handle=str(params.get("handle", "") or ""),
+        key=str(params.get("key", "") or ""),
+    )
+
+
 async def _sandbox_runs(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     """The detached coding runs the engine is holding.
 
@@ -291,6 +309,7 @@ _QUERIES: dict[str, tuple[Handler, bool]] = {
     "schedules": (_schedules, False),
     "fleet": (_fleet, False),
     "sandbox_runs": (_sandbox_runs, False),
+    "conversations": (_conversations, False),
     "budgets": (_budgets, False),
     "integrations": (_integrations, False),
     # Named ``stream``, not ``health``: a query must never share a name

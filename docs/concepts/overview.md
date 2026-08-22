@@ -127,6 +127,7 @@ PostgreSQL via `asyncpg`. The schema is built from a forward-only migration sequ
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
+- **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
 - **`secret_values`** — the [secret store](secret-store.md): one encrypted row per env-var name, consulted ahead of `os.environ` when the config layer resolves a `${VAR}` reference. Sealed with the Tier A keyring; no plaintext mode.
 
 Everything else is YAML config, in-memory state, external PM tools, or Apache Pulsar. The full migration list is in `src/crewlet/db/migrations/`.
@@ -144,6 +145,9 @@ src/crewlet/
 ├── agent/                # Agent runtime (definition, instance, pool, turn engine:
 │                         #   turn, plan, execute, review, subagent, guards,
 │                         #   prompts, turn_context, phase_model, llm_loop,
+│                         #   iteration_log — within-turn prior-work ledger,
+│                         #   conversation_log — the cross-turn one
+│                         #     (see conversation-sessions.md),
 │                         #   skills/ — knowledge-base-sourced tool-skill registry)
 ├── queue/                # EventQueue protocol (Pulsar + memory)
 ├── a2a/                  # Agent-to-agent channels (durable state, service)

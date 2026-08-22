@@ -30,6 +30,11 @@ from uuid import UUID
 import structlog
 
 from crewlet._logging import get_logger
+from crewlet.agent.conversation_log import (
+    SessionEntry,
+    build_session_entry,
+    render_conversation_history,
+)
 from crewlet.agent.execute import ExecuteResult, run_execute_phase
 from crewlet.agent.guards import (
     DelegationDepthExceeded,
@@ -64,6 +69,7 @@ from crewlet.events.types import (
 )
 from crewlet.learning.episode_store import EpisodeStoreProtocol
 from crewlet.learning.models import Episode
+from crewlet.notifications.coalesce import conversation_key
 from crewlet.providers.fallback import FallbackLLMProvider, LLMChainExhausted
 from crewlet.providers.llm.protocol import LLMProvider
 from crewlet.providers.llm.scope import bind_llm_scope
@@ -263,6 +269,7 @@ class TurnEngine:
         execution_tracker: Any = None,
         token_usage_repo: TokenUsageRepository | None = None,
         episode_store: EpisodeStoreProtocol | None = None,
+        conversation_sessions: Any = None,
         counterparty_store: Any = None,
         synthesized_skill_store: Any = None,
         agent_diary: Any = None,
@@ -357,6 +364,7 @@ class TurnEngine:
         self._execution_tracker = execution_tracker
         self._token_usage_repo = token_usage_repo
         self._episode_store = episode_store
+        self._conversation_sessions = conversation_sessions
         self._counterparty_store = counterparty_store
         self._synthesized_skill_store = synthesized_skill_store
         self._agent_diary = agent_diary
@@ -647,6 +655,17 @@ class TurnEngine:
     def _sandbox_min_budget_tokens(self) -> int:
         return int(self._settings.get().sandbox_min_budget_tokens)
 
+    @property
+    def _conversation_session(self) -> Any:
+        """The live ``ConversationSessionConfig`` (a nested model).
+
+        Returned whole rather than field-by-field: the read path needs
+        three of its fields together to render one block, and taking
+        them from one ``get()`` keeps them from being read across a
+        config swap mid-turn.
+        """
+        return self._settings.get().conversation_session
+
     def set_sandbox_manager(self, manager: Any) -> None:
         """Swap the sandbox manager (live-reload of ``providers.sandbox``).
 
@@ -934,6 +953,10 @@ class TurnEngine:
             delegation_chain=delegation_chain,
             notification_metadata=notification_metadata,
             a2a_context=a2a_context,
+            # ONE derivation of "which conversation is this", read from
+            # here by the session ledger, the sandbox clarification
+            # round-trip, the episode row and this turn's telemetry.
+            conversation_key=conversation_key(event) if event is not None else "",
             deadline_seconds=deadline_seconds,
             started_at=datetime.now(UTC),
         )
@@ -955,6 +978,12 @@ class TurnEngine:
                 IterationRecord.from_dict(rec)
                 for rec in getattr(resume_state, "iteration_history", []) or []
             ]
+
+        # Prior turns of this conversation, resolved ONCE here and frozen
+        # for the whole turn — the ``plan_prefetch`` rule, for the same
+        # reason: a block that changed between iterations would
+        # invalidate the provider prompt cache on every self_iterate loop.
+        turn.conversation_history = await self._load_conversation_history(turn)
 
         # Three pieces of ambient turn context, all wrapping the whole
         # ``_run_turn_inner`` call rather than sitting inside it, so
@@ -1658,6 +1687,14 @@ class TurnEngine:
                 for name, ann in called_annotations.items()
                 if _annotation_is_read(ann)
             }
+            # Stashed for the conversation ledger, which is assembled in
+            # the turn-completion frame — where ``role_mcp`` (half of the
+            # resolution above) is out of scope.  Accumulated across
+            # iterations rather than replaced: a read marked in round 1
+            # is still a read, and the entry covers the whole turn.
+            turn.read_only_names = tuple(
+                sorted(set(turn.read_only_names) | known_read_names)
+            )
             # Server-backed tool names (per-role MCP wrappers + shared MCP
             # tools registered globally).  A delivery to a shared surface
             # only comes from an MCP server, so the phantom-guess fallback
@@ -1746,6 +1783,12 @@ class TurnEngine:
             final_artifact = review.final_artifact or execute_result.text or ""
             decision = review.decision
             plan_notes = review.notes
+            # Stashed for the conversation ledger.  This frame returns
+            # only ``(final_artifact, decision)``, and a ``done`` round
+            # appends no ``IterationRecord`` — so without this the
+            # reviewer's own prose about what landed never reaches the
+            # turn-completion frame that records the conversation.
+            turn.last_review = review
 
             # Hard override: Review's LLM frequently judges from the
             # produced *text* and says "done" even when neither phase
@@ -1951,6 +1994,7 @@ class TurnEngine:
             phase=phase,
             provider_key=kwargs.get("provider_key", "") or "",
             trigger=describe_trigger(turn.trigger_event),
+            conversation_key=turn.stored_conversation_key,
         ):
             with tracer.start_as_current_span(span_name):
                 return await fn(**kwargs)
@@ -2211,6 +2255,7 @@ class TurnEngine:
                 agent_id=turn.agent.id_str,
                 role=turn.agent.role_name,
                 trigger=describe_trigger(turn.trigger_event),
+                conversation_key=turn.stored_conversation_key,
                 model=turn.model_keys.get("plan", "")
                 or turn.model_keys.get("execute", "")
                 or turn.model_keys.get("review", ""),
@@ -2265,6 +2310,12 @@ class TurnEngine:
             return
         await self._publish_turn_completed(turn, decision)
         await self._write_episode(turn, decision)
+        # Same two guards, deliberately: a crash has nothing coherent to
+        # record, and a suspend has not finished.  A turn that ended
+        # ``failed`` on a guard breach DOES get an entry — "I tried this
+        # and it did not land" is exactly what the conversation's next
+        # turn must not rediscover the hard way.
+        await self._append_conversation_session(turn, final_text, decision)
 
     async def _publish_turn_completed(self, turn: TurnContext, decision: str) -> None:
         """Emit the learning-shaped ``TurnCompleted`` event."""
@@ -2286,6 +2337,7 @@ class TurnEngine:
                 role=turn.agent.role_name,
                 turn_id=turn.turn_id,
                 task_id=turn.task_id or "",
+                conversation_key=turn.stored_conversation_key,
                 started_at=d.started_at,
                 ended_at=d.ended_at,
                 duration_ms=d.duration_ms,
@@ -2362,6 +2414,12 @@ class TurnEngine:
                     # trigger, which is the honest answer — there is no
                     # cross-node duplicate to collapse.
                     work_key=current_work_key(),
+                    # Which conversation this turn served. Empty for a
+                    # trigger with no reproducible conversation (a
+                    # scheduled fire, a task assignment, an A2A wake key
+                    # as ``event:{id}``, which no later message can
+                    # reproduce), so storing one would be noise.
+                    conversation_key=turn.stored_conversation_key,
                 )
                 await self._episode_store.write(episode)
                 span.set_attribute("learning.outcome", "done")
@@ -2394,6 +2452,129 @@ class TurnEngine:
                 span.set_attribute("learning.outcome", "failed")
                 set_span_error(exc)
                 logger.exception("episode_write_failed", turn_id=turn.turn_id)
+
+    # --- per-conversation session ledger ------------------------------
+
+    async def _load_conversation_history(self, turn: TurnContext) -> str:
+        """Render prior turns of this conversation, or ``""``.
+
+        Fails open in every branch: no store, no key, an unreadable
+        store, or a decode failure all yield the empty block, which is
+        precisely the prompt every turn had before this ledger existed.
+        """
+        cfg = self._conversation_session
+        if self._conversation_sessions is None or not cfg.enabled:
+            return ""
+        key = turn.stored_conversation_key
+        handle = turn.agent.handle or ""
+        if not key or not handle:
+            return ""
+        try:
+            rows = await self._conversation_sessions.recent(
+                agent_handle=handle,
+                conversation_key=key,
+                limit=int(cfg.injected_max_entries),
+            )
+        except Exception:
+            logger.warning(
+                "conversation_history_unavailable",
+                agent=handle,
+                conversation=key,
+            )
+            return ""
+        if not rows:
+            return ""
+        entries = [SessionEntry.from_dict(row.entry) for row in rows]
+        rendered = render_conversation_history(
+            entries,
+            max_entries=int(cfg.injected_max_entries),
+            max_chars=int(cfg.injected_max_chars),
+        )
+        if rendered:
+            logger.debug(
+                "conversation_history_loaded",
+                agent=handle,
+                conversation=key,
+                entries=len(entries),
+                chars=len(rendered),
+            )
+        return rendered
+
+    async def _append_conversation_session(
+        self, turn: TurnContext, final_text: str, decision: str
+    ) -> None:
+        """Record what this turn did, for the conversation's next turn.
+
+        Deduped on the work key rather than the turn id: two nodes
+        completing one trigger mint two turn ids, so a turn-keyed row
+        would record the duplicate instead of collapsing it.  An empty
+        work key (a scheduled fire, a sub-agent) means there is nothing
+        to collapse and nothing to key on, so the entry is skipped.
+        """
+        cfg = self._conversation_session
+        if self._conversation_sessions is None or not cfg.enabled:
+            return
+        key = turn.stored_conversation_key
+        handle = turn.agent.handle or ""
+        work_key = current_work_key()
+        if not key or not handle or not work_key:
+            return
+        try:
+            entry = self._build_session_entry(turn, final_text, decision)
+            await self._conversation_sessions.append(
+                agent_handle=handle,
+                conversation_key=key,
+                work_key=work_key,
+                turn_id=turn.turn_id,
+                entry=entry.to_dict(),
+                max_entries=int(cfg.max_entries),
+            )
+        except Exception:
+            # The turn is complete and its side effects shipped; all that
+            # is lost is context for the next turn, which then starts
+            # from the blank slate it always started from.
+            logger.exception(
+                "conversation_session_append_failed",
+                agent=handle,
+                conversation=key,
+                turn_id=turn.turn_id,
+            )
+
+    def _build_session_entry(
+        self, turn: TurnContext, final_text: str, decision: str
+    ) -> SessionEntry:
+        """Assemble the entry from data already in hand — no LLM call."""
+        plan = turn.last_plan
+        review = turn.last_review
+        execute_result = turn.last_execute_result
+        # EVERY round's calls, not just the last one.  Both per-round
+        # sources are iteration-local — ``plan_tool_executions`` is reset
+        # each round by design, and ``last_execute_result`` is only the
+        # final round's — so reading them alone would drop a delivery
+        # that fired in round 1 of a self_iterate turn.  That is the one
+        # thing this entry exists to prevent the next turn repeating, so
+        # the closed rounds in the iteration ledger are replayed first,
+        # in order, then the round that ended the turn.
+        executions: list[dict[str, Any]] = []
+        for record in turn.iteration_history:
+            executions.extend(record.plan_tool_calls)
+            executions.extend(record.execute_tool_calls)
+        executions.extend(turn.plan_tool_executions or [])
+        executions.extend(getattr(execute_result, "tool_executions", None) or [])
+        return build_session_entry(
+            turn_id=turn.turn_id,
+            at=datetime.now(UTC).isoformat(timespec="minutes"),
+            trigger=_describe_session_trigger(turn),
+            plan_summary=_safe_plan_summary(plan),
+            plan_reasoning=str(getattr(plan, "reasoning", "") or ""),
+            tool_executions=executions,
+            read_only_names=turn.read_only_names,
+            skip_names=PLAN_META_TOOL_NAMES,
+            reply=final_text or "",
+            decision=decision,
+            # ``review.notes`` is deliberately absent — see SessionEntry.
+            completed_work=str(getattr(review, "completed_work", "") or ""),
+        )
 
 
 _VALID_EPISODE_OUTCOMES = {"done", "self_iterate", "failed"}
@@ -2444,6 +2625,26 @@ def _safe_plan_summary(plan: Any) -> str:
     except Exception:
         summary = ""
     return (summary or "")[:2000]
+
+
+def _describe_session_trigger(turn: TurnContext) -> str:
+    """Who said what to start this turn, in one line.
+
+    The LAST inbound interaction, because a coalesced digest's final
+    constituent is the message the turn actually answered.  Enough to
+    recognise it in the thread and no more — the body is re-readable on
+    the surface it came from, and the entry exists to record what the
+    seat DID about it.
+    """
+    interactions = turn.trigger_interactions()
+    if not interactions:
+        return ""
+    last = interactions[-1]
+    sender = last.sender.display_name or last.sender.handle or last.sender.external_id
+    body = " ".join((last.body or "").split())
+    if sender and body:
+        return f"{sender}: {body}"
+    return sender or body
 
 
 def _extract_tool_sequence_and_skills(

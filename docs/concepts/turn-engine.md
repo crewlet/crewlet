@@ -147,6 +147,18 @@ Arguments use **per-value** elision, never a cap on the serialised blob. `json.d
 
 `task_description` is **not** mutated by a `self_iterate` round. Appending review notes to it leaked `Review notes: …` into the knowledge-search query builders, the sandbox brief, and the `Episode` / `TurnCompleted` publishers — all of which want the user's actual ask.
 
+### The same ledger, one scope wider
+
+Everything above is scoped to a single turn. The cross-turn counterpart —
+what this seat already said in *this Slack thread / issue / pull request*,
+carried into that conversation's next turn — is
+[Conversation Sessions](conversation-sessions.md). It inherits this section's
+doctrine wholesale (elide payloads never structure, writes never dropped,
+reads marked so they are re-run rather than trusted) and rides the same user
+message, immediately above `Task:`. Plan and Execute receive it; Review does
+not, because Review judges *this* turn's delivery and the ledger above already
+carries its duplicate-delivery rule.
+
 ### Engine-driven `failed` outcome
 
 `failed` is not an LLM-emitted decision; it's set by the engine on guard breaches (stall, max-iter exhaustion, depth cap, unhandled exception, `LLMUnavailable`). Every `failed` turn publishes a `turn.guard_breach` event (with the specific `kind`) and an `AgentTurnCompleted(decision="failed")` carrying the classified `error` / `error_kind`.

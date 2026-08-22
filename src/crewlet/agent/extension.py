@@ -365,6 +365,7 @@ async def judge_extension(
                 event_queue=event_queue,
                 agent=turn.agent,
                 turn_id=turn.turn_id,
+                conversation_key=turn.stored_conversation_key,
                 iteration=host_iteration,
                 phase="judge",
                 provider_key=provider_key,

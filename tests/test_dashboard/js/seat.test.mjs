@@ -72,11 +72,11 @@ const settle = async () => {
   await new Promise((r) => setTimeout(r, 0));
 };
 
-test("the four tabs are the four questions", async () => {
+test("the tabs are the questions this page answers", async () => {
   const { markup } = mount();
   await settle();
   const html = markup();
-  for (const label of ["Now", "Memory", "Cost", "Access"]) {
+  for (const label of ["Now", "Memory", "Threads", "Cost", "Access"]) {
     assert.ok(html.includes(label), `no ${label} tab`);
   }
 });
@@ -262,6 +262,94 @@ test("a stopped seat leads with why", async () => {
   const html = markup();
   assert.match(html, /failure-card/);
   assert.match(html, /no forward progress/);
+});
+
+
+// ---- Threads: unreadable is not empty ----
+//
+// The rule the whole conversation ledger is built on, applied one level
+// down. The list read already honoured it; the per-thread expand did
+// not — a failed query set the entry list to [] and the panel drew "No
+// entries", which is the exact sentence a thread the seat has genuinely
+// never spoken in gets. An operator reading a database outage as a
+// silent seat is the failure the ledger exists to prevent.
+
+const THREADS = {
+  available: true,
+  handle: "eng",
+  conversations: [{ conversation_key: "jira:POC-7", entries: 2, last_at: "" }],
+  entries: [],
+};
+
+function mountThreads(entriesReply) {
+  let asks = 0;
+  return mount(SEAT, { key: "eng", tab: "threads" }, {
+    get conversations() {
+      // The list read and the entry read are the same query name; the
+      // second call is the expand.
+      asks += 1;
+      if (asks === 1) return THREADS;
+      if (entriesReply instanceof Error) throw entriesReply;
+      return entriesReply;
+    },
+  });
+}
+
+test("an unreadable thread does not render as a thread with nothing in it", async () => {
+  const h = mountThreads(new Error("database is down"));
+  await settle();
+  h.view.onAction("open-thread", { dataset: { thread: "jira:POC-7" } });
+  await settle();
+  const html = h.markup();
+  assert.ok(!html.includes("No entries"), "a failed read drew an empty thread");
+  assert.match(html, /Could not read this conversation/);
+  assert.match(html, /database is down/);
+});
+
+test("a direct link to Threads loads them", async () => {
+  // The tab data is fetched once, from `begin()`, which runs before the
+  // seat reply lands. Resolving the handle off that reply meant a
+  // bookmark or a refresh on this tab rendered a skeleton for ever —
+  // nothing re-runs the fetch when the reply arrives, so only clicking
+  // away and back ever populated it.
+  const h = mountThreads({ available: true, entries: [] });
+  await settle();
+  assert.match(h.markup(), /jira:POC-7/, "the tab never asked for its data");
+});
+
+test("a thread that really is empty still says so", async () => {
+  const h = mountThreads({ available: true, entries: [] });
+  await settle();
+  h.view.onAction("open-thread", { dataset: { thread: "jira:POC-7" } });
+  await settle();
+  assert.match(h.markup(), /No entries/);
+});
+
+test("a failed expand does not claim the whole list is unreadable", async () => {
+  // Two independent reads. Folding them into one flag let one thread's
+  // failure speak for every conversation the seat has ever worked.
+  const h = mountThreads(new Error("nope"));
+  await settle();
+  h.view.onAction("open-thread", { dataset: { thread: "jira:POC-7" } });
+  await settle();
+  assert.match(h.markup(), /jira:POC-7/, "the list was dropped");
+  assert.ok(
+    !h.markup().includes("Could not read this seat's conversations"),
+    "one thread's failure was reported as the list failing",
+  );
+});
+
+test("closing a failed thread clears its error", async () => {
+  const h = mountThreads(new Error("nope"));
+  await settle();
+  h.view.onAction("open-thread", { dataset: { thread: "jira:POC-7" } });
+  await settle();
+  h.view.onAction("open-thread", { dataset: { thread: "jira:POC-7" } });
+  await settle();
+  assert.ok(
+    !h.markup().includes("Could not read this conversation"),
+    "a closed thread kept its error",
+  );
 });
 
 await run();

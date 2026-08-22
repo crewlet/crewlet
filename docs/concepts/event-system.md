@@ -63,6 +63,8 @@ flowchart TD
 
 **Conversation keys** (`crewlet.notifications.coalesce.conversation_key`) are derived by pure logic from webhook metadata, via the same per-source `NotificationPrompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field — a human firing four rapid top-level DM messages is one conversation; a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001` — a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else — `task_assigned`, A2A wakes, notifications without a derivable conversation — keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
 
+The same key now has a second consumer that outlives the drain. Coalescing merges the messages of one conversation that arrive *together*; [conversation sessions](conversation-sessions.md) carry what the seat did about them into that conversation's **next** turn, and the episode row and the turn's telemetry are stamped with the key so history can be asked for by thread rather than only by agent and time. The `event:{uuid}` fallback above is exactly why those consumers store nothing for a trigger without a real conversation: no later message could ever reproduce that key to read the row back.
+
 **Busy agents queue; parked agents requeue.** A delivery that finds its agent mid-turn does not fail: `TurnEngine.run_turn` WAITS for the running turn to finish (the handler already holds the delivery for a full turn, so the ack window — 30 minutes — is sized for a wait plus a worst-case turn). A delivery that finds the agent parked on a detached sandbox job (`AWAITING_SANDBOX`, potentially hours) is requeued + acked instead — the coordinator keeps the topic paused, so the copies buffer on the broker and flow when the job completes. Before the engine has a turn engine at all (booted with zero LLM providers), the handler pauses the topic and requeues likewise; the late turn-engine build resumes every inbox. Busy-agent handling therefore never consumes-and-drops and never pushes healthy events toward the dead-letter topic.
 
 **Unsubscribe.** `EventQueue.unsubscribe(topic, group)` tears down the durable group consumer(s) for the pair and deletes the broker-side subscription (retained messages for the group are dropped). The engine calls it when a role is decommissioned live, so a removed seat neither keeps a consumer bound to a terminated instance nor accumulates undeliverable events forever. Inbox subscription is idempotent per agent handle — boot and the late turn-engine path both walk the pool, and only the first subscribe per agent creates a consumer.
@@ -179,6 +181,19 @@ flowchart TD
 1. Webhook handlers create an OTel span → all events created inside inherit `trace_id`
 2. When events cross async boundaries (EventQueue → handler), the receiving component restores the OTel context from the event's `trace_id`/`span_id`
 3. The Event model's `trace_id` field defaults to `current_trace_id()` which reads the active OTel span
+
+**Where "automatic" stops.** Point 3 is a read of the *ambient* span, so it
+only works while one is open. An event constructed outside every span gets an
+**empty** `trace_id` — and an event with no trace is unreachable from the work
+it belongs to, which on the dashboard shows up as a trace link that goes
+nowhere. Phases open spans, the engine itself does not, so anything published
+from engine code *after* `run_turn` has returned is in that state. Those call
+sites copy the causing event's context forward explicitly
+(`trace_id` / `span_id` / `parent_span_id`) rather than relying on capture —
+the A2A reply and channel-close do this from the ask, and
+`A2AMessageDelivered` from the wake. Copy it **verbatim**: `run_turn` calls
+`restore_context` with those values, so the woken turn becomes a child of the
+span that caused it.
 
 **When notifications are dropped** (own message, not following thread, rate limit), a `NotificationSkipped` event is emitted with the skip reason — visible in the trace so you can see why a webhook didn't reach an agent.
 

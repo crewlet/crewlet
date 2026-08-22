@@ -17,6 +17,19 @@ because the guard IS the SQL. An ``INSERT … SELECT … WHERE NOT EXISTS``
 under an advisory lock is not something to trust unrun: without the
 lock the ``NOT EXISTS`` is evaluated under the statement's snapshot and
 both writers insert, which is measured below rather than asserted.
+
+Against the MIGRATED tables, never a hand-written copy of them. This
+file used to drop ``episodes`` and ``counterparty_profiles`` and
+re-create its own, on the reasoning that ``create_hypertable`` needs
+TimescaleDB and partitioning plays no part in the exclusion. Both halves
+of that were wrong. The copy is a schema mirror nothing keeps in step,
+so the first migration to add an episodes column (033, ``conversation_key``)
+broke every test here while the store's real SQL was correct — the exact
+inversion a real-database suite exists to prevent. And the teardown left
+the real tables DROPPED, so anything later in the same session that
+touched them failed too. The tables the engine ships are the tables the
+guard must hold on; rows are cleaned between tests, schema is the
+migrator's.
 """
 
 from __future__ import annotations
@@ -38,50 +51,11 @@ pytestmark = pytest.mark.skipif(
     not _TEST_DSN, reason="set CREWLET_TEST_DSN to run against real PG"
 )
 
-# The real table's columns, minus the hypertable. `create_hypertable`
-# needs TimescaleDB, and partitioning plays no part in the exclusion —
-# it is in fact WHY the exclusion is not a unique index (a hypertable
-# requires the partition column in every one, and the two duplicate
-# turns end at different times). Everything the guard touches is here,
-# with the real types, so the store's own SQL runs unmodified.
-_DROP = "DROP TABLE IF EXISTS episodes"
-
-# One statement per call: asyncpg prepares every query, and a prepared
-# statement cannot carry multiple commands.
-_CREATE = """
-CREATE TABLE episodes (
-    id              UUID        NOT NULL DEFAULT gen_random_uuid(),
-    agent_handle    TEXT        NOT NULL,
-    agent_role      TEXT        NOT NULL DEFAULT '',
-    task_id         TEXT        NOT NULL DEFAULT '',
-    turn_id         UUID        NOT NULL,
-    started_at      TIMESTAMPTZ NOT NULL,
-    ended_at        TIMESTAMPTZ NOT NULL,
-    plan_summary    TEXT        NOT NULL DEFAULT '',
-    task_summary    TEXT        NOT NULL DEFAULT '',
-    tool_sequence   JSONB       NOT NULL DEFAULT '[]'::jsonb,
-    skills_used     JSONB       NOT NULL DEFAULT '[]'::jsonb,
-    review_outcome  TEXT        NOT NULL DEFAULT 'done',
-    duration_ms     INTEGER     NOT NULL DEFAULT 0,
-    embedding       vector(1536),
-    kind            TEXT        NOT NULL DEFAULT 'raw',
-    count           INTEGER     NOT NULL DEFAULT 1,
-    exemplar_turn_ids JSONB     NOT NULL DEFAULT '[]'::jsonb,
-    consolidated_into_skill_id UUID,
-    common_task_pattern TEXT    NOT NULL DEFAULT '',
-    common_outcome  TEXT        NOT NULL DEFAULT '',
-    success_rate    REAL,
-    subjects_involved JSONB     NOT NULL DEFAULT '[]'::jsonb,
-    notable_patterns TEXT       NOT NULL DEFAULT '',
-    work_key        TEXT        NOT NULL DEFAULT '',
-    PRIMARY KEY (ended_at, id)
-)
-"""
-
-_INDEX = """
-CREATE INDEX episodes_agent_work_key_idx
-    ON episodes (agent_handle, work_key) WHERE work_key <> ''
-"""
+# Rows, not schema. The migrator owns the shape of both tables here;
+# this only clears what a previous test left behind, in a database whose
+# whole purpose is the suite.
+_CLEAR_EPISODES = "DELETE FROM episodes"
+_CLEAR_PROFILES = "DELETE FROM counterparty_profiles"
 
 
 class _NoEmbeddings:
@@ -115,12 +89,11 @@ async def store() -> Any:
     from crewlet.db.client import Database
 
     db = await Database.connect(_TEST_DSN)
-    for statement in (_DROP, _CREATE, _INDEX):
-        await db.execute(statement)
+    await db.execute(_CLEAR_EPISODES)
     try:
         yield EpisodeStore(db, _NoEmbeddings())
     finally:
-        await db.execute(_DROP)
+        await db.execute(_CLEAR_EPISODES)
         await db.close()
 
 
@@ -195,26 +168,6 @@ async def test_the_lock_word_is_stable_and_per_agent() -> None:
 
 # ── the interaction counter ──────────────────────────────────────────
 
-_CP_DROP = "DROP TABLE IF EXISTS counterparty_profiles"
-
-_CP_CREATE = """
-CREATE TABLE counterparty_profiles (
-    observer_handle      TEXT        NOT NULL,
-    subject_handle       TEXT        NOT NULL DEFAULT '',
-    subject_external_id  TEXT        NOT NULL DEFAULT '',
-    subject_platform     TEXT        NOT NULL DEFAULT '',
-    subject_name         TEXT        NOT NULL DEFAULT '',
-    traits               JSONB       NOT NULL DEFAULT '{}'::jsonb,
-    interaction_count    INTEGER     NOT NULL DEFAULT 0,
-    first_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_corroborated_at TIMESTAMPTZ,
-    last_work_key        TEXT        NOT NULL DEFAULT '',
-    PRIMARY KEY (observer_handle, subject_handle,
-                 subject_external_id, subject_platform)
-)
-"""
-
 
 @pytest.fixture
 async def profiles() -> Any:
@@ -222,12 +175,11 @@ async def profiles() -> Any:
     from crewlet.learning.counterparty_store import CounterpartyStore
 
     db = await Database.connect(_TEST_DSN)
-    for statement in (_CP_DROP, _CP_CREATE):
-        await db.execute(statement)
+    await db.execute(_CLEAR_PROFILES)
     try:
         yield CounterpartyStore(db)
     finally:
-        await db.execute(_CP_DROP)
+        await db.execute(_CLEAR_PROFILES)
         await db.close()
 
 

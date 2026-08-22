@@ -13,6 +13,7 @@ from starlette.routing import Route, WebSocketRoute
 
 from crewlet.api.routes.agents import get_agent, get_agent_memory, list_agents
 from crewlet.api.routes.budgets import get_budgets
+from crewlet.api.routes.conversations import get_conversations
 from crewlet.api.routes.dashboard import dashboard, root, static_file
 from crewlet.api.routes.events import get_event, list_events, list_trace
 from crewlet.api.routes.fleet import get_fleet
@@ -53,6 +54,7 @@ def build_routes() -> list[Route | WebSocketRoute]:
         Route("/fleet", get_fleet, methods=["GET"]),
         Route("/sandbox-runs", get_sandbox_runs, methods=["GET"]),
         Route("/budgets", get_budgets, methods=["GET"]),
+        Route("/conversations", get_conversations, methods=["GET"]),
         Route("/integrations", get_integrations, methods=["GET"]),
         Route("/schedules", get_schedules, methods=["GET"]),
         Route("/tokens/breakdown", get_tokens_breakdown, methods=["GET"]),

@@ -387,6 +387,7 @@ async def run_review_phase(
         event_queue=event_queue,
         agent=turn.agent,
         turn_id=turn.turn_id,
+        conversation_key=turn.stored_conversation_key,
         iteration=turn.iteration,
         phase="review",
         provider_key=provider_key,
