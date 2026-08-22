@@ -386,10 +386,30 @@ PRIOR_WORK_HEADER = (
 )
 
 
+CONVERSATION_HISTORY_HEADER = (
+    "## Earlier in this conversation"
+    "\nYour own earlier turns on this same thread / issue / item, oldest"
+    " first. This is what YOU already said and did here — nobody else's"
+    " record of it, and not a transcript of the conversation itself."
+    "\n- **Do not repeat a reply you already gave.** If your answer to what"
+    " has just come in is one you have already sent, say the new thing or"
+    " say nothing — a human reads the second copy as not having been read."
+    "\n- **`(read)` calls may be stale.** Their results were not carried"
+    " over and time has passed since. Re-run any whose data you need now;"
+    " never reuse a remembered value as if it were current."
+    "\n- **Everything else already took effect.** Treat those as landed,"
+    " and follow up on them rather than re-issuing them."
+    "\n- **The conversation has moved on.** This is history, not the"
+    " current state — the task below is the newest thing said, and where"
+    " the two disagree the task wins."
+)
+
+
 def build_phase_user_message(
     *,
     task_description: str,
     prior_work: str = "",
+    conversation_history: str = "",
 ) -> str:
     """User message shared by the Plan and Execute phases.
 
@@ -399,16 +419,28 @@ def build_phase_user_message(
     case, so the message stays byte-identical to the pre-ledger form
     until a ``self_iterate`` actually happens.
 
-    It rides the USER message, never the system prompt: the Plan
+    ``conversation_history`` is the rendered
+    :func:`crewlet.agent.conversation_log.render_conversation_history`
+    block — prior TURNS of this same conversation, empty on its first
+    turn and whenever the trigger has no reproducible conversation key.
+    It sits before the prior-work ledger so the two read
+    chronologically: earlier conversations, then earlier rounds of this
+    turn, then the ask.
+
+    Both ride the USER message, never the system prompt: the Plan
     system prompt is deliberately frozen at turn start
     (``TurnContext.plan_prefetch``) so its prefix stays byte-stable for
     provider prefix caching, and a block that grows each iteration
     would invalidate that cache on every loop.
     """
     task = task_description or "(no description)"
-    if not prior_work:
-        return f"Task:\n{task}"
-    return f"Task:\n{task}\n\n{PRIOR_WORK_HEADER}\n{prior_work}"
+    parts = []
+    if conversation_history:
+        parts.append(f"{CONVERSATION_HISTORY_HEADER}\n{conversation_history}")
+    parts.append(f"Task:\n{task}")
+    if prior_work:
+        parts.append(f"{PRIOR_WORK_HEADER}\n{prior_work}")
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

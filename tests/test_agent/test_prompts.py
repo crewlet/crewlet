@@ -1239,3 +1239,49 @@ def test_phase_user_message_appends_prior_work_block():
     assert "### Iteration 1" in msg
     # The rule that actually prevents the double-post.
     assert "ALREADY RAN" in msg
+
+
+def test_phase_user_message_prepends_conversation_history():
+    """Prior TURNS of this conversation, before the ask."""
+    msg = build_phase_user_message(
+        task_description="any update?",
+        conversation_history="### 2026-08-20T09:30\nYou replied: shipped it",
+    )
+    assert msg.startswith("## Earlier in this conversation")
+    assert "You replied: shipped it" in msg
+    assert msg.rstrip().endswith("Task:\nany update?")
+
+
+def test_the_three_sections_read_chronologically():
+    """Earlier conversations, then earlier rounds of this turn, then the
+    ask — so the newest thing said is nearest the model's answer."""
+    msg = build_phase_user_message(
+        task_description="THE-ASK",
+        prior_work="PRIOR-WORK",
+        conversation_history="CONVERSATION-HISTORY",
+    )
+    assert (
+        msg.index("CONVERSATION-HISTORY")
+        < msg.index("THE-ASK")
+        < msg.index("PRIOR-WORK")
+    )
+
+
+def test_conversation_history_header_states_the_no_repeat_rule():
+    """The block is worthless — worse than absent — if the model treats
+    it as a script to re-run rather than as what it already said."""
+    msg = build_phase_user_message(
+        task_description="x", conversation_history="something"
+    )
+    assert "Do not repeat a reply you already gave" in msg
+
+
+def test_conversation_history_header_warns_that_reads_are_stale():
+    """Across turns this is stronger than within one: a read from last
+    Tuesday is stale by construction, and telling the model to trust it
+    is how it fabricates current state."""
+    msg = build_phase_user_message(
+        task_description="x", conversation_history="something"
+    )
+    assert "may be stale" in msg
+    assert "moved on" in msg

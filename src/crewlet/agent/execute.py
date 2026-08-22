@@ -285,6 +285,7 @@ async def _suspend_execute(
         event_queue=event_queue,
         agent=turn.agent,
         turn_id=turn.turn_id,
+        conversation_key=turn.stored_conversation_key,
         iteration=turn.iteration,
         phase="execute",
         provider_key=provider_key,
@@ -461,6 +462,7 @@ async def run_execute_phase(
                     prior_work=render_iteration_ledger(
                         turn.iteration_history, skip_names=PLAN_META_TOOL_NAMES
                     ),
+                    conversation_history=turn.conversation_history,
                 ),
             ),
         ]
@@ -643,6 +645,7 @@ async def run_execute_phase(
         event_queue=event_queue,
         agent=turn.agent,
         turn_id=turn.turn_id,
+        conversation_key=turn.stored_conversation_key,
         iteration=turn.iteration,
         phase="execute",
         provider_key=provider_key,

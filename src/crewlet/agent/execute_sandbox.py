@@ -474,6 +474,10 @@ async def publish_sandbox_completion_phase(
         event_queue=event_queue,
         agent=agent,
         turn_id=run.turn_id,
+        # Off the persisted run rather than a TurnContext: this fires on
+        # the detached completion path, where the kick-off turn is long
+        # gone and the row is the only carrier of where it came from.
+        conversation_key=run.conversation_key,
         iteration=1,
         phase="execute",
         provider_key=run.coding_agent,

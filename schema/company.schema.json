@@ -137,6 +137,43 @@
       "title": "ConfluenceIdentity",
       "type": "object"
     },
+    "ConversationSessionConfig": {
+      "additionalProperties": false,
+      "description": "Per-conversation session ledger settings.\n\nCarries what a seat already did in one conversation (a Slack thread,\na Jira issue, a GitHub PR) into the NEXT turn of that conversation,\nas a ``## Earlier in this conversation`` block on the Plan and\nExecute user messages.\n\nThis is the cross-turn counterpart of the within-turn prior-work\nledger, and it is deliberately structured rather than a transcript\nreplay \u2014 see ``docs/concepts/conversation-sessions.md``.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_entries": {
+          "default": 20,
+          "minimum": 1,
+          "title": "Max Entries",
+          "type": "integer"
+        },
+        "injected_max_entries": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Injected Max Entries",
+          "type": "integer"
+        },
+        "injected_max_chars": {
+          "default": 6000,
+          "minimum": 500,
+          "title": "Injected Max Chars",
+          "type": "integer"
+        },
+        "retention_days": {
+          "default": 30,
+          "minimum": 1,
+          "title": "Retention Days",
+          "type": "integer"
+        }
+      },
+      "title": "ConversationSessionConfig",
+      "type": "object"
+    },
     "CounterpartyConfig": {
       "additionalProperties": false,
       "description": "CounterpartyProfiler settings.\n\nRuns alongside the PersistDecider in the ReflectEngine.  For\neach turn triggered by an identifiable sender, updates a per-\n``(observer, subject)`` profile on the auxiliary model.  Writes\ngo to the ``counterparty_profiles`` table.",
@@ -2418,6 +2455,16 @@
           "default": 2000,
           "title": "Sandbox Min Budget Tokens",
           "type": "integer"
+        },
+        "conversation_session": {
+          "$ref": "#/$defs/ConversationSessionConfig",
+          "default": {
+            "enabled": true,
+            "max_entries": 20,
+            "injected_max_entries": 5,
+            "injected_max_chars": 6000,
+            "retention_days": 30
+          }
         }
       },
       "title": "TurnEngineConfig",
@@ -2670,7 +2717,14 @@
         "onboarding_max_tool_rounds_ceiling": 20,
         "extension_round_step": 8,
         "sandbox_budget_fraction": 0.5,
-        "sandbox_min_budget_tokens": 2000
+        "sandbox_min_budget_tokens": 2000,
+        "conversation_session": {
+          "enabled": true,
+          "injected_max_chars": 6000,
+          "injected_max_entries": 5,
+          "max_entries": 20,
+          "retention_days": 30
+        }
       }
     },
     "learning": {

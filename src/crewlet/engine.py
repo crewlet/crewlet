@@ -24,6 +24,7 @@ from crewlet.agent.turn import TurnEngine
 from crewlet.budget_reporter import BudgetReporter
 from crewlet.concurrency import BudgetManager, ConcurrencyController
 from crewlet.config import (
+    ConversationSessionConfig,
     MCPServerConfig,
     config_to_organization,
     parse_mcp_servers,
@@ -545,6 +546,14 @@ class Engine:
         # reason the lease store is, and it must be the SAME object
         # across a fleet or it deduplicates nothing across a takeover.
         self._turn_completions: Any = turn_completion_store
+
+        # Per-conversation session ledger — what this seat already did in
+        # a given Slack thread / issue / PR, rendered back into that
+        # conversation's next turn.  Built at start() from ``storage``:
+        # Postgres when there is one, the memory twin otherwise (see
+        # ``_build_conversation_session_store`` for why the twin is
+        # acceptable here and not for the completion ledger).
+        self._conversation_sessions: Any = None
 
         # Tool-skill registry — populated from the knowledge base at boot
         # and via webhook events. Lives engine-wide; threaded into
@@ -2699,6 +2708,11 @@ class Engine:
             action="setup_turn_engine",
             llm_providers=len(self._llm_providers),
         )
+        # Before the turn engine, not with the other stores below: the
+        # TurnEngine takes it as a constructor argument, and the live
+        # rebuild path (``_ensure_turn_engine_after_providers``) would
+        # otherwise construct one with no ledger and keep it.
+        self._build_conversation_session_store()
         if self._llm_providers:
             self._build_turn_engine(
                 summarize_enabled=summarize_enabled,
@@ -5432,6 +5446,7 @@ class Engine:
         corrupt anything — it would simply be N times the write
         amplification and vacuum churn for one table's worth of benefit.
         """
+        from crewlet.db.chat_thread_follows import ChatThreadFollowRepository
         from crewlet.db.client import Database
         from crewlet.db.deliveries import PostgresDeliveryDedupeStore
         from crewlet.db.maintenance import MaintenanceWorker
@@ -5445,6 +5460,16 @@ class Engine:
         a2a_channels = (
             self.a2a_service.channels if self.a2a_service is not None else None
         )
+        # Only the Postgres store accumulates; the memory twin the
+        # engine wires without a database prunes itself with the process.
+        conversation_sessions = self._conversation_sessions
+        if not hasattr(conversation_sessions, "purge"):
+            conversation_sessions = None
+        retention_days = int(
+            self._turn_engine_config.conversation_session.retention_days
+            if self._turn_engine_config is not None
+            else ConversationSessionConfig().retention_days
+        )
         self._maintenance_worker = MaintenanceWorker(
             deliveries=PostgresDeliveryDedupeStore(self.storage),
             rate_limits=PostgresRateLimitStore(self.storage),
@@ -5452,6 +5477,13 @@ class Engine:
             turn_completions=self._turn_completions,
             a2a_channels=a2a_channels,
             apply_status=self._config_plane(),
+            # A fresh repository over the same pool: the one the chat
+            # transports hold is built in ``build_notification_transports``
+            # and is stateless, so a second instance is equivalent and
+            # avoids making the sweep depend on chat being configured.
+            chat_thread_follows=ChatThreadFollowRepository(self.storage),
+            conversation_sessions=conversation_sessions,
+            conversation_session_retention_seconds=retention_days * 24 * 3600.0,
             # Closing a channel nothing finished is housekeeping on the
             # same shared table, on the same singleton, for the same
             # reason: N nodes closing the same abandoned channels would
@@ -5504,6 +5536,33 @@ class Engine:
         if not isinstance(self.storage, Database):
             return
         self._turn_completions = PostgresTurnCompletionStore(self.storage)
+
+    def _build_conversation_session_store(self) -> None:
+        """Wire the per-conversation ledger.
+
+        Unlike the completion ledger above, the memory twin IS wired
+        when there is no database, and the difference is what each one
+        would do wrong without one.  A process-local completion ledger
+        silently fails to deduplicate across the takeover it exists for.
+        A process-local conversation ledger just forgets when the seat
+        moves — the same "no history" every turn had before it existed,
+        which is this feature's own fail-open answer anyway.  So the
+        single-node deployment gets the feature, and a fleet without a
+        database already has the loud ``seat_placement_is_process_local``
+        warning telling it what it is running.
+        """
+        from crewlet.db.client import Database
+        from crewlet.db.conversation_sessions import (
+            MemoryConversationSessionStore,
+            PostgresConversationSessionStore,
+        )
+
+        if self._conversation_sessions is not None:
+            return
+        if isinstance(self.storage, Database):
+            self._conversation_sessions = PostgresConversationSessionStore(self.storage)
+        else:
+            self._conversation_sessions = MemoryConversationSessionStore()
 
     def _refresh_jira_routing(self, jira_transport: Any) -> None:
         """Re-seed a freshly-rebuilt JiraTransport's routing state.
@@ -6387,6 +6446,7 @@ class Engine:
             execution_tracker=self.execution_tracker,
             token_usage_repo=token_usage_repo,
             episode_store=self._episode_store,
+            conversation_sessions=self._conversation_sessions,
             counterparty_store=getattr(self, "_counterparty_store", None),
             synthesized_skill_store=getattr(self, "_synthesized_skill_store", None),
             agent_diary=getattr(self, "_agent_diary", None),
