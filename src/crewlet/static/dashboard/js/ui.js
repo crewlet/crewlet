@@ -10,7 +10,6 @@ import {
   integrationFromSource,
   integrationBadge,
   integrationMeta,
-  roleInk,
 } from "./state.js";
 
 export function skeletonRows(n = 5) {
@@ -147,7 +146,7 @@ export function activityRow(ev, { agents } = {}) {
   return `
     <div ${nav}>
       <span class="act-time">${esc(fmtTime(ev.timestamp))}</span>
-      <span class="act-actor" ${actor ? `style="color:${roleInk(actor)}"` : ""}>${esc(actor || "engine")}</span>
+      <span class="act-actor">${esc(actor || "engine")}</span>
       <span class="act-surface">${surface}</span>
       <span class="act-text">${ev.failed ? icon("alert", "sm") : ""}${esc(ev.summary || ev.type)}</span>
     </div>`;
@@ -190,7 +189,7 @@ export function attentionRow(item) {
          data-k="att:${escAttr(item.id)}" data-action="go"
          data-route="${escAttr(item.route)}" role="link" tabindex="0">
       <span class="att-sev"></span>
-      ${item.seat ? `<span class="att-seat" style="color:${roleInk(item.seat)}">${esc(item.seat)}</span>` : ""}
+      ${item.seat ? `<span class="att-seat">${esc(item.seat)}</span>` : ""}
       <span class="att-what">
         <span class="att-title">${esc(item.title)}</span>
         ${item.detail ? `<span class="att-detail">${esc(item.detail)}</span>` : ""}

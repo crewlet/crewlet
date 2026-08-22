@@ -253,21 +253,38 @@ def _tools_data_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     a :class:`~crewlet.api.runtime.NodeRuntime` registered asks it
     instead, and sees every live tool.
     """
-    builtin_tool_names = [
-        (
-            "reflect_and_persist",
-            "Capture a personal-context fact in agent memory with optional TTL",
-        ),
-        (
-            "refresh_memory",
-            "Re-read personal memories filtered by a context hint",
-        ),
-        ("mark_onboarded", "Mark an onboarding step complete"),
+    # This list is a CLAIM about what agents can call, and it is read on
+    # a node that has no engine to ask — so it has to answer from the
+    # payload rather than from a constant. The learning tools below are
+    # registered by ``Engine`` only when ``learning.reflect.enabled``
+    # holds AND the storage is a real Database (``AgentDiary`` needs the
+    # ``agent_diary`` table). Advertising them unconditionally told an
+    # operator on a standalone API, or on a company with learning off,
+    # that four tools were available which no agent could ever call.
+    learning = payload.get("learning") or {}
+    reflect = learning.get("reflect") or {}
+    # Absent means the default, which is on — the same reading
+    # ``Engine`` takes.
+    learning_on = learning.get("enabled", True) and reflect.get("enabled", True)
+
+    builtin_tool_names: list[tuple[str, str]] = [
         (
             "load_tool_skill",
             "Fetch the rich body of a Tool Skill mid-task",
         ),
     ]
+    if learning_on:
+        builtin_tool_names[:0] = [
+            (
+                "reflect_and_persist",
+                "Capture a personal-context fact in agent memory with optional TTL",
+            ),
+            (
+                "refresh_memory",
+                "Re-read personal memories filtered by a context hint",
+            ),
+            ("mark_onboarded", "Mark an onboarding step complete"),
+        ]
     out: list[dict[str, Any]] = [
         {"name": name, "description": desc, "source": BUILTIN_ORIGIN}
         for name, desc in builtin_tool_names

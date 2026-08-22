@@ -155,6 +155,27 @@ class ToolRegistry:
             logger.info("tool_unregistered", name=tool_name)
         return existed
 
+    def unregister_origin(self, origin: str) -> list[str]:
+        """Drop every tool registered under ``origin``. Returns their names.
+
+        The counterpart to the origin being recorded at registration.
+        Without it, dropping an extension dropped only the extension
+        object: ``ExtensionManager.unregister`` calls ``on_engine_stop``
+        and removes it from its own list, and an extension whose stop
+        hook does nothing (the common case — most have nothing to stop)
+        left its tools in the shared registry for ever. A live config
+        edit that removes an extension therefore kept advertising tools
+        backed by a disposed object, and calling one dispatched into it.
+        """
+        doomed = [name for name, its in self._origins.items() if its == origin]
+        for name in doomed:
+            self.unregister(name)
+        if doomed:
+            logger.info(
+                "tools_unregistered_by_origin", origin=origin, count=len(doomed)
+            )
+        return doomed
+
     def annotations_for(self, tool_name: str) -> ToolAnnotations | None:
         """Return the registered :class:`ToolAnnotations` for a builtin,
         or ``None`` when none were declared (treated as all-unknown)."""
@@ -250,7 +271,32 @@ class OriginScopedRegistry:
             origin=self._origin,
         )
 
+    def for_origin(self, origin: str) -> OriginScopedRegistry:
+        """Re-scoping a scoped view is a no-op: it keeps this origin.
+
+        Without this, ``__getattr__`` forwarded ``for_origin`` to the
+        real registry, so an extension holding its own scoped view could
+        call ``ctx.tool_registry.for_origin("builtin").register(tool)``
+        and stamp its tool as one the engine ships — the exact confusion
+        the origin exists to end. Returning ``self`` refuses the change
+        rather than raising, because an extension asking for its own
+        origin is not doing anything wrong and should not be punished
+        for it.
+        """
+        if origin != self._origin:
+            logger.warning(
+                "tool_origin_rescope_refused",
+                requested=origin,
+                origin=self._origin,
+            )
+        return self
+
     def __getattr__(self, name: str) -> Any:
+        # The underlying registry stays reachable through this — the
+        # origin is a convention enforced at the seam an extension is
+        # HANDED, not a sandbox. An extension that goes looking for
+        # `_registry` can still reach it; nothing here is a security
+        # boundary, and the loader is not a place to pretend otherwise.
         return getattr(self._registry, name)
 
 

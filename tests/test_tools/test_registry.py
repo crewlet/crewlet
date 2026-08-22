@@ -260,3 +260,54 @@ def test_a_scoped_view_passes_every_other_call_through() -> None:
     scoped.register(make_tool("acme_ping"))
     assert scoped.unregister("acme_ping") is True
     assert registry.get("acme_ping") is None
+
+
+class TestOriginCannotBeEscaped:
+    """A scoped view is a promise about who registered a tool.
+
+    The scope is a convention enforced at the seam an extension is
+    *handed*, not a sandbox — but a convention that forwards the very
+    method for changing it is not a convention at all.
+    """
+
+    def test_rescoping_a_scoped_view_keeps_its_origin(self) -> None:
+        registry = ToolRegistry()
+        scoped = registry.for_origin(extension_origin("acme"))
+        # `__getattr__` used to forward this to the real registry, so an
+        # extension could hand itself the builtin origin and its tools
+        # would sit in the engine's own group.
+        escaped = scoped.for_origin("builtin")
+        assert escaped.origin == extension_origin("acme")
+
+    def test_a_tool_registered_through_an_escaped_view_keeps_the_extension(
+        self,
+    ) -> None:
+        registry = ToolRegistry()
+        scoped = registry.for_origin(extension_origin("acme"))
+        scoped.for_origin("builtin").register(make_tool("acme_deploy"))
+        assert registry.origin_for("acme_deploy") == extension_origin("acme")
+
+
+class TestUnregisterByOrigin:
+    def test_dropping_an_origin_takes_only_its_tools(self) -> None:
+        """The counterpart to recording the origin at registration.
+
+        Without it, removing an extension left every tool it registered
+        in the shared registry — advertised in every later catalogue and
+        dispatching into a disposed object.
+        """
+        registry = ToolRegistry()
+        registry.register(make_tool("builtin_one"), origin=BUILTIN_ORIGIN)
+        registry.for_origin(extension_origin("acme")).register(make_tool("acme_a"))
+        registry.for_origin(extension_origin("acme")).register(make_tool("acme_b"))
+        registry.for_origin(extension_origin("other")).register(make_tool("other_a"))
+
+        dropped = registry.unregister_origin(extension_origin("acme"))
+
+        assert sorted(dropped) == ["acme_a", "acme_b"]
+        names = {t.name for t in registry.list_tools()}
+        assert "acme_a" not in names and "acme_b" not in names
+        assert {"builtin_one", "other_a"} <= names
+
+    def test_dropping_an_origin_nothing_registered_is_not_an_error(self) -> None:
+        assert ToolRegistry().unregister_origin(extension_origin("ghost")) == []

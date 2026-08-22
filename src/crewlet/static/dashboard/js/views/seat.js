@@ -51,7 +51,6 @@ import {
   phaseColor,
   phaseInk,
   integrationMeta,
-  roleInk,
   PHASE_ORDER,
   effectiveAgentState,
   stateLabel,
@@ -387,7 +386,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       <div class="card agent-head" data-k="head">
         ${avatarFor(role)}
         <div class="agent-head-id">
-          <div class="agent-head-name" style="color:${roleInk(role)}">${esc(role)}</div>
+          <div class="agent-head-name">${esc(role)}</div>
           <div class="row-sub">
             <span class="mono">${esc(shortId(a.runtime_id || (data && data.id), 14))}</span>
             · @${esc(seatHandle())}
@@ -1083,7 +1082,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       <div class="card agent-head" data-k="head">
         ${avatarFor(seat.name)}
         <div class="agent-head-id">
-          <div class="agent-head-name" style="color:${roleInk(seat.name)}">${esc(seat.name)}</div>
+          <div class="agent-head-name">${esc(seat.name)}</div>
           <div class="row-sub"><span class="mono">@${esc(seat.handle)}</span> · ${esc(where)}</div>
         </div>
         <div class="agent-head-state">

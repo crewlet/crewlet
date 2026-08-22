@@ -33,14 +33,18 @@ const MOVED = {
   dashboard: () => ({ path: "/" }),
   events: (q) => ({ path: "/activity", query: q }),
   tokens: (q) => ({ path: "/spend", query: q }),
-  agents: () => ({ path: "/org", query: new URLSearchParams({ lens: "seats" }) }),
   people: () => ({ path: "/org", query: new URLSearchParams({ lens: "directory" }) }),
+  // The seats LENS moved out of Org into a room of its own, so the lens
+  // form of this link has to move with it or it lands on a lens that no
+  // longer exists.
+  seats: () => ({ path: "/agents" }),
   company: () => ({ path: "/org", query: new URLSearchParams({ lens: "charter" }) }),
   audit: () => ({ path: "/config", query: new URLSearchParams({ lens: "history" }) }),
 };
 
 const KNOWN = [
   "mission",
+  "agents",
   "work",
   "activity",
   "org",

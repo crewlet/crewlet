@@ -47,33 +47,45 @@ export function phaseInk(phase) {
   return hue ? `var(--${hue}-ink)` : "var(--text-muted)";
 }
 
-// Identity hues for agent avatars. CSS custom properties rather than hex, so
-// the tile re-steps with the theme instead of being frozen at one theme's
-// values.
-const PALETTE = [
-  "var(--blue)",
-  "var(--green)",
-  "var(--amber)",
-  "var(--pink)",
-  "var(--cyan)",
-  "var(--purple)",
-  "var(--orange)",
-  "var(--brown)",
-];
+// ---------------------------------------------------------------------
+// A seat's colour is its STATE. It is never its identity.
+// ---------------------------------------------------------------------
+// Seats used to be coloured by `PALETTE[hash(name) % 8]` — a hash of the
+// role name over the same eight families the design system assigns to
+// PHASES and to EVENT CATEGORIES. So one amber meant "the execute phase",
+// "the decision category" and "the Analyst" at once, and a seat called
+// Engineer drew orange next to a red rail that meant something entirely
+// different. Reported as "the colouring of the agents is weird", and it
+// was: two meanings were sharing one palette, and one of them was noise.
+// A hash of a name carries no information — rename the seat and its
+// colour changes, which is the proof that it never meant anything.
+//
+// Identity is carried by the ICON and the NAME, which are stable and
+// legible. Colour is spent on the one thing worth spending it on: what
+// the seat is doing. Four tones, and `quiet` is deliberately not a hue —
+// an idle seat drew a tinted, glowing tile that read as activity ("when
+// agent is idle it has this blob lighting which feels like it is
+// working"), and the fix for that is not a duller hue, it is none.
 
-function hash(name) {
-  let h = 0;
-  for (const c of String(name || "")) h = c.charCodeAt(0) + ((h << 5) - h);
-  return Math.abs(h);
-}
+/** @typedef {"working"|"needs"|"broken"|"quiet"} SeatTone */
 
-export function roleColor(name) {
-  return PALETTE[hash(name) % PALETTE.length];
-}
-
-// The same identity hue as a text step, for a name set in the seat's colour.
-export function roleInk(name) {
-  return roleColor(name).replace(/\)$/, "-ink)");
+/**
+ * What a seat's chrome should be tinted by, from its live state.
+ *
+ * `needs` and `broken` are separate on purpose: a seat parked on a
+ * question and a seat that fell over both stopped, and only one of them
+ * is a failure. The design system reserves red for failure.
+ */
+export function seatTone(agent, sandboxes) {
+  if (!agent) return "quiet";
+  const role = agent.role || agent.name;
+  const sandbox = (sandboxes || []).find((s) => s.role === role);
+  if (sandbox && sandbox.status === "awaiting_input") return "needs";
+  if (agent.last_error) return "broken";
+  const state = effectiveAgentState(agent, sandboxes);
+  if (state === "afk") return "broken";
+  if (state === "working" || state === "awaiting_sandbox") return "working";
+  return "quiet";
 }
 
 // Map a role name to a representative icon.
@@ -234,8 +246,15 @@ export function phaseSuffix(a) {
   return ` · ${a.current_phase}${iter}`;
 }
 
-export function avatarFor(role) {
-  return `<span class="avatar" style="--avatar-color:${roleColor(role)}">${icon(roleIcon(role))}</span>`;
+/**
+ * A seat's tile: its icon, tinted by what it is DOING.
+ *
+ * `tone` defaults to quiet, so a caller with no state to hand renders an
+ * untinted tile rather than inventing one — the honest answer when the
+ * page does not know.
+ */
+export function avatarFor(role, tone = "quiet") {
+  return `<span class="avatar tone-${tone}">${icon(roleIcon(role))}</span>`;
 }
 
 // Event category → hue family.

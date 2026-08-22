@@ -9,10 +9,19 @@
 // Both return promises so a caller reads as a sequence rather than as a
 // callback. Neither resolves until the reader chooses.
 
-import { esc } from "./format.js";
+import { esc, escAttr } from "./format.js";
 
 let host = null;
-let escapeHandler = null;
+let keyHandler = null;
+// What had focus before the dialog opened. A dialog that does not give it
+// back leaves a keyboard user at the top of the document, having lost the
+// control they were operating.
+let opener = null;
+
+// Everything inside the dialog that can take focus, in document order.
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select, textarea, ' +
+  '[tabindex]:not([tabindex="-1"])';
 
 function ensureHost() {
   if (host && host.isConnected) return host;
@@ -26,10 +35,12 @@ function close(resolve, value) {
     el.hidden = true;
     el.innerHTML = "";
   }
-  if (escapeHandler) {
-    document.removeEventListener("keydown", escapeHandler);
-    escapeHandler = null;
+  if (keyHandler) {
+    document.removeEventListener("keydown", keyHandler);
+    keyHandler = null;
   }
+  if (opener && typeof opener.focus === "function") opener.focus();
+  opener = null;
   resolve(value);
 }
 
@@ -42,13 +53,38 @@ function open({ markup, onMount, resolve, cancelValue }) {
     resolve(cancelValue);
     return;
   }
+  opener = document.activeElement;
   el.hidden = false;
   el.innerHTML = markup;
 
-  escapeHandler = (ev) => {
-    if (ev.key === "Escape") close(resolve, cancelValue);
+  // `aria-modal` is a promise to assistive technology, not a mechanism:
+  // it says the rest of the page is inert while doing nothing to make it
+  // so. Without a trap, Tab walks straight out of the dialog and into the
+  // obscured dashboard behind it, where a keyboard user can operate
+  // controls they cannot see — while a dialog asking them to confirm
+  // something irreversible is still open.
+  keyHandler = (ev) => {
+    if (ev.key === "Escape") {
+      close(resolve, cancelValue);
+      return;
+    }
+    if (ev.key !== "Tab") return;
+    const stops = [...el.querySelectorAll(FOCUSABLE)];
+    if (!stops.length) return;
+    const first = stops[0];
+    const last = stops[stops.length - 1];
+    const active = document.activeElement;
+    // Wrap at both ends, and pull focus back in if it has already
+    // escaped — which it has if the dialog opened with nothing focused.
+    if (ev.shiftKey && (active === first || !el.contains(active))) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && (active === last || !el.contains(active))) {
+      ev.preventDefault();
+      first.focus();
+    }
   };
-  document.addEventListener("keydown", escapeHandler);
+  document.addEventListener("keydown", keyHandler);
 
   el.querySelector("[data-modal-cancel]")?.addEventListener("click", () =>
     close(resolve, cancelValue),
@@ -118,7 +154,7 @@ export function promptModal({ title, body, label, value = "", secret = false }) 
             <label class="modal-label" for="modal-input">${esc(label)}</label>
             <input class="modal-input" id="modal-input"
                    type="${secret ? "password" : "text"}"
-                   value="${esc(value)}" autocomplete="off" spellcheck="false" />
+                   value="${escAttr(value)}" autocomplete="off" spellcheck="false" />
             <div class="modal-actions">
               <button class="btn" type="button" data-modal-cancel>Cancel</button>
               <button class="btn primary" type="submit">Save</button>

@@ -74,7 +74,7 @@ const ENTITIES = [
   },
 ];
 
-export function createConfigView({ query, refresh, setToken, params }) {
+export function createConfigView({ query, refresh, params, askForToken }) {
   let lens = LENSES.some((l) => l.key === params.lens) ? params.lens : "active";
 
   let doc = null;
@@ -418,7 +418,7 @@ export function createConfigView({ query, refresh, setToken, params }) {
             <span class="sec-link" data-action="close-edit" role="link" tabindex="0">Close →</span>
           </div>
           <textarea class="cfg-text" data-action="edit-text" spellcheck="false"
-                    aria-label="${esc(spec.label)} ${esc(editing.id)} as JSON">${esc(editing.initial)}</textarea>
+                    aria-label="${escAttr(spec.label)} ${escAttr(editing.id)} as JSON">${esc(editing.initial)}</textarea>
           <div class="cfg-editor-foot">
             <span class="cfg-note">Saving appends a new revision, attributed to your token. Secrets you cannot see round-trip unchanged.</span>
             <span style="flex:1"></span>
@@ -516,8 +516,12 @@ export function createConfigView({ query, refresh, setToken, params }) {
         }
       } else if (action === "save-entity") saveEntity();
       else if (action === "set-token") {
-        setToken(apiToken());
-        loadActive();
+        // The DIALOG, not a bare setter over stored state. Reading
+        // storage and handing the socket back the same missing (or
+        // already rejected) value re-renders this very gate, so the button
+        // appeared to do nothing — on the one screen whose entire content
+        // is behind it.
+        askForToken();
       }
     },
   };

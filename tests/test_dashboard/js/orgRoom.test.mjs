@@ -174,7 +174,7 @@ function reportsOf(el, name) {
 test("the chart is the default lens and its tab is the selected one", () => {
   const el = parse(view().render(state()));
   const tabs = all(el, (n) => hasClass(n, "org-lens-tab"));
-  assert.equal(tabs.length, 4, "four lenses");
+  assert.equal(tabs.length, 3, "three lenses");
   const on = tabs.filter((t) => hasClass(t, "on"));
   assert.equal(on.length, 1, "exactly one lens is selected");
   assert.equal(on[0].getAttribute("data-k"), "chart");
@@ -442,33 +442,7 @@ test("the charter's unit list links into the chart", () => {
 // Seats
 // ---------------------------------------------------------------------
 
-test("the seats lens is one card per AGENT seat, worst first", () => {
-  const el = parse(view({ lens: "seats" }).render(state()));
-  const cards = all(el, (n) => hasClass(n, "seat-card"));
-  assert.deepEqual(
-    cards.map((c) => c.getAttribute("data-k")),
-    // afk first, then the working seat, then idle. The human seat is not
-    // here at all: nothing runs it.
-    ["seat:Backend Engineer", "seat:CTO", "seat:CEO"],
-  );
-});
 
-test("a seat holding an error sorts above everything", () => {
-  const agents = [
-    { id: "a1", role: "CEO", handle: "ceo", state: "idle" },
-    { id: "a2", role: "CTO", handle: "cto", state: "working" },
-    {
-      id: "a3",
-      role: "Backend Engineer",
-      handle: "backend",
-      state: "idle",
-      last_error: "provider refused",
-    },
-  ];
-  const el = parse(view({ lens: "seats" }).render(state({ agents, sandboxes: [] })));
-  const cards = all(el, (n) => hasClass(n, "seat-card"));
-  assert.equal(cards[0].getAttribute("data-k"), "seat:Backend Engineer");
-});
 
 // ---------------------------------------------------------------------
 // Honesty
@@ -491,7 +465,7 @@ test("an engine with no active configuration says that, not 'no seats'", () => {
 
 test("a configured company with no seats keeps the lens bar", () => {
   const el = parse(view().render(state({ org: { name: "Empty", units: [] } })));
-  assert.equal(all(el, (n) => hasClass(n, "org-lens-tab")).length, 4);
+  assert.equal(all(el, (n) => hasClass(n, "org-lens-tab")).length, 3);
   assert.match(el.textContent, /No seats configured/);
 });
 

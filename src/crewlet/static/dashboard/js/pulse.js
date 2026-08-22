@@ -17,7 +17,7 @@
 // was working in that minute.
 
 import { esc, escAttr, fmtCompact, fmtNum } from "./format.js";
-import { effectiveAgentState, roleColor, roleInk } from "./state.js";
+import { effectiveAgentState } from "./state.js";
 import { MAX_EVENTS } from "./store.js";
 
 // The window and its resolution. One cell per minute over an hour: the
@@ -213,8 +213,8 @@ function rowMarkup(row, pulse) {
       : `<span class="pulse-count is-zero">—</span>`;
   return `
     <div class="pulse-row${nav}" data-k="pulse:${escAttr(row.name)}"
-         style="--seat:${roleColor(row.name)}">
-      <span class="pulse-name" style="color:${roleInk(row.name)}">
+         style="--seat:${row.failed ? "var(--red)" : "var(--border-strong)"}">
+      <span class="pulse-name">
         <i class="dot ${esc(row.state)}"></i>${esc(row.name)}
       </span>
       <span class="pulse-track">${cells}</span>
@@ -240,7 +240,7 @@ export function pulseSpark(row, max) {
       return `<i class="pc is-lit" style="--lit:${lit.toFixed(2)}"></i>`;
     })
     .join("");
-  return `<span class="pulse-track is-mini" style="--seat:${roleColor(row.name)}"
+  return `<span class="pulse-track is-mini"
     title="${escAttr(`${row.name} · ${row.events} event${row.events === 1 ? "" : "s"} in the last hour`)}">${cells}</span>`;
 }
 

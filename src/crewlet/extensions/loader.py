@@ -118,6 +118,24 @@ class ExtensionManager:
             logger.exception(
                 "extension_stop_failed", extension=extension.name, error=str(exc)
             )
+        # And take its tools with it. The stop hook is the extension's
+        # own chance to clean up, but most have nothing to stop and do
+        # not implement one — so relying on it left every tool the
+        # extension registered in the shared registry, advertised in
+        # every later catalogue and dispatching into a disposed object.
+        # The origin recorded at registration is exactly what makes this
+        # sweep possible.
+        registry = getattr(ctx, "tool_registry", None)
+        sweep = getattr(registry, "unregister_origin", None)
+        if callable(sweep):
+            dropped = sweep(extension_origin(extension.name))
+            if dropped:
+                logger.info(
+                    "extension_tools_dropped",
+                    extension=extension.name,
+                    tools=dropped,
+                )
+
         # Already absent → nothing to remove; swallow ValueError.
         import contextlib
 

@@ -24,8 +24,8 @@ import {
   avatarFor,
   phaseColor,
   phaseInk,
-  roleInk,
   staleness,
+  seatTone,
 } from "../state.js";
 import {
   empty,
@@ -83,7 +83,7 @@ export function createWorkView({ query, refresh }) {
 
   // ---- live turns ----
 
-  function liveTurn(agent) {
+  function liveTurn(agent, sandboxes) {
     const call = agent.live_call;
     const phase = call.phase || agent.current_phase || "";
     const stale = staleness(call.updated_at);
@@ -94,8 +94,8 @@ export function createWorkView({ query, refresh }) {
            data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}"
            style="--phase-color:${phaseColor(phase)}">
         <div class="live-row-top">
-          ${avatarFor(agent.role)}
-          <span class="live-who" style="color:${roleInk(agent.role)}">${esc(agent.role)}</span>
+          ${avatarFor(agent.role, seatTone(agent, sandboxes))}
+          <span class="live-who">${esc(agent.role)}</span>
           <span class="ph-pill" style="color:${phaseInk(phase)}">${esc(phase || "working")}${call.iteration ? " #" + call.iteration : ""}</span>
           <span class="live-age">${esc(
             stale === "stalled"
@@ -122,8 +122,8 @@ export function createWorkView({ query, refresh }) {
     return `
       <div class="work-run ${waiting ? "is-waiting" : ""}" data-k="run:${escAttr(run.turn_id)}">
         <div class="work-run-top">
-          ${avatarFor(seat)}
-          <span class="live-who" style="color:${roleInk(seat)}">${esc(seat)}</span>
+          ${avatarFor(seat, "needs")}
+          <span class="live-who">${esc(seat)}</span>
           <span class="chip">${esc(run.coding_agent || "coding agent")}</span>
           ${run.branch ? `<span class="chip mono">${esc(run.branch)}</span>` : ""}
           <span class="badge ${status.cls}"><i class="dot"></i>${esc(status.label)}</span>
@@ -217,7 +217,7 @@ export function createWorkView({ query, refresh }) {
     if (!live.length) return "";
     return (
       sectionHead("activity", "Live turns", live.length) +
-      `<div class="live-board">${live.map(liveTurn).join("")}</div>`
+      `<div class="live-board">${live.map((a) => liveTurn(a, state.sandboxes)).join("")}</div>`
     );
   }
 

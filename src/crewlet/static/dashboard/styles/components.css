@@ -429,6 +429,11 @@
 
 /* Soft-tinted identity tile — the hue reads as ink on its own wash, which is
    how the site renders every icon chip. */
+/* A seat's tile. Its icon says WHO; its tint says what it is DOING.
+   It used to be tinted by a hash of the seat's NAME, which put a lit,
+   coloured blob on every row whether or not anything was running — an
+   idle seat glowed exactly as brightly as a working one. Quiet is now
+   genuinely quiet: a hairline and a muted glyph, no fill. */
 .avatar {
   width: 32px;
   height: 32px;
@@ -437,10 +442,24 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--avatar-color, var(--text-secondary));
-  background: color-mix(in srgb, var(--avatar-color, var(--text-muted)) 13%, transparent);
-  border: 1px solid
-    color-mix(in srgb, var(--avatar-color, var(--text-muted)) 24%, transparent);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.avatar.tone-working {
+  color: var(--green-ink);
+  background: color-mix(in srgb, var(--green) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--green) 26%, transparent);
+}
+.avatar.tone-needs {
+  color: var(--amber-ink);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--amber) 26%, transparent);
+}
+.avatar.tone-broken {
+  color: var(--red-ink);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
 }
 
 /* ---- Badges & pills ---- */
@@ -472,28 +491,28 @@
 .badge.live {
   color: var(--amber-ink);
   border-color: color-mix(in srgb, var(--amber) 26%, transparent);
-  background: color-mix(in srgb, var(--amber) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
 }
 .badge.warn {
   color: var(--orange-ink);
   border-color: color-mix(in srgb, var(--orange) 26%, transparent);
-  background: color-mix(in srgb, var(--orange) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--orange) var(--tint), transparent);
 }
 .badge.done,
 .badge.idle {
   color: var(--green-ink);
   border-color: color-mix(in srgb, var(--green) 26%, transparent);
-  background: color-mix(in srgb, var(--green) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--green) var(--tint), transparent);
 }
 .badge.failed {
   color: var(--red-ink);
   border-color: color-mix(in srgb, var(--red) 30%, transparent);
-  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
 }
 .badge.afk {
   color: var(--orange-ink);
   border-color: color-mix(in srgb, var(--orange) 26%, transparent);
-  background: color-mix(in srgb, var(--orange) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--orange) var(--tint), transparent);
 }
 .badge.pending {
   color: var(--text-muted);
@@ -501,12 +520,12 @@
 .badge.info {
   color: var(--blue-ink);
   border-color: color-mix(in srgb, var(--blue) 26%, transparent);
-  background: color-mix(in srgb, var(--blue) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--blue) var(--tint), transparent);
 }
 .badge.purple {
   color: var(--purple-ink);
   border-color: color-mix(in srgb, var(--purple) 26%, transparent);
-  background: color-mix(in srgb, var(--purple) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--purple) var(--tint), transparent);
 }
 /* A task title is prose, not a status code — keep it sentence-cased. */
 .badge.text {
@@ -1492,7 +1511,7 @@
 .badge.failed {
   color: var(--red-ink);
   border-color: color-mix(in srgb, var(--red) 40%, transparent);
-  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
 }
 .badge.failed .dot {
   background: var(--red);
@@ -1562,11 +1581,11 @@
   color: var(--red-ink);
 }
 .pill.failed.active {
-  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   border-color: color-mix(in srgb, var(--red) 34%, transparent);
 }
 .nav-count.alert {
-  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   color: var(--red-ink);
 }
 
@@ -1592,12 +1611,12 @@
    would show as a correctly-worded warning in body text. */
 .degraded.down {
   color: var(--red-ink);
-  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--red) 26%, transparent);
 }
 .degraded.warn {
   color: var(--amber-ink);
-  background: color-mix(in srgb, var(--amber) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
 }
 
@@ -1884,7 +1903,7 @@
   margin-top: var(--space-5);
 }
 .btn.danger {
-  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   border-color: color-mix(in srgb, var(--red) 45%, transparent);
   color: var(--red-ink);
 }

@@ -30,7 +30,7 @@ import {
 import { patch } from "./patch.js";
 import { schedule, cancel } from "./scheduler.js";
 import { $, delegate } from "./dom.js";
-import { esc } from "./format.js";
+import { esc, escAttr } from "./format.js";
 import { icon } from "./icons.js";
 import { apiToken, storeToken } from "./authToken.js";
 import { promptModal } from "./modal.js";
@@ -44,6 +44,7 @@ import {
 } from "./health.js";
 
 import { createMissionView } from "./views/mission.js";
+import { createAgentsView } from "./views/agents.js";
 import { createWorkView } from "./views/work.js";
 import { createActivityView } from "./views/activity.js";
 import { createOrgRoomView } from "./views/orgRoom.js";
@@ -63,6 +64,7 @@ socket.setToken(apiToken());
 
 const VIEWS = {
   mission: createMissionView,
+  agents: createAgentsView,
   work: createWorkView,
   activity: createActivityView,
   org: createOrgRoomView,
@@ -80,6 +82,7 @@ const VIEWS = {
 
 const TITLES = {
   mission: "Mission Control",
+  agents: "Agents",
   work: "Work",
   activity: "Activity",
   org: "Org",
@@ -108,6 +111,13 @@ const ctx = {
   navigate,
   query: (what, params) => socket.query(what, params),
   setToken: (token) => socket.setToken(token),
+  // The token DIALOG, not just the setter. An auth-gated view that can
+  // only read storage has no way out of its own empty state: it hands the
+  // socket back the same missing or rejected value and re-renders the
+  // same gate, so the "Set API token" button on the Configuration room
+  // did nothing at all. One flow, wherever the reader discovers they need
+  // a credential.
+  askForToken: () => askForToken(),
   refresh: () => renderView(),
 };
 
@@ -209,6 +219,10 @@ const NAV = [
     question: "What is happening, and what needs me?",
     items: [
       { name: "mission", icon: "grid", label: "Mission Control" },
+      // Second, directly under Mission Control: "who is working" is the
+      // question people arrive with, and it used to be three clicks into
+      // the Company zone as a lens of the org chart.
+      { name: "agents", icon: "users", label: "Agents" },
       { name: "work", icon: "cpu", label: "Work" },
       { name: "activity", icon: "activity", label: "Activity", count: "failures" },
     ],
@@ -294,14 +308,25 @@ let paletteOpen = false;
 let paletteQuery = "";
 let paletteIndex = 0;
 
+// What had focus before the palette opened, so closing it puts the reader
+// back where they were rather than at the top of the document.
+let paletteOpener = null;
+
 function togglePalette(open) {
+  const was = paletteOpen;
   paletteOpen = open === undefined ? !paletteOpen : open;
   if (paletteOpen) {
+    if (!was) paletteOpener = document.activeElement;
     paletteQuery = "";
     paletteIndex = 0;
   }
   renderPalette();
-  if (paletteOpen) $("#palette-input")?.focus();
+  if (paletteOpen) {
+    $("#palette-input")?.focus();
+  } else if (was && paletteOpener && typeof paletteOpener.focus === "function") {
+    paletteOpener.focus();
+    paletteOpener = null;
+  }
 }
 
 function paletteGroups() {
@@ -323,14 +348,14 @@ function renderPalette() {
   const body = groups
     .map(
       (group) => `
-      <div class="pal-group" data-k="g:${group.title}">
+      <div class="pal-group" data-k="g:${escAttr(group.title)}">
         <div class="pal-group-title">${esc(group.title)}</div>
         ${group.items
           .map((hit) => {
             cursor++;
             return `<div class="pal-item ${cursor === paletteIndex ? "on" : ""}"
-                 data-k="${esc(hit.id)}" data-action="palette-go"
-                 data-route="${esc(hit.route)}" role="option"
+                 data-k="${escAttr(hit.id)}" data-action="palette-go"
+                 data-route="${escAttr(hit.route)}" role="option"
                  aria-selected="${cursor === paletteIndex}">
               <span class="pal-label">${esc(hit.label)}</span>
               <span class="pal-hint">${esc(hit.hint)}</span>
@@ -347,7 +372,7 @@ function renderPalette() {
        <div class="palette" role="dialog" aria-modal="true" aria-label="Search">
          <input id="palette-input" class="palette-input" type="text"
                 placeholder="Search seats, rooms, or paste an event or trace id"
-                value="${esc(paletteQuery)}" autocomplete="off"
+                value="${escAttr(paletteQuery)}" autocomplete="off"
                 spellcheck="false" role="combobox" aria-expanded="true"
                 aria-controls="palette-results" />
          <div class="palette-results" id="palette-results" role="listbox">
@@ -372,6 +397,13 @@ function paletteKey(ev) {
     togglePalette(false);
     return true;
   }
+  // The palette is `aria-modal`, which is a promise that the rest of the
+  // page is inert — and was only ever a promise: the result rows are
+  // plain divs with no tabindex, so one Tab took focus straight out of
+  // the dialog and into the nav behind it. It is driven by arrows and
+  // Enter, so there is nothing inside to Tab BETWEEN; swallowing the key
+  // keeps focus on the input, which is the whole of the interaction.
+  if (ev.key === "Tab") return true;
   if (ev.key === "ArrowDown" || (ev.key === "n" && ev.ctrlKey)) {
     paletteIndex = Math.min(paletteIndex + 1, Math.max(0, flat.length - 1));
     renderPalette();
@@ -427,6 +459,13 @@ function toggleHealth(open) {
 }
 
 function renderChrome() {
+  // Per-connection facts belong to THIS connection. `healthStream` is the
+  // reply to the `stream` query — dropped envelopes, queue depth, client
+  // count — and it was cleared only when the popover opened or closed. So
+  // a socket that died with the popover open left the previous
+  // connection's counters on screen beside "disconnected", presenting
+  // stale telemetry as current at the one moment it is being read.
+  if (store.state.connected === false) healthStream = null;
   schedule("chrome", () => {
     const state = store.state;
     const health = state.health || {};
@@ -475,16 +514,39 @@ function renderChrome() {
 }
 
 // ---- theme + density ----
+// `localStorage` is not merely empty in a privacy-restricted browser or a
+// sandboxed iframe — the accessor THROWS. These two reads sit before the
+// socket and the router are wired, so an exception here left a blank
+// page: no dashboard at all, because of a remembered theme.
+// `authToken.js` already guards its own access; preferences did not.
+function pref(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function savePref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // A preference that cannot be remembered is not worth an error: the
+    // page still works, it just forgets. Unlike a token, nothing depends
+    // on it having been stored.
+  }
+}
+
 function initTheme() {
-  setTheme(localStorage.getItem("crewlet-theme") || "dark");
-  setDensity(localStorage.getItem("crewlet-density") || "comfortable");
+  setTheme(pref("crewlet-theme", "dark"));
+  setDensity(pref("crewlet-density", "comfortable"));
   $("#theme-btn").addEventListener("click", () => {
     const next =
       document.documentElement.getAttribute("data-theme") === "dark"
         ? "light"
         : "dark";
     setTheme(next);
-    localStorage.setItem("crewlet-theme", next);
+    savePref("crewlet-theme", next);
   });
   $("#density-btn").addEventListener("click", () => {
     const next =
@@ -492,7 +554,7 @@ function initTheme() {
         ? "comfortable"
         : "compact";
     setDensity(next);
-    localStorage.setItem("crewlet-density", next);
+    savePref("crewlet-density", next);
   });
 }
 
@@ -510,8 +572,16 @@ function setDensity(density) {
     density === "compact" ? "rows-wide" : "rows-tight",
     "sm",
   );
-  $("#density-btn").title =
-    density === "compact" ? "Comfortable spacing" : "Compact spacing";
+  // A tooltip is the whole affordance on an icon-only control, so it
+  // names the DESTINATION (what clicking does), and `aria-label` carries
+  // the same words rather than leaving a screen reader with "button".
+  // `aria-pressed` is what makes the current state readable at all
+  // without clicking to find out.
+  const label =
+    density === "compact" ? "Switch to comfortable spacing" : "Switch to compact spacing";
+  $("#density-btn").title = label;
+  $("#density-btn").setAttribute("aria-label", label);
+  $("#density-btn").setAttribute("aria-pressed", density === "compact" ? "true" : "false");
 }
 
 // ---- token entry ----
@@ -615,6 +685,16 @@ function initDelegation() {
       // sharing the name would swallow the Configuration button and
       // leave that view un-reloaded after a token was set.
       askForToken();
+    } else if (action === "agent") {
+      // `pulse.js` marks every seat row `clickable` and emits this action
+      // with the seat's RUNTIME id — the identity the live projection
+      // uses. Nothing handled it: not the shell, and not Mission Control,
+      // which has no `onAction` at all. So the most prominent list of
+      // agents in the product showed a pointer cursor and did nothing.
+      // Resolved to the handle where possible, because that is what the
+      // seat route is addressed by everywhere else.
+      const seat = store.agentByKey(el.dataset.id || "");
+      navigate("/seats/" + encodeURIComponent((seat && seat.handle) || el.dataset.id || ""));
     } else if (action === "seat") {
       navigate("/seats/" + encodeURIComponent(el.dataset.seat));
     } else if (action === "go") {

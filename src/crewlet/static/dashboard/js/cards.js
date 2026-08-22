@@ -18,10 +18,10 @@ import {
   effectiveAgentState,
   integrationMeta,
   phaseInk,
-  roleInk,
   stateBadgeClass,
   stateLabel,
   statusLine,
+  seatTone,
 } from "./state.js";
 
 /** Integration chips, from the MCP servers actually wired to the seat. */
@@ -150,11 +150,11 @@ export function seatCard(seat, {
 
   return `
     <div class="${cls}" data-k="seat:${escAttr(seat.name)}"
-         ${nav} style="--seat:${roleInk(seat.name)}" title="${escAttr(seat.name)}">
+         ${nav} title="${escAttr(seat.name)}">
       <div class="seat-top">
         <span class="seat-state dot ${esc(state)}"></span>
-        ${avatarFor(seat.name)}
-        <span class="seat-name" style="color:${roleInk(seat.name)}">${esc(seat.name)}</span>
+        ${avatarFor(seat.name, human ? "quiet" : seatTone(agent, sandboxes))}
+        <span class="seat-name">${esc(seat.name)}</span>
         ${marker}
       </div>
       <div class="seat-status">${esc(trunc(status, 96))}</div>

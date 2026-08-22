@@ -247,21 +247,21 @@
 
      Because the fill is an alpha rather than a lighter step, panels nested
      inside panels accumulate depth on their own, with no second token. */
-  --bg: #090d1c;
-  --bg-sidebar: #070a17;
-  --bg-card: rgba(150, 182, 255, 0.07);
-  --bg-card-2: rgba(150, 182, 255, 0.115);
-  --bg-hover: rgba(150, 182, 255, 0.075);
-  --bg-active: rgba(150, 182, 255, 0.13);
+  --bg: #0e0a20;
+  --bg-sidebar: #0a0719;
+  --bg-card: rgba(176, 152, 255, 0.075);
+  --bg-card-2: rgba(176, 152, 255, 0.12);
+  --bg-hover: rgba(176, 152, 255, 0.08);
+  --bg-active: rgba(176, 152, 255, 0.135);
   /* Recessed surfaces go DARKER than the ground, not lighter — a code
      block on a translucent panel has to read as a hole cut in it. */
   --bg-inset: rgba(0, 0, 0, 0.42);
 
   /* Borders — the cool hairline ramp. On this ground these do all the
      separation work, which is why the panel recipe needs no drop shadow. */
-  --border-subtle: rgba(150, 182, 255, 0.1);
-  --border: rgba(150, 182, 255, 0.16);
-  --border-strong: rgba(150, 182, 255, 0.27);
+  --border-subtle: rgba(176, 152, 255, 0.1);
+  --border: rgba(176, 152, 255, 0.17);
+  --border-strong: rgba(176, 152, 255, 0.28);
 
   /* Text — the same cool hue the surfaces are built from, at a tiny
      chroma, so type belongs to the material instead of sitting on it as
@@ -281,27 +281,27 @@
      near-black blooms, and reading a dense page of it is the thing that
      makes eyes hurt — so the top step stops at 15.8, under the halation
      line, rather than going as bright as it can. */
-  --text: #d8ddec; /* 10.0 – 14.5 */
-  --text-secondary: #b9becc; /* 7.3 – 10.6 */
-  --text-muted: #a5a9b7; /* 5.8 – 8.4 */
-  --text-dim: #9498a6; /* 4.7 – 6.8 */
-  --heading: #e4e9f8; /* 11.2 – 16.3 */
-  --on-accent: #090d1c; /* 7.2:1 on the accent fill */
+  --text: #dddae9; /* 10.0 – 14.5 */
+  --text-secondary: #bdbac9; /* 7.3 – 10.6 */
+  --text-muted: #a8a5b4; /* 5.8 – 8.4 */
+  --text-dim: #9794a2; /* 4.7 – 6.8 */
+  --heading: #e8e4f4; /* 11.2 – 16.3 */
+  --on-accent: #0e0a20; /* 7.2:1 on the accent fill */
 
   /* Accent — the brand violet (#7c56ff, the mark's own colour), pitched
      paler and less saturated than any categorical hue so an interactive
      affordance never reads as a phase. It is a FILL; its readable partner
      is --accent-ink. */
-  --accent: #9c98d3;
-  --accent-hover: #b6b2ef;
-  --accent-soft: rgba(156, 152, 211, 0.16);
-  --accent-ink: #b6b2ef;
+  --accent: #c5c1fe;
+  --accent-hover: #d4d2ff;
+  --accent-soft: rgba(197, 193, 254, 0.16);
+  --accent-ink: #bdb9f6;
 
   /* Glass (topbar, icon buttons, segmented controls) — the same cool
      blue-white as the material rather than a white wash, so chrome
      belongs to the surface it floats over. Always with a backdrop blur. */
-  --glass: rgba(150, 182, 255, 0.08);
-  --glass-hover: rgba(150, 182, 255, 0.14);
+  --glass: rgba(176, 152, 255, 0.08);
+  --glass-hover: rgba(176, 152, 255, 0.14);
 
   /* Keyboard focus. Its own token: it has to clear every surface AND stay
      unmistakable against every hue it might land on, so it can be neither
@@ -309,7 +309,7 @@
      on the wheel, between green at 140° and cyan at 230° — which puts it
      ΔE 15.3 from the nearest categorical in both themes and never under
      6:1 on any surface. */
-  --focus: #5dcdb2;
+  --focus: #5bcaaf;
 
   /* Elevation.
    *
@@ -317,9 +317,9 @@
    * by LIGHT instead: a one-pixel cool highlight along its top edge, the way
    * a physical panel catches the light above it. The dramatic drop shadow is
    * kept for chrome that genuinely floats over content. */
-  --panel-shadow: inset 0 1px 0 rgba(150, 182, 255, 0.08);
+  --panel-shadow: inset 0 1px 0 rgba(176, 152, 255, 0.08);
   --card-shadow: 0 24px 60px rgba(0, 0, 0, 0.75), 0 2px 10px rgba(0, 0, 0, 0.5);
-  --lift-shadow: inset 0 1px 0 rgba(150, 182, 255, 0.13),
+  --lift-shadow: inset 0 1px 0 rgba(176, 152, 255, 0.13),
     0 10px 30px rgba(0, 0, 0, 0.6);
   /* The primary button's own lift. Its own step because a control that
      leaves the surface is not a panel settling onto it. */
@@ -329,30 +329,30 @@
      Mark tiers, on the worst surface: pink 3.3 · green/blue/amber/cyan/
      orange/brown 3.5 · purple 4.5 (the assignment that separates every
      adjacent pair in both orders, in both themes). */
-  --green: #54903a;
-  --green-ink: #7dbb64;
-  --blue: #5580d3;
-  --blue-ink: #7ba9ff;
-  --amber: #ac7800;
-  --amber-ink: #daa138;
-  --purple: #9688e5;
-  --purple-ink: #ada1ff;
-  --cyan: #3988b8;
-  --cyan-ink: #65b3e4;
-  --orange: #c46932;
-  --orange-ink: #f3935d;
-  --pink: #c35988;
-  --pink-ink: #f688b7;
-  --brown: #b37240;
-  --brown-ink: #e09c69;
+  --green: #528e38;
+  --green-ink: #7ab861;
+  --blue: #537ed1;
+  --blue-ink: #7aa8fe;
+  --amber: #a97602;
+  --amber-ink: #d89e35;
+  --purple: #9486e3;
+  --purple-ink: #ac9ffe;
+  --cyan: #3786b6;
+  --cyan-ink: #63b1e2;
+  --orange: #c26730;
+  --orange-ink: #f0915b;
+  --pink: #c05786;
+  --pink-ink: #f485b4;
+  --brown: #b1703e;
+  --brown-ink: #de9a67;
 
   /* Reserved status hue, carried a tier above the categorical marks and at
      a higher chroma than the cap: it has to stay legible as "this broke"
      while sitting in a list beside them, and it is used sparingly — rails,
      badges, dots — never as body copy, which is where a saturated colour
      would tire the eye. */
-  --red: #e56768;
-  --red-ink: #ff8786;
+  --red: #eb6c6d;
+  --red-ink: #ff8987;
 }
 
 /* ---- Light ---- */
@@ -364,64 +364,64 @@
      pure white — a full-white panel on a tinted ground is the light
      theme's version of the halation problem, and a page of them is what
      makes a bright room feel brighter. */
-  --bg: #eaeef8;
-  --bg-sidebar: #e2e7f4;
-  --bg-card: #fbfcff;
-  --bg-card-2: #f1f4fc;
-  --bg-hover: rgba(28, 42, 92, 0.045);
-  --bg-active: rgba(28, 42, 92, 0.08);
-  --bg-inset: rgba(28, 42, 92, 0.05);
+  --bg: #eeeaf8;
+  --bg-sidebar: #e6e1f3;
+  --bg-card: #fdfcff;
+  --bg-card-2: #f5f1fc;
+  --bg-hover: rgba(44, 26, 92, 0.045);
+  --bg-active: rgba(44, 26, 92, 0.08);
+  --bg-inset: rgba(44, 26, 92, 0.05);
 
-  --border-subtle: rgba(28, 42, 92, 0.07);
-  --border: rgba(28, 42, 92, 0.13);
-  --border-strong: rgba(28, 42, 92, 0.22);
+  --border-subtle: rgba(44, 26, 92, 0.07);
+  --border: rgba(44, 26, 92, 0.13);
+  --border-strong: rgba(44, 26, 92, 0.22);
 
   /* The same ramp, solved against this theme's own worst surface. Light
      has the narrower spread — its panels are opaque, so nesting one inside
      another changes nothing — but the recessed chrome and a selected row
      still cost a point, which is exactly what put six of these steps under
      4.5:1 when they were anchored to the panel. */
-  --text: #303440; /* 10.0 – 12.1 */
-  --text-secondary: #444955; /* 7.3 – 8.8 */
-  --text-muted: #535764; /* 5.8 – 7.0 */
-  --text-dim: #616572; /* 4.7 – 5.7 */
-  --heading: #292c38; /* 11.2 – 13.5 */
+  --text: #282530; /* 10.0 – 13.9 */
+  --text-secondary: #3f3b48; /* 7.3 – 10.2 */
+  --text-muted: #4e4a57; /* 5.8 – 8.1 */
+  --text-dim: #5c5864; /* 4.7 – 6.5 */
+  --heading: #201d28; /* 11.2 – 15.6 */
   --on-accent: #ffffff; /* 6.3:1 on the accent fill */
 
-  --accent: #5f5895;
-  --accent-hover: #4c457f;
-  --accent-soft: rgba(95, 88, 149, 0.12);
-  --accent-ink: #4c457f;
+  --accent: #342d5f;
+  --accent-hover: #2b2354;
+  --accent-soft: rgba(52, 45, 95, 0.12);
+  --accent-ink: #3a3466;
 
   --glass: rgba(255, 255, 255, 0.72);
   --glass-hover: rgba(255, 255, 255, 0.92);
 
-  --focus: #006351;
+  --focus: #005545;
 
-  --panel-shadow: 0 1px 2px rgba(28, 42, 92, 0.05);
-  --card-shadow: 0 18px 44px rgba(28, 42, 92, 0.16),
-    0 2px 8px rgba(28, 42, 92, 0.08);
-  --lift-shadow: 0 8px 22px rgba(28, 42, 92, 0.12);
-  --btn-shadow: 0 1px 2px rgba(28, 42, 92, 0.05),
-    0 2px 4px rgba(28, 42, 92, 0.05), 0 4px 8px rgba(28, 42, 92, 0.05);
+  --panel-shadow: 0 1px 2px rgba(44, 26, 92, 0.05);
+  --card-shadow: 0 18px 44px rgba(44, 26, 92, 0.16),
+    0 2px 8px rgba(44, 26, 92, 0.08);
+  --lift-shadow: 0 8px 22px rgba(44, 26, 92, 0.12);
+  --btn-shadow: 0 1px 2px rgba(44, 26, 92, 0.05),
+    0 2px 4px rgba(44, 26, 92, 0.05), 0 4px 8px rgba(44, 26, 92, 0.05);
 
-  --green: #4c8831;
-  --green-ink: #286300;
-  --blue: #4d78ca;
-  --blue-ink: #2c53a2;
-  --amber: #a17000;
-  --amber-ink: #765100;
-  --purple: #6a5bb4;
-  --purple-ink: #57479d;
-  --cyan: #3080af;
-  --cyan-ink: #005c87;
-  --orange: #bb6129;
-  --orange-ink: #8f3f01;
-  --pink: #c35a89;
-  --pink-ink: #953061;
-  --brown: #aa6a38;
-  --brown-ink: #84470e;
+  --green: #3f7b23;
+  --green-ink: #225600;
+  --blue: #416bbc;
+  --blue-ink: #204795;
+  --amber: #916503;
+  --amber-ink: #654500;
+  --purple: #5f4fa6;
+  --purple-ink: #4d3b90;
+  --cyan: #2073a2;
+  --cyan-ink: #015076;
+  --orange: #ad5418;
+  --orange-ink: #7e3600;
+  --pink: #b54d7c;
+  --pink-ink: #872255;
+  --brown: #9d5e2b;
+  --brown-ink: #763c00;
 
-  --red: #bd4247;
-  --red-ink: #a22831;
+  --red: #a72d35;
+  --red-ink: #8f1122;
 }

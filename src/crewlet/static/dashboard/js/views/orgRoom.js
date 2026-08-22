@@ -7,7 +7,7 @@
 // three navigations and a mental join, because no screen carried more
 // than a third of the answer.
 //
-// So it is one room with four LENSES over the same seat list:
+// So it is one room with three LENSES over the same seat list:
 //
 //   chart      the reporting structure, drawn — who answers to whom
 //   directory  every seat as a person: where they sit, how to reach them
@@ -23,19 +23,16 @@
 
 import { esc, escAttr, fmtNum, trunc } from "../format.js";
 import { icon } from "../icons.js";
-import { seatCard } from "../cards.js";
 import { flattenSeats, flattenUnits, managerOf } from "../org.js";
-import { buildPulse } from "../pulse.js";
 import { pushParams, replaceParams } from "../router.js";
 import {
   CONTACT_FIELDS,
   avatarFor,
   effectiveAgentState,
   integrationMeta,
-  roleColor,
-  roleInk,
   stateBadgeClass,
   stateLabel,
+  seatTone,
 } from "../state.js";
 import {
   empty,
@@ -53,7 +50,6 @@ const LENSES = [
   { key: "chart", label: "Chart", icon: "building" },
   { key: "directory", label: "Directory", icon: "users" },
   { key: "charter", label: "Charter", icon: "book" },
-  { key: "seats", label: "Seats", icon: "grid" },
 ];
 const LENS_KEYS = new Set(LENSES.map((l) => l.key));
 const DEFAULT_LENS = "chart";
@@ -165,11 +161,10 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
       : ` data-action="seat" data-seat="${escAttr(seat.handle)}" role="link" tabindex="0"`;
     return `
       <div class="org-node ${human ? "is-human" : "clickable"}"${nav}
-           style="--seat:${roleColor(seat.name)}"
            title="${escAttr(seat.goal || seat.name)}">
         <span class="org-node-top">
           <i class="org-node-dot" data-state="${escAttr(runState)}"></i>
-          <span class="org-node-name" style="color:${roleInk(seat.name)}">${esc(seat.name)}</span>
+          <span class="org-node-name">${esc(seat.name)}</span>
         </span>
         <span class="org-node-handle mono">@${esc(seat.handle)}</span>
         <span class="org-node-foot">${
@@ -260,9 +255,9 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
 
     return `
       <div ${nav} data-k="seat:${escAttr(seat.name)}">
-        ${avatarFor(seat.name)}
+        ${avatarFor(seat.name, human ? "quiet" : seatTone(agent, sandboxes))}
         <div class="row-body">
-          <div class="row-title" style="color:${roleInk(seat.name)}">${esc(seat.name)}
+          <div class="row-title">${esc(seat.name)}
             <span class="org-handle mono">@${esc(seat.handle)}</span></div>
           <div class="row-sub">${esc(where || "root level")}</div>
           ${seat.goal ? `<div class="row-sub">${esc(trunc(seat.goal, 96))}</div>` : ""}
@@ -390,63 +385,6 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
 
   // ---- lens: seats ----
 
-  function seatsLens(state, seats, byRole) {
-    const agents = state.agents || [];
-    // Prefer org seats (they carry the unit chain + integrations); fall
-    // back to the live agent list so the lens works before /org lands.
-    const configured = seats.filter((s) => s.kind === "agent");
-    const list = configured.length
-      ? [...configured]
-      : agents.map((a) => ({
-          name: a.role || a.name,
-          handle: a.handle || "",
-          kind: "agent",
-          integrations: [],
-          unitPath: [],
-        }));
-    if (!list.length) {
-      return (
-        sectionHead("grid", "Agent seats", 0, null) +
-        empty(
-          "user",
-          "No agent seats",
-          "Every seat in this company is a human seat — nothing here is run by the engine.",
-        )
-      );
-    }
-    const sandboxByRole = new Map((state.sandboxes || []).map((s) => [s.role, s]));
-    const working = agents.filter((a) => a.state === "working").length;
-    // Urgency order, not config order: on a thirty-seat org the one
-    // broken seat is wherever the YAML happens to put it, which is the
-    // worst possible place for it. Ties keep config order (a stable
-    // sort), so the grid still reads like the chart within a band.
-    list.sort((a, b) => rank(byRole.get(a.name)) - rank(byRole.get(b.name)));
-    // The same hour of activity the overview's pulse grid shows, so a
-    // card means the same thing on both screens.
-    const pulse = buildPulse({
-      seats: configured,
-      agents,
-      events: state.events,
-      tokens: state.tokens,
-      sandboxes: state.sandboxes,
-    });
-    const pulseByRole = new Map(pulse.rows.map((r) => [r.name, r]));
-
-    return (
-      sectionHead("grid", "Agent seats", `${working} active`, null) +
-      `<div class="seat-grid">${list
-        .map((seat) =>
-          seatCard(seat, {
-            agent: byRole.get(seat.name),
-            sandbox: sandboxByRole.get(seat.name),
-            sandboxes: state.sandboxes,
-            pulseRow: pulseByRole.get(seat.name),
-            pulseMax: pulse.max,
-          }),
-        )
-        .join("")}</div>`
-    );
-  }
 
   return {
     slices: ["org", "agents", "sandboxes", "events", "tokens", "budget", "health"],
@@ -496,7 +434,6 @@ export function createOrgRoomView({ params = {}, navigate, refresh }) {
       let body;
       if (lens === "directory") body = directoryLens(state, seats, byRole);
       else if (lens === "charter") body = charterLens(state, seats, units);
-      else if (lens === "seats") body = seatsLens(state, seats, byRole);
       else body = chartLens(state, seats, byRole);
       return bar + body;
     },

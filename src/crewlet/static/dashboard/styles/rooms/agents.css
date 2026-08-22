@@ -1,0 +1,244 @@
+/* Agents — who is working, who is not, and why.
+ *
+ * Panels take their surface from the shared recipe in components.css;
+ * this file holds only what is specific to the room. No colour is defined
+ * here: every value is a token from tokens.css.
+ *
+ * The tones below are the room's whole colour argument, and they follow
+ * the design system's rule rather than inventing one: RED only where
+ * something broke, AMBER where something needs a person but nothing is
+ * wrong, GREEN for running, and NOTHING AT ALL for quiet. Idle is not a
+ * status worth a hue — colouring it would make a healthy company look
+ * like a lit-up alarm panel, which is the fastest way to teach an
+ * operator to ignore colour.
+ *
+ * Every tone is paired with words in the markup, so the grouping is
+ * legible with no colour vision at all.
+ */
+
+/* ---- The summary strip ---- */
+
+.ag-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+.ag-chip {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color var(--dur), background var(--dur);
+}
+.ag-chip:hover {
+  border-color: var(--border-strong);
+}
+.ag-chip.active {
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+  color: var(--text);
+}
+.ag-chip-n {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+}
+.ag-chip-label {
+  font-size: var(--text-xs);
+}
+
+/* The count leads the eye, so the count is what carries the tone. */
+.ag-chip.tone-working .ag-chip-n {
+  color: var(--green-ink);
+}
+.ag-chip.tone-needs .ag-chip-n {
+  color: var(--amber-ink);
+}
+/* Only when something in that group actually broke. A group that merely
+   needs an answer is amber; this is the escalation. */
+.ag-chip.tone-needs.is-broken .ag-chip-n {
+  color: var(--red-ink);
+}
+
+.ag-clear {
+  align-self: center;
+  margin-left: var(--space-2);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ag-clear:hover {
+  color: var(--text);
+}
+
+.ag-alert {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  border-left: 3px solid var(--amber);
+  font-size: var(--text-sm);
+}
+
+/* ---- Groups ---- */
+
+.ag-group {
+  margin-bottom: var(--space-6);
+}
+.ag-blurb {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* ---- One seat ---- */
+
+.ag-row {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1.1fr) minmax(0, 2fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ag-row:last-child {
+  border-bottom: 0;
+}
+.ag-row:hover {
+  background: var(--bg-hover);
+}
+/* A rail rather than a fill: the row still has to read as a row, and a
+   washed background at this size competes with the badges inside it. */
+.ag-row.is-waiting {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+.ag-row.is-broken {
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+/* The avatar comes from `avatarFor`, which brings its own `.avatar`
+   surface and hue — the room only sizes the cell it sits in. */
+.ag-row > .avatar {
+  flex: none;
+}
+
+.ag-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ag-name {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  letter-spacing: var(--track-body);
+}
+.ag-name:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ag-handle {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+.ag-where {
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-what {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ag-status {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.ag-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+.ag-phase {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+}
+.ag-model {
+  font-family: var(--font-mono);
+}
+.ag-tokens {
+  font-variant-numeric: tabular-nums;
+}
+/* Motion stops when work stops, and so does this: `staleness()` returns a
+   phrase only for a turn that has gone quiet, so the label appearing IS
+   the signal. */
+.ag-stale {
+  color: var(--amber-ink);
+}
+
+.ag-when {
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ag-do {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.ag-do .btn.ghost {
+  background: none;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+.ag-do .btn.ghost:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* Narrow: the row becomes two lines rather than five squeezed columns. */
+@media (max-width: 900px) {
+  .ag-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: var(--space-2);
+  }
+  .ag-what,
+  .ag-when,
+  .ag-do {
+    grid-column: 2;
+  }
+  .ag-when {
+    text-align: left;
+  }
+  .ag-do {
+    justify-content: flex-start;
+  }
+}

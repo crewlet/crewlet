@@ -9,7 +9,7 @@
 //
 // Every number in tokens.css's header comment is computed here.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { test, run } from "./harness.mjs";
@@ -61,15 +61,25 @@ function theme(name) {
   // half of contrast — so a ramp checked only against the panel is a ramp
   // that has been checked against neither its brightest nor its dimmest
   // case. Every one of these is a surface the shipped CSS actually builds.
+  const sidebar = col("--bg-sidebar");
   const surfaces = {
     bg,
-    sidebar: col("--bg-sidebar"),
+    sidebar,
     panel: card,
     "nested panel": flatten([bg, col("--bg-card"), col("--bg-card")]),
     "raised on ground": flatten([bg, col("--bg-card-2")]),
     "raised on panel": flatten([bg, col("--bg-card"), col("--bg-card-2")]),
     "inset in panel": flatten([bg, col("--bg-card"), col("--bg-inset")]),
     "selected row": flatten([bg, col("--bg-card"), col("--bg-active")]),
+    // The CHROME has states too, and they compose off the sidebar rather
+    // than off the ground — which in the light theme makes the selected
+    // nav item the darkest surface in the design, darker than anything in
+    // the content area. It is also exactly where the nav's alert badge
+    // sits, so leaving it out is how a tint that measures 4.87 renders at
+    // 4.29. Twice now an incomplete surface set has been the bug rather
+    // than the value measured against it.
+    "selected nav item": flatten([sidebar, col("--bg-active")]),
+    "hovered nav item": flatten([sidebar, col("--bg-hover")]),
   };
   const entries = Object.entries(surfaces);
   // Ranked by how much contrast they give this theme's text: dark text is
@@ -167,6 +177,100 @@ function adjacentPairs(order) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------
+// The stylesheets that CONSUME the tokens
+// ---------------------------------------------------------------------
+// Everything above reads tokens.css. That is exactly how `--tint: 14%`
+// shipped alongside 24 consumers writing `var(--tint)%`: the token was a
+// valid percentage, every gate passed, and every one of those
+// declarations expanded to `14%%` — invalid at computed-value time, so
+// the property computed to `unset`. Badges lost their status fill AND the
+// neutral panel fill underneath it, because invalid-at-computed-value
+// does not fall back a cascade level. Nothing errored and nothing was
+// measured, because contrast maths cannot see a declaration the browser
+// threw away.
+
+const STYLE_DIR = join(HERE, "../../../src/crewlet/static/dashboard/styles");
+
+function shippedStylesheets() {
+  const out = [];
+  for (const dir of [STYLE_DIR, join(STYLE_DIR, "rooms")]) {
+    for (const name of readdirSync(dir)) {
+      if (name.endsWith(".css")) out.push([name, readFileSync(join(dir, name), "utf8")]);
+    }
+  }
+  return out;
+}
+
+test("no consumer appends a unit a token already carries", () => {
+  // Generalised past `--tint`: any token whose value ends in a unit,
+  // used as `var(--x)<unit>`, is this bug.
+  const units = new Map();
+  for (const [, block] of blocks) {
+    for (const [name, value] of block) {
+      const m = /^-?[\d.]+(%|px|em|rem|deg|ms|s)$/.exec(String(value).trim());
+      if (m) units.set(name, m[1]);
+    }
+  }
+  const offenders = [];
+  for (const [file, css] of shippedStylesheets()) {
+    for (const [name, unit] of units) {
+      const re = new RegExp(`var\\(${name}\\)\\s*${unit}`, "g");
+      for (const hit of css.matchAll(re)) {
+        offenders.push(`${file}: ${hit[0]} (${name} is already "${unit}")`);
+      }
+    }
+  }
+  if (offenders.length) {
+    throw new Error(
+      `these expand to a doubled unit and are dropped by the browser:\n  ` +
+        offenders.join("\n  "),
+    );
+  }
+});
+
+test("every token a stylesheet reaches for actually exists", () => {
+  // A `var(--typo)` with no fallback computes to unset the same way as a
+  // doubled unit, and is just as silent.
+  //
+  // A token can legitimately be defined nowhere in CSS: several are set
+  // INLINE by a view (`style="--n:...;--ink:..."`) so a component can be
+  // tinted per row without a class per hue. Those are collected from the
+  // JS rather than allowlisted by hand — a hand-kept list is a list that
+  // grows a typo of its own.
+  const defined = new Set();
+  for (const [, block] of blocks) for (const [name] of block) defined.add(name);
+
+  const jsDir = join(HERE, "../../../src/crewlet/static/dashboard/js");
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".js")) {
+        for (const hit of readFileSync(full, "utf8").matchAll(/(--[\w-]+)\s*:/g)) {
+          defined.add(hit[1]);
+        }
+      }
+    }
+  };
+  walk(jsDir);
+
+  const missing = new Set();
+  for (const [file, css] of shippedStylesheets()) {
+    const body = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const hit of body.matchAll(/var\((--[\w-]+)\s*(,)?/g)) {
+      // A declared fallback is a deliberate choice, not a typo.
+      if (hit[2]) continue;
+      if (!defined.has(hit[1])) missing.add(`${file}: ${hit[1]}`);
+    }
+  }
+  if (missing.size) {
+    throw new Error(
+      `undefined tokens used with no fallback:\n  ${[...missing].join("\n  ")}`,
+    );
+  }
+});
 
 // ---------------------------------------------------------------------
 // Gates
@@ -380,18 +484,15 @@ for (const name of Object.keys(THEMES)) {
     // toward the ink, on light it pulls the ground down toward it. So the
     // light theme is always the binding case, and a tint chosen by eye on
     // dark is a tint chosen for the wrong theme.
-    const { col, tokens, bg } = theme(name);
+    const { col, tokens, surfaces } = theme(name);
     const raw = (tokens.get("--tint") || "").trim();
     const pct = Number.parseFloat(raw);
     if (!raw.endsWith("%") || !Number.isFinite(pct)) {
       throw new Error(`--tint is "${raw}", not a percentage`);
     }
-    const grounds = {
-      "--bg": bg,
-      "--bg-sidebar": col("--bg-sidebar"),
-      panel: flatten([bg, col("--bg-card")]),
-      "selected row": flatten([bg, col("--bg-card"), col("--bg-active")]),
-    };
+    // Every surface, not a hand-picked few: the same set the ramp is held
+    // against, because a badge can sit on any of them.
+    const grounds = surfaces;
     for (const hue of [...HUES, "red", "accent"]) {
       const mark = { ...col(`--${hue}`), a: pct / 100 };
       const ink = col(`--${hue}-ink`);
@@ -412,8 +513,15 @@ for (const name of Object.keys(THEMES)) {
     // sits above the flat ink target, which made --purple and
     // --purple-ink the same colour to within one step of 8-bit sRGB, and
     // left the ink with nothing to clear once its own tint was under it.
-    const { col, weakest } = theme(name);
-    for (const hue of [...HUES, "red", "accent"]) {
+    //
+    // The ACCENT is exempt, and deliberately: it is the one family whose
+    // mark is a large pale FILL (a button) rather than a dot, and whose
+    // ink is a LINK — quieter than the fill, not louder. Nothing prints
+    // --accent-ink on --accent; what sits on the fill is --on-accent, so
+    // the pairing this gate protects does not exist there. Its own two
+    // contracts are checked below instead.
+    const { weakest } = theme(name);
+    for (const hue of [...HUES, "red"]) {
       const mark = weakest(`--${hue}`).ratio;
       const ink = weakest(`--${hue}-ink`).ratio;
       if (ink < mark * 1.25) {
@@ -421,6 +529,25 @@ for (const name of Object.keys(THEMES)) {
           `--${hue}-ink (${ink.toFixed(2)}) is not a step above --${hue} (${mark.toFixed(2)})`,
         );
       }
+    }
+  });
+
+  test(`${name}: the accent's own two contracts hold`, () => {
+    // A fill needs a label that reads ON it, and a link needs to read on
+    // the soft wash it sits in. Those are the accent's real pairings.
+    const { col, surfaces } = theme(name);
+    const onAccent = contrast(col("--on-accent"), col("--accent"));
+    if (onAccent < INK_FLOOR) {
+      throw new Error(
+        `--on-accent is ${onAccent.toFixed(2)}:1 on the accent fill, under ${INK_FLOOR}`,
+      );
+    }
+    const wash = flatten([surfaces.panel, col("--accent-soft")]);
+    const link = contrast(flatten([wash, col("--accent-ink")]), wash);
+    if (link < INK_FLOOR) {
+      throw new Error(
+        `--accent-ink is ${link.toFixed(2)}:1 on --accent-soft, under ${INK_FLOOR}`,
+      );
     }
   });
 

@@ -20,7 +20,7 @@
 
 import { esc, escAttr, fmtNum, fmtDateTime, relTime, shortId } from "../format.js";
 import { icon } from "../icons.js";
-import { PHASE_ORDER, phaseColor, phaseInk, roleInk } from "../state.js";
+import { PHASE_ORDER, phaseColor, phaseInk } from "../state.js";
 import {
   empty,
   emptyOrPending,
@@ -137,7 +137,7 @@ export function createSpendView({ store, query, refresh }) {
         const refused = s.refused_at;
         return `<tr class="${refused ? "is-refused" : ""}" data-k="bud:${escAttr(s.agent_id)}"
                     data-action="seat" data-seat="${escAttr(s.handle || s.role)}">
-          <td><span style="color:${roleInk(s.role)}">${esc(s.role)}</span></td>
+          <td>${esc(s.role)}</td>
           <td class="num">${esc(fmtNum(s.durable_used))}</td>
           <td class="num">${s.max_tokens ? esc(fmtNum(s.max_tokens)) : '<span class="zero">no cap</span>'}</td>
           <td>${meterBar(s.durable_used, s.max_tokens, refused)}</td>

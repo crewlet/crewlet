@@ -19,8 +19,8 @@ import {
   avatarFor,
   phaseColor,
   phaseInk,
-  roleInk,
   staleness,
+  seatTone,
 } from "../state.js";
 import { flattenSeats } from "../org.js";
 import { seatRow } from "../cards.js";
@@ -186,7 +186,7 @@ export function createMissionView({ store }) {
   // pips, and the response as it streams. Everything comes from the
   // server's in-flight call, so it survives a refresh and needs no
   // reconstruction from the event stream.
-  function liveCard(agent) {
+  function liveCard(agent, sandboxes) {
     const call = agent.live_call;
     const phase = call.phase || agent.current_phase || "";
     const roundCount = call.rounds || 0;
@@ -206,8 +206,8 @@ export function createMissionView({ store }) {
            data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}"
            style="--phase-color:${phaseColor(phase)}">
         <div class="live-row-top">
-          ${avatarFor(agent.role)}
-          <span class="live-who" style="color:${roleInk(agent.role)}">${esc(agent.role)}</span>
+          ${avatarFor(agent.role, seatTone(agent, sandboxes))}
+          <span class="live-who">${esc(agent.role)}</span>
           <span class="ph-pill" style="color:${phaseInk(phase)}">${esc(phase || "working")}${call.iteration ? " #" + call.iteration : ""}</span>
           <span class="pips ${stale ? "" : "is-live"}" title="${roundCount} round${roundCount === 1 ? "" : "s"}">${pips}</span>
           <span class="live-age" title="last round">${esc(
@@ -248,8 +248,8 @@ export function createMissionView({ store }) {
            data-action="go" data-route="/work"
            style="--phase-color:var(--cyan)">
         <div class="live-row-top">
-          ${avatarFor(seat)}
-          <span class="live-who" style="color:${roleInk(seat)}">${esc(seat)}</span>
+          ${avatarFor(seat, "needs")}
+          <span class="live-who">${esc(seat)}</span>
           <span class="chip">${esc(run.coding_agent || "coding agent")}</span>
           <span class="badge ${waiting ? "afk" : "live"}"><i class="dot"></i>${waiting ? "needs an answer" : "sandbox"}</span>
           <span style="flex:1"></span>
@@ -264,7 +264,7 @@ export function createMissionView({ store }) {
   // A seat the engine stopped, and why. This is the counterpart to the
   // live board: an agent that is not working because something broke
   // should be as visible as one that is working.
-  function stoppedRow(agent) {
+  function stoppedRow(agent, sandboxes) {
     // `last_error` is the full record and is what a live failure sets. It
     // does not survive an API restart — the projection hydrates an
     // agent's state and AFK reason from the store, not the payload that
@@ -280,8 +280,8 @@ export function createMissionView({ store }) {
       <div class="live-row is-failed clickable" data-k="stopped:${escAttr(agent.role)}"
            data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}">
         <div class="live-row-top">
-          ${avatarFor(agent.role)}
-          <span class="live-who" style="color:${roleInk(agent.role)}">${esc(agent.role)}</span>
+          ${avatarFor(agent.role, seatTone(agent, sandboxes))}
+          <span class="live-who">${esc(agent.role)}</span>
           <span class="badge failed"><i class="dot"></i>${esc(failureLabel(kind))}</span>
           ${failure.phase ? `<span class="ph-pill" style="color:${phaseInk(failure.phase)}">${esc(failure.phase)}</span>` : ""}
           <span style="flex:1"></span>
@@ -315,9 +315,9 @@ export function createMissionView({ store }) {
         route: "/work",
       }) +
       `<div class="live-board">
-        ${live.map(liveCard).join("")}
+        ${live.map((a) => liveCard(a, state.sandboxes)).join("")}
         ${runs.map(sandboxCard).join("")}
-        ${stopped.map(stoppedRow).join("")}
+        ${stopped.map((a) => stoppedRow(a, state.sandboxes)).join("")}
       </div>`
     );
   }

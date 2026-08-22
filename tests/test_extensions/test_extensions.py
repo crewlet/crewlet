@@ -518,3 +518,60 @@ async def test_extension_context_is_pydantic():
     ctx = ExtensionContext(event_queue=MemoryEventQueue())
     data = ctx.model_dump()
     assert "event_queue" in data
+
+
+@pytest.mark.asyncio
+async def test_unregistering_an_extension_takes_its_tools_with_it():
+    """Dropping the object was never enough.
+
+    ``unregister`` calls ``on_engine_stop`` and removes the extension
+    from its own list — and most extensions have nothing to stop, so they
+    do not implement the hook. Everything they registered therefore
+    stayed in the shared registry, advertised in every later catalogue
+    and dispatching into a disposed object. A live config edit that
+    removed an extension left exactly that behind.
+    """
+    from crewlet.tools.registry import (
+        BUILTIN_ORIGIN,
+        SimpleTool,
+        ToolRegistry,
+        extension_origin,
+    )
+
+    async def _fn(params, context):
+        return ToolResult(output="ok")
+
+    def _tool(name: str) -> SimpleTool:
+        return SimpleTool(
+            name=name, description="d", parameters={"type": "object"}, fn=_fn
+        )
+
+    class SilentExtension:
+        """The common case: nothing to stop, so no stop hook."""
+
+        name = "acme"
+        version = "1.0"
+
+        async def on_register(self, ctx):
+            ctx.tool_registry.register(_tool("acme_deploy"))
+
+        async def on_engine_start(self, ctx):
+            return None
+
+        async def on_engine_stop(self, ctx):
+            return None
+
+    registry = ToolRegistry()
+    registry.register(_tool("builtin_one"), origin=BUILTIN_ORIGIN)
+    ctx = ExtensionContext(event_queue=MemoryEventQueue(), tool_registry=registry)
+    manager = ExtensionManager()
+    ext = SilentExtension()
+
+    await manager.register(ext, ctx)
+    assert registry.origin_for("acme_deploy") == extension_origin("acme")
+
+    await manager.unregister(ext, ctx)
+
+    names = {t.name for t in registry.list_tools()}
+    assert "acme_deploy" not in names, "the extension's tool outlived the extension"
+    assert "builtin_one" in names, "the sweep took a tool it did not own"

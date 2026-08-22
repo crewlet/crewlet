@@ -5203,6 +5203,13 @@ class Engine:
         if self.mcp_bridge is None:
             return False
         name = cfg.name
+        # What this server currently contributes, captured BEFORE the
+        # relaunch. Registration is by name, so a replacement that
+        # exposes the same tools overwrites them — but one that exposes
+        # FEWER, or that fails to start at all, leaves the missing names
+        # behind in every later catalogue, dispatching into a client the
+        # bridge has already stopped. Both exits below drop these.
+        doomed = {tool.name for tool in self.mcp_bridge.get_server_tools(name)}
         try:
             if cfg.transport == "http":
                 # ``restart_server`` would relaunch this as a stdio
@@ -5236,11 +5243,21 @@ class Engine:
                 )
         except Exception as exc:
             logger.error("mcp_server_restart_failed", server=name, error=str(exc))
+            # The server is stopped and is not coming back on this
+            # attempt. Advertising its tools would offer the model a
+            # catalogue entry that can only fail.
+            for stale in doomed:
+                self.tool_registry.unregister(stale)
             return False
         # Re-register the new wrapped tools with the engine
         # tool registry so subsequent turns see them.
         for tool in wrapped:
             self.tool_registry.register(tool, origin=mcp_origin(tool.server_name))
+        # Anything the replacement no longer exposes goes. Registration
+        # by name overwrites what came back; only what did NOT come back
+        # needs removing.
+        for stale in doomed - {tool.name for tool in wrapped}:
+            self.tool_registry.unregister(stale)
         logger.info(
             "mcp_server_restarted_live",
             server=name,

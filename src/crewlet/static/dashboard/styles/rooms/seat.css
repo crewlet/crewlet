@@ -53,20 +53,40 @@
 
 /* ---- Facts ----
    A label and a value, for the things a seat simply IS: its unit chain,
-   its manager, the model it runs on. */
+   its manager, the model it runs on.
+
+   A DEFINITION LIST, which is what this is — one fact per row, labels in
+   a column of their own. It was an auto-fit multi-column grid with
+   `justify-content: space-between` on each row, and both halves of that
+   were wrong for the content. The grid put five unrelated facts side by
+   side on a wide screen, so "Goal" — a sentence of prose — was squeezed
+   into a 220px column; `space-between` then right-aligned it, giving a
+   tall ragged block of right-edged text with acres of gap between every
+   label and its value. Prose is left-aligned and rows are rows. */
 .seat-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--space-1) var(--space-5);
-}
-.seat-fact {
-  display: flex;
+  /* The label column takes exactly what the longest label needs and the
+     value column takes the rest; `minmax(0, 1fr)` rather than `1fr` so a
+     long unbroken token wraps instead of forcing the grid wider. */
+  grid-template-columns: max-content minmax(0, 1fr);
   align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
+  column-gap: var(--space-5);
+  padding: 0 var(--space-4) var(--space-2);
+}
+/* The row wrapper exists for the patcher's key, not for layout: its two
+   children are the grid's cells. */
+.seat-fact {
+  display: contents;
+}
+.seat-fact-label,
+.seat-fact-value {
   padding: var(--space-2) 0;
   border-top: 1px solid var(--border-subtle);
   font-size: var(--text-sm);
+}
+.seat-fact:first-child .seat-fact-label,
+.seat-fact:first-child .seat-fact-value {
+  border-top: 0;
 }
 .seat-fact-label {
   font-family: var(--font-mono);
@@ -78,9 +98,11 @@
 }
 .seat-fact-value {
   color: var(--text);
-  text-align: right;
   min-width: 0;
   overflow-wrap: anywhere;
+  /* Prose wraps to a comfortable measure rather than running the full
+     width of a wide panel. */
+  max-width: 78ch;
 }
 .seat-chips {
   display: flex;

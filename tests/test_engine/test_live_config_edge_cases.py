@@ -298,7 +298,7 @@ async def test_role_mcp_env_change_triggers_role_mcp_respawn() -> None:
 
 
 async def test_shared_http_mcp_url_change_uses_http_restart() -> None:
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
     engine = await make_engine(
         company=make_company(
@@ -312,6 +312,11 @@ async def test_shared_http_mcp_url_change_uses_http_restart() -> None:
     bridge = AsyncMock()
     bridge.restart_http_server = AsyncMock(return_value=[])
     bridge.restart_server = AsyncMock(return_value=[])
+    # `get_server_tools` is SYNC on the real bridge. A blanket `AsyncMock`
+    # makes every attribute a coroutine function, so a stub that does not
+    # say otherwise disagrees with the object it stands for — and any
+    # caller that treats the result as a list gets a coroutine.
+    bridge.get_server_tools = MagicMock(return_value=[])
     engine.mcp_bridge = bridge
 
     await engine.apply_config(
