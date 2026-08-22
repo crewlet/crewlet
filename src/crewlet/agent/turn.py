@@ -2547,13 +2547,18 @@ class TurnEngine:
         plan = turn.last_plan
         review = turn.last_review
         execute_result = turn.last_execute_result
-        # Plan-phase calls first, then Execute's: chronological within
-        # the turn, and the same two sources the iteration ledger draws
-        # on.  ``plan_tool_executions`` is iteration-local by design, so
-        # on a self_iterate turn this carries the final round's recon
-        # while the deliveries — which is what must not repeat — come
-        # from the cumulative Execute trace.
+        # EVERY round's calls, not just the last one.  Both per-round
+        # sources are iteration-local — ``plan_tool_executions`` is reset
+        # each round by design, and ``last_execute_result`` is only the
+        # final round's — so reading them alone would drop a delivery
+        # that fired in round 1 of a self_iterate turn.  That is the one
+        # thing this entry exists to prevent the next turn repeating, so
+        # the closed rounds in the iteration ledger are replayed first,
+        # in order, then the round that ended the turn.
         executions: list[dict[str, Any]] = []
+        for record in turn.iteration_history:
+            executions.extend(record.plan_tool_calls)
+            executions.extend(record.execute_tool_calls)
         executions.extend(turn.plan_tool_executions or [])
         executions.extend(getattr(execute_result, "tool_executions", None) or [])
         return build_session_entry(

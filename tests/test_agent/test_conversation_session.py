@@ -231,6 +231,39 @@ async def test_the_reviewers_verdict_reaches_the_entry() -> None:
     assert rows[0].entry["completed_work"] == "Posted the comment."
 
 
+async def test_a_delivery_from_an_earlier_round_is_still_recorded() -> None:
+    """The entry covers the whole turn, not just the round that ended it.
+
+    Both per-round sources are iteration-local — plan_tool_executions is
+    reset each round and last_execute_result is only the final one — so
+    reading them alone drops a delivery that fired in round 1 of a
+    self_iterate turn. That delivery is precisely what the next turn
+    must not repeat.
+    """
+    agent = _mk_agent()
+    store = MemoryConversationSessionStore()
+    provider = _PhaseScriptedProvider(
+        plan=_plan(["jira_add_comment"]) * 2,
+        # Round 1 comments (the delivery), round 2 does not.
+        execute=[
+            *_execute("commented"),
+            Completion(content="nothing further", tool_calls=[]),
+        ],
+        review=[
+            *_review("self_iterate", notes="say a bit more"),
+            *_review("done", final_artifact="commented"),
+        ],
+    )
+    engine = _mk_engine(provider, store)
+
+    await _run(engine, agent, _jira_trigger(), "w1")
+
+    rows = await store.recent(
+        agent_handle="eng", conversation_key="jira:POC-7", limit=5
+    )
+    assert "jira_add_comment" in rows[0].entry["tool_calls"]
+
+
 async def test_a_trigger_with_no_reproducible_conversation_is_not_recorded() -> None:
     """A scheduled fire or task assignment keys as ``event:{uuid}``,
     which no later message can reproduce — a row nothing could read."""
