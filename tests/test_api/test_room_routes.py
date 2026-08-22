@@ -26,6 +26,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from crewlet.api.routes.budgets import budgets_payload
+from crewlet.api.routes.conversations import conversations_payload
 from crewlet.api.routes.integrations import (
     INBOUND,
     TRAFFIC_WINDOW_HOURS,
@@ -35,6 +36,7 @@ from crewlet.api.routes.sandbox_runs import (
     PendingStoreUnavailable,
     sandbox_runs_payload,
 )
+from crewlet.db.client import Database
 from tests.test_api.helpers import create_app
 
 
@@ -140,6 +142,94 @@ class TestBudgets:
         handler, _needs_operator = _QUERIES["budgets"]
         assert "budgets_payload" in handler.__code__.co_names
         assert module.get_budgets.__doc__
+
+
+class TestConversations:
+    """The conversation ledger, served the way the prompt reads it.
+
+    An operator who cannot read what the engine feeds a turn is looking
+    at the same invisible second memory the CLI workspace deletes on
+    every call to avoid — so the honesty rule here is the one that
+    matters: no ledger and an empty ledger must not render alike.
+    """
+
+    async def test_no_database_is_not_an_empty_ledger(self) -> None:
+        payload = await conversations_payload(_app(), handle="eng")
+        assert payload["available"] is False
+        assert payload["conversations"] == []
+
+    async def test_it_lists_what_a_seat_has_worked(self) -> None:
+        app = _app(database=_FakeDatabase())
+        payload = await conversations_payload(app, handle="eng")
+        assert payload["available"] is True
+        assert [c["conversation_key"] for c in payload["conversations"]] == [
+            "jira:POC-7"
+        ]
+        assert payload["conversations"][0]["entries"] == 2
+
+    async def test_one_conversation_returns_its_entries(self) -> None:
+        app = _app(database=_FakeDatabase())
+        payload = await conversations_payload(app, handle="eng", key="jira:POC-7")
+        assert [e["reply"] for e in payload["entries"]] == ["first", "second"]
+
+    async def test_an_unreadable_ledger_reports_unavailable(self) -> None:
+        """Same rule as the budget counter: a store that cannot be read
+        is not a seat that has said nothing."""
+        app = _app(database=_FakeDatabase(fail=True))
+        payload = await conversations_payload(app, handle="eng")
+        assert payload["available"] is False
+        assert payload["conversations"] == []
+
+    async def test_no_handle_asks_nothing(self) -> None:
+        payload = await conversations_payload(_app(database=_FakeDatabase()))
+        assert payload["conversations"] == []
+
+    def test_the_rest_route_and_the_socket_query_are_one_function(self) -> None:
+        from crewlet.api.queries import _QUERIES
+        from crewlet.api.routes import conversations as module
+
+        handler, _needs_operator = _QUERIES["conversations"]
+        assert "conversations_payload" in handler.__code__.co_names
+        assert module.get_conversations.__doc__
+
+
+class _FakeDatabase(Database):
+    """A real ``Database`` with its execute stubbed.
+
+    Subclassed rather than duck-typed because the payload selects its
+    store with ``isinstance``: a stand-in that skipped that check would
+    pass here while the production path returned no store at all.
+    """
+
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self._fail = fail
+
+    async def execute(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        if self._fail:
+            raise RuntimeError("database is down")
+        if "GROUP BY" in query:
+            return [
+                {
+                    "conversation_key": "jira:POC-7",
+                    "entries": 2,
+                    "last_at": datetime(2026, 8, 20, 9, 30, tzinfo=UTC),
+                }
+            ]
+        return [
+            {
+                "turn_id": "t2",
+                "work_key": "w2",
+                "created_at": datetime(2026, 8, 20, 9, 30, tzinfo=UTC),
+                "entry": {"reply": "second"},
+            },
+            {
+                "turn_id": "t1",
+                "work_key": "w1",
+                "created_at": datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+                "entry": {"reply": "first"},
+            },
+        ]
 
 
 class _StreamWithMeter:

@@ -972,6 +972,24 @@ pre.code.msg-pre {
   background: linear-gradient(transparent, var(--bg-inset));
   pointer-events: none;
 }
+/* The conversation ledger's tool-call lines. Monospace and scrolling
+   in their own box rather than wrapping: each line is
+   `- tool(args) → outcome`, and a wrapped one stops looking like one
+   call. Horizontal scroll is confined here so the page body never
+   scrolls sideways. */
+.mem-pre {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  max-width: 82ch;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
 .mem-text b {
   color: var(--text);
   font-weight: 600;
