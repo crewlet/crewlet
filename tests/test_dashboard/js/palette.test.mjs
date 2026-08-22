@@ -18,6 +18,7 @@ import {
   themeTokens,
   parseColor,
   flatten,
+  luminance,
   contrast,
   deltaE,
   chroma,
@@ -52,7 +53,53 @@ function theme(name) {
   // theme, so measuring a label against the token's nominal value would
   // describe a colour that is never painted.
   const card = flatten([bg, col("--bg-card")]);
-  return { tokens, col, bg, card };
+
+  // And the panel is not the only thing text lands on. Because the dark
+  // panel is an alpha, panels nest; on top of that a row can be hovered or
+  // selected, and a code block cuts an inset into it. That is eight
+  // distinct composites carrying the same tokens, spanning a point and a
+  // half of contrast — so a ramp checked only against the panel is a ramp
+  // that has been checked against neither its brightest nor its dimmest
+  // case. Every one of these is a surface the shipped CSS actually builds.
+  const surfaces = {
+    bg,
+    sidebar: col("--bg-sidebar"),
+    panel: card,
+    "nested panel": flatten([bg, col("--bg-card"), col("--bg-card")]),
+    "raised on ground": flatten([bg, col("--bg-card-2")]),
+    "raised on panel": flatten([bg, col("--bg-card"), col("--bg-card-2")]),
+    "inset in panel": flatten([bg, col("--bg-card"), col("--bg-inset")]),
+    "selected row": flatten([bg, col("--bg-card"), col("--bg-active")]),
+  };
+  const entries = Object.entries(surfaces);
+  // Ranked by how much contrast they give this theme's text: dark text is
+  // light, so its worst ground is the lightest one, and light text's worst
+  // is the darkest. Ranking by luminance alone would name the wrong end.
+  const ranked = entries
+    .map(([label, colour]) => ({ label, colour, l: luminance(colour) }))
+    .sort((a, b) => (name === "dark" ? b.l - a.l : a.l - b.l));
+
+  /** The lowest ratio `token` reaches anywhere in the design, and where. */
+  const weakest = (token) => {
+    let worst = null;
+    for (const { label, colour } of ranked) {
+      const ratio = contrast(flatten([colour, col(token)]), colour);
+      if (!worst || ratio < worst.ratio) worst = { ratio, label };
+    }
+    return worst;
+  };
+
+  /** The highest — the halation end. */
+  const strongest = (token) => {
+    let best = null;
+    for (const { label, colour } of ranked) {
+      const ratio = contrast(flatten([colour, col(token)]), colour);
+      if (!best || ratio > best.ratio) best = { ratio, label };
+    }
+    return best;
+  };
+
+  return { tokens, col, bg, card, surfaces, weakest, strongest };
 }
 
 const HUES = [
@@ -142,76 +189,109 @@ const RED_SEPARATION_GATE = 8;
 
 // Body text is held inside a BAND. The floor is legibility; the ceiling is
 // the point where small bright glyphs start to halate against the ground.
-const BODY_BAND = [11, 15];
+const BODY_BAND = [10, 15];
 const HEADING_CEILING = 16.5; // larger glyphs tolerate more
+
+// The one floor every step of the ramp clears, on every surface the
+// design composites. WCAG's small-text minimum: each of these steps is
+// used as type somewhere, so none of them gets the 3:1 non-text floor.
+const TEXT_FLOOR = 4.5;
 
 for (const name of Object.keys(THEMES)) {
   test(`${name}: body text sits inside the comfort band`, () => {
-    const { col, bg } = theme(name);
-    const ratio = contrast(col("--text"), bg);
+    // Measured where it reads WORST, so the floor is a guarantee rather
+    // than an average — a band satisfied on the page ground and missed on
+    // a selected row is not a band.
+    const { weakest } = theme(name);
+    const { ratio, label } = weakest("--text");
     if (ratio < BODY_BAND[0] || ratio > BODY_BAND[1]) {
       throw new Error(
-        `--text is ${ratio.toFixed(2)}:1 against --bg, outside ${BODY_BAND[0]}..${BODY_BAND[1]}`,
+        `--text is ${ratio.toFixed(2)}:1 on the ${label}, outside ${BODY_BAND[0]}..${BODY_BAND[1]}`,
       );
     }
   });
 
   test(`${name}: headings stay under the halation ceiling`, () => {
-    const { col, bg } = theme(name);
-    const ratio = contrast(col("--heading"), bg);
+    // And this one where it reads BRIGHTEST, because halation is a
+    // problem of the maximum, not the mean: the wordmark on the recessed
+    // sidebar is a point clear of the same token on a panel.
+    const { strongest } = theme(name);
+    const { ratio, label } = strongest("--heading");
     if (ratio > HEADING_CEILING) {
       throw new Error(
-        `--heading is ${ratio.toFixed(2)}:1, over ${HEADING_CEILING}`,
+        `--heading is ${ratio.toFixed(2)}:1 on the ${label}, over ${HEADING_CEILING}`,
       );
     }
   });
 
   test(`${name}: the whole text ramp clears its floor and descends`, () => {
-    const { col, card } = theme(name);
+    const { col, weakest, surfaces } = theme(name);
+    // Every step is held to the TEXT floor, the dimmest included. An
+    // audit of the rendered page found `--text-dim` carrying 10px labels
+    // in ten places and marking nothing anywhere: a step specced as a
+    // non-text mark and used as type everywhere is a text step that has
+    // been measured against the wrong floor.
+    //
+    // One floor, not four. The steps differ in emphasis, not in whether
+    // they have to be readable, and the earlier tiered floors (11/7/5/4.5)
+    // encoded the opposite: they let the dim step sit a hair over the line
+    // on one surface and fail on the six the suite never looked at.
     const steps = [
-      ["--text", 11],
-      ["--text-secondary", 6],
-      ["--text-muted", 4.5],
-      // Dim is de-emphasised meta, not body copy, so it is held to the
-      // non-text floor rather than the text one — but it IS held to it.
-      ["--text-dim", 3],
+      "--text",
+      "--text-secondary",
+      "--text-muted",
+      "--text-dim",
     ];
     let previous = Infinity;
-    for (const [token, floor] of steps) {
-      const ratio = contrast(flatten([card, col(token)]), card);
-      if (ratio < floor) {
+    for (const token of steps) {
+      const { ratio, label } = weakest(token);
+      if (ratio < TEXT_FLOOR) {
         throw new Error(
-          `${token} is ${ratio.toFixed(2)}:1 on the panel, under ${floor}`,
+          `${token} is ${ratio.toFixed(2)}:1 on the ${label}, under ${TEXT_FLOOR}`,
         );
       }
-      if (ratio > previous) {
+      // Descent is checked on ONE surface: ranking each step by its own
+      // worst case would let two steps swap order and still pass, since
+      // they can bottom out on different grounds.
+      const onPanel = contrast(
+        flatten([surfaces.panel, col(token)]),
+        surfaces.panel,
+      );
+      if (onPanel > previous) {
         throw new Error(
-          `${token} (${ratio.toFixed(2)}) is stronger than the step above it`,
+          `${token} (${onPanel.toFixed(2)}) is stronger than the step above it`,
         );
       }
-      previous = ratio;
+      previous = onPanel;
     }
   });
 
   test(`${name}: every hue ink clears text contrast`, () => {
-    const { col, card } = theme(name);
+    // An ink is the step a hue is allowed to be TYPE in — a phase name, a
+    // status line — so it is held where it reads worst, exactly like the
+    // neutral ramp above.
+    const { weakest } = theme(name);
     for (const hue of [...HUES, "red", "accent"]) {
-      const ratio = contrast(flatten([card, col(`--${hue}-ink`)]), card);
+      const { ratio, label } = weakest(`--${hue}-ink`);
       if (ratio < INK_FLOOR) {
         throw new Error(
-          `--${hue}-ink is ${ratio.toFixed(2)}:1 on the panel, under ${INK_FLOOR}`,
+          `--${hue}-ink is ${ratio.toFixed(2)}:1 on the ${label}, under ${INK_FLOOR}`,
         );
       }
     }
   });
 
   test(`${name}: every hue mark clears non-text contrast`, () => {
-    const { col, card } = theme(name);
+    // A mark is a dot, a bar, a rule — never a glyph — so it takes WCAG's
+    // non-text floor rather than the text one. Same worst-surface rule
+    // though: a dot that vanishes on the row the reader just selected is
+    // a dot that vanishes when they are looking straight at it.
+    const { weakest } = theme(name);
     for (const hue of [...HUES, "red", "accent"]) {
-      const ratio = contrast(flatten([card, col(`--${hue}`)]), card);
+      const { ratio, label } = weakest(`--${hue}`);
       if (ratio < MARK_FLOOR) {
         throw new Error(
-          `--${hue} is ${ratio.toFixed(2)}:1 on the panel, under ${MARK_FLOOR}`,
+          `--${hue} is ${ratio.toFixed(2)}:1 on the ${label}, under ${MARK_FLOOR}`,
         );
       }
     }

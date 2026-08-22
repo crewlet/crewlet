@@ -224,30 +224,6 @@
   border-color: color-mix(in srgb, var(--purple) 26%, transparent);
 }
 
-/* ---- Company overview ---- */
-.company-hero {
-  padding: 22px 24px;
-}
-.company-name {
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.035em;
-  line-height: 1.15;
-  color: var(--heading);
-  margin: 8px 0 0;
-}
-.company-line {
-  margin: 10px 0 0;
-  max-width: 68ch;
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--text-secondary);
-}
-.company-line.muted {
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
 /* A compact integration chip, for cards and directory rows. */
 .int-badge.sm {
   font-size: 10px;
@@ -259,75 +235,6 @@
 .int-badge.sm .ic {
   width: 11px;
   height: 11px;
-}
-
-/* ---- Org tree ---- */
-.org-head {
-  margin-bottom: 16px;
-}
-.org-name {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  color: var(--heading);
-}
-.org-mission {
-  color: var(--text-secondary);
-  font-size: 13px;
-  margin-top: 3px;
-}
-.unit {
-  border-left: 1px solid var(--border);
-  margin: 4px 0 4px 6px;
-  padding-left: 16px;
-}
-.unit-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  color: var(--heading);
-}
-.unit-head .ic {
-  color: var(--text-muted);
-}
-.unit-type {
-  font-size: 9.5px;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-}
-.unit-purpose {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 400;
-  letter-spacing: 0;
-}
-.org-role {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 0 6px 10px;
-}
-.org-role .ic {
-  color: var(--text-dim);
-}
-.org-role-name {
-  font-weight: 500;
-}
-.org-role-handle {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.org-role-goal {
-  font-size: 12px;
-  color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ---- LLM history (agent detail) ---- */
@@ -1006,10 +913,6 @@ pre.code.msg-pre {
   letter-spacing: -0.015em;
   color: var(--heading);
 }
-.mem-sub {
-  font-size: 11.5px;
-  color: var(--text-muted);
-}
 .mem-card.open .mem-head .chevron {
   transform: rotate(90deg);
 }
@@ -1130,40 +1033,6 @@ pre.code.msg-pre {
   border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
   color: var(--red-ink);
 }
-.rev {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--border);
-}
-.rev:last-child {
-  border-bottom: none;
-}
-.rev-mark {
-  color: var(--text-dim);
-}
-.rev-mark.active {
-  color: var(--green);
-}
-.diff-op {
-  font-family: var(--font-mono);
-  font-weight: 500;
-}
-.diff-op.add {
-  color: var(--green-ink);
-}
-.diff-op.remove {
-  color: var(--red-ink);
-}
-.diff-op.replace {
-  color: var(--amber-ink);
-}
-.diff-path {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-}
-
 /* ---- Toast ---- */
 .toast-wrap {
   position: fixed;
@@ -1261,18 +1130,3 @@ pre.code.msg-pre {
   padding-left: calc(14px + var(--depth, 0) * 18px);
 }
 
-/* The pager has two jobs that must not look alike: revealing rows
-   already in memory is instant, reading the store is a network trip
-   that can fail or run out. */
-.show-more.is-note {
-  cursor: default;
-  color: var(--text-dim);
-}
-.show-more.is-note:hover {
-  background: none;
-  border-color: var(--border);
-}
-.show-more.is-loading {
-  cursor: progress;
-  color: var(--text-muted);
-}

@@ -1766,3 +1766,256 @@
   color: var(--text);
   border-color: var(--border);
 }
+
+/* ---- Search affordance (topbar) ---- */
+.search-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur);
+}
+.search-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.search-btn kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 4px;
+}
+@media (max-width: 720px) {
+  .search-label,
+  .search-btn kbd {
+    display: none;
+  }
+}
+
+/* ---- Modal + command palette ----
+   Both are modal chrome at the document root: they take the keyboard
+   from whatever view is mounted, so they must not live inside it. The
+   veil composes its own ground rather than inventing a second material —
+   the panel wash layered over an opaque backdrop. */
+.modal-wrap,
+.palette-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+}
+.modal-veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh var(--space-4) var(--space-4);
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+  backdrop-filter: blur(3px);
+}
+.modal,
+.palette {
+  width: 100%;
+  max-width: 520px;
+  background: linear-gradient(var(--bg-card), var(--bg-card)) var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  animation: modal-in 0.16s var(--ease);
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.modal {
+  padding: var(--space-5);
+}
+.modal-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+  margin: 0 0 var(--space-2);
+}
+.modal-body {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-4);
+}
+.modal-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+.modal-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.modal-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.btn.danger {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red-ink);
+}
+
+.palette {
+  max-width: 580px;
+  padding: 0;
+  overflow: hidden;
+}
+.palette-input {
+  width: 100%;
+  padding: var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+  letter-spacing: var(--track-body);
+}
+.palette-input:focus {
+  outline: none;
+}
+.palette-results {
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+.pal-group + .pal-group {
+  margin-top: var(--space-2);
+}
+.pal-group-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+}
+.pal-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.pal-item.on {
+  background: var(--bg-active);
+}
+.pal-label {
+  color: var(--text);
+  font-size: var(--text-sm);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pal-hint {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pal-empty {
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* ---- Attention rows ----
+   The shared grammar for every "needs a person" list: a severity stripe
+   in the reserved status hue or the caution hue, the seat, what happened,
+   how long it has been waiting, and the one control that acts on it. */
+.att-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.att-row:first-child {
+  border-top: 0;
+}
+.att-row:hover {
+  background: var(--bg-hover);
+}
+.att-sev {
+  width: 3px;
+  align-self: stretch;
+  border-radius: 2px;
+  flex: none;
+  background: var(--amber);
+}
+.att-row.broke .att-sev {
+  background: var(--red);
+}
+.att-seat {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.att-what {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.att-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.att-detail {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.att-age {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.att-quiet {
+  padding: var(--space-4) var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}

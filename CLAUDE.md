@@ -805,6 +805,18 @@ src/crewlet/          # Main package
                       #   GET /webhooks/slack-oauth landing page; see
                       #   docs/integrations/slack.md)
   tools/              # Agent tool system (builtins + A2A tools);
+                      #   registry.py — ToolRegistry + THE tool-origin
+                      #     grammar (builtin | custom | extension:<name> |
+                      #     mcp:<server>), the `source` of GET /tools.
+                      #     Recorded at REGISTRATION because it cannot be
+                      #     recovered after: an extension's tool is
+                      #     structurally identical to a builtin, so the
+                      #     dashboard called both "builtin" and a tool
+                      #     missing because its extension failed to load
+                      #     read as a missing builtin. Extensions get a
+                      #     for_origin() view of the registry, since the
+                      #     register() call is the only frame that knows
+                      #     who is registering;
                       #   capabilities.py — tool classification from MCP
                       #   annotations (ToolAnnotations +
                       #   writes_to_shared_surface; keeps the engine
@@ -886,7 +898,34 @@ src/crewlet/          # Main package
                       #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
                       #     GitLab/Plane/Confluence/Forge inbound, incl.
                       #     POST /webhooks/plane — X-Plane-Signature HMAC),
-                      #     dashboard, health),
+                      #     dashboard, health;
+                      #     fleet.py / sandbox_runs.py / budgets.py /
+                      #     integrations.py each export a PAYLOAD function
+                      #     the REST route and the /ws/stream query both
+                      #     call — two surfaces answering one question
+                      #     from two implementations is how they end up
+                      #     disagreeing with nobody noticing.
+                      #     What they add is the durable half of three
+                      #     questions the live projection could only half
+                      #     answer: sandbox_runs reads pending_sandbox_run
+                      #     (in-memory swept a parked run after 12h while
+                      #     a question can wait days, and `reseed` had no
+                      #     surface at all — it looked like work that
+                      #     finished); budgets pairs the config CAP with
+                      #     the DURABLE counter the engine enforces
+                      #     against, keeping them distinct from the
+                      #     per-run meter (three spans, and only the
+                      #     meter shares one with the cap — so `durable`
+                      #     false means unreadable, never zero, and
+                      #     live_used is null, never 0); integrations
+                      #     answers how each surface is wired +
+                      #     secret_present (THREE-valued: null = uses
+                      #     none, false = a route 503-ing every
+                      #     delivery) + per-source counts grouped by the
+                      #     STORE. It never infers health — an idle
+                      #     Slack and a 401-ing Slack are identical in
+                      #     the event store, since verification runs
+                      #     BEFORE the row is written),
                       #   app.py, tokens.py (aggregation),
                       #   live_state.py (in-memory agent-state projection +
                       #     in-flight live_call, so state survives a browser
@@ -980,7 +1019,14 @@ src/crewlet/          # Main package
                       #   collapsed; eventDetail.js renders inbound
                       #   notifications as a readable integration-branded view
                       #   (state.js integrationMeta/integrationBadge) — see
-                      #   describe_trigger / turn-engine.md).
+                      #   describe_trigger / turn-engine.md — and gives each
+                      #   webhook source a layout over the SAME fields its
+                      #   router keys on (GitLab `changes.{assignees,
+                      #   reviewers}` diffs + pipeline.failed jobs, Plane
+                      #   `activity.field`/`old_value → new_value` +
+                      #   mention ids), with the raw payload always kept
+                      #   beneath and any payload URL scheme-checked
+                      #   before it becomes an href).
                       #   Visual system = the crewlet.io panel language:
                       #   PURE BLACK ground, and every division on it is a
                       #   different ALPHA OF ONE WARM CREAM (panel fill,
@@ -1002,18 +1048,64 @@ src/crewlet/          # Main package
                       #   PHASE_HUE / EVENT_CATEGORIES) are validated for
                       #   CVD + normal-vision separation in BOTH themes —
                       #   re-verify before changing one.
-                      #   Screens: Dashboard, Company (Overview / People
-                      #   Directory / Org Chart / Audit log), Agents,
-                      #   Activity, Tokens, Tools, Schedules, Fleet,
-                      #   Configuration.
+                      #   ROOMS ARE GROUPED BY THE QUESTION THEY ANSWER,
+                      #   not by the kind of data they hold — nine
+                      #   top-level nouns meant the questions an operator
+                      #   actually arrives with each needed three or four
+                      #   screens and a mental join. Three zones:
+                      #     Now        Mission Control / Work / Activity
+                      #     Company    Org (chart|directory|charter|seats)
+                      #                / Schedules / a seat page
+                      #     Operations Spend & Budgets / Integrations /
+                      #                Fleet / Configuration / Tools
+                      #   attention.js is the one NEW idea: buildAttention
+                      #   derives every open obligation — a sandbox parked
+                      #   on a question, a stopped seat, a budget refusing
+                      #   charges, an unconfigured engine — from slices
+                      #   the server already pushes, and gives it three
+                      #   outlets (the lead panel of Mission Control, the
+                      #   per-zone nav badges, the tab title). It answers
+                      #   `{items, stale}`: losing the socket freezes
+                      #   every slice it reads, so an empty list on a
+                      #   disconnected page means "cannot see", never
+                      #   "nothing to do", and attentionCounts returns
+                      #   null rather than a confident zero.
+                      #   commandPalette.js is the answer to "no search
+                      #   anywhere" — ONE palette over rooms, seats and
+                      #   any event or trace id pasted from a log, rather
+                      #   than a search box per view with its own ranking.
+                      #   modal.js replaced the window.prompt/confirm that
+                      #   were the only unstyled UI in the product.
+                      #   router.js REDIRECTS every old path (#/events,
+                      #   #/tokens, #/agents/:id, #/people, #/company,
+                      #   #/audit) with its query string intact: those
+                      #   links are in bookmarks and chat threads.
                       #   A seat's raw event list belongs to Activity ALONE
-                      #   (#/events?actor=<role> seeds its actor filter);
-                      #   the agent page links there rather than rendering
+                      #   (#/activity?actor=<role> seeds its actor filter);
+                      #   the seat page links there rather than rendering
                       #   a second copy below its turns.
                       #   Fleet reads the LEASE TABLE, not a fan-out of
                       #   /health probes: /health answers about the node
                       #   that served it, so behind a load balancer a
-                      #   refresh tells a different story.
+                      #   refresh tells a different story. It reads it over
+                      #   the `fleet` QUERY: it was the last view with its
+                      #   own HTTP client and that is exactly where the
+                      #   cost landed — it took that client from a ctx
+                      #   field the shell never populated, so every poll
+                      #   threw before the network and the page held a
+                      #   loading skeleton for ever, on the one view an
+                      #   operator opens when nodes are dying. Reads have
+                      #   ONE transport; writes stay REST for the auth
+                      #   middleware's attribution. tests/test_dashboard/
+                      #   js/wiring.test.mjs holds that seam: what app.js
+                      #   provides against what each view destructures,
+                      #   that every imported module EXISTS (one missing
+                      #   import kills the whole module graph and renders
+                      #   nothing at all), and that none is orphaned.
+                      #   styles/rooms/*.css is one stylesheet per room —
+                      #   views.css keeps what the small shared views
+                      #   need, and a room that owns a screen owns its
+                      #   own file.
                       #   EVERY nav entry is backed by a real endpoint — no
                       #   placeholder screens. org.js flattens the /org tree
                       #   into SEATS (unit chain + effective lead + inherited

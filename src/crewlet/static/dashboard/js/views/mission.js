@@ -1,18 +1,17 @@
-// The overview: is anything happening, did anything break, who is doing
-// it, and what did it cost.
+// Mission Control: what needs me, what is happening, who is doing it.
 //
-// The page is built around one lead panel — the company pulse — because
-// that is the question the dashboard is opened to answer and the one it
-// used to answer worst. It had three counters, a scrolling log, and no
-// sense of time at all: an org that had been flat out for twenty minutes
-// looked identical to one that had been asleep since yesterday. The
-// pulse puts an hour of every seat's real activity on one grid, marks
-// failures in red, and folds the counters into a strip beside it so the
-// figures cost a corner of the panel instead of the whole fold.
+// The overview this replaces led with the company pulse, which answers
+// "is anything happening" — a good question, and not the one an operator
+// arrives with. They arrive with "is anything waiting on me", and the
+// dashboard knew the answer in four different rooms: a sandbox parked on
+// a question was a badge further down this page, a stopped seat was a
+// card among the healthy ones, a budget refusing charges was a bar on a
+// seat page, and an engine discarding every webhook was a line in a
+// popover.
 //
-// Below it, in order of urgency: what is in flight right now (as a turn
-// rail, not a phase name), which seat stopped and why, who is on the
-// team, and what just happened.
+// So the attention queue leads, the pulse follows, and the live board
+// carries turns and detached sandbox runs together — "what is running"
+// has included both since code work moved into a suspended Execute loop.
 
 import { esc, escAttr, fmtCompact, fmtNum, relTime, trunc } from "../format.js";
 import {
@@ -26,7 +25,9 @@ import {
 import { flattenSeats } from "../org.js";
 import { seatRow } from "../cards.js";
 import { buildPulse, pulseGrid } from "../pulse.js";
+import { buildAttention } from "../attention.js";
 import {
+  attentionList,
   empty,
   phaseBar,
   sectionHead,
@@ -37,17 +38,32 @@ import {
 } from "../ui.js";
 import { failureLabel, stripThink } from "../llm.js";
 
-// Rows on the overview's activity feed. The full history is one click
+// Rows on the overview's activity strip. The full history is one click
 // away on Activity; this is a glance, not a log.
 const FEED_ROWS = 12;
 
-export function createDashboardView({ store }) {
-  // ---- the lead panel ----
+export function createMissionView({ store }) {
+  // ---- the attention queue ----
 
-  // The headline: seats working, out of seats that could be. Written as
-  // a sentence rather than a bare count because "2" on its own is the
-  // kind of number that means nothing without its denominator, and this
-  // is the first thing on the page.
+  function attention(state) {
+    const queue = buildAttention(state);
+    // The panel is drawn even when it is empty, and that is deliberate:
+    // "nothing is waiting on you" is an answer, and a panel that
+    // disappears when there is nothing to do teaches the reader to
+    // check whether it is there rather than read it.
+    return `
+      <section class="panel att-panel" data-k="attention">
+        <div class="sec">
+          <span class="sec-title">Needs you
+            ${queue.items.length ? `<span class="sec-count">${queue.items.length}</span>` : ""}
+          </span>
+        </div>
+        ${attentionList(queue)}
+      </section>`;
+  }
+
+  // ---- the pulse ----
+
   function headline(pulse, health) {
     const total = pulse.rows.length;
     const working = pulse.working;
@@ -187,7 +203,7 @@ export function createDashboardView({ store }) {
     const stale = staleness(call.updated_at);
     return `
       <div class="live-row clickable ${stale ? "is-" + stale : ""}" data-k="live:${escAttr(agent.role)}"
-           data-action="agent" data-id="${escAttr(agent.id)}"
+           data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}"
            style="--phase-color:${phaseColor(phase)}">
         <div class="live-row-top">
           ${avatarFor(agent.role)}
@@ -218,6 +234,33 @@ export function createDashboardView({ store }) {
       </div>`;
   }
 
+  // A detached coding run, on the same board as the turns.
+  //
+  // A seat running one is idle by design — the engine frees it the moment
+  // the run detaches, so the box can take days without holding an agent —
+  // which means a board keyed on live turns alone showed a company doing
+  // nothing while its most expensive work was under way.
+  function sandboxCard(run) {
+    const waiting = run.status === "awaiting_input";
+    const seat = run.role || run.agent_handle || "agent";
+    return `
+      <div class="live-row clickable" data-k="sbx:${escAttr(run.turn_id)}"
+           data-action="go" data-route="/work"
+           style="--phase-color:var(--cyan)">
+        <div class="live-row-top">
+          ${avatarFor(seat)}
+          <span class="live-who" style="color:${roleInk(seat)}">${esc(seat)}</span>
+          <span class="chip">${esc(run.coding_agent || "coding agent")}</span>
+          <span class="badge ${waiting ? "afk" : "live"}"><i class="dot"></i>${waiting ? "needs an answer" : "sandbox"}</span>
+          <span style="flex:1"></span>
+          <span class="row-ts">${esc(relTime(run.started_at))}</span>
+        </div>
+        <div class="live-text">${esc(
+          trunc(waiting ? run.question || "waiting on an answer" : run.task || "writing code", 220),
+        )}</div>
+      </div>`;
+  }
+
   // A seat the engine stopped, and why. This is the counterpart to the
   // live board: an agent that is not working because something broke
   // should be as visible as one that is working.
@@ -231,10 +274,11 @@ export function createDashboardView({ store }) {
     // exactly when an operator goes looking for them.
     const failure = agent.last_error || {};
     const kind = failure.kind || agent.afk_reason || "error";
-    const message = failure.message || (agent.state === "afk" ? afkQuip(agent.afk_reason) : "");
+    const message =
+      failure.message || (agent.state === "afk" ? afkQuip(agent.afk_reason) : "");
     return `
       <div class="live-row is-failed clickable" data-k="stopped:${escAttr(agent.role)}"
-           data-action="agent" data-id="${escAttr(agent.id)}">
+           data-action="seat" data-seat="${escAttr(agent.handle || agent.role)}">
         <div class="live-row-top">
           ${avatarFor(agent.role)}
           <span class="live-who" style="color:${roleInk(agent.role)}">${esc(agent.role)}</span>
@@ -258,14 +302,21 @@ export function createDashboardView({ store }) {
       !a.live_call.failed &&
       a.state !== "afk";
     const live = agents.filter(isRunning);
+    const runs = state.sandboxes || [];
     const stopped = agents.filter(
       (a) => !isRunning(a) && (a.last_error || a.state === "afk"),
     );
-    if (!live.length && !stopped.length) return "";
+    const total = live.length + runs.length + stopped.length;
+    if (!total) return "";
     return (
-      sectionHead("activity", "In flight", live.length + stopped.length, null) +
+      sectionHead("activity", "In flight", total, {
+        action: "go",
+        label: "Work board",
+        route: "/work",
+      }) +
       `<div class="live-board">
         ${live.map(liveCard).join("")}
+        ${runs.map(sandboxCard).join("")}
         ${stopped.map(stoppedRow).join("")}
       </div>`
     );
@@ -278,8 +329,9 @@ export function createDashboardView({ store }) {
     if (!all.length) return "";
     return (
       sectionHead("users", "The team", all.length, {
-        action: "view-agents",
-        label: "All agents",
+        action: "go",
+        label: "Org",
+        route: "/org",
       }) +
       seatRow(all, {
         agents: state.agents,
@@ -306,31 +358,6 @@ export function createDashboardView({ store }) {
     );
   }
 
-  function sandboxList(state) {
-    const runs = state.sandboxes || [];
-    if (!runs.length) return "";
-    const rows = runs
-      .map((s) => {
-        const waiting = s.status === "awaiting_input";
-        return `
-        <div class="row" data-k="sb:${escAttr(s.turn_id)}">
-          <div class="row-body">
-            <div class="row-title">${esc(s.role || s.agent_handle || "agent")}
-              <span class="chip">${esc(s.coding_agent || "coding agent")}</span>
-            </div>
-            <div class="row-sub">${esc(trunc(waiting ? s.question || "waiting on an answer" : s.task || "", 110))}</div>
-          </div>
-          <span class="badge ${waiting ? "afk" : "live"}"><i class="dot"></i>${waiting ? "needs an answer" : "running"}</span>
-          <span class="row-ts">${esc(relTime(s.started_at))}</span>
-        </div>`;
-      })
-      .join("");
-    return (
-      sectionHead("cpu", "Running sandboxes", runs.length, null) +
-      `<div class="list">${rows}</div>`
-    );
-  }
-
   function activityList(state) {
     const events = (state.events || []).slice(0, FEED_ROWS);
     if (!events.length) return empty("activity", "No engine activity yet");
@@ -340,7 +367,17 @@ export function createDashboardView({ store }) {
   }
 
   return {
-    slices: ["agents", "events", "sandboxes", "org", "tools", "tokens", "budget", "health"],
+    slices: [
+      "agents",
+      "events",
+      "sandboxes",
+      "org",
+      "tools",
+      "tokens",
+      "budget",
+      "health",
+      "connected",
+    ],
 
     render(state) {
       if (!state.connected && !(state.agents || []).length) {
@@ -349,13 +386,14 @@ export function createDashboardView({ store }) {
       const hasSeats = flattenSeats(state.org).length > 0;
       const pulse = pulseFor(state);
       return `
+        ${attention(state)}
         ${hero(state, pulse)}
         ${liveBoard(state)}
         ${hasSeats ? seats(state, pulse) : sectionHead("users", "Agents", null, null) + agentsList(state, pulse)}
-        ${sandboxList(state)}
         ${sectionHead("activity", "Engine activity", (state.events || []).length, {
-          action: "view-events",
+          action: "go",
           label: "View all",
+          route: "/activity",
         })}
         ${activityList(state)}`;
     },

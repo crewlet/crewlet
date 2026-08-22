@@ -24,6 +24,17 @@
     <link rel="stylesheet" href="/static/dashboard/styles/base.css" />
     <link rel="stylesheet" href="/static/dashboard/styles/components.css" />
     <link rel="stylesheet" href="/static/dashboard/styles/views.css" />
+    <!--
+      One stylesheet per room. views.css holds what the small shared
+      views still need; a room that owns a screen owns its own file, so
+      a change to one room's layout cannot reach another's.
+    -->
+    <link rel="stylesheet" href="/static/dashboard/styles/rooms/mission.css" />
+    <link rel="stylesheet" href="/static/dashboard/styles/rooms/activity.css" />
+    <link rel="stylesheet" href="/static/dashboard/styles/rooms/org.css" />
+    <link rel="stylesheet" href="/static/dashboard/styles/rooms/seat.css" />
+    <link rel="stylesheet" href="/static/dashboard/styles/rooms/operations.css" />
+    <link rel="stylesheet" href="/static/dashboard/styles/rooms/config.css" />
   </head>
   <body>
     <!--
@@ -82,6 +93,11 @@
       <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
       <symbol id="i-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 01-9 9"/></symbol>
       <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.6 7.6a5 5 0 11-7 7 5 5 0 017-7zm0 0L15 8m0 0l3 3m-3-3l2-2"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></symbol>
+      <symbol id="i-rows-tight" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="3" y1="14" x2="21" y2="14"/><line x1="3" y1="18" x2="21" y2="18"/></symbol>
+      <symbol id="i-rows-wide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="7" x2="21" y2="7"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="17" x2="21" y2="17"/></symbol>
+      <symbol id="i-question" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 015 .9c0 1.7-2.5 2.2-2.5 3.9"/><line x1="12" y1="17" x2="12" y2="17"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6"/><path d="M6 8h12v3a6 6 0 01-6 6 6 6 0 01-6-6z"/><line x1="12" y1="17" x2="12" y2="22"/></symbol>
     </svg>
 
     <div id="app">
@@ -118,8 +134,20 @@
           <button class="icon-btn" id="menu-btn" title="Menu" hidden>
             <span class="ic sm"><svg><use href="#i-menu" /></svg></span>
           </button>
-          <h2 id="title">Dashboard</h2>
+          <h2 id="title">Mission Control</h2>
           <div class="topbar-actions">
+            <!--
+              One search for the whole page. Per-view search boxes would
+              mean one ranking rule per view and four places to keep them
+              agreeing; this reaches rooms, seats, and any event or trace
+              id pasted from a log.
+            -->
+            <button class="search-btn" data-action="palette" title="Search (⌘K)">
+              <span class="ic sm"><svg><use href="#i-search" /></svg></span>
+              <span class="search-label">Search</span>
+              <kbd>⌘K</kbd>
+            </button>
+            <button class="icon-btn" id="density-btn" title="Density"></button>
             <button class="icon-btn" id="theme-btn" title="Toggle theme"></button>
           </div>
         </header>
@@ -153,6 +181,14 @@
       same reason.
     -->
     <div class="health-pop-wrap" id="health-pop" hidden></div>
+    <!--
+      The command palette and the dialog host sit here for the same
+      stacking reason as the popover, and because both are modal: they
+      take the keyboard from whatever view is mounted, so they must not
+      be inside it.
+    -->
+    <div class="palette-wrap" id="palette" hidden></div>
+    <div class="modal-wrap" id="modal-host" hidden></div>
     <div class="toast-wrap" id="toasts"></div>
 
     <script type="module" src="/static/dashboard/js/app.js"></script>

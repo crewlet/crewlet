@@ -1,0 +1,169 @@
+/* The seat page.
+ *
+ * Panels take their surface from the shared recipe in components.css —
+ * this file holds only what is specific to this room. No colour is
+ * defined here: every value is a token from tokens.css.
+ *
+ * The turn list, memory cards and LLM-record internals are shared with
+ * the surfaces that render the same objects elsewhere and stay in
+ * views.css; what is here is the tab chrome and the facts the page
+ * states about a seat.
+ */
+
+/* ---- Tabs ----
+   The page answers four questions and used to stack them in one scroll,
+   which meant the answer to any one of them was somewhere below the
+   answer to another. */
+.seat-tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin: var(--space-4) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.seat-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.seat-tab:hover {
+  color: var(--text);
+}
+.seat-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.seat-tab.on .ic {
+  color: var(--accent-ink);
+}
+.seat-tab-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+}
+.seat-panel {
+  display: block;
+}
+
+/* ---- Facts ----
+   A label and a value, for the things a seat simply IS: its unit chain,
+   its manager, the model it runs on. */
+.seat-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-1) var(--space-5);
+}
+.seat-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+}
+.seat-fact-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.seat-fact-value {
+  color: var(--text);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.seat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+}
+
+/* A note explaining where a figure came from, or why a section is
+   empty. Muted, because it is context rather than content. */
+.seat-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin: var(--space-3) 0 0;
+  max-width: 78ch;
+}
+.seat-quip {
+  margin-top: var(--space-1);
+}
+.seat-phase-lede {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+/* ---- The budget meter ----
+   Drawn only where numerator and denominator cover the same span, and
+   `is-unmetered` is the state for a cap with no live meter behind it:
+   the cap is stated, and nothing is divided by it. */
+.seat-meter {
+  padding: var(--space-4) var(--space-5);
+}
+.seat-meter-fig {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.seat-meter-of {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  letter-spacing: var(--track-body);
+  color: var(--text-muted);
+}
+.seat-meter-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: var(--space-2);
+}
+.seat-budget-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.seat-budget-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--green);
+}
+/* The tone is set on the card, not the track: the note beneath the bar
+   changes with it, so one class has to reach both. */
+.seat-meter.warn .seat-budget-track > i {
+  background: var(--amber);
+}
+.seat-meter.over .seat-budget-track > i {
+  background: var(--red);
+}
+
+/* The turn list keeps its own scroll context so a long history cannot
+   push the tab bar off the top of the page. */
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.seat-tab-label {
+  white-space: nowrap;
+}

@@ -5,54 +5,129 @@ The dashboard is a zero-build, modular ES-module app (see
 documents its **visual system** — the tokens every component reads, the panel
 recipe, and the rules a change has to keep holding.
 
-The system is the one the Crewlet marketing site ships. The ground is pure
-black and every division on it — panel fill, hairline, inset — is a different
-alpha of the *same* warm cream. That single material is what makes a dense
-operational surface read as one object rather than as a stack of grey boxes,
-and it is the rule to keep: a new surface is another step of the ramp, never a
-new colour.
+The system is the one the Crewlet marketing site ships. The ground is a warm
+near-black and every division on it — panel fill, hairline, inset — is a
+different alpha of the *same* warm cream. That single material is what makes a
+dense operational surface read as one object rather than as a stack of grey
+boxes, and it is the rule to keep: a new surface is another step of the ramp,
+never a new colour.
+
+The ground is deliberately **not** `#000`. An operator reads this page for
+hours, and pure black behind near-white text is the specific combination that
+halates — the smear around small bright glyphs that anyone with astigmatism
+sees, and the pupil oscillation that makes a long session tiring for everyone
+else. Lifting it to `#0d0c0b` costs nothing visually (it still reads as
+black), keeps the drop-shadow-is-invisible property the elevation model
+depends on, and lets the text ramp sit in a comfort band instead of at the top
+of the contrast range.
 
 ---
 
-## Screens
+## Rooms
 
-The sidebar is a flat list with `Company` as the one collapsible group. Every
-entry resolves to a view backed by a real endpoint — nothing is rendered as a
-placeholder or a coming-soon stub.
+The sidebar is grouped by the **question a room answers**, not by the kind of
+data it holds. That is the reorganisation: nine top-level nouns — Dashboard,
+Agents, Activity, Tokens, Tools, Schedules, Fleet, Configuration — meant that
+the questions an operator actually arrives with (*is anything waiting on me?
+did anything break? what is this costing?*) each needed three or four screens
+and a mental join, and the most actionable facts in the system had no
+aggregation point at all.
 
-| Nav | Route | Reads |
-|---|---|---|
-| Dashboard | `#/dashboard` | the snapshot's `agents` / `events` / `sandboxes` / `org` / `tools` / `tokens` |
-| Company → Overview | `#/company` | `/org` |
-| Company → People Directory | `#/people` | `/org` + live agent state |
-| Company → Org Chart | `#/org` | `/org` + live agent state |
-| Company → Audit log | `#/audit` | `/config/audit` *(auth-gated)* |
-| Agents | `#/agents` | `/org` + live agent state |
-| Activity | `#/events` | the snapshot's `events`, then live `event` pushes, then the `events` query for stored history |
-| Engine health | the dot in the brand | the pushed `health` envelope + the `stream` query — a popover, not a screen (see [Health](#health)) |
-| Trace | `#/traces/{trace_id}` | the `trace` query — reached from a row, never from the nav |
-| Tokens | `#/tokens` | the pushed spend rollup; a `tokens` query for any other window |
-| Tools | `#/tools` | `/tools` |
-| Schedules | `#/schedules` | `/schedules` |
-| Fleet | `#/fleet` | `/fleet` (the lease table) — the one polled view, and the one that must say when its poll failed: it is read when nodes are dying, which is when the API answering it is least reliable |
-| Configuration | `#/config` | `/config` *(auth-gated, secrets redacted server-side)* |
+Every entry resolves to a view backed by a real endpoint — nothing is
+rendered as a placeholder or a coming-soon stub.
+
+| Zone | Nav | Route | Reads |
+|---|---|---|---|
+| **Now** — *what is happening, and what needs me?* | Mission Control | `#/` | the snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget` |
+| | Work | `#/work` | the pushed `sandboxes` for live runs + the `sandbox_runs` query for the durable ones |
+| | Activity | `#/activity` | the snapshot's `events`, then live `event` pushes, then the `events` query for stored history |
+| **Company** — *who is this company?* | Org | `#/org?lens=` | `/org` + live agent state; lenses `chart` / `directory` / `charter` / `seats` |
+| | Schedules | `#/schedules` | `/schedules` |
+| | *a seat* | `#/seats/{handle}?tab=` | the `agent` query, plus `agent_memory` and `tokens` per tab |
+| **Operations** — *is the machine healthy?* | Spend & Budgets | `#/spend` | the pushed spend rollup + the `budgets` query |
+| | Integrations | `#/integrations` | the `integrations` query |
+| | Fleet | `#/fleet` | the `fleet` query (the lease table) — the one polled view, and the one that must say when its poll failed: it is read when nodes are dying, which is when the API answering it is least reliable |
+| | Configuration | `#/config?lens=` | `config` / `config_audit` / `config_diff` / `config_entities` *(auth-gated, secrets redacted server-side)* |
+| | Tools | `#/tools` | `/tools` |
+| — | Engine health | the dot in the brand | the pushed `health` envelope + the `stream` query — a popover, not a screen (see [Health](#health)) |
+| — | Trace | `#/traces/{trace_id}` | the `trace` query — reached from a row, never from the nav |
+| — | Event | `#/events/{id}` | the `event` query — reached from a row |
+
+**Old routes redirect, with their query strings intact.** `#/events`,
+`#/tokens`, `#/agents/{id}`, `#/people`, `#/company` and `#/audit` all resolve
+to their new homes: those links are in bookmarks, in chat threads, and in the
+seat page's own "Events" button. A redirect costs one `hashchange`; a dead
+link costs the reader the thing they were looking for.
 
 `js/org.js` is where the `/org` tree is flattened into **seats** — every role
 with its unit chain, effective unit lead, its configured `token_budget`, and
 the MCP surfaces it inherits. Views consume seats, never the raw payload, so
 lead inheritance and `mcp_env` inheritance are resolved once.
 
-### The overview
+### The attention queue
 
-The Dashboard reads, top to bottom, in order of urgency:
+`js/attention.js` is the one genuinely new idea, and it exists because the
+dashboard already knew every one of these conditions and kept each in a
+different room:
+
+| Condition | Where it used to live |
+|---|---|
+| A sandbox run parked on a question | a badge on the overview — and a `reseed` run, box reclaimed, appeared **nowhere at all** |
+| A seat the engine stopped | a card among the healthy ones |
+| A budget refusing charges | a bar on one seat's page |
+| An engine with no active configuration | a line in the health popover |
+
+`buildAttention(state)` derives one list from the slices the server already
+pushes, and each item names the room it belongs to. It has three outlets: the
+lead panel of Mission Control, a count on each nav zone, and the tab title
+(`(3) Crewlet`), so a backgrounded dashboard is a pager.
+
+Two rules make it trustworthy rather than merely useful:
+
+- **It answers `{items, stale}`.** Losing the socket freezes every slice the
+  items are derived from, so an empty list on a disconnected page means
+  "cannot see", never "nothing to do". `attentionCounts` returns `null`
+  rather than a confident zero, and the zone badges are simply not drawn.
+- **Severity follows the same rule as everything else.** Red for a seat that
+  stopped; amber for an obligation where nothing has broken. A budget doing
+  exactly what it was configured to do is not a failure, however much it is
+  blocking.
+
+Ordering is severity first, then **oldest obligation first** — the opposite of
+a feed, and the right way round for a list of debts: a question that has been
+waiting four days outranks one asked a minute ago.
+
+Fleet-sourced conditions (a role no node runs, a seat whose teardown could not
+be proven) are absent rather than guessed at: they cannot be reached from the
+pushed slices. Moving the derivation into the server projection is what would
+let them join, and would follow the rule that the client never derives what
+the server can project.
+
+### Search
+
+One palette (`⌘K`, or `/`), over rooms, seats, and any event or trace id
+pasted from a log. There was no search of any kind before: a thirty-seat org
+was navigated by scrolling, and an id copied out of a log could only be opened
+by hand-editing the URL. A search box per view would have meant one ranking
+rule per view and four places to keep them agreeing.
+
+`buildResults` is pure, so the ranking is testable without a DOM: a prefix
+beats a word boundary beats a substring.
+
+### Mission Control
+
+Reads top to bottom, in order of urgency:
 
 | Band | Answers |
 |---|---|
-| **Company pulse** (the lead panel) | Is anything happening, and did anything break? |
-| **In flight** | What is running right now, how far through its turn, and how long since it last moved |
+| **Needs you** (the lead panel) | Is anything waiting on me? — the [attention queue](#the-attention-queue). Drawn even when it is empty: an answer that disappears when it is "nothing" teaches the reader to check whether the panel is there rather than to read it |
+| **Company pulse** | Is anything happening, and did anything break? |
+| **In flight** | What is running right now — turns *and* detached sandbox runs, on one board. A seat running one is idle by design (the engine frees it the moment the run detaches, so a box can take days without holding an agent), so a board keyed on live turns alone showed a company doing nothing while its most expensive work was under way |
 | **The team** | Who is on the roster and what each seat is doing |
-| **Running sandboxes** | Which detached coding jobs are open, and which are blocked on an answer. An entry is cleared by the run's completion event, and expires after 12 hours if that event never arrives — a panel that shows a job which finished hours ago is claiming work that is not happening, and no operator can clear it |
 | **Engine activity** | What just happened |
+
+The pulse used to lead. It answers a good question and not the one an operator
+arrives with.
 
 ### The pulse
 
@@ -109,6 +184,49 @@ query, and three rules keep the merged list honest:
 The pager's two jobs must not look alike: revealing rows already in
 memory is instant, reading the store is a network trip that can fail,
 run out, or find no store at all. Each says which it is.
+
+### Event detail
+
+`#/events/{id}` lays a single event out field by field, and it is the one
+screen where text an outsider chose — a Slack message, a Jira summary, a
+merge-request title — is rendered as markup. Two rules hold it together:
+
+- **Every value is escaped**; a caller opts out by wrapping it in the
+  module-level `raw()` marker. The default used to be the other way
+  round, with each caller expected to remember `esc`, and one that forgot
+  was a stored-XSS hole.
+- **A URL out of a payload is checked before it becomes an `href`.** Only
+  `http(s)` renders as a link — anything else, `javascript:` above all,
+  renders as escaped text.
+
+An inbound webhook gets a per-source layout (Jira, Confluence, Slack,
+Mattermost, GitHub, GitLab, Plane), and the raw payload block stays
+beneath every one of them: a layout can only surface the fields it knows
+about, and the field it does not know is the one an operator came for.
+
+Each layout reads the same fields the engine's own router reads, so the
+screen answers *why did this wake anyone*, not just *what arrived*:
+
+| Source | What the layout names |
+| --- | --- |
+| GitLab | `object_kind`.`action`; the actor (`user.username`, or the flattened `user_username` a push hook sends instead of a user object); `project.path_with_namespace`; the MR, issue, pipeline or branch the event hangs off — a sibling key on a `note` or `pipeline` hook, `object_attributes` on the others; `state` and the MR's source → target branches; the `changes.{assignees,reviewers}` `previous → current` diff `parse_gitlab_webhook` routes on; `object_attributes.url` |
+| Plane | `event`.`action`; `activity.actor` (a bare UUID or an expanded user); `workspace_slug`; the project identifier; the work item as `{identifier}-{sequence_id}`, or the page; `activity.field` with `old_value → new_value`; `data.assignees`; the `<mention-component>` ids a comment carries |
+
+Two of those are load-bearing for an operator reading a failure.
+`pipeline.failed` is the one GitLab event routed back to the *actor*
+rather than to the thread — the agent whose push broke the build owns the
+fix — so its status renders as a failure badge and the failing jobs are
+named rather than left in the payload. And on a Plane work item,
+`data.id` is the work item on an `issue` event but the comment or intake
+row on the others, where the work item is `data.issue`; the screen draws
+that distinction exactly where the transport draws it, because the other
+id produces a pointer that 404s.
+
+The matching question for a *notification* is answered by
+`metadata.routed_via` (`assignee`, `assignee_added`, `mention`,
+`subscriber`, `project_lead_fallback`, `intake_triage`, …). It is
+promoted into a row of its own instead of appearing as one chip among a
+dozen coordinates, where it read as another id.
 
 ### Traces
 
@@ -270,8 +388,56 @@ component branches on the theme.
 | `--bg-hover` / `--bg-active` | Row and control states |
 | `--bg-inset` | Recessed surface (code blocks, expanded bodies) |
 | `--border-subtle` / `--border` / `--border-strong` | Hairline ramp |
-| `--text` / `--text-secondary` / `--text-muted` / `--text-dim` | Ink ramp |
+| `--text` / `--text-secondary` / `--text-muted` / `--text-dim` | Ink ramp — the cream hue at a small chroma, so the whole surface reads as one family rather than as tinted panels holding neutral text |
 | `--heading` | Headings, row titles, headline numbers |
+| `--focus` | The keyboard focus ring. Its own token because it has to clear the surface *and* every hue it might land on, so it cannot be the accent |
+
+**Contrast is a band, not a floor.** Guidance sets minimums, and a palette
+tuned only against minimums drifts to the top of the range where it is legible
+and unpleasant. The palette this replaced did exactly that in both directions
+at once: body text at 19.25:1 (halation) while `--text-dim` sat at 2.67:1,
+under the 3:1 floor it existed to clear, and the light theme's `--text-muted`
+at 3.55:1, under the text floor.
+
+**And every step is measured against the worst surface it can land on**, which
+is the part that is easy to get wrong. Because the dark panel fill is an alpha,
+panels nest; a row inside one can be hovered or selected, and a code block cuts
+an inset into it. That is eight distinct composites carrying the same tokens,
+spanning about a point and a half of contrast — so a ramp anchored to the panel
+is anchored to neither end. A browser audit across ten rooms found sixteen
+elements rendering under 4.5:1 while every token in the file "passed" its
+panel-anchored check.
+
+The ranges below are what each step covers across all eight surfaces, so the
+low figure is a guarantee rather than an average, and the high one is a ceiling
+rather than a score:
+
+| Step | Range |
+|---|---|
+| body text | 10.2 – 14.5 — comfortable for sustained reading |
+| headings | 11.5 – 16.4 — larger glyphs tolerate, and want, more weight |
+| secondary | 7.4 – 10.6 |
+| muted | 5.8 – 8.2 |
+| dim | 4.7 – 6.7 — de-emphasised meta, still a **text** step |
+| hue ink | 5.1 – 7.3 |
+| hue mark | 3.3 – 6.7 (the 3:1 non-text floor) |
+
+`--text-dim` takes the text floor rather than the 3:1 non-text one because in
+this design there is no non-text use of it: the same audit found it carrying
+10px labels in ten places — a clock, "last 24h", "no live meter" — and marking
+nothing anywhere. A step specced as a mark and used as type everywhere is a
+text step measured against the wrong floor.
+
+### Spacing, type, and density
+
+Font sizes and paddings were literals scattered across ~3,000 lines of
+component CSS, at half-pixel precision and in eleven distinct values, which
+made "make this readable" a sweep rather than an edit. Both are ramps now:
+`--text-2xs … --text-3xl` and `--space-1 … --space-8`.
+
+The spacing ramp is multiplied by one scalar, `--density`, so an operator who
+wants more rows on screen gets them from a token swap rather than a second
+stylesheet: `data-density="compact"` on `<html>`.
 
 ### Accent and glass
 
@@ -306,8 +472,19 @@ Eight hue families, each shipping two steps:
 Soft fills are derived at the use site with
 `color-mix(in srgb, var(--<hue>) 10%, transparent)`.
 
+Chroma is capped at 13.5 (OKLab ×100), because highly saturated
+light-on-dark type is what "vibrates". Only lightness is re-stepped per theme.
+Two families sit above that cap, and only because a measurement forced it:
+`--red` (below) and `--pink` at 14.5, which is the least rotation and chroma
+that lets the dimmest mark clear the non-text floor on a selected row while
+still holding ΔE 15 against purple.
+
 `--red` / `--red-ink` is a **reserved status hue** (failed, error,
-destructive) and is never used as a categorical slot.
+destructive) and is never used as a categorical slot. It is allowed more
+chroma than the cap and sits slightly off the orange family: it has to stay
+legible as "this broke" among the categorical marks, and it is used sparingly
+— rails, badges, dots — never as body copy, which is where a saturated colour
+would tire the eye.
 
 **The rule for text.** Any label that carries a hue uses the `-ink` step. The
 mark step is tuned for a mark on a surface (≥ 3:1), not for 11px type. Setting
@@ -323,7 +500,11 @@ apart:
 | Order | Source | Assignment |
 |---|---|---|
 | Phases | `PHASE_ORDER` in `js/state.js`, used by the stacked phase bar and its legend | onboarding → green, plan → blue, execute → amber, review → purple, auxiliary/subagent → orange, judge → cyan, turn → neutral |
-| Event categories | `EVENT_CATEGORIES` in `js/state.js`, used by the activity filter row and category tags | lifecycle → blue, task → green, communication → purple, decision → amber, knowledge → pink, learning → purple, a2a → orange, notification → cyan, webhook → brown, system → neutral |
+| Event categories | `CATEGORY_HUE` in `js/state.js`, rendered in `EVENT_CATEGORIES` order by the activity filter row and category tags | lifecycle → blue, task → green, communication → purple, decision → amber, knowledge → pink, learning → purple, a2a → orange, notification → cyan, webhook → brown, system → neutral |
+
+`CATEGORY_HUE` lives in `state.js` beside `PHASE_HUE` rather than only in the
+`.cat-*` rules, so both orders can be read — and measured — from one place. A
+test holds the CSS to it.
 
 `PHASE_HUE` in `state.js` is the single source of truth for phase colour;
 `phaseColor()` returns the mark step and `phaseInk()` the text step. There is
@@ -336,17 +517,33 @@ adjacent pair in **both** orders clears, in **both** themes:
 
 | Check | Gate | Light | Dark |
 |---|---|---|---|
-| Normal-vision separation (worst adjacent pair, OKLab ΔE ×100) | ≥ 15 | 17.9 | 17.8 |
-| Protan / deutan separation | ≥ 8 | 15.8 | 15.6 |
-| Mark contrast vs the surface | ≥ 3:1 | 3.29 | 3.70 |
+| Normal-vision separation (worst adjacent pair, OKLab ΔE ×100) | ≥ 15 | 18.6 | 17.8 |
+| Protan / deutan separation | ≥ 8 | 11.5 | 15.9 |
+| Mark contrast vs the surface | ≥ 3:1 | 3.3 | 3.3 |
 
-The hue *families* (angle and chroma) come from the marketing site's brand
-tokens; only lightness is re-stepped per theme, because the site's own steps
-are tuned for occasional accent use on a marketing page rather than a dense
-operational surface where six of them stack edge to edge.
+**The mark steps do not all sit at one contrast, and that is load-bearing.**
+Capping chroma for comfort costs separation, and placing every mark at one
+comfortable contrast then collapses pink against purple to ΔE 12.5 (gate 15)
+and 8.0 for protanopia (gate 8) — at equal lightness they are only a hue
+rotation apart. Three lightness tiers, assigned so that adjacent families
+differ in lightness as well as hue, is what clears every gate in both themes
+with ≥18% margin while keeping the set inside the comfort band.
 
-**If you change a hue, re-check both orders in both themes.** Changing one
-value can break a pair three slots away.
+Red against green under protanopia is left unsolved deliberately: those are
+the two hues that cone cannot separate, and pushing red until it cleared green
+for them would leave a colour nobody else reads as red. The rule that colour
+never carries identity alone is what closes that gap.
+
+**These numbers are computed, not remembered.**
+`tests/test_dashboard/js/palette.test.mjs` reads `tokens.css` and `state.js`
+on every run and measures all of it — contrast bands, ink and mark floors,
+chroma ceilings, and OKLab separation for normal, protan and deutan vision
+across both orders. They were measured by hand once before that, and by the
+time the suite was written the dark theme's `--text-dim` had drifted under its
+own floor. The suite caught a red/orange collapse on its first run.
+
+**If you change a hue, run the suite.** Changing one value can break a pair
+three slots away.
 
 Colour is never the only carrier of identity: every pill, legend entry, and
 badge renders its name, and every heat cell prints its value.
@@ -557,24 +754,60 @@ operator went looking for them.
 2. **Colour on text is `-ink`, colour on a mark is the base step.**
 3. **New surface? Use the panel recipe** by adding the selector to the shared
    rule in `components.css`.
-4. **New hue or reassignment?** Re-verify both adjacency orders in both
-   themes against the gates above before shipping.
+4. **New hue or reassignment?** Run
+   `node tests/test_dashboard/js/palette.test.mjs`. It measures both
+   adjacency orders in both themes against every gate — and each colour
+   against the worst of the eight surfaces the design composites, not
+   against the panel. Do not eyeball it: the panel-anchored version of this
+   suite passed a `--pink` that renders at 2.58:1 on a selected row. A new
+   *phase* or *category* needs a hue the set may not have spare — the eight
+   families are already doubled up in one order.
 5. **New micro-label?** Mono, uppercase, wide tracking — not bold sans.
 6. **New nav entry?** It ships only once an endpoint backs it. A nav item
    that leads to an empty screen is worse than no nav item.
 7. **Need the org tree?** Go through `flattenSeats` / `flattenUnits` in
    `js/org.js`, so lead and `mcp_env` inheritance stay resolved in one place.
 8. **New data?** It arrives over the websocket — a snapshot section and a
-   push, or a query. A view that reaches for `fetch` is reintroducing the
-   split-transport bug the refactor removed.
-9. **New repeated row? Give it a `data-k`.** And never derive state the
-   server already projects; mirror what it pushes.
-10. **New engine fact? Decide what it renders as when it is unknown.** The
+   push, or a query. A view that reaches for `fetch` to READ is
+   reintroducing the split-transport bug, and that is not hypothetical: the
+   Fleet view took its HTTP client from a context field the shell never
+   populated and held a loading skeleton in every shipped build until it was
+   moved onto the `fleet` query. Writes stay REST, for the auth
+   middleware's attribution. `wiring.test.mjs` enforces both halves.
+9. **New view module? It has to be reachable from `app.js`.** ES modules
+   fail as a graph: one missing import and *nothing* renders — no view, no
+   nav, no error on the page. The same suite checks that every import
+   exists and that nothing is orphaned.
+10. **New room? Put its CSS in `styles/rooms/<room>.css`.** One stylesheet
+    per room, so a change to one room's layout cannot reach another's.
+11. **New obligation the operator has to act on?** Add it to
+    `buildAttention` rather than to a panel of its own. A condition that
+    needs a person and lives only on the screen that owns it is a condition
+    nobody finds — that is what the queue exists to end. Decide its
+    severity by the rule: red only if something broke.
+12. **New repeated row? Give it a `data-k`.** And never derive state the
+    server already projects; mirror what it pushes.
+13. **New engine fact? Decide what it renders as when it is unknown.** The
     health slice is cleared on disconnect, so every field it carries arrives
     `undefined` at exactly the moment the reader most needs the truth. A
     two-way read of a three-way fact renders the unknown case as the healthy
     one.
-11. **New figure? Say what window it covers, and do not divide two windows
+14. **New figure? Say what window it covers, and do not divide two windows
     into each other.** Two numbers on one screen that disagree is worse than
-    one number with a caveat. The budget bar is the one ratio on the page,
-    and only because its numerator and denominator are the same engine run.
+    one number with a caveat. Budgets are where this bites: a cap, the
+    engine-run meter and the durable counter are three numbers over three
+    spans, and only the meter shares a span with the cap. Exhaustion is read
+    from `refused_at`, never from `used >= max` — the engine refuses a
+    charge that would exceed the cap and increments nothing, so a blocked
+    seat never reaches its own maximum.
+15. **New spacing or font size? Use the ramp.** `--space-*` and `--text-*`
+    exist so density is a token swap; a literal px value re-opens the sweep
+    they replaced.
+16. **Changed a colour or a surface? Measure the rendered page, not the
+    tokens.** The suite in step 4 checks what the stylesheet defines; it
+    cannot see which token a component actually applies, or at what size.
+    Both defects the last colour pass shipped were of that kind — a text
+    ramp anchored to the wrong surface, and a step specced as a mark and
+    used as 10px type — and both were found by walking every rendered
+    element in a browser, compositing its colour against the stack behind
+    it, and sorting by ratio. Nothing under 4.5:1, nothing over 16.5:1.

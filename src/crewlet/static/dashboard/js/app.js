@@ -10,6 +10,12 @@
 // shell patches it in on the next animation frame. A view is therefore
 // incapable of causing the full-page rebuild this dashboard used to do
 // on every envelope.
+//
+// The nav is grouped by the question a room answers rather than by the
+// kind of data it holds. Nine top-level nouns meant the questions an
+// operator actually arrives with — is anything waiting on me, did
+// anything break, what is this costing — each needed three or four
+// screens and a mental join.
 
 import { Store } from "./store.js";
 import { LiveSocket } from "./socket.js";
@@ -19,7 +25,10 @@ import { schedule, cancel } from "./scheduler.js";
 import { $, delegate } from "./dom.js";
 import { esc } from "./format.js";
 import { icon } from "./icons.js";
-import { apiToken, promptForToken } from "./authToken.js";
+import { apiToken, storeToken } from "./authToken.js";
+import { promptModal } from "./modal.js";
+import { buildAttention, attentionCounts } from "./attention.js";
+import { buildResults, flatResults } from "./commandPalette.js";
 import {
   dotClass,
   renderHealthPopover,
@@ -27,19 +36,17 @@ import {
   bannerTone,
 } from "./health.js";
 
-import { createDashboardView } from "./views/dashboard.js";
-import { createEventsView } from "./views/events.js";
-import { createTokensView } from "./views/tokens.js";
-import { createToolsView } from "./views/tools.js";
-import { createOrgView } from "./views/org.js";
-import { createCompanyView } from "./views/company.js";
-import { createPeopleView } from "./views/people.js";
-import { createAuditView } from "./views/audit.js";
-import { createAgentsView } from "./views/agents.js";
+import { createMissionView } from "./views/mission.js";
+import { createWorkView } from "./views/work.js";
+import { createActivityView } from "./views/activity.js";
+import { createOrgRoomView } from "./views/orgRoom.js";
 import { createSchedulesView } from "./views/schedules.js";
+import { createSpendView } from "./views/spend.js";
+import { createIntegrationsView } from "./views/integrations.js";
 import { createFleetView } from "./views/fleet.js";
 import { createConfigView } from "./views/config.js";
-import { createAgentView } from "./views/agent.js";
+import { createToolsView } from "./views/tools.js";
+import { createSeatView } from "./views/seat.js";
 import { createEventDetailView } from "./views/eventDetail.js";
 import { createTraceView } from "./views/trace.js";
 
@@ -48,37 +55,33 @@ const socket = new LiveSocket(store);
 socket.setToken(apiToken());
 
 const VIEWS = {
-  dashboard: createDashboardView,
-  company: createCompanyView,
-  people: createPeopleView,
-  org: createOrgView,
-  audit: createAuditView,
-  agents: createAgentsView,
-  events: createEventsView,
-  tokens: createTokensView,
-  tools: createToolsView,
+  mission: createMissionView,
+  work: createWorkView,
+  activity: createActivityView,
+  org: createOrgRoomView,
   schedules: createSchedulesView,
+  spend: createSpendView,
+  integrations: createIntegrationsView,
   fleet: createFleetView,
   config: createConfigView,
-  agent: createAgentView,
-  llm: createAgentView, // the agent view owns the llm sub-route
+  tools: createToolsView,
+  seat: createSeatView,
+  llm: createSeatView, // the seat view owns the llm sub-route
   eventDetail: createEventDetailView,
   trace: createTraceView,
 };
 
 const TITLES = {
-  dashboard: "Dashboard",
-  company: "Overview",
-  people: "People Directory",
-  org: "Org Chart",
-  audit: "Audit log",
-  agents: "Agents",
-  events: "Activity",
-  tokens: "Tokens",
-  tools: "Tools",
+  mission: "Mission Control",
+  work: "Work",
+  activity: "Activity",
+  org: "Org",
   schedules: "Schedules",
+  spend: "Spend & Budgets",
+  integrations: "Integrations",
   fleet: "Fleet",
   config: "Configuration",
+  tools: "Tools",
   eventDetail: "Event",
   trace: "Trace",
 };
@@ -90,6 +93,9 @@ let unsubscribeEvents = null;
 
 // Context handed to every view. `query` is the only way a view reaches
 // the server, and it goes over the same socket the pushes arrive on.
+// tests/test_dashboard/js/wiring.test.mjs holds every view's declared
+// dependencies against these keys — the Fleet view once asked for an
+// `api` that was never here, and failed silently for it.
 const ctx = {
   store,
   navigate,
@@ -110,6 +116,10 @@ function renderView() {
 
 function mountRoute() {
   const route = parseRoute();
+  if (route.redirect) {
+    navigate(route.redirect);
+    return;
+  }
   const root = $("#view");
 
   if (active && active.destroy) active.destroy();
@@ -118,7 +128,7 @@ function mountRoute() {
   cancel("view");
   root.innerHTML = "";
 
-  const factory = VIEWS[route.name] || VIEWS.dashboard;
+  const factory = VIEWS[route.name] || VIEWS.mission;
   active = factory({ ...ctx, params: route.params });
   activeRoute = route;
   if (active.mount) active.mount(root);
@@ -139,108 +149,213 @@ function mountRoute() {
 }
 
 function setTitle(route) {
-  let title = TITLES[route.name] || "Dashboard";
-  if (route.name === "agent" || route.name === "llm") {
-    const agent = store.agentById(route.params.id);
-    title = agent ? agent.role || agent.name : "Agent";
+  let title = TITLES[route.name] || "Mission Control";
+  if (route.name === "seat" || route.name === "llm") {
+    const seat = store.agentByKey(route.params.key);
+    title = seat ? seat.role || seat.name : "Seat";
   }
   $("#title").textContent = title;
-  document.title = `${title} · Crewlet`;
+  // The count rides in the tab title so a backgrounded dashboard is a
+  // pager. It is the total, not the failure count: a question waiting
+  // four days is not a failure and still needs somebody.
+  const counts = attentionCounts(buildAttention(store.state));
+  const badge = counts && counts.total ? `(${counts.total}) ` : "";
+  document.title = `${badge}${title} · Crewlet`;
 }
 
 // ---- sidebar ----
-// A flat list, with `Company` as the one collapsible group — every entry
-// resolves to a view backed by real data.
+// Three zones, each the answer to one question. Every entry resolves to
+// a view backed by real data — a nav item that leads to an empty screen
+// is worse than no nav item.
 const NAV = [
-  { name: "dashboard", icon: "grid", label: "Dashboard" },
   {
-    group: "company",
-    icon: "building",
-    label: "Company",
+    zone: "now",
+    title: "Now",
+    question: "What is happening, and what needs me?",
     items: [
-      { name: "company", icon: "grid", label: "Overview" },
-      { name: "people", icon: "users", label: "People Directory" },
-      { name: "org", icon: "hash", label: "Org Chart" },
-      { name: "audit", icon: "refresh", label: "Audit log" },
+      { name: "mission", icon: "grid", label: "Mission Control" },
+      { name: "work", icon: "cpu", label: "Work" },
+      { name: "activity", icon: "activity", label: "Activity", count: "failures" },
     ],
   },
-  { name: "agents", icon: "user", label: "Agents" },
-  { name: "events", icon: "activity", label: "Activity", count: "events" },
-  { name: "tokens", icon: "zap", label: "Tokens" },
-  { name: "tools", icon: "wrench", label: "Tools" },
-  { name: "schedules", icon: "clock", label: "Schedules" },
-  { name: "fleet", icon: "globe", label: "Fleet" },
-  { name: "config", icon: "database", label: "Configuration" },
+  {
+    zone: "company",
+    title: "Company",
+    question: "Who is this company?",
+    items: [
+      { name: "org", icon: "building", label: "Org" },
+      { name: "schedules", icon: "clock", label: "Schedules" },
+    ],
+  },
+  {
+    zone: "operations",
+    title: "Operations",
+    question: "Is the machine healthy?",
+    items: [
+      { name: "spend", icon: "zap", label: "Spend & Budgets" },
+      { name: "integrations", icon: "globe", label: "Integrations" },
+      { name: "fleet", icon: "cpu", label: "Fleet" },
+      { name: "config", icon: "database", label: "Configuration" },
+      { name: "tools", icon: "wrench", label: "Tools" },
+    ],
+  },
 ];
-
-const GROUP_KEY = "crewlet-nav-groups";
-// Read once: this used to be re-read and JSON-parsed on every store
-// emit, which meant a localStorage hit per LLM round.
-let collapsed = readCollapsedGroups();
-
-function readCollapsedGroups() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem(GROUP_KEY) || "[]"));
-  } catch {
-    return new Set();
-  }
-}
-
-function toggleGroup(name) {
-  if (collapsed.has(name)) collapsed.delete(name);
-  else collapsed.add(name);
-  localStorage.setItem(GROUP_KEY, JSON.stringify([...collapsed]));
-  renderNav();
-}
 
 function renderNav() {
   schedule("nav", () => {
-    const current = activeRoute ? activeRoute.name : "dashboard";
-    const events = store.state.events;
-    // A count in the nav ring is only worth the pixels if it tells you
-    // whether to click. "44 events" never does; "2 failed" always does.
-    // So Activity carries its failure count in red when there is one and
-    // falls back to the plain total when there is not.
-    const failures = events.filter((e) => e.failed).length;
-    const counts = {
-      events: failures
-        ? { value: failures, alert: true, title: `${failures} failed` }
-        : { value: events.length, alert: false, title: `${events.length} events` },
-    };
+    const current = activeRoute ? activeRoute.name : "mission";
+    const state = store.state;
+    const attention = buildAttention(state);
+    const counts = attentionCounts(attention);
+    const failures = state.events.filter((e) => e.failed).length;
 
-    const item = (n, sub = false) => {
-      const count = n.count ? counts[n.count] : null;
+    const item = (n) => {
+      // Two different counts, deliberately. A zone badge counts open
+      // obligations — things a person has to do. Activity's badge counts
+      // failures in the retained feed, which is a different question and
+      // was the only badge this nav had.
+      let badge = null;
+      if (n.count === "failures" && failures) {
+        badge = { value: failures, alert: true, title: `${failures} failed` };
+      }
       return `
-      <div class="nav-item ${sub ? "sub" : ""} ${current === n.name ? "active" : ""}"
-           data-k="nav:${n.name}" data-action="nav" data-nav="${n.name}">
+      <div class="nav-item ${current === n.name ? "active" : ""}"
+           data-k="nav:${n.name}" data-action="nav" data-nav="${n.name}"
+           role="link" tabindex="0">
         ${icon(n.icon, "sm")}<span class="label">${esc(n.label)}</span>
         ${
-          count && count.value
-            ? `<span class="nav-count ${count.alert ? "alert" : ""}" title="${esc(count.title)}">${esc(String(count.value))}</span>`
+          badge
+            ? `<span class="nav-count ${badge.alert ? "alert" : ""}" title="${esc(badge.title)}">${esc(String(badge.value))}</span>`
             : ""
         }
       </div>`;
     };
 
-    const group = (g) => {
-      const open = !collapsed.has(g.group);
-      const holds = g.items.some((i) => i.name === current);
+    const zone = (z) => {
+      // The zone badge is only drawn when the page can actually see the
+      // engine. `attentionCounts` answers null while the socket is down,
+      // because a confident zero during an outage is exactly the lie
+      // this surface exists to prevent.
+      const open = counts ? counts[z.zone] || 0 : 0;
       return `
-      <div class="nav-group ${open ? "open" : ""}" data-k="grp:${g.group}">
-        <div class="nav-item nav-group-head ${holds && !open ? "active" : ""}"
-             data-action="nav-group" data-group="${esc(g.group)}">
-          ${icon(g.icon, "sm")}<span class="label">${esc(g.label)}</span>
-          ${icon("chevron", "chevron")}
+      <div class="nav-zone" data-k="zone:${z.zone}">
+        <div class="nav-zone-head" title="${esc(z.question)}">
+          <span class="nav-title">${esc(z.title)}</span>
+          ${open ? `<span class="zone-count" title="${open} waiting on you">${open}</span>` : ""}
         </div>
-        <div class="nav-group-items">${g.items.map((i) => item(i, true)).join("")}</div>
+        ${z.items.map(item).join("")}
       </div>`;
     };
 
-    patch(
-      $("#nav"),
-      `<div class="nav-section">${NAV.map((n) => (n.group ? group(n) : item(n))).join("")}</div>`,
-    );
+    patch($("#nav"), `<div class="nav-section">${NAV.map(zone).join("")}</div>`);
   });
+}
+
+// ---- command palette ----
+// Chrome, not a view: it outlives whatever is under it, and it takes the
+// keyboard while open.
+
+let paletteOpen = false;
+let paletteQuery = "";
+let paletteIndex = 0;
+
+function togglePalette(open) {
+  paletteOpen = open === undefined ? !paletteOpen : open;
+  if (paletteOpen) {
+    paletteQuery = "";
+    paletteIndex = 0;
+  }
+  renderPalette();
+  if (paletteOpen) $("#palette-input")?.focus();
+}
+
+function paletteGroups() {
+  return buildResults(store.state, paletteQuery);
+}
+
+function renderPalette() {
+  const host = $("#palette");
+  host.hidden = !paletteOpen;
+  if (!paletteOpen) {
+    host.innerHTML = "";
+    return;
+  }
+  const groups = paletteGroups();
+  const flat = flatResults(groups);
+  if (paletteIndex >= flat.length) paletteIndex = Math.max(0, flat.length - 1);
+
+  let cursor = -1;
+  const body = groups
+    .map(
+      (group) => `
+      <div class="pal-group" data-k="g:${group.title}">
+        <div class="pal-group-title">${esc(group.title)}</div>
+        ${group.items
+          .map((hit) => {
+            cursor++;
+            return `<div class="pal-item ${cursor === paletteIndex ? "on" : ""}"
+                 data-k="${esc(hit.id)}" data-action="palette-go"
+                 data-route="${esc(hit.route)}" role="option"
+                 aria-selected="${cursor === paletteIndex}">
+              <span class="pal-label">${esc(hit.label)}</span>
+              <span class="pal-hint">${esc(hit.hint)}</span>
+            </div>`;
+          })
+          .join("")}
+      </div>`,
+    )
+    .join("");
+
+  patch(
+    host,
+    `<div class="modal-veil" data-action="palette-dismiss">
+       <div class="palette" role="dialog" aria-modal="true" aria-label="Search">
+         <input id="palette-input" class="palette-input" type="text"
+                placeholder="Search seats, rooms, or paste an event or trace id"
+                value="${esc(paletteQuery)}" autocomplete="off"
+                spellcheck="false" role="combobox" aria-expanded="true"
+                aria-controls="palette-results" />
+         <div class="palette-results" id="palette-results" role="listbox">
+           ${body || `<div class="pal-empty">Nothing matches “${esc(paletteQuery)}”.</div>`}
+         </div>
+       </div>
+     </div>`,
+  );
+  const input = $("#palette-input");
+  if (input && document.activeElement !== input) {
+    input.focus();
+    // Keep the caret at the end: the input is re-rendered on every
+    // keystroke, and a patched value resets the selection to the start.
+    input.setSelectionRange(paletteQuery.length, paletteQuery.length);
+  }
+}
+
+function paletteKey(ev) {
+  if (!paletteOpen) return false;
+  const flat = flatResults(paletteGroups());
+  if (ev.key === "Escape") {
+    togglePalette(false);
+    return true;
+  }
+  if (ev.key === "ArrowDown" || (ev.key === "n" && ev.ctrlKey)) {
+    paletteIndex = Math.min(paletteIndex + 1, Math.max(0, flat.length - 1));
+    renderPalette();
+    return true;
+  }
+  if (ev.key === "ArrowUp" || (ev.key === "p" && ev.ctrlKey)) {
+    paletteIndex = Math.max(paletteIndex - 1, 0);
+    renderPalette();
+    return true;
+  }
+  if (ev.key === "Enter") {
+    const hit = flat[paletteIndex];
+    if (hit) {
+      togglePalette(false);
+      navigate(hit.route);
+    }
+    return true;
+  }
+  return false;
 }
 
 // ---- chrome (live dot + health popover + in-flight pill) ----
@@ -297,7 +412,7 @@ function renderChrome() {
     // click: a rejected API token (the socket will never come back on
     // its own), a socket that is down (the page is polling REST and may
     // be stale) and an engine with no active company configuration
-    // (every inbound webhook is being dropped). A dashboard that is
+    // (every inbound webhook is being turned away). A dashboard that is
     // quietly wrong is worse than one that says it cannot see.
     const banner = $("#degraded");
     const text = bannerFor(health, state.connected, state.events, state.authRejected);
@@ -324,9 +439,10 @@ function renderChrome() {
   });
 }
 
-// ---- theme ----
+// ---- theme + density ----
 function initTheme() {
   setTheme(localStorage.getItem("crewlet-theme") || "dark");
+  setDensity(localStorage.getItem("crewlet-density") || "comfortable");
   $("#theme-btn").addEventListener("click", () => {
     const next =
       document.documentElement.getAttribute("data-theme") === "dark"
@@ -335,11 +451,52 @@ function initTheme() {
     setTheme(next);
     localStorage.setItem("crewlet-theme", next);
   });
+  $("#density-btn").addEventListener("click", () => {
+    const next =
+      document.documentElement.getAttribute("data-density") === "compact"
+        ? "comfortable"
+        : "compact";
+    setDensity(next);
+    localStorage.setItem("crewlet-density", next);
+  });
 }
 
 function setTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   $("#theme-btn").innerHTML = icon(theme === "dark" ? "sun" : "moon", "sm");
+  $("#theme-btn").title = theme === "dark" ? "Switch to light" : "Switch to dark";
+}
+
+// One scalar drives the whole spacing ramp, so "fit more rows on screen"
+// is a token swap rather than a second stylesheet.
+function setDensity(density) {
+  document.documentElement.setAttribute("data-density", density);
+  $("#density-btn").innerHTML = icon(
+    density === "compact" ? "rows-wide" : "rows-tight",
+    "sm",
+  );
+  $("#density-btn").title =
+    density === "compact" ? "Comfortable spacing" : "Compact spacing";
+}
+
+// ---- token entry ----
+// One flow, shared by the chrome banner and by any view that discovers
+// it needs a credential. It used to be a `window.prompt` in one place
+// and a re-implementation in two views.
+async function askForToken() {
+  const entered = await promptModal({
+    title: "API token",
+    body: "This engine is configured to require a token for the surface you are opening. It is stored in this browser only.",
+    label: "Bearer token",
+    secret: true,
+  });
+  if (!entered) return false;
+  storeToken(entered);
+  socket.setToken(entered);
+  store.setAuthRejected(false);
+  socket.reconnect();
+  renderView();
+  return true;
 }
 
 // ---- global delegation ----
@@ -357,43 +514,91 @@ function initDelegation() {
     if (ev.target.closest("#health-pop, #live-dot-btn")) return;
     toggleHealth(false);
   });
+
   document.addEventListener("keydown", (ev) => {
+    if (paletteKey(ev)) {
+      ev.preventDefault();
+      return;
+    }
+    // The palette's own shortcut. Checked after its key handling so the
+    // combination closes it again while it is open.
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "k") {
+      ev.preventDefault();
+      togglePalette();
+      return;
+    }
     if (ev.key === "Escape" && healthOpen) toggleHealth(false);
+    // A bare "/" opens search the way it does in every other tool, but
+    // only when the reader is not already typing into something.
+    if (ev.key === "/" && !isTyping(ev.target) && !paletteOpen) {
+      ev.preventDefault();
+      togglePalette(true);
+    }
+  });
+
+  // Typing, forwarded the same way clicks are. A view holding an editor
+  // has to keep the text in its own state — the next patch renders from
+  // state, and a value living only in the DOM would be reverted by it —
+  // so it needs to hear every keystroke.
+  document.addEventListener("input", (ev) => {
+    const target = ev.target;
+    if (!target) return;
+    if (target.id === "palette-input") {
+      paletteQuery = target.value;
+      paletteIndex = 0;
+      renderPalette();
+      return;
+    }
+    const action = target.dataset && target.dataset.action;
+    if (action && active && active.onAction) active.onAction(action, target, ev);
+  });
+
+  // Rows are links, so they answer to the keyboard like links.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    const el = ev.target.closest?.("[data-action][tabindex]");
+    if (!el) return;
+    ev.preventDefault();
+    el.click();
   });
 
   delegate(document.body, "click", (action, el, ev) => {
     if (action === "nav") navigate("/" + el.dataset.nav);
-    else if (action === "nav-group") toggleGroup(el.dataset.group);
     else if (action === "health") toggleHealth();
-    else if (action === "reconnect") {
+    else if (action === "palette") togglePalette(true);
+    else if (action === "palette-dismiss") {
+      if (ev.target.classList.contains("modal-veil")) togglePalette(false);
+    } else if (action === "palette-go") {
+      togglePalette(false);
+      navigate(el.dataset.route);
+    } else if (action === "reconnect") {
       socket.reconnect();
       toggleHealth(false);
     } else if (action === "set-token-chrome") {
       // Its own action name, not the views' `set-token`: this delegate
       // runs before the branch that forwards to the active view, so
-      // sharing the name would swallow the Configuration and Audit
-      // buttons and leave those views un-reloaded after a token was set.
-      promptForToken(() => {
-        socket.setToken(apiToken());
-        store.setAuthRejected(false);
-        socket.reconnect();
-      });
-    } else if (action === "agent")
-      navigate("/agents/" + encodeURIComponent(el.dataset.id));
-    else if (action === "view-events") {
+      // sharing the name would swallow the Configuration button and
+      // leave that view un-reloaded after a token was set.
+      askForToken();
+    } else if (action === "seat") {
+      navigate("/seats/" + encodeURIComponent(el.dataset.seat));
+    } else if (action === "go") {
+      // A row that names its own destination, so a new panel does not
+      // need a new app-level action every time.
       if (healthOpen) toggleHealth(false);
-      navigate("/events");
-    }
-    else if (action === "view-tokens") navigate("/tokens");
-    else if (action === "view-tools") navigate("/tools");
-    else if (action === "view-agents") navigate("/agents");
-    else if (action === "view-org") navigate("/org");
-    else if (action === "view-schedules") navigate("/schedules");
-    else if (active && active.onAction) active.onAction(action, el, ev);
+      navigate(el.dataset.route);
+    } else if (active && active.onAction) active.onAction(action, el, ev);
   });
+
   $("#menu-btn").addEventListener("click", () =>
     $("#app").classList.toggle("nav-open"),
   );
+}
+
+function isTyping(target) {
+  if (!target || !target.tagName) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || target.isContentEditable;
 }
 
 // ---- boot ----
@@ -401,9 +606,21 @@ function boot() {
   initTheme();
   initDelegation();
 
+  // The socket can tell a refused credential from an unreachable engine;
+  // only the shell can draw a dialog. It fires once — a 30-second
+  // reconnect backoff must not reopen one forever — and the banner
+  // carries the state afterwards.
+  socket.onAuthRejected(() => askForToken());
+
   store.subscribe(["health"], renderChrome);
   store.subscribe(["events"], renderNav);
   store.subscribe(["events"], renderChrome);
+  // The attention badges read the slices the obligations come from, so a
+  // question answered in chat clears its badge without a refresh.
+  store.subscribe(["sandboxes", "agents", "budget", "health"], renderNav);
+  store.subscribe(["sandboxes", "agents", "budget", "health"], () => {
+    if (activeRoute) setTitle(activeRoute);
+  });
 
   // The socket starts first so a query issued by the first view's mount
   // goes out as soon as the connection is up (it would queue either way,

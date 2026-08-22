@@ -56,6 +56,153 @@ function kv(rows) {
   return `<dl class="kv">${body}</dl>`;
 }
 
+/**
+ * Render a payload-supplied URL as a link, or as plain text.
+ *
+ * The scheme is checked rather than trusted: these URLs come out of a
+ * webhook body, and a `javascript:` value would otherwise be one click
+ * away from running script in the operator's dashboard session. Only
+ * http(s) becomes an anchor; anything else renders as escaped text.
+ *
+ * `base.css` gives `a` `color: inherit`, so an anchor with no class is
+ * indistinguishable from the text around it — `trace-link` is the
+ * dashboard's link treatment and the only one defined.
+ */
+function linkTo(url) {
+  const href = String(url || "");
+  if (!href) return "";
+  if (!/^https?:\/\//i.test(href)) return href;
+  return raw(
+    `<a class="trace-link" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${esc(
+      href,
+    )} ↗</a>`,
+  );
+}
+
+function firstLine(s) {
+  return String(s == null ? "" : s).split("\n")[0].trim();
+}
+
+// GitLab user arrays (`assignees`, `reviewers`, and both sides of a
+// `changes` diff) hold user objects; the router keys on `username`.
+function glNames(users) {
+  return (Array.isArray(users) ? users : [])
+    .map((u) => (u && (u.username || u.name)) || "")
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * The `previous → current` transition for a `changes` entry.
+ *
+ * `changes.{assignees,reviewers}` is the diff `parse_gitlab_webhook`
+ * routes on — a *newly added* assignee is the target, someone removed is
+ * not. Rendering only the resulting list would hide exactly that: "who
+ * is on it now" never says who was just put there. Falls back to
+ * `current` when the event carries no diff (an `open`, not an `update`).
+ */
+function glTransition(changes, key, current) {
+  const entry = changes[key];
+  if (!entry || typeof entry !== "object") return current;
+  const before = glNames(entry.previous);
+  const after = glNames(entry.current);
+  if (!before && !after) return current;
+  return `${before || "—"} → ${after || "—"}`;
+}
+
+function glFailedJobs(builds) {
+  return (Array.isArray(builds) ? builds : [])
+    .filter((b) => b && b.status === "failed")
+    .map((b) => (b.stage ? `${b.stage}/${b.name || ""}` : b.name || ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
+// Plane's CE serializers hand an FK back as a UUID string OR an expanded
+// `{id: …}` dict, and disagree on `project` vs `project_id` — the
+// coercions in `notifications/transports/plane.py` mirrored, because a
+// reader of this screen has to see the same value the router did.
+function planeRef(value) {
+  if (value && typeof value === "object") value = value.id;
+  return value == null ? "" : String(value).toLowerCase();
+}
+
+function planeParties(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((v) =>
+      v && typeof v === "object" ? v.display_name || v.first_name || v.id : v,
+    )
+    .map((v) => (v == null ? "" : String(v)))
+    .filter(Boolean)
+    .join(", ");
+}
+
+const PLANE_MENTION_TAG = /<mention-component[^>]*>(?:<\/mention-component>)?/gi;
+const PLANE_MENTION_ID = /entity_identifier="([^"]*)"/i;
+
+// The mentioned user UUIDs a comment carries. The transport routes a
+// Plane comment to exactly these ids, so they are the payload's answer
+// to "why did this comment wake that agent".
+function planeMentionIds(html) {
+  const out = [];
+  const seen = new Set();
+  for (const tag of String(html || "").match(PLANE_MENTION_TAG) || []) {
+    const found = tag.match(PLANE_MENTION_ID);
+    const id = found ? (found[1] || "").toLowerCase() : "";
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+const HTML_ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+
+function unentity(s) {
+  return s.replace(/&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, ref) => {
+    if (ref[0] !== "#") {
+      const v = HTML_ENTITIES[ref.toLowerCase()];
+      return v === undefined ? whole : v;
+    }
+    const cp =
+      ref[1] === "x" || ref[1] === "X"
+        ? parseInt(ref.slice(2), 16)
+        : parseInt(ref.slice(1), 10);
+    if (!Number.isInteger(cp) || cp < 1 || cp > 0x10ffff) return whole;
+    return String.fromCodePoint(cp);
+  });
+}
+
+/**
+ * Flatten Plane's `comment_html` / `description_html` to readable text.
+ *
+ * Mirrors `_strip_html` in `notifications/transports/plane.py`: mention
+ * components collapse to `@{uuid}`, every other tag becomes whitespace,
+ * and only then are entities decoded. That order is not cosmetic —
+ * decoding first turns an entity-encoded `&lt;` into a bracket the tag
+ * strip then reads as markup, swallowing everything up to the next `>`.
+ * Decoding at all is safe because the result is handed to `esc` before
+ * it reaches the DOM, so a decoded `<script>` is re-escaped on the way
+ * out.
+ */
+function planeText(html) {
+  const flattened = String(html || "")
+    .replace(PLANE_MENTION_TAG, (tag) => {
+      const found = tag.match(PLANE_MENTION_ID);
+      return found && found[1] ? `@${found[1]}` : " ";
+    })
+    .replace(/<[^>]+>/g, " ");
+  return unentity(flattened).replace(/\s+/g, " ").trim();
+}
+
 // Flatten Atlassian Document Format → plain text.
 function adfText(node) {
   if (!node) return "";
@@ -188,6 +335,161 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
         ["PR", pr ? `#${pr.number} ${pr.title || ""}` : ""],
         ["Issue", issue ? `#${issue.number} ${issue.title || ""}` : ""],
       ]);
+    } else if (source === "gitlab") {
+      const kind = body.object_kind || "";
+      const attrs = body.object_attributes || {};
+      const action = attrs.action || "";
+      const changes =
+        body.changes && typeof body.changes === "object" ? body.changes : {};
+      // A push hook carries neither `object_attributes` nor a `user`
+      // object — its actor is flattened onto the envelope instead.
+      const actor =
+        body.user?.username ||
+        body.user?.name ||
+        body.user_username ||
+        body.user_name ||
+        "";
+      // On an `issue` / `merge_request` hook the object IS
+      // `object_attributes`; on a `note` or `pipeline` hook the thing the
+      // event hangs off is a sibling key.
+      const mr = kind === "merge_request" ? attrs : body.merge_request || {};
+      const issue = kind === "issue" ? attrs : body.issue || {};
+      const status = kind === "pipeline" ? attrs.status || "" : "";
+      const commits = Array.isArray(body.commits) ? body.commits : [];
+      specific = kv([
+        ["Event", action ? `${kind}.${action}` : kind],
+        ["Actor", actor],
+        ["Project", body.project?.path_with_namespace],
+        ["Merge request", mr.iid ? `!${mr.iid} ${mr.title || ""}`.trim() : ""],
+        ["Issue", issue.iid ? `#${issue.iid} ${issue.title || ""}`.trim() : ""],
+        ["State", kind === "issue" || kind === "merge_request" ? attrs.state : ""],
+        [
+          "Branches",
+          kind === "merge_request" && attrs.source_branch
+            ? `${attrs.source_branch} → ${attrs.target_branch || ""}`.trim()
+            : "",
+        ],
+        [
+          "Pipeline",
+          kind === "pipeline" ? `#${attrs.id || ""} on ${attrs.ref || ""}`.trim() : "",
+        ],
+        // `pipeline.failed` is the one GitLab event routed back to the
+        // actor rather than to the thread — the agent whose push broke
+        // the build owns the fix — so it must not read like any other
+        // status line.
+        [
+          "Status",
+          status === "failed"
+            ? raw('<span class="badge failed">failed</span>')
+            : status,
+        ],
+        ["Failed jobs", status === "failed" ? glFailedJobs(body.builds) : ""],
+        [
+          "Duration",
+          kind === "pipeline" && attrs.duration != null ? `${attrs.duration}s` : "",
+        ],
+        [
+          "Branch",
+          kind === "push" ? String(body.ref || "").replace(/^refs\/heads\//, "") : "",
+        ],
+        [
+          "Commits",
+          kind === "push" ? String(body.total_commits_count ?? commits.length) : "",
+        ],
+        ["Assignees", glTransition(changes, "assignees", glNames(body.assignees))],
+        ["Reviewers", glTransition(changes, "reviewers", glNames(body.reviewers))],
+        ["Changed", Object.keys(changes).join(", ")],
+        ["Link", linkTo(attrs.url || mr.url || issue.url || body.project?.web_url)],
+      ]);
+      const note = kind === "note" ? attrs.note || "" : "";
+      const description =
+        kind === "issue" || kind === "merge_request" ? attrs.description || "" : "";
+      if (note)
+        specific += `<div class="block-label">Comment</div><pre class="code">${esc(note)}</pre>`;
+      else if (description)
+        specific += `<div class="block-label">Description</div><pre class="code">${esc(description)}</pre>`;
+      if (kind === "push" && commits.length)
+        specific += `<div class="block-label">Commits</div><pre class="code">${esc(
+          commits
+            .map(
+              (c) =>
+                `${String((c && c.id) || "").slice(0, 8)} ${firstLine(
+                  c && (c.title || c.message),
+                )}`,
+            )
+            .join("\n"),
+        )}</pre>`;
+    } else if (source === "plane") {
+      const event = body.event || "";
+      const action = body.action || "";
+      const data = body.data && typeof body.data === "object" ? body.data : {};
+      const activity =
+        body.activity && typeof body.activity === "object" ? body.activity : {};
+      const actorRef = activity.actor;
+      const actor =
+        (actorRef && typeof actorRef === "object"
+          ? actorRef.display_name || actorRef.first_name || actorRef.id
+          : actorRef) || "";
+      const isPage = event === "page";
+      // A page is workspace-scoped with a `projects` M2M, so its project
+      // ref is a list rather than the scalar FK a work item carries —
+      // `_page_project_id` in the transport draws the same distinction.
+      const projectRef = isPage
+        ? data.project_id ||
+          data.project ||
+          (Array.isArray(data.projects) ? data.projects[0] : "") ||
+          (Array.isArray(data.project_ids) ? data.project_ids[0] : "")
+        : data.project_id || data.project;
+      const identifier =
+        data.project && typeof data.project === "object"
+          ? data.project.identifier || ""
+          : "";
+      const seq = data.sequence_id;
+      // ``ENG-42`` only when the payload expanded the project FK — the
+      // id→identifier cache that resolves the rest lives in the engine,
+      // and a bare sequence number is still worth more than nothing.
+      const workItemKey =
+        seq === undefined || seq === null || seq === ""
+          ? ""
+          : identifier
+            ? `${identifier}-${seq}`
+            : `#${seq}`;
+      // `data.id` is the work item on an `issue` event but the COMMENT /
+      // INTAKE row on the others — the work item is `data.issue` there,
+      // the same distinction the transport draws before it builds a URL.
+      const workItemId = planeRef(event === "issue" ? data.id : data.issue);
+      const oldValue = activity.old_value == null ? "" : String(activity.old_value);
+      const newValue = activity.new_value == null ? "" : String(activity.new_value);
+      const mentions =
+        event === "issue_comment" ? planeMentionIds(data.comment_html) : [];
+      specific = kv([
+        ["Event", action ? `${event}.${action}` : event],
+        ["Actor", actor],
+        ["Workspace", body.workspace_slug],
+        ["Project", identifier || planeRef(projectRef)],
+        [
+          "Work item",
+          isPage ? "" : [workItemKey, data.name || ""].filter(Boolean).join(" "),
+        ],
+        ["Work item id", isPage ? "" : workItemId],
+        ["Page", isPage ? data.name || "" : ""],
+        ["Page id", isPage ? planeRef(data.id) : ""],
+        // `activity.field` is the discriminator the transport routes an
+        // update on: an `assignees` edit is a directed ping at the newly
+        // added assignee, anything else fans out to the work item's
+        // subscribers. Without it an `issue.updated` row says nothing
+        // about what actually moved.
+        ["Field", activity.field],
+        ["Change", oldValue || newValue ? `${oldValue || "—"} → ${newValue || "—"}` : ""],
+        ["Assignees", planeParties(data.assignees)],
+        ["Mentions", mentions.join(", ")],
+      ]);
+      const commentText = planeText(data.comment_html);
+      const descriptionText = planeText(data.description_html);
+      if (commentText)
+        specific += `<div class="block-label">Comment</div><pre class="code">${esc(commentText)}</pre>`;
+      else if (descriptionText)
+        specific += `<div class="block-label">Description</div><pre class="code">${esc(descriptionText)}</pre>`;
     }
     return `
       ${specific}
@@ -236,7 +538,12 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
       p.salient_body != null && p.salient_body !== "" ? p.salient_body : p.body;
     const messages = Array.isArray(p.messages) ? p.messages : [];
     const meta = p.metadata && typeof p.metadata === "object" ? p.metadata : {};
-    const metaKeys = Object.keys(meta);
+    // `routed_via` is promoted out of the chip row below rather than
+    // shown twice: it is the transport's answer to "why did this wake
+    // THIS agent" (`assignee`, `mention`, `subscriber`,
+    // `project_lead_fallback`, `intake_triage`, …), and as one chip among
+    // a dozen coordinates it read as another id.
+    const metaKeys = Object.keys(meta).filter((k) => k !== "routed_via");
 
     let out =
       head +
@@ -244,6 +551,7 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
         ["Sender", p.sender || ""],
         ["Subject", p.subject || ""],
         ["Recipient", p.recipient_email || ""],
+        ["Routed via", meta.routed_via || ""],
       ]);
     if (msg)
       out += `<div class="block-label">Message</div><pre class="code">${esc(msg)}</pre>`;
@@ -253,8 +561,8 @@ export function createEventDetailView({ query, navigate, refresh, params }) {
         `<div class="notif-msgs">` +
         messages
           .map(
-            (cm) => `
-          <div class="notif-msg">
+            (cm, i) => `
+          <div class="notif-msg" data-k="msg:${i}">
             <div class="notif-msg-meta">
               ${cm.sender ? `<b>${esc(cm.sender)}</b>` : ""}
               ${cm.source_event_type ? `<span class="chip">${esc(cm.source_event_type)}</span>` : ""}

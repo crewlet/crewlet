@@ -18,7 +18,7 @@
 // the browser, not the wiring.
 
 import assert from "node:assert";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { test, run } from "./harness.mjs";
@@ -81,6 +81,70 @@ test("every view's dependencies are provided by the shell", () => {
     }
   }
   assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+test("every module the shell imports exists on disk", () => {
+  // ES modules fail as a graph, not as a file: one missing import in
+  // app.js and NOTHING renders — no view, no nav, no error on the page,
+  // just an empty shell and a 404 in a console nobody has open. A view
+  // module deleted in a refactor, or renamed on one side of a rename,
+  // takes the whole dashboard with it.
+  const problems = [];
+  const seen = new Set();
+  const walk = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    let source;
+    try {
+      source = readFileSync(file, "utf8");
+    } catch {
+      return; // reported by whoever imported it
+    }
+    for (const hit of source.matchAll(/from\s+"(\.[^"]+)"/g)) {
+      const target = join(dirname(file), hit[1]);
+      if (!existsSync(target)) {
+        problems.push(
+          `${file.slice(JS.length + 1)} imports ${hit[1]}, which does not exist`,
+        );
+        continue;
+      }
+      walk(target);
+    }
+  };
+  walk(join(JS, "app.js"));
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+test("no module is orphaned", () => {
+  // The other half: a view left behind by a refactor still passes every
+  // test it has, still looks maintained, and is reachable from nothing.
+  const reachable = new Set();
+  const walk = (file) => {
+    if (reachable.has(file)) return;
+    reachable.add(file);
+    let source;
+    try {
+      source = readFileSync(file, "utf8");
+    } catch {
+      return;
+    }
+    for (const hit of source.matchAll(/from\s+"(\.[^"]+)"/g)) {
+      const target = join(dirname(file), hit[1]);
+      if (existsSync(target)) walk(target);
+    }
+  };
+  walk(join(JS, "app.js"));
+
+  const all = [
+    ...readdirSync(JS)
+      .filter((f) => f.endsWith(".js"))
+      .map((f) => join(JS, f)),
+    ...VIEW_FILES.map((f) => join(JS, "views", f)),
+  ];
+  const orphans = all
+    .filter((f) => !reachable.has(f))
+    .map((f) => f.slice(JS.length + 1));
+  assert.deepEqual(orphans, [], `unreachable from app.js: ${orphans.join(", ")}`);
 });
 
 test("every view in the router's table is imported", () => {

@@ -1,11 +1,16 @@
-// Where a seat's raw event list lives.
+// The seat page does not render a second event list — it links to one.
 //
-// It used to be a second list at the bottom of the agent page, below the
-// turns — the thing the page is actually for. Activity already renders
-// that list, with filters the agent page never had, so the agent page
-// links across instead of carrying a copy. That only holds if the link
-// actually lands on a filtered view, and if the filter it sets is
-// visible to the reader who arrives on it.
+// A seat's page answers "what is this agent doing and what did it cost".
+// Its raw event list is a different question — "what happened, across the
+// company" — and Activity already answers that one, with category,
+// failure and actor filters the seat page never had. Rendering a second
+// copy below the turns pushed the page's own content off the fold.
+//
+// So the rule is: when a screen wants a list another screen already owns,
+// it links to it FILTERED. This checks both ends of that link, because a
+// filtered link is only useful if the far end actually filters — and the
+// two ends live in different modules, which is exactly where a rename
+// breaks one and not the other.
 
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
@@ -13,130 +18,105 @@ import { test, run } from "./harness.mjs";
 
 installDom();
 const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
-const { createEventsView } = await import(new URL("views/events.js", base));
-const { createAgentView } = await import(new URL("views/agent.js", base));
+const { createSeatView } = await import(new URL("views/seat.js", base));
+const { createActivityView } = await import(new URL("views/activity.js", base));
 const { parseRoute } = await import(new URL("router.js", base));
 
-// ---- the agent page ----
-
-function makeAgentView(agent) {
-  const state = { agents: [agent], sandboxes: [], connected: true };
-  const store = {
-    state,
-    agentById: () => agent,
-    subscribe: () => () => {},
-  };
-  const navigated = [];
-  let markup = "";
-  const view = createAgentView({
-    store,
-    params: { id: agent.id },
-    navigate: (hash) => navigated.push(hash),
-    refresh: () => {
-      markup = view.render(state);
-    },
-    query: async (what) => {
-      if (what === "agent") return agent;
-      if (what === "agent_memory") return {};
-      if (what === "tokens") return { by_phase: [], totals: {} };
-      return [];
-    },
-  });
-  view.mount();
-  return { view, navigated, markup: () => view.render(state) };
-}
-
 const SEAT = {
-  id: "a1",
+  id: "rt-1",
+  name: "Agent CEO",
   role: "Agent CEO",
   handle: "ceo",
+  goal: "Lead",
   state: "idle",
-  llm_history: [],
   input_tokens: 0,
   output_tokens: 0,
   total_tokens: 0,
 };
 
-test("the agent page no longer renders a second event list", async () => {
-  const { markup } = makeAgentView(SEAT);
+function makeSeatView(agent) {
+  const state = {
+    agents: [agent],
+    sandboxes: [],
+    budget: {},
+    events: [],
+    connected: true,
+    health: { status: "ok" },
+  };
+  const navigated = [];
+  const view = createSeatView({
+    store: { state, agentByKey: () => agent, subscribe: () => () => {} },
+    query: async (what) => {
+      if (what === "agent") return { ...agent, llm_history: [] };
+      if (what === "agent_memory") return {};
+      if (what === "tokens") return { totals: {}, by_phase: [] };
+      return {};
+    },
+    navigate: (to) => navigated.push(to),
+    refresh: () => {},
+    params: { key: "ceo" },
+  });
+  if (view.mount) view.mount(document.createElement("div"));
+  return { view, state, navigated, markup: () => view.render(state) };
+}
+
+test("the seat page renders no event list of its own", async () => {
+  const { markup } = makeSeatView(SEAT);
   await Promise.resolve();
   await Promise.resolve();
   const html = markup();
-  assert.ok(!html.includes("Event history"), "the event list is still on the page");
-  assert.ok(html.includes("LLM Invocations"), "the page lost what it is for");
+  assert.ok(!html.includes("Event history"), "the event list is back on the page");
 });
 
-test("the agent page links to Activity filtered to the seat", async () => {
-  const { view, navigated } = makeAgentView(SEAT);
+test("the seat page links to Activity filtered to the seat", async () => {
+  const { markup } = makeSeatView(SEAT);
   await Promise.resolve();
   await Promise.resolve();
-  view.onAction("seat-events", { dataset: {} });
-  assert.deepStrictEqual(navigated, ["/events?actor=Agent%20CEO"]);
+  const html = markup();
+  assert.ok(
+    html.includes("/activity?actor=Agent%20CEO"),
+    `no filtered Activity link on the seat page:\n${html.slice(0, 400)}`,
+  );
 });
 
 // ---- the link's other end ----
 
-test("the route carries the actor through to the view", () => {
-  globalThis.location.hash = "#/events?actor=Agent%20CEO";
+test("the route carries the actor through to Activity", () => {
+  globalThis.location.hash = "#/activity?actor=Agent%20CEO";
   const route = parseRoute();
-  assert.strictEqual(route.name, "events");
+  assert.strictEqual(route.name, "activity");
   assert.strictEqual(route.params.actor, "Agent CEO");
 });
 
-function makeEventsView(params, liveEvents = []) {
-  const state = { events: liveEvents, connected: true, health: { status: "ok" } };
-  const store = { state, subscribe: () => () => {} };
-  let markup = "";
-  const view = createEventsView({
-    store,
-    params,
-    navigate: () => {},
-    refresh: () => {
-      markup = view.render(state);
-    },
-    query: async () => [],
-  });
-  view.mount();
-  markup = view.render(state);
-  return { view, markup: () => markup };
-}
-
-const ev = (id, actor) => ({
-  id,
-  type: "task_created",
-  category: "task",
-  actor,
-  summary: id,
-  timestamp: "2026-04-01T12:00:00Z",
-  trace_id: "",
+test("the old route still lands, filter intact", () => {
+  // `#/events?actor=` is in bookmarks and in chat threads, and was the
+  // form the seat page itself minted before the rooms were reorganised.
+  globalThis.location.hash = "#/events?actor=Agent%20CEO";
+  const route = parseRoute();
+  assert.ok(route.redirect, "the old Activity route no longer redirects");
+  assert.match(route.redirect, /^\/activity\?actor=/);
+  // The query survives the move: decoding it must yield the same actor,
+  // whichever encoding of a space the redirect used.
+  const query = new URLSearchParams(route.redirect.split("?")[1]);
+  assert.strictEqual(query.get("actor"), "Agent CEO");
 });
 
 test("Activity opens filtered when the URL names an actor", () => {
-  const { markup } = makeEventsView({ actor: "Agent CEO" }, [
-    ev("e1", "Agent CEO"),
-    ev("e2", "Agent PM"),
-  ]);
-  const html = markup();
-  assert.ok(html.includes("e1"), "the seat's own event was filtered out");
-  assert.ok(!html.includes("e2"), "another seat's event survived the filter");
+  const events = [
+    { id: "e1", type: "task_created", actor: "Agent CEO", timestamp: "2026-04-01T12:00:00Z", category: "task", summary: "one" },
+    { id: "e2", type: "task_created", actor: "Agent PM", timestamp: "2026-04-01T12:00:01Z", category: "task", summary: "two" },
+  ];
+  const state = { events, connected: true, health: { status: "ok" } };
+  const view = createActivityView({
+    store: { state, subscribe: () => () => {} },
+    query: async () => ({ events: [] }),
+    navigate: () => {},
+    refresh: () => {},
+    params: { actor: "Agent CEO" },
+  });
+  const html = view.render(state);
+  assert.ok(html.includes("one"), "the seat's own event is missing");
+  assert.ok(!html.includes("two"), "another seat's event was not filtered out");
 });
 
-test("the preset actor gets a visible, clearable pill with no matches yet", () => {
-  // Reachable from a URL, so the filter can be set before one matching
-  // event has loaded. An active filter the reader cannot see is an empty
-  // list with no way back out of it.
-  const { markup } = makeEventsView({ actor: "Agent CEO" }, [ev("e2", "Agent PM")]);
-  const html = markup();
-  assert.ok(
-    /data-action="actor" data-actor="Agent CEO"/.test(html),
-    "no pill for the active filter",
-  );
-});
-
-test("Activity with no actor param filters nothing", () => {
-  const { markup } = makeEventsView({}, [ev("e1", "Agent CEO"), ev("e2", "Agent PM")]);
-  const html = markup();
-  assert.ok(html.includes("e1") && html.includes("e2"));
-});
-
-run();
+await run();

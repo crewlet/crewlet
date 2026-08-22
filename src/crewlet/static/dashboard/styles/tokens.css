@@ -31,22 +31,47 @@
  * minimums drifts to the top of the range where it is legible and unpleasant.
  * The previous palette did exactly that in both directions at once: body text
  * sat at 19.25:1 (halation) while `--text-dim` sat at 2.67:1 — below the 3:1
- * floor it needed. Every step here is placed at a measured TARGET:
+ * floor it needed.
  *
- *   body text      13.5:1   comfortable for sustained reading, far above AAA
- *   headings       ~15:1    larger glyphs tolerate (and want) more weight
- *   secondary      ~8:1
- *   muted          ~5:1
- *   dim            ~3.2:1   de-emphasised meta, still above the 3:1 floor
- *   hue ink        ~6.5:1   labels that carry a hue
- *   hue mark       3.3-5.7  fills, bars, dots (3:1 floor for non-text)
+ * Every step is placed at a measured target against the WORST SURFACE it can
+ * land on. That distinction is the whole of it. Because the dark panel fill
+ * is an alpha, panels nest; a row inside one can be hovered or selected, and
+ * a code block cuts an inset into it — eight distinct composites carrying the
+ * same tokens, spanning a point and a half of contrast. A ramp anchored to
+ * the panel is therefore anchored to neither end, and a browser audit across
+ * ten rooms found sixteen elements rendering under 4.5:1 while every token in
+ * this file "passed". The ranges below are what each step covers across all
+ * eight, so the low end is a guarantee rather than an average:
+ *
+ *   body text      10.2 – 14.5   comfortable for sustained reading
+ *   headings       11.5 – 16.4   larger glyphs tolerate (and want) more
+ *   secondary       7.4 – 10.6
+ *   muted           5.8 –  8.2
+ *   dim             4.7 –  6.7   still a TEXT step — see below
+ *   hue ink         5.1 –  7.3   labels that carry a hue
+ *   hue mark        3.3 –  6.7   fills, bars, dots (3:1 floor for non-text)
+ *
+ * The high end of the body and heading rows is a ceiling, not a score. Cream
+ * at 19:1 on near-black blooms, and a dense page of it is the thing that
+ * makes eyes hurt after an hour — so the top step stops just under the
+ * halation line rather than going as bright as it can.
+ *
+ * The dimmest step clears the TEXT floor because in this design there is no
+ * non-text use of it. An audit of the rendered page found `--text-dim`
+ * carrying 10px labels in ten places — a clock, "last 24h", "no live meter" —
+ * and marking nothing anywhere. A step specced as a non-text mark and used as
+ * type everywhere is a text step measured against the wrong floor.
  *
  * ---------------------------------------------------------------------------
  * Categorical hues
  * ---------------------------------------------------------------------------
  * The hue FAMILIES (angle) come from the site's brand tokens. Chroma is
  * capped at 13.5 (OKLab ×100) because highly saturated light-on-dark type is
- * what "vibrates", and lightness is re-stepped per theme.
+ * what "vibrates", and lightness is re-stepped per theme. Two families are
+ * carried above that cap on purpose and only because a measurement forced
+ * it: `--red` at 15.8 (below) and `--pink` at 14.5, which is the least
+ * rotation and chroma that lets the dimmest mark clear the non-text floor on
+ * a selected row while still holding ΔE 15 against purple.
  *
  * Each family ships two steps:
  *   --<hue>       the MARK step  — bars, dots, stack segments, heat fills
@@ -67,9 +92,11 @@
  * this file on every run — not by hand, and not once:
  *   - normal-vision separation, worst adjacent pair  ≥ 15
  *   - protan / deutan separation, worst adjacent pair ≥ 8
- *   - mark contrast vs the surface it is painted on  ≥ 3:1
- *   - ink contrast vs the surface                    ≥ 4.5:1
- *   - body text inside its comfort band              11:1 … 15:1
+ *   - mark contrast, worst of eight surfaces          ≥ 3:1
+ *   - ink contrast, worst of eight surfaces           ≥ 4.5:1
+ *   - every neutral text step, worst of eight         ≥ 4.5:1
+ *   - body text inside its comfort band              10:1 … 15:1
+ *   - headings under the halation ceiling, BEST of eight ≤ 16.5:1
  *
  * `--red` is a reserved STATUS hue (failed / error / destructive) and is not
  * part of the categorical set — an ops dashboard needs red to keep meaning
@@ -206,12 +233,28 @@
 
   /* Text — warm, and actually warm: the previous ramp's comment said
      "warm cream, not white" while shipping a blue-white (#f4f5f7) at
-     19.25:1. These are the cream hue at a tiny chroma, placed on target. */
-  --text: #dad6ce; /* 13.5:1 */
-  --text-secondary: #a9a69e; /* 8.0:1 */
-  --text-muted: #86847c; /* 5.2:1 */
-  --text-dim: #67645c; /* 3.3:1 — was 2.67:1, under the floor */
-  --heading: #e6e3da; /* 15.2:1 */
+     19.25:1. These are the cream hue at a tiny chroma, placed on target.
+
+     Every step is placed against the WORST surface it can land on, not
+     against the panel. Panels are alphas, so they nest, and a row can be
+     hovered or selected on top of that — which means the same token is
+     painted over eight different composites and the panel is nowhere near
+     the darkest of them. Anchoring to the panel is what let a "4.6:1"
+     ramp render at 3.6:1 on a selected row inside a card; a browser audit
+     across ten rooms found 16 such elements, all of them real type. The
+     numbers below are the RANGE each step covers over every surface in
+     the design, so the low end is the guarantee: nothing this file
+     defines is ever painted under 4.7:1.
+
+     The high end is a ceiling, not a score. Cream at 19:1 on near-black
+     blooms, and reading a dense page of it is the thing that makes eyes
+     hurt — so the top step stops at 16.4, just under the halation line,
+     rather than going as bright as it can. */
+  --text: #e0dbd3; /* 10.2 – 14.5 */
+  --text-secondary: #c1bcb4; /* 7.4 – 10.6 */
+  --text-muted: #aaa69e; /* 5.8 – 8.2 */
+  --text-dim: #99968d; /* 4.7 – 6.7 */
+  --heading: #ece9df; /* 11.5 – 16.4 */
   --on-accent: #0d0c0b;
 
   /* Accent — the brand violet, pitched brighter and less saturated than any
@@ -243,8 +286,9 @@
     0 10px 30px rgba(0, 0, 0, 0.6);
 
   /* Categorical hues — mark step / text step.
-     Mark tiers: pink 3.3 · green/blue/amber/cyan/orange/brown 4.5 · purple 5.7
-     (the assignment that separates every adjacent pair in both orders). */
+     Mark tiers, on the worst surface: pink 3.3 · green/blue/amber/cyan/
+     orange/brown 3.5 · purple 4.5 (the assignment that separates every
+     adjacent pair in both orders, in both themes). */
   --green: #528e38;
   --green-ink: #6fac56;
   --blue: #537ed1;
@@ -257,8 +301,8 @@
   --cyan-ink: #57a5d6;
   --orange: #c26730;
   --orange-ink: #e3854f;
-  --pink: #a34a83;
-  --pink-ink: #dc7eb8;
+  --pink: #c05786;
+  --pink-ink: #e779a9;
   --brown: #b1703e;
   --brown-ink: #d18e5c;
 
@@ -290,11 +334,16 @@
   --border: rgba(60, 50, 30, 0.13);
   --border-strong: rgba(60, 50, 30, 0.22);
 
-  --text: #282620; /* 13.5:1 */
-  --text-secondary: #504d46; /* 7.5:1 */
-  --text-muted: #6d6a63; /* 4.8:1 — was 3.55:1, under the text floor */
-  --text-dim: #8a877f; /* 3.2:1 — was 2.15:1, under the floor */
-  --heading: #1d1a14; /* 15.5:1 */
+  /* The same ramp, solved against this theme's own worst surface. Light
+     has the narrower spread — its panels are opaque, so nesting one
+     inside another changes nothing — but the recessed chrome and a
+     selected row still cost a point, which is exactly what put six of
+     these steps under 4.5:1 before. */
+  --text: #39352f; /* 10.3 – 11.9 */
+  --text-secondary: #4d4a44; /* 7.5 – 8.6 */
+  --text-muted: #5d5b54; /* 5.7 – 6.6 */
+  --text-dim: #6a6861; /* 4.7 – 5.4 */
+  --heading: #302d26; /* 11.6 – 13.4 */
   --on-accent: #ffffff;
 
   --accent: #5e5490;
@@ -324,8 +373,8 @@
   --cyan-ink: #086593;
   --orange: #b65c23;
   --orange-ink: #9e4600;
-  --pink: #c96da6;
-  --pink-ink: #973f78;
+  --pink: #c75d8d;
+  --pink-ink: #a0396a;
   --brown: #a56633;
   --brown-ink: #8d501b;
 

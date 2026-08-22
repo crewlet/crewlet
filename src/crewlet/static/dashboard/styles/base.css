@@ -252,11 +252,7 @@ code,
   padding: 6px 10px;
 }
 .nav-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 8px 6px;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.16em;
 }
 .nav-title .count {
@@ -315,27 +311,28 @@ code,
   color: var(--accent-ink);
 }
 
-/* Collapsible nav group (Company). The head toggles; the items navigate. */
-.nav-group-head .chevron {
-  margin-left: auto;
-  transition: transform var(--dur) var(--ease-snappy);
+/* Nav zones. Each is the answer to one question, and each carries a
+   count of the obligations open inside it — drawn only when the page can
+   actually see the engine, because a confident zero during an outage is
+   the lie this surface exists to prevent. */
+.nav-zone + .nav-zone {
+  margin-top: var(--space-3);
 }
-.nav-group.open > .nav-group-head .chevron {
-  transform: rotate(90deg);
+.nav-zone-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2) var(--space-1);
 }
-.nav-group-items {
-  display: none;
-}
-.nav-group.open > .nav-group-items {
-  display: block;
-}
-.nav-item.sub {
-  padding-left: 32px;
-  font-size: 12.5px;
-}
-.nav-item.sub .ic {
-  width: 12px;
-  height: 12px;
+.zone-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--amber-ink);
 }
 
 .sidebar-footer {

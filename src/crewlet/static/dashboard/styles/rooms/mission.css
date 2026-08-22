@@ -1,0 +1,84 @@
+/* Mission Control and the Work board.
+ *
+ * Panels take their surface from the shared recipe in components.css —
+ * this file holds only what is specific to these two rooms. No colour is
+ * defined here: every value is a token from tokens.css.
+ */
+
+/* The attention queue leads the page, so it gets the one piece of chrome
+   that says "read this first": a hairline in the caution hue along its
+   top edge, and the brand gradient left alone (that belongs to the hero
+   below it, and two lit edges in a row is neither of them leading). */
+.att-panel {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  margin-bottom: var(--space-5);
+  position: relative;
+  overflow: hidden;
+}
+.att-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--amber) 70%, transparent),
+    transparent 70%
+  );
+}
+/* A queue with nothing in it keeps its panel: an answer that disappears
+   when it is "nothing" teaches the reader to check whether the panel is
+   there rather than to read it. */
+.att-panel .sec {
+  margin-bottom: 0;
+}
+
+/* ---- Work board ---- */
+
+.work-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.work-run {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--panel-shadow);
+  padding: var(--space-3) var(--space-4);
+}
+/* A run nobody can move without answering it wears the caution hue on
+   its leading edge — the same amber the attention queue uses, because it
+   is the same obligation seen from the other side. */
+.work-run.is-waiting {
+  border-left: 3px solid var(--amber);
+}
+.work-run-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.work-run-body {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.work-run-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.work-meta {
+  color: var(--text-muted);
+}
+.work-run-foot .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+}

@@ -1,0 +1,157 @@
+/* The Configuration room.
+ *
+ * Panels take their surface from the shared recipe in components.css —
+ * this file holds only what is specific to this room. No colour is
+ * defined here: every value is a token from tokens.css.
+ */
+
+.cfg-active {
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-4);
+}
+.cfg-name {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+  margin: var(--space-1) 0 var(--space-2);
+}
+.cfg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.cfg-meta .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.cfg-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: var(--space-2) 0 0;
+}
+
+/* ---- History ---- */
+
+.cfg-rev {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cfg-rev:last-child {
+  border-bottom: 0;
+}
+.cfg-rev-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.cfg-rev-summary {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.cfg-rev-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+}
+.cfg-rev-meta .mono {
+  font-family: var(--font-mono);
+}
+/* The active revision is marked by a filled dot AND the word "active" —
+   colour is never the only carrier. */
+.cfg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  flex: none;
+}
+.cfg-dot.on {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.cfg-diff {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+.cfg-change {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 2px 0;
+  min-width: 0;
+}
+.cfg-change .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.cfg-val {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cfg-op {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  width: 3.2em;
+  flex: none;
+}
+.cfg-op-add {
+  color: var(--green-ink);
+}
+.cfg-op-remove {
+  color: var(--red-ink);
+}
+.cfg-op-change {
+  color: var(--amber-ink);
+}
+
+/* ---- Editor ---- */
+
+.cfg-kinds {
+  margin-bottom: var(--space-3);
+}
+.cfg-editor {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.cfg-text {
+  width: 100%;
+  min-height: 46vh;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  resize: vertical;
+  tab-size: 2;
+}
+.cfg-text:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.cfg-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}

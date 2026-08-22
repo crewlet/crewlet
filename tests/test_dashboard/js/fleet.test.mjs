@@ -74,12 +74,18 @@ async function withView(answers, body) {
   };
   const ctx = {
     query: (...args) => impl(...args),
+    // The shell re-renders a view when it asks; here it paints straight
+    // into the element so a test can read what a reader would see.
+    refresh: () => {
+      el.innerHTML = view.render({});
+    },
     setQuery: (fn) => {
       impl = fn;
     },
   };
   const view = createFleetView(ctx);
   view.mount(el);
+  el.innerHTML = view.render({});
   // Let the initial load() settle.
   await new Promise((resolve) => setTimeout(resolve, 0));
   try {
@@ -88,6 +94,36 @@ async function withView(answers, body) {
     view.destroy();
   }
 }
+
+test("the view returns markup for the shell to patch", async () => {
+  // It used to paint with `innerHTML` and return no `render` at all, so
+  // the shell's own `patch(root, active.render(state))` threw on mount —
+  // in every build, on the one view an operator opens when nodes are
+  // dying.
+  await withView([fleetPayload()], ({ view }) => {
+    assert.strictEqual(typeof view.render, "function");
+    assert.match(view.render({}), /node-a/);
+  });
+});
+
+test("a lagging node is measured against what the fleet is converging on", async () => {
+  // An epoch on its own is a number with nothing to compare it to.
+  const payload = fleetPayload();
+  payload.target_epoch = 10;
+  payload.nodes[0].config_epoch = 7;
+  await withView([payload], ({ el }) => {
+    assert.match(el.innerHTML, /epoch 7/);
+    assert.match(el.innerHTML, /3 behind/);
+  });
+});
+
+test("a node that stopped reporting is not read as merely behind", async () => {
+  const payload = fleetPayload();
+  payload.nodes[0].config_reported_at = new Date(Date.now() - 600_000).toISOString();
+  await withView([payload], ({ el }) => {
+    assert.match(el.innerHTML, /stopped reporting/);
+  });
+});
 
 test("a successful read renders the fleet and says it is fresh", async () => {
   await withView([fleetPayload()], ({ el }) => {
