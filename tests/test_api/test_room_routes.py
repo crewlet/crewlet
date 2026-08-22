@@ -172,6 +172,26 @@ class TestConversations:
         payload = await conversations_payload(app, handle="eng", key="jira:POC-7")
         assert [e["reply"] for e in payload["entries"]] == ["first", "second"]
 
+    async def test_an_entry_shows_the_timestamp_the_prompt_renders(self) -> None:
+        """The Threads tab's contract is that it shows what the PROMPT
+        shows, and the prompt renders ``SessionEntry.at``. Building the
+        payload by spreading the entry LAST made the answer depend on
+        dict-merge order and quietly dropped the row-timestamp fallback
+        the same line was there to provide."""
+        app = _app(database=_FakeDatabase(stored_at=True))
+        payload = await conversations_payload(app, handle="eng", key="jira:POC-7")
+        # Entries come back oldest-first, the order the prompt renders.
+        assert [e["at"] for e in payload["entries"]] == ["", "2026-08-19T07:00"]
+
+    async def test_an_entry_with_no_recorded_time_falls_back_to_the_row(self) -> None:
+        """An entry written by an older engine still landed at a knowable
+        moment; a blank timestamp would read as an entry from nowhere."""
+        app = _app(database=_FakeDatabase())
+        assert [e["at"] for e in (await _entries(app))] == [
+            "2026-08-20T09:00:00+00:00",
+            "2026-08-20T09:30:00+00:00",
+        ]
+
     async def test_an_unreadable_ledger_reports_unavailable(self) -> None:
         """Same rule as the budget counter: a store that cannot be read
         is not a seat that has said nothing."""
@@ -193,6 +213,11 @@ class TestConversations:
         assert module.get_conversations.__doc__
 
 
+async def _entries(app: Any) -> list[dict[str, Any]]:
+    payload = await conversations_payload(app, handle="eng", key="jira:POC-7")
+    return payload["entries"]
+
+
 class _FakeDatabase(Database):
     """A real ``Database`` with its execute stubbed.
 
@@ -201,9 +226,10 @@ class _FakeDatabase(Database):
     pass here while the production path returned no store at all.
     """
 
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, stored_at: bool = False) -> None:
         super().__init__()
         self._fail = fail
+        self._stored_at = stored_at
 
     async def execute(self, query: str, *args: Any) -> list[dict[str, Any]]:
         if self._fail:
@@ -216,18 +242,38 @@ class _FakeDatabase(Database):
                     "last_at": datetime(2026, 8, 20, 9, 30, tzinfo=UTC),
                 }
             ]
+        # ``SessionEntry.to_dict`` always emits every key, empty or
+        # not — which is exactly what made the row-timestamp fallback
+        # dead code when the entry was spread last.
+        second: dict[str, Any] = {"reply": "second", "at": ""}
+        first: dict[str, Any] = {"reply": "first", "at": ""}
+        if self._stored_at:
+            # Only the newer entry carries its own time, so one row
+            # exercises the entry value and the other the fallback.
+            second["at"] = "2026-08-19T07:00"
+            return [
+                # A row time that DISAGREES with the entry's own, so the
+                # assertion proves which one reaches the screen.
+                {
+                    "turn_id": "t2",
+                    "work_key": "w2",
+                    "created_at": datetime(2026, 8, 20, 9, 30, tzinfo=UTC),
+                    "entry": second,
+                },
+                {"turn_id": "t1", "work_key": "w1", "created_at": None, "entry": first},
+            ]
         return [
             {
                 "turn_id": "t2",
                 "work_key": "w2",
                 "created_at": datetime(2026, 8, 20, 9, 30, tzinfo=UTC),
-                "entry": {"reply": "second"},
+                "entry": second,
             },
             {
                 "turn_id": "t1",
                 "work_key": "w1",
                 "created_at": datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
-                "entry": {"reply": "first"},
+                "entry": first,
             },
         ]
 

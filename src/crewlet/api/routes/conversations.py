@@ -29,6 +29,29 @@ logger = get_logger("api.routes.conversations")
 _CONVERSATION_LIST_LIMIT = 50
 
 
+def _entry_payload(row: Any) -> dict[str, Any]:
+    """One stored entry as the dashboard reads it.
+
+    The entry's own fields win: the Threads tab's whole contract is that
+    it shows what the PROMPT shows, and the prompt renders
+    ``SessionEntry.at``.  The row's ``created_at`` is the fallback for
+    the one case where they differ — an entry written by an older engine
+    that had no ``at``, where the row still knows when it landed and a
+    blank timestamp would read as an entry from nowhere.
+
+    Spreading ``row.entry`` last (the obvious way to write this) made
+    the answer depend on dict-merge order and silently discarded the
+    fallback it was there to provide.
+    """
+    entry = row.entry or {}
+    stored = row.created_at.isoformat() if row.created_at else ""
+    return {
+        **entry,
+        "turn_id": str(entry.get("turn_id") or "") or row.turn_id,
+        "at": str(entry.get("at") or "") or stored,
+    }
+
+
 def _store(app: Any) -> Any:
     """The durable ledger, or ``None``.
 
@@ -81,14 +104,7 @@ async def conversations_payload(
             "handle": handle,
             "conversation_key": key,
             "conversations": [],
-            "entries": [
-                {
-                    "turn_id": row.turn_id,
-                    "at": row.created_at.isoformat() if row.created_at else "",
-                    **row.entry,
-                }
-                for row in rows
-            ],
+            "entries": [_entry_payload(row) for row in rows],
         }
 
     try:
