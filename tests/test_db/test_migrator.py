@@ -373,3 +373,44 @@ def test_repair_migration_sorts_after_the_definitions_it_repairs() -> None:
     assert ordered.index("020_learning_health_repair.sql") > ordered.index(
         "009_skill_curator.sql"
     )
+
+
+# ---------------------------------------------------------------------------
+# The migrator is the only author of schema
+# ---------------------------------------------------------------------------
+
+
+def test_no_test_hand_builds_a_table_the_migrations_own() -> None:
+    """A test that re-creates a migrated table is a schema mirror nothing
+    keeps in step, and it fails in the worst direction: the copy goes
+    stale, the tests that read it break, and the engine's real SQL —
+    which was correct all along — is what looks broken.
+
+    That is not hypothetical. ``tests/test_learning/test_episode_work_key``
+    dropped ``episodes`` and built its own, and migration 033's new
+    ``conversation_key`` column turned every test in it red while the
+    store was right. Its teardown left the real table dropped, so
+    anything later in the same session that touched it failed too.
+
+    Against a real ``CREWLET_TEST_DSN`` the migrator has already built
+    every table. Clean rows between tests; never the schema.
+    """
+    owned = set()
+    for path in MIGRATIONS_DIR.glob("*.sql"):
+        owned.update(
+            re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)", path.read_text())
+        )
+    assert "episodes" in owned, "the table-name scan found nothing to protect"
+
+    root = MIGRATIONS_DIR.parents[3] / "tests"
+    offenders: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        text = path.read_text()
+        for statement in re.findall(
+            r"(?:CREATE|DROP) TABLE (?:IF NOT EXISTS |IF EXISTS )?([a-z_]+)", text
+        ):
+            if statement in owned:
+                offenders.append(f"{path.relative_to(root.parent)}: {statement}")
+    assert not offenders, (
+        "these tests build their own copy of a migrated table: " + ", ".join(offenders)
+    )
