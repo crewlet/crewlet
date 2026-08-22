@@ -151,29 +151,29 @@
 .source-badge.builtin {
   color: var(--green-ink);
   border-color: color-mix(in srgb, var(--green) 26%, transparent);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
+  background: color-mix(in srgb, var(--green) var(--tint)%, transparent);
 }
 .source-badge.mcp-slack {
   color: var(--purple-ink);
   border-color: color-mix(in srgb, var(--purple) 26%, transparent);
-  background: color-mix(in srgb, var(--purple) 10%, transparent);
+  background: color-mix(in srgb, var(--purple) var(--tint)%, transparent);
 }
 .source-badge.mcp-atlassian {
   color: var(--blue-ink);
   border-color: color-mix(in srgb, var(--blue) 26%, transparent);
-  background: color-mix(in srgb, var(--blue) 10%, transparent);
+  background: color-mix(in srgb, var(--blue) var(--tint)%, transparent);
 }
 .source-badge.mcp-plane {
   /* Orange, not green: green is the builtin badge above, and a
      disambiguation badge must not read as "builtin". */
   color: var(--orange-ink);
   border-color: color-mix(in srgb, var(--orange) 26%, transparent);
-  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  background: color-mix(in srgb, var(--orange) var(--tint)%, transparent);
 }
 .source-badge.mcp {
   color: var(--cyan-ink);
   border-color: color-mix(in srgb, var(--cyan) 26%, transparent);
-  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+  background: color-mix(in srgb, var(--cyan) var(--tint)%, transparent);
 }
 .tool-grid {
   display: grid;
@@ -220,7 +220,7 @@
 }
 .chip.sandbox {
   color: var(--purple-ink);
-  background: color-mix(in srgb, var(--purple) 10%, transparent);
+  background: color-mix(in srgb, var(--purple) var(--tint)%, transparent);
   border-color: color-mix(in srgb, var(--purple) 26%, transparent);
 }
 
@@ -706,7 +706,7 @@ pre.code.msg-pre {
   margin-bottom: 10px;
   padding: 3px 10px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--purple) 11%, transparent);
+  background: color-mix(in srgb, var(--purple) var(--tint)%, transparent);
   border: 1px solid color-mix(in srgb, var(--purple) 26%, transparent);
   color: var(--purple-ink);
   font-size: 12px;
@@ -1007,7 +1007,7 @@ pre.code.msg-pre {
   font-family: var(--font-mono);
   font-size: 11.5px;
   color: var(--amber-ink);
-  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint)%, transparent);
   border: 1px solid color-mix(in srgb, var(--amber) 24%, transparent);
   padding: 1px 7px;
   border-radius: 5px;

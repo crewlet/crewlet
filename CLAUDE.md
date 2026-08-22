@@ -1027,11 +1027,21 @@ src/crewlet/          # Main package
                       #   mention ids), with the raw payload always kept
                       #   beneath and any payload URL scheme-checked
                       #   before it becomes an href).
-                      #   Visual system = the crewlet.io panel language:
-                      #   PURE BLACK ground, and every division on it is a
-                      #   different ALPHA OF ONE WARM CREAM (panel fill,
-                      #   hairline, inset) — that single material is what
-                      #   makes a dense surface read as one object. The
+                      #   Visual system = INDIGO CONSOLE: a cool
+                      #   blue-black ground, and every division on it is a
+                      #   different ALPHA OF ONE COOL BLUE-WHITE (panel
+                      #   fill, hairline, inset, and the type itself) —
+                      #   that single material is what makes a dense
+                      #   surface read as one object. TEMPERATURE IS THE
+                      #   IDENTITY: a cool ground puts the warm half of
+                      #   the categorical set (amber/orange/brown/red) in
+                      #   opposition to the surface, so a status mark
+                      #   separates before hue is considered. The accent
+                      #   IS the logo's own violet (#7c56ff). Panels
+                      #   carry the identity, not the ground — chroma is
+                      #   only visible at lightness, so a ground that
+                      #   MEASURES blue over a 5% tint still RENDERS
+                      #   neutral black. The
                       #   brand gradient is used as LIGHT (a hairline on the
                       #   hero's top edge, the rail packet), never as a fill.
                       #   styles/tokens.css is the ONLY place a colour is

@@ -5,21 +5,35 @@ The dashboard is a zero-build, modular ES-module app (see
 documents its **visual system** — the tokens every component reads, the panel
 recipe, and the rules a change has to keep holding.
 
-The system is the one the Crewlet marketing site ships. The ground is a warm
-near-black and every division on it — panel fill, hairline, inset — is a
-different alpha of the *same* warm cream. That single material is what makes a
-dense operational surface read as one object rather than as a stack of grey
-boxes, and it is the rule to keep: a new surface is another step of the ramp,
-never a new colour.
+The ground is a cool blue-black and every division on it — panel fill,
+hairline, inset, and the type itself — is a different alpha or lightness of
+the *same* cool blue-white. That single material is what makes a dense
+operational surface read as one object rather than as a stack of grey boxes,
+and it is the rule to keep: a new surface is another step of the ramp, never a
+new colour.
+
+**The temperature is the identity.** A cool ground puts the warm half of the
+categorical set — amber, orange, brown, and the reserved red — in opposition
+to the surface rather than in sympathy with it, so a status mark separates
+from its own background before hue is even considered. The brand violet is the
+accent because it *is* the mark's colour (`#7c56ff`), which is what keeps the
+logo belonging to the page rather than sitting on it.
 
 The ground is deliberately **not** `#000`. An operator reads this page for
 hours, and pure black behind near-white text is the specific combination that
 halates — the smear around small bright glyphs that anyone with astigmatism
 sees, and the pupil oscillation that makes a long session tiring for everyone
-else. Lifting it to `#0d0c0b` costs nothing visually (it still reads as
+else. Lifting it to `#090d1c` costs nothing visually (it still reads as
 black), keeps the drop-shadow-is-invisible property the elevation model
 depends on, and lets the text ramp sit in a comfort band instead of at the top
 of the contrast range.
+
+The chroma is load-bearing, not decoration. A first pass at this ground used
+`#0a0c12`, which measures as blue and renders as neutral black: at 5% alpha
+over a near-black ground the panel tint had a chroma of 3.3 and the page read
+as grey. Panels carry the identity because they are both the largest area and
+the lightest, and chroma is far more visible at higher lightness — so the
+lever that actually works is the panel fill, not the ground.
 
 ---
 
@@ -383,7 +397,7 @@ component branches on the theme.
 | Token | Job |
 |---|---|
 | `--bg` / `--bg-sidebar` | Page tone; the nav rail one step off it |
-| `--bg-card` | Panel fill — a warm cream **alpha** over the ground in dark, so nested panels accumulate depth without another token |
+| `--bg-card` | Panel fill — a cool blue-white **alpha** over the ground in dark, so nested panels accumulate depth without another token |
 | `--bg-card-2` | Raised inner surface (table headers, chips) |
 | `--bg-hover` / `--bg-active` | Row and control states |
 | `--bg-inset` | Recessed surface (code blocks, expanded bodies) |
@@ -414,13 +428,24 @@ rather than a score:
 
 | Step | Range |
 |---|---|
-| body text | 10.2 – 14.5 — comfortable for sustained reading |
-| headings | 11.5 – 16.4 — larger glyphs tolerate, and want, more weight |
-| secondary | 7.4 – 10.6 |
-| muted | 5.8 – 8.2 |
-| dim | 4.7 – 6.7 — de-emphasised meta, still a **text** step |
-| hue ink | 5.1 – 7.3 |
-| hue mark | 3.3 – 6.7 (the 3:1 non-text floor) |
+| body text | 10.0 – 14.5 — comfortable for sustained reading |
+| headings | 11.2 – 16.3 — larger glyphs tolerate, and want, more weight |
+| secondary | 7.3 – 10.6 |
+| muted | 5.8 – 8.4 |
+| dim | 4.7 – 6.8 — de-emphasised meta, still a **text** step |
+| hue ink | 5.8 – 9.5 |
+| hue mark | 3.3 – 7.4 (the 3:1 non-text floor) |
+
+An ink is held to two things, not one: the flat floor above, and a clear step
+above **its own mark**. A badge is that hue softened into a fill with that
+hue's ink printed on it, so the ink's real ground is the mark composited into
+the panel — and when the two steps converge, as `--purple` and `--purple-ink`
+did, nothing is left to clear. How strongly a hue is softened for that job is
+one token, `--tint`, because those sites are one object; they had drifted to
+six different percentages with nothing choosing between them, and the 15% one
+rendered its ink at 3.8:1. The direction flips per theme — on dark a tint
+lifts the ground toward the ink, on light it pulls the ground down toward it —
+so a tint judged by eye on dark has been judged for the wrong theme.
 
 `--text-dim` takes the text floor rather than the 3:1 non-text one because in
 this design there is no non-text use of it: the same audit found it carrying

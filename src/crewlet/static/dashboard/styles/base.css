@@ -331,7 +331,7 @@ code,
   letter-spacing: 0.04em;
   padding: 1px 6px;
   border-radius: 5px;
-  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint)%, transparent);
   color: var(--amber-ink);
 }
 
@@ -351,12 +351,12 @@ code,
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--amber-ink);
-  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint)%, transparent);
   border: 1px solid color-mix(in srgb, var(--amber) 26%, transparent);
 }
 .inflight-pill.drain {
   color: var(--red-ink);
-  background: color-mix(in srgb, var(--red) 12%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint)%, transparent);
   border-color: color-mix(in srgb, var(--red) 30%, transparent);
   animation: pulse 1.4s var(--ease) infinite;
 }

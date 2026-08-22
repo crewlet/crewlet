@@ -369,6 +369,61 @@ for (const name of Object.keys(THEMES)) {
     }
   });
 
+  test(`${name}: an ink still clears its floor on its own tint`, () => {
+    // A badge is a hue softened into a fill with that hue's ink printed on
+    // it, so the ink's real ground is neither the panel nor the mark — it
+    // is the mark composited INTO the panel at `--tint`. Checking the ink
+    // against the bare surface misses that entirely, which is how a red
+    // count badge shipped at 3.8:1.
+    //
+    // The direction flips per theme: on dark a tint lifts the ground
+    // toward the ink, on light it pulls the ground down toward it. So the
+    // light theme is always the binding case, and a tint chosen by eye on
+    // dark is a tint chosen for the wrong theme.
+    const { col, tokens, bg } = theme(name);
+    const raw = (tokens.get("--tint") || "").trim();
+    const pct = Number.parseFloat(raw);
+    if (!raw.endsWith("%") || !Number.isFinite(pct)) {
+      throw new Error(`--tint is "${raw}", not a percentage`);
+    }
+    const grounds = {
+      "--bg": bg,
+      "--bg-sidebar": col("--bg-sidebar"),
+      panel: flatten([bg, col("--bg-card")]),
+      "selected row": flatten([bg, col("--bg-card"), col("--bg-active")]),
+    };
+    for (const hue of [...HUES, "red", "accent"]) {
+      const mark = { ...col(`--${hue}`), a: pct / 100 };
+      const ink = col(`--${hue}-ink`);
+      for (const [label, ground] of Object.entries(grounds)) {
+        const chip = flatten([ground, mark]);
+        const ratio = contrast(flatten([chip, ink]), chip);
+        if (ratio < INK_FLOOR) {
+          throw new Error(
+            `--${hue}-ink is ${ratio.toFixed(2)}:1 on a ${pct}% --${hue} tint over the ${label}, under ${INK_FLOOR}`,
+          );
+        }
+      }
+    }
+  });
+
+  test(`${name}: every ink stays a clear step above its own mark`, () => {
+    // Otherwise the two-step architecture collapses: --purple's mark tier
+    // sits above the flat ink target, which made --purple and
+    // --purple-ink the same colour to within one step of 8-bit sRGB, and
+    // left the ink with nothing to clear once its own tint was under it.
+    const { col, weakest } = theme(name);
+    for (const hue of [...HUES, "red", "accent"]) {
+      const mark = weakest(`--${hue}`).ratio;
+      const ink = weakest(`--${hue}-ink`).ratio;
+      if (ink < mark * 1.25) {
+        throw new Error(
+          `--${hue}-ink (${ink.toFixed(2)}) is not a step above --${hue} (${mark.toFixed(2)})`,
+        );
+      }
+    }
+  });
+
   test(`${name}: the focus ring clears every surface it lands on`, () => {
     const { col, bg, card } = theme(name);
     const focus = col("--focus");
