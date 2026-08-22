@@ -9,7 +9,7 @@ from crewlet.extensions.protocol import ExtensionContext
 from crewlet.org.models import Organization, OrgUnit, Role
 from crewlet.queue.memory import MemoryEventQueue
 from crewlet.tools.protocol import ToolResult
-from crewlet.tools.registry import SimpleTool
+from crewlet.tools.registry import BUILTIN_ORIGIN, SimpleTool, ToolRegistry
 
 
 class TrackingExtension:
@@ -65,6 +65,42 @@ class ToolRegisteringExtension:
 
     async def on_engine_start(self, ctx: ExtensionContext) -> None:
         pass
+
+    async def on_engine_stop(self, ctx: ExtensionContext) -> None:
+        pass
+
+
+class LateToolExtension:
+    """Extension that registers its tool from ``on_engine_start``.
+
+    A perfectly legal place to do it — a tool whose construction needs a
+    started subsystem cannot be built during ``on_register`` — and a
+    second hook the origin has to survive.
+    """
+
+    @property
+    def name(self) -> str:
+        return "late-tools"
+
+    @property
+    def version(self) -> str:
+        return "1.0.0"
+
+    async def on_register(self, ctx: ExtensionContext) -> None:
+        pass
+
+    async def on_engine_start(self, ctx: ExtensionContext) -> None:
+        async def late_fn(params, context):
+            return ToolResult(output="late")
+
+        ctx.tool_registry.register(
+            SimpleTool(
+                name="ext_late",
+                description="Registered at engine start",
+                parameters={"type": "object"},
+                fn=late_fn,
+            )
+        )
 
     async def on_engine_stop(self, ctx: ExtensionContext) -> None:
         pass
@@ -334,6 +370,123 @@ async def test_engine_extension_registers_tool():
 
 
 @pytest.mark.asyncio
+async def test_an_extensions_tool_reports_the_extension_as_its_origin():
+    """The whole point of the origin: an extension's tool is
+    structurally identical to a builtin, so before it was recorded the
+    dashboard called both "builtin" — and a tool missing because its
+    extension failed to load read as a missing builtin."""
+    ext = ToolRegisteringExtension()
+    engine = Engine(organization=make_org(), extensions=[ext])
+
+    await engine.start()
+    try:
+        assert engine.tool_registry.origin_for("ext_hello") == "extension:custom-tools"
+        # And the engine's own tools are still the engine's own.
+        assert engine.tool_registry.origin_for("lookup_colleague") == BUILTIN_ORIGIN
+
+        by_name = {t["name"]: t for t in engine._build_tools_data()}
+        assert by_name["ext_hello"]["source"] == "extension:custom-tools"
+        assert by_name["lookup_colleague"]["source"] == BUILTIN_ORIGIN
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_registered_at_engine_start_carries_the_origin_too():
+    ext = LateToolExtension()
+    engine = Engine(organization=make_org(), extensions=[ext])
+
+    await engine.start()
+    try:
+        assert engine.tool_registry.get("ext_late") is not None
+        assert engine.tool_registry.origin_for("ext_late") == "extension:late-tools"
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_passed_to_the_engine_is_not_a_builtin():
+    """``Engine(tools=[...])`` is the embedding application's surface,
+    not the engine's — reporting it as ``builtin`` is the same lie in
+    different clothes."""
+
+    async def fn(params, context):
+        return ToolResult(output="ok")
+
+    tool = SimpleTool(
+        name="review_code",
+        description="Run static analysis",
+        parameters={"type": "object"},
+        fn=fn,
+    )
+    engine = Engine(organization=make_org(), tools=[tool])
+    assert engine.tool_registry.origin_for("review_code") == "custom"
+
+
+@pytest.mark.asyncio
+async def test_the_scoped_registry_keeps_the_rest_of_the_context():
+    """Each extension gets its own context object so its registrations
+    can be stamped. Everything else on it must still be the shared
+    engine state — a copy that dropped a subsystem would break the
+    extension silently, at the first attribute it read."""
+    ext = ToolRegisteringExtension()
+    engine = Engine(organization=make_org(), extensions=[ext])
+    ctx = engine._build_extension_context()
+
+    from crewlet.extensions.loader import _scoped
+
+    scoped = _scoped(ctx, ext)
+    assert scoped is not ctx
+    assert scoped.tool_registry is not ctx.tool_registry
+    assert scoped.event_queue is ctx.event_queue
+    assert scoped.org is ctx.org
+    assert scoped.claim_duty is ctx.claim_duty
+    assert scoped.node_id == ctx.node_id
+
+
+@pytest.mark.asyncio
+async def test_a_context_without_a_registry_is_left_alone():
+    """A bare ``ExtensionContext`` (every test that builds one) carries
+    no registry, and scoping must not manufacture one."""
+    from crewlet.extensions.loader import _scoped
+
+    ctx = ExtensionContext(event_queue=MemoryEventQueue())
+    ext = ToolRegisteringExtension()
+    assert _scoped(ctx, ext) is ctx
+
+
+@pytest.mark.asyncio
+async def test_two_extensions_do_not_share_an_origin():
+    class Second(ToolRegisteringExtension):
+        @property
+        def name(self) -> str:
+            return "second"
+
+        async def on_register(self, ctx: ExtensionContext) -> None:
+            async def fn(params, context):
+                return ToolResult(output="second")
+
+            ctx.tool_registry.register(
+                SimpleTool(
+                    name="second_tool",
+                    description="Second extension tool",
+                    parameters={"type": "object"},
+                    fn=fn,
+                )
+            )
+
+    registry = ToolRegistry()
+    manager = ExtensionManager()
+    ctx = ExtensionContext(tool_registry=registry)
+
+    await manager.register(ToolRegisteringExtension(), ctx)
+    await manager.register(Second(), ctx)
+
+    assert registry.origin_for("ext_hello") == "extension:custom-tools"
+    assert registry.origin_for("second_tool") == "extension:second"
+
+
+@pytest.mark.asyncio
 async def test_engine_extension_adds_middleware():
     ext = MiddlewareExtension()
     engine = Engine(organization=make_org(), extensions=[ext])
@@ -365,3 +518,60 @@ async def test_extension_context_is_pydantic():
     ctx = ExtensionContext(event_queue=MemoryEventQueue())
     data = ctx.model_dump()
     assert "event_queue" in data
+
+
+@pytest.mark.asyncio
+async def test_unregistering_an_extension_takes_its_tools_with_it():
+    """Dropping the object was never enough.
+
+    ``unregister`` calls ``on_engine_stop`` and removes the extension
+    from its own list — and most extensions have nothing to stop, so they
+    do not implement the hook. Everything they registered therefore
+    stayed in the shared registry, advertised in every later catalogue
+    and dispatching into a disposed object. A live config edit that
+    removed an extension left exactly that behind.
+    """
+    from crewlet.tools.registry import (
+        BUILTIN_ORIGIN,
+        SimpleTool,
+        ToolRegistry,
+        extension_origin,
+    )
+
+    async def _fn(params, context):
+        return ToolResult(output="ok")
+
+    def _tool(name: str) -> SimpleTool:
+        return SimpleTool(
+            name=name, description="d", parameters={"type": "object"}, fn=_fn
+        )
+
+    class SilentExtension:
+        """The common case: nothing to stop, so no stop hook."""
+
+        name = "acme"
+        version = "1.0"
+
+        async def on_register(self, ctx):
+            ctx.tool_registry.register(_tool("acme_deploy"))
+
+        async def on_engine_start(self, ctx):
+            return None
+
+        async def on_engine_stop(self, ctx):
+            return None
+
+    registry = ToolRegistry()
+    registry.register(_tool("builtin_one"), origin=BUILTIN_ORIGIN)
+    ctx = ExtensionContext(event_queue=MemoryEventQueue(), tool_registry=registry)
+    manager = ExtensionManager()
+    ext = SilentExtension()
+
+    await manager.register(ext, ctx)
+    assert registry.origin_for("acme_deploy") == extension_origin("acme")
+
+    await manager.unregister(ext, ctx)
+
+    names = {t.name for t in registry.list_tools()}
+    assert "acme_deploy" not in names, "the extension's tool outlived the extension"
+    assert "builtin_one" in names, "the sweep took a tool it did not own"

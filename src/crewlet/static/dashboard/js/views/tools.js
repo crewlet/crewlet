@@ -1,4 +1,9 @@
-// Tools view: builtin + MCP tools grouped by source.
+// Tools view: tools grouped by where they came from.
+//
+// The server's `source` is the tool-origin grammar in
+// crewlet/tools/registry.py: "builtin", "custom" (handed to
+// Engine(tools=[...]) by the embedding app), "extension:<name>", or
+// "mcp:<server>". Only the last two carry a sub-name.
 
 import { esc, escAttr } from "../format.js";
 import { icon } from "../icons.js";
@@ -7,6 +12,11 @@ import { emptyOrPending, sectionHead, skeletonRows } from "../ui.js";
 function sourceBadge(source) {
   const s = (source || "builtin").toLowerCase();
   if (s === "builtin") return "builtin";
+  if (s === "custom") return "custom";
+  // Before the substring matches below, not after: an extension called
+  // "slack-digest" is not the Slack MCP server, and a badge that says it
+  // is puts a third-party tool behind the engine's own colouring.
+  if (s.startsWith("extension:")) return "extension";
   if (s.includes("slack")) return "mcp-slack";
   if (s.includes("atlassian") || s.includes("jira") || s.includes("confluence"))
     return "mcp-atlassian";
@@ -15,7 +25,16 @@ function sourceBadge(source) {
 }
 
 function sourceLabel(source) {
-  return (source || "builtin").replace(/^mcp[:_-]?/i, "MCP · ");
+  return (source || "builtin")
+    .replace(/^extension:/i, "Extension · ")
+    .replace(/^mcp[:_-]?/i, "MCP · ");
+}
+
+function groupRank(source) {
+  const s = (source || "builtin").toLowerCase();
+  if (s === "builtin") return 0;
+  if (s === "custom") return 1;
+  return s.startsWith("extension:") ? 2 : 3;
 }
 
 export function createToolsView({ store }) {
@@ -40,8 +59,11 @@ export function createToolsView({ store }) {
         const src = t.source || "builtin";
         (groups[src] ||= []).push(t);
       }
-      const order = Object.keys(groups).sort((a, b) =>
-        a === "builtin" ? -1 : b === "builtin" ? 1 : a.localeCompare(b),
+      // Ranked, not alphabetical: the groups read outward from the
+      // engine — what it ships, what the host app added, what
+      // extensions added, what an MCP server serves.
+      const order = Object.keys(groups).sort(
+        (a, b) => groupRank(a) - groupRank(b) || a.localeCompare(b),
       );
 
       const sections = order

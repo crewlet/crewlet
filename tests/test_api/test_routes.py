@@ -230,8 +230,8 @@ class TestDashboard:
         assert "export function phaseInk" in state_js
         # No parallel hardcoded RGB table for the heatmap.
         assert "PHASE_RGB" not in state_js
-        tokens_js = client.get("/static/dashboard/js/views/tokens.js").text
-        assert "color-mix" in tokens_js
+        spend_js = client.get("/static/dashboard/js/views/spend.js").text
+        assert "color-mix" in spend_js
 
     def test_dashboard_nav_only_ships_backed_views(self, client: TestClient):
         """Every sidebar entry resolves to a view that reads a real
@@ -240,22 +240,34 @@ class TestDashboard:
         app_js = client.get("/static/dashboard/js/app.js").text
         router_js = client.get("/static/dashboard/js/router.js").text
         for view in (
-            "company",
-            "people",
+            "mission",
+            "work",
+            "activity",
             "org",
-            "audit",
-            "agents",
-            "events",
-            "tokens",
-            "tools",
             "schedules",
+            "spend",
+            "integrations",
+            "fleet",
             "config",
+            "tools",
         ):
             assert f'"{view}"' in app_js, view
             assert f'"{view}"' in router_js, view
         # Screens with nothing behind them stay out of the nav entirely.
         for absent in ("billing", "wallet"):
             assert f'name: "{absent}"' not in app_js, absent
+
+    def test_moved_routes_still_land(self, client: TestClient):
+        """The rooms were reorganised around the question they answer, and
+        the old paths are in bookmarks and in chat threads. A redirect
+        costs one hashchange; a dead link costs the reader the thing they
+        were looking for."""
+        router_js = client.get("/static/dashboard/js/router.js").text
+        for old in ("events", "tokens", "agents", "people", "company", "audit"):
+            assert old in router_js, old
+        # The filtered form is the one that gets shared, so the query
+        # string has to survive the move.
+        assert "query: q" in router_js
 
     def test_dashboard_flattens_the_org_tree_once(self, client: TestClient):
         """Views consume seats, not the raw /org payload, so unit-lead and
@@ -267,7 +279,7 @@ class TestDashboard:
         assert "export function flattenUnits" in body
         # Lead inheritance: a child unit with no `lead` takes its parent's.
         assert "unit.lead || inheritedLead" in body
-        for view in ("company.js", "people.js", "agents.js", "dashboard.js"):
+        for view in ("orgRoom.js", "mission.js"):
             v = client.get(f"/static/dashboard/js/views/{view}").text
             assert "flattenSeats" in v or "flattenUnits" in v, view
 
@@ -1883,3 +1895,33 @@ class TestBuildToolsData:
         special = next(t for t in tools_data if t["name"] == "special_mcp_tool")
         assert "Lead" in special["roles"]
         assert "Dev" not in special["roles"]
+
+    def test_source_reports_the_registered_origin(self):
+        """``source`` is whatever the registry recorded at registration.
+        Deriving it from the tool object instead is what made every
+        non-MCP tool report ``builtin`` — nothing about an extension's
+        tool distinguishes it from one the engine ships."""
+        from crewlet.tools.protocol import AgentContext, ToolResult
+        from crewlet.tools.registry import SimpleTool
+
+        async def _noop(params: dict, ctx: AgentContext) -> ToolResult:
+            return ToolResult(output="ok")
+
+        def _tool(name: str) -> SimpleTool:
+            return SimpleTool(
+                name=name,
+                description=f"{name} tool",
+                parameters={"type": "object", "properties": {}},
+                fn=_noop,
+            )
+
+        engine = _make_engine()
+        engine.tool_registry.register(_tool("from_ext"), origin="extension:acme")
+        engine.tool_registry.register(_tool("from_host"), origin="custom")
+        engine.tool_registry.register(_tool("from_mcp"), origin="mcp:atlassian")
+
+        by_name = {t["name"]: t for t in engine._build_tools_data()}
+        assert by_name["from_ext"]["source"] == "extension:acme"
+        assert by_name["from_host"]["source"] == "custom"
+        assert by_name["from_mcp"]["source"] == "mcp:atlassian"
+        assert by_name["lookup_colleague"]["source"] == "builtin"

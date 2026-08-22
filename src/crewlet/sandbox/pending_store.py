@@ -122,6 +122,14 @@ class PendingSandboxRun:
     # NAK'd trigger can re-claim on redelivery — inferring it from other
     # fields is unsound (a reused run keeps its old ``question``).
     claimed_from: str = ""
+    created_at: datetime | None = None
+    """When the run was kicked off, and when it last moved.
+
+    Both are on every row and were simply not carried through, which is
+    why nothing could say how long a parked run had been waiting — the
+    one number that separates a question asked a minute ago from one
+    that has been blocking a branch for four days."""
+    updated_at: datetime | None = None
 
 
 def _row_to_run(row: dict[str, Any]) -> PendingSandboxRun:
@@ -153,6 +161,8 @@ def _row_to_run(row: dict[str, Any]) -> PendingSandboxRun:
         pause_ttl_seconds=float(row.get("pause_ttl_seconds", 0.0) or 0.0),
         paused_at=row.get("paused_at"),
         execute_state=decode_jsonb_dict(row.get("execute_state")),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
     )
 
 

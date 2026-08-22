@@ -50,30 +50,80 @@ function makeRoot() {
 }
 
 /**
- * Mount a view whose `/fleet` answers come from `answers`, run `body`,
- * and ALWAYS destroy it.
+ * Mount a view whose `fleet` query answers come from `answers`, run
+ * `body`, and ALWAYS destroy it.
  *
  * The `finally` is not tidiness. `mount` starts a 15 s poll, and node
  * will not exit while an interval is pending — so a test that threw
  * before its `destroy()` left the whole suite hanging until the pytest
  * wrapper's timeout killed it, reporting a hang instead of the
  * assertion that actually failed.
+ *
+ * `answers` holds payloads; a `null` entry stands for a query that
+ * REJECTS, which is what the socket channel does on every failure —
+ * a dead socket, an unreadable lease store, a timeout.
  */
 async function withView(answers, body) {
   const el = makeRoot();
-  const api = {
-    fleet: async () => (answers.length ? answers.shift() : null),
+  // The view destructures `query` once, so the swap a test performs has
+  // to go through a stable function rather than replacing the field.
+  let impl = async () => {
+    const next = answers.length ? answers.shift() : null;
+    if (next === null) throw new Error("fleet_unavailable");
+    return next;
   };
-  const view = createFleetView({ store: {}, api });
+  const ctx = {
+    query: (...args) => impl(...args),
+    // The shell re-renders a view when it asks; here it paints straight
+    // into the element so a test can read what a reader would see.
+    refresh: () => {
+      el.innerHTML = view.render({});
+    },
+    setQuery: (fn) => {
+      impl = fn;
+    },
+  };
+  const view = createFleetView(ctx);
   view.mount(el);
+  el.innerHTML = view.render({});
   // Let the initial load() settle.
   await new Promise((resolve) => setTimeout(resolve, 0));
   try {
-    await body({ el, view, api });
+    await body({ el, view, ctx });
   } finally {
     view.destroy();
   }
 }
+
+test("the view returns markup for the shell to patch", async () => {
+  // It used to paint with `innerHTML` and return no `render` at all, so
+  // the shell's own `patch(root, active.render(state))` threw on mount —
+  // in every build, on the one view an operator opens when nodes are
+  // dying.
+  await withView([fleetPayload()], ({ view }) => {
+    assert.strictEqual(typeof view.render, "function");
+    assert.match(view.render({}), /node-a/);
+  });
+});
+
+test("a lagging node is measured against what the fleet is converging on", async () => {
+  // An epoch on its own is a number with nothing to compare it to.
+  const payload = fleetPayload();
+  payload.target_epoch = 10;
+  payload.nodes[0].config_epoch = 7;
+  await withView([payload], ({ el }) => {
+    assert.match(el.innerHTML, /epoch 7/);
+    assert.match(el.innerHTML, /3 behind/);
+  });
+});
+
+test("a node that stopped reporting is not read as merely behind", async () => {
+  const payload = fleetPayload();
+  payload.nodes[0].config_reported_at = new Date(Date.now() - 600_000).toISOString();
+  await withView([payload], ({ el }) => {
+    assert.match(el.innerHTML, /stopped reporting/);
+  });
+});
 
 test("a successful read renders the fleet and says it is fresh", async () => {
   await withView([fleetPayload()], ({ el }) => {
@@ -86,10 +136,12 @@ test("a successful read renders the fleet and says it is fresh", async () => {
 test("a failed refresh keeps the fleet but stops claiming it is current", async () => {
   // First read succeeds, second fails — the ordinary shape of an API
   // that goes away while the page is open.
-  await withView([fleetPayload()], async ({ el, view, api }) => {
+  await withView([fleetPayload()], async ({ el, view, ctx }) => {
     assert.match(el.innerHTML, /Refreshed/);
 
-    api.fleet = async () => null;
+    ctx.setQuery(async () => {
+      throw new Error("fleet_unavailable");
+    });
     await view.__loadForTest();
 
     assert.match(el.innerHTML, /node-a/, "the last fleet was thrown away");
@@ -111,10 +163,10 @@ test("a failed FIRST read says so instead of spinning forever", async () => {
 });
 
 test("a recovered read drops the warning again", async () => {
-  await withView([null], async ({ el, view, api }) => {
+  await withView([null], async ({ el, view, ctx }) => {
     assert.match(el.innerHTML, /Could not read the fleet/);
 
-    api.fleet = async () => fleetPayload();
+    ctx.setQuery(async () => fleetPayload());
     await view.__loadForTest();
 
     assert.match(el.innerHTML, /node-a/);
@@ -125,11 +177,11 @@ test("a recovered read drops the warning again", async () => {
 test("destroy stops the poll", async () => {
   let calls = 0;
   let after = null;
-  await withView([fleetPayload()], ({ view, api }) => {
-    api.fleet = async () => {
+  await withView([fleetPayload()], ({ view, ctx }) => {
+    ctx.setQuery(async () => {
       calls++;
       return fleetPayload();
-    };
+    });
     view.destroy();
     after = new Promise((resolve) => setTimeout(resolve, 20));
   });

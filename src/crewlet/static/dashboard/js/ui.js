@@ -1,6 +1,6 @@
 // Reusable render helpers shared across views.
 
-import { esc, escAttr, fmtNum, fmtTime } from "./format.js";
+import { esc, escAttr, fmtNum, fmtTime, relTime } from "./format.js";
 import { icon } from "./icons.js";
 import {
   PHASE_ORDER,
@@ -10,7 +10,6 @@ import {
   integrationFromSource,
   integrationBadge,
   integrationMeta,
-  roleInk,
 } from "./state.js";
 
 export function skeletonRows(n = 5) {
@@ -147,7 +146,7 @@ export function activityRow(ev, { agents } = {}) {
   return `
     <div ${nav}>
       <span class="act-time">${esc(fmtTime(ev.timestamp))}</span>
-      <span class="act-actor" ${actor ? `style="color:${roleInk(actor)}"` : ""}>${esc(actor || "engine")}</span>
+      <span class="act-actor">${esc(actor || "engine")}</span>
       <span class="act-surface">${surface}</span>
       <span class="act-text">${ev.failed ? icon("alert", "sm") : ""}${esc(ev.summary || ev.type)}</span>
     </div>`;
@@ -159,8 +158,62 @@ export function sectionHead(iconId, title, count, link) {
       <span class="sec-title">${iconId ? icon(iconId, "sm") : ""}${esc(title)}
         ${count != null ? `<span class="sec-count">${esc(String(count))}</span>` : ""}
       </span>
-      ${link ? `<span class="sec-link" data-action="${esc(link.action)}">${esc(link.label)} →</span>` : ""}
+      ${
+        link
+          ? `<span class="sec-link" data-action="${escAttr(link.action)}"${
+              link.route ? ` data-route="${escAttr(link.route)}"` : ""
+            } role="link" tabindex="0">${esc(link.label)} →</span>`
+          : ""
+      }
     </div>`;
+}
+
+// ---------------------------------------------------------------------
+// Attention rows
+// ---------------------------------------------------------------------
+// One renderer for every "needs a person" list, so Mission Control, the
+// Work board and any future panel draw an obligation the same way. The
+// severity stripe is the reserved status hue when something broke and
+// the caution hue when nothing did — the distinction the whole surface
+// keeps, and the reason an operator can trust red.
+
+/**
+ * One obligation, as a clickable row.
+ *
+ * `item` is a member of `buildAttention(state).items`.
+ */
+export function attentionRow(item) {
+  const age = item.at ? relTime(item.at) : "";
+  return `
+    <div class="att-row ${item.severity === "broke" ? "broke" : ""}"
+         data-k="att:${escAttr(item.id)}" data-action="go"
+         data-route="${escAttr(item.route)}" role="link" tabindex="0">
+      <span class="att-sev"></span>
+      ${item.seat ? `<span class="att-seat">${esc(item.seat)}</span>` : ""}
+      <span class="att-what">
+        <span class="att-title">${esc(item.title)}</span>
+        ${item.detail ? `<span class="att-detail">${esc(item.detail)}</span>` : ""}
+      </span>
+      ${age ? `<span class="att-age">${esc(age)}</span>` : ""}
+      <span class="btn sm">${esc(item.action)}</span>
+    </div>`;
+}
+
+/**
+ * The whole queue, or an honest statement of why it is empty.
+ *
+ * `stale` is not decoration: losing the socket freezes every slice these
+ * items are derived from, so an empty list on a disconnected page means
+ * "cannot see", never "nothing to do".
+ */
+export function attentionList({ items, stale }) {
+  if (stale) {
+    return `<div class="att-quiet">Not connected — this list is from the last state received, and may be out of date.</div>`;
+  }
+  if (!items.length) {
+    return `<div class="att-quiet">Nothing is waiting on you.</div>`;
+  }
+  return items.map(attentionRow).join("");
 }
 
 // ---------------------------------------------------------------------
@@ -216,23 +269,42 @@ export function turnRail(phase) {
 // strip fits inside the lead panel and leaves the room to the thing
 // worth looking at.
 
+// The tones a strip figure may carry, and the ink each resolves to.
+//
+// A closed map rather than the hue name spliced straight into
+// `var(--${tone}-ink)`: a caller reaching for the SEMANTIC word it means
+// ("bad", "warn") built `--bad-ink` and `--warn-ink`, which are not
+// tokens, so the declaration was invalid and CSS dropped it — silently,
+// and without falling back a cascade level, so the figure that most
+// needed colour was the one rendering plain. Callers now name the
+// meaning; this file owns the one translation to a hue.
+const STRIP_TONES = {
+  bad: "--red-ink",
+  warn: "--amber-ink",
+  good: "--green-ink",
+};
+
 /**
- * `items` are `{label, value, foot, tone}` — `tone` names a hue family
- * (`red`, `green`, …) for a figure whose *value* carries a warning.
+ * `items` are `{label, value, foot, tone}` — `tone` is one of
+ * `bad` / `warn` / `good`, for a figure whose *value* carries a warning.
+ *
+ * `value` and `foot` are inserted as markup, so a caller passing data
+ * escapes it. `label` is escaped here because it is also the patch key.
  */
 export function statStrip(items) {
   const cells = items
     .filter(Boolean)
-    .map(
-      (it) => `
+    .map((it) => {
+      const ink = STRIP_TONES[it.tone] || "";
+      return `
       <div class="strip-cell" data-k="strip:${escAttr(it.label)}">
         <div class="stat-label">${esc(it.label)}</div>
-        <div class="strip-value num${it.tone ? " tone" : ""}"${
-          it.tone ? ` style="color:var(--${it.tone}-ink)"` : ""
+        <div class="strip-value num${ink ? " tone" : ""}"${
+          ink ? ` style="color:var(${ink})"` : ""
         }>${it.value}</div>
         <div class="strip-foot">${it.foot || ""}</div>
-      </div>`,
-    )
+      </div>`;
+    })
     .join("");
   return `<div class="strip">${cells}</div>`;
 }

@@ -805,6 +805,18 @@ src/crewlet/          # Main package
                       #   GET /webhooks/slack-oauth landing page; see
                       #   docs/integrations/slack.md)
   tools/              # Agent tool system (builtins + A2A tools);
+                      #   registry.py — ToolRegistry + THE tool-origin
+                      #     grammar (builtin | custom | extension:<name> |
+                      #     mcp:<server>), the `source` of GET /tools.
+                      #     Recorded at REGISTRATION because it cannot be
+                      #     recovered after: an extension's tool is
+                      #     structurally identical to a builtin, so the
+                      #     dashboard called both "builtin" and a tool
+                      #     missing because its extension failed to load
+                      #     read as a missing builtin. Extensions get a
+                      #     for_origin() view of the registry, since the
+                      #     register() call is the only frame that knows
+                      #     who is registering;
                       #   capabilities.py — tool classification from MCP
                       #   annotations (ToolAnnotations +
                       #   writes_to_shared_surface; keeps the engine
@@ -886,7 +898,34 @@ src/crewlet/          # Main package
                       #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
                       #     GitLab/Plane/Confluence/Forge inbound, incl.
                       #     POST /webhooks/plane — X-Plane-Signature HMAC),
-                      #     dashboard, health),
+                      #     dashboard, health;
+                      #     fleet.py / sandbox_runs.py / budgets.py /
+                      #     integrations.py each export a PAYLOAD function
+                      #     the REST route and the /ws/stream query both
+                      #     call — two surfaces answering one question
+                      #     from two implementations is how they end up
+                      #     disagreeing with nobody noticing.
+                      #     What they add is the durable half of three
+                      #     questions the live projection could only half
+                      #     answer: sandbox_runs reads pending_sandbox_run
+                      #     (in-memory swept a parked run after 12h while
+                      #     a question can wait days, and `reseed` had no
+                      #     surface at all — it looked like work that
+                      #     finished); budgets pairs the config CAP with
+                      #     the DURABLE counter the engine enforces
+                      #     against, keeping them distinct from the
+                      #     per-run meter (three spans, and only the
+                      #     meter shares one with the cap — so `durable`
+                      #     false means unreadable, never zero, and
+                      #     live_used is null, never 0); integrations
+                      #     answers how each surface is wired +
+                      #     secret_present (THREE-valued: null = uses
+                      #     none, false = a route 503-ing every
+                      #     delivery) + per-source counts grouped by the
+                      #     STORE. It never infers health — an idle
+                      #     Slack and a 401-ing Slack are identical in
+                      #     the event store, since verification runs
+                      #     BEFORE the row is written),
                       #   app.py, tokens.py (aggregation),
                       #   live_state.py (in-memory agent-state projection +
                       #     in-flight live_call, so state survives a browser
@@ -928,13 +967,17 @@ src/crewlet/          # Main package
                       #   than a field whitelist — four hand-maintained
                       #   whitelists are how a phase failure got deleted on
                       #   its way to the screen), pulse.js (THE COMPANY
-                      #   PULSE — the overview's lead panel: one row per
-                      #   seat, one cell per minute of the last hour, lit
-                      #   by real feed events, red where the server's
-                      #   `failed` flag says so. buildPulse is pure and
-                      #   runs ONCE per render, threaded through to the
-                      #   hero grid AND every seat card's strip so the two
-                      #   cannot disagree about a seat), health.js (THE
+                      #   PULSE — one cell per minute of the last hour,
+                      #   lit by real feed events, red where the server's
+                      #   `failed` flag says so, PALE where the feed's
+                      #   retention edge means the minute is unknown
+                      #   rather than quiet. buildPulse is pure and
+                      #   buckets ONCE, answering the company-wide `cells`
+                      #   track and the per-seat `rows` from one pass —
+                      #   the total increments BEFORE the roster check, so
+                      #   engine-authored events with no actor are counted
+                      #   (summing the rows instead undercounts every one
+                      #   of them)), health.js (THE
                       #   ENGINE HEALTH SURFACE — a popover on the live
                       #   dot, plus the two conditions that escalate into
                       #   always-on chrome because they must never wait
@@ -980,12 +1023,29 @@ src/crewlet/          # Main package
                       #   collapsed; eventDetail.js renders inbound
                       #   notifications as a readable integration-branded view
                       #   (state.js integrationMeta/integrationBadge) — see
-                      #   describe_trigger / turn-engine.md).
-                      #   Visual system = the crewlet.io panel language:
-                      #   PURE BLACK ground, and every division on it is a
-                      #   different ALPHA OF ONE WARM CREAM (panel fill,
-                      #   hairline, inset) — that single material is what
-                      #   makes a dense surface read as one object. The
+                      #   describe_trigger / turn-engine.md — and gives each
+                      #   webhook source a layout over the SAME fields its
+                      #   router keys on (GitLab `changes.{assignees,
+                      #   reviewers}` diffs + pipeline.failed jobs, Plane
+                      #   `activity.field`/`old_value → new_value` +
+                      #   mention ids), with the raw payload always kept
+                      #   beneath and any payload URL scheme-checked
+                      #   before it becomes an href).
+                      #   Visual system = INDIGO CONSOLE: a cool
+                      #   blue-black ground, and every division on it is a
+                      #   different ALPHA OF ONE COOL BLUE-WHITE (panel
+                      #   fill, hairline, inset, and the type itself) —
+                      #   that single material is what makes a dense
+                      #   surface read as one object. TEMPERATURE IS THE
+                      #   IDENTITY: a cool ground puts the warm half of
+                      #   the categorical set (amber/orange/brown/red) in
+                      #   opposition to the surface, so a status mark
+                      #   separates before hue is considered. The accent
+                      #   IS the logo's own violet (#7c56ff). Panels
+                      #   carry the identity, not the ground — chroma is
+                      #   only visible at lightness, so a ground that
+                      #   MEASURES blue over a 5% tint still RENDERS
+                      #   neutral black. The
                       #   brand gradient is used as LIGHT (a hairline on the
                       #   hero's top edge, the rail packet), never as a fill.
                       #   styles/tokens.css is the ONLY place a colour is
@@ -1002,25 +1062,173 @@ src/crewlet/          # Main package
                       #   PHASE_HUE / EVENT_CATEGORIES) are validated for
                       #   CVD + normal-vision separation in BOTH themes —
                       #   re-verify before changing one.
-                      #   Screens: Dashboard, Company (Overview / People
-                      #   Directory / Org Chart / Audit log), Agents,
-                      #   Activity, Tokens, Tools, Schedules, Fleet,
-                      #   Configuration.
+                      #   ROOMS ARE GROUPED BY THE QUESTION THEY ANSWER,
+                      #   not by the kind of data they hold — nine
+                      #   top-level nouns meant the questions an operator
+                      #   actually arrives with each needed three or four
+                      #   screens and a mental join. Three zones:
+                      #     Now        Mission Control / Agents / Work
+                      #                / Activity
+                      #     Company    Org (chart|directory|charter)
+                      #                / Schedules / a seat page
+                      #     Operations Spend & Budgets / Integrations /
+                      #                Fleet / Configuration / Tools
+                      #   views/mission.js is TRIAGE, and the way that
+                      #   room fails is by re-rendering the rest of the
+                      #   product: it carried a per-seat grid Agents
+                      #   answers better, an in-flight board with a
+                      #   better-sourced twin in Work, a phase bar
+                      #   belonging to Spend (where the window is
+                      #   selectable) and a truncated Activity with none
+                      #   of Activity's machinery — and half of it was
+                      #   untrustworthy, since store.setConnected clears
+                      #   only the `health` slice, so agents/events/
+                      #   tokens/budget/sandboxes stay frozen and the page
+                      #   printed them at full confidence on a dead
+                      #   socket. Five bands, each owning a question no
+                      #   other room does: needs-you / ENGINE (in-flight,
+                      #   posture, event store — most of it reached no
+                      #   pixel outside a popover you had to know to
+                      #   click) / STUCK (stalled turns, plus seats whose
+                      #   teardown was never proven, which runtime.py
+                      #   calls the one to alert on and which reached no
+                      #   screen at all) / recent record / cost. An absent
+                      #   precondition renders an em dash, NEVER a zero:
+                      #   "cannot see the engine" and "the engine is doing
+                      #   nothing" are opposite facts a 0 merges.
+                      #   attention.js is the one NEW idea: buildAttention
+                      #   derives every open obligation — a sandbox parked
+                      #   on a question, a stopped seat, a budget refusing
+                      #   charges, an unconfigured engine — from slices
+                      #   the server already pushes, and gives it three
+                      #   outlets (the lead panel of Mission Control, the
+                      #   per-zone nav badges, the tab title). It answers
+                      #   `{items, stale}`: losing the socket freezes
+                      #   every slice it reads, so an empty list on a
+                      #   disconnected page means "cannot see", never
+                      #   "nothing to do", and attentionCounts returns
+                      #   null rather than a confident zero.
+                      #   commandPalette.js is the answer to "no search
+                      #   anywhere" — ONE palette over rooms, seats, any
+                      #   event or trace id pasted from a log, and
+                      #   COMMANDS, rather than a search box per view with
+                      #   its own ranking. A chrome preference is a
+                      #   command, never a topbar button: the topbar is
+                      #   the most valuable strip on every screen and a
+                      #   preference is set once, so density's permanent
+                      #   icon-only slot beside the theme toggle bought a
+                      #   mystery control (two rule glyphs saying nothing
+                      #   about spacing) at that price. Theme keeps its
+                      #   button — it is flipped by the light in the room.
+                      #   Commands rank below rooms/seats and vanish on an
+                      #   empty query; buildResults takes {theme,density}
+                      #   as an ARGUMENT so it stays DOM-free.
+                      #   modal.js replaced the window.prompt/confirm that
+                      #   were the only unstyled UI in the product.
+                      #   router.js OWNS THE BACK BUTTON, which is a
+                      #   decision every navigation makes whether or not
+                      #   anyone notices making it. Three rules, and all
+                      #   three shipped wrong: a MOVED path REPLACES
+                      #   (#/events, #/tokens, #/agents/:id, #/people,
+                      #   #/company, #/audit — query string intact,
+                      #   because those links are in bookmarks and chat
+                      #   threads); pushing one instead made Back land on
+                      #   the dead URL, redirect forward and arrive back
+                      #   — measured: Back could not escape at all. A
+                      #   SECTION (lens, tab — what the reader calls a
+                      #   screen) PUSHES; replacing made Back skip every
+                      #   lens and leave the room. A FILTER REPLACES:
+                      #   four ticked pills are one screen. Scroll is a
+                      #   property of a history ENTRY, not of a URL, so
+                      #   takeRoute() keys it on one stamped into
+                      #   history.state — an entry with no key IS the
+                      #   test for "somewhere new", which is the only
+                      #   thing that starts at the top. parseRoute merges
+                      #   the query into EVERY route: it used to do so
+                      #   only on the last branch, so a seat route
+                      #   arrived with ?tab= thrown away and the view
+                      #   re-read location.hash itself to get it back.
+                      #   The shell absorbs a section change via
+                      #   sameScreen() + view.setParams() rather than
+                      #   remounting — identity is the PATH, never the
+                      #   query, so a different tab of one seat keeps its
+                      #   loaded LLM history and a different seat does
+                      #   not.
                       #   A seat's raw event list belongs to Activity ALONE
-                      #   (#/events?actor=<role> seeds its actor filter);
-                      #   the agent page links there rather than rendering
+                      #   (#/activity?actor=<role> seeds its actor filter);
+                      #   the seat page links there rather than rendering
                       #   a second copy below its turns.
                       #   Fleet reads the LEASE TABLE, not a fan-out of
                       #   /health probes: /health answers about the node
                       #   that served it, so behind a load balancer a
-                      #   refresh tells a different story.
+                      #   refresh tells a different story. It reads it over
+                      #   the `fleet` QUERY: it was the last view with its
+                      #   own HTTP client and that is exactly where the
+                      #   cost landed — it took that client from a ctx
+                      #   field the shell never populated, so every poll
+                      #   threw before the network and the page held a
+                      #   loading skeleton for ever, on the one view an
+                      #   operator opens when nodes are dying. Reads have
+                      #   ONE transport; writes stay REST for the auth
+                      #   middleware's attribution. tests/test_dashboard/
+                      #   js/wiring.test.mjs holds that seam: what app.js
+                      #   provides against what each view destructures,
+                      #   that every imported module EXISTS (one missing
+                      #   import kills the whole module graph and renders
+                      #   nothing at all), and that none is orphaned.
+                      #   styles/rooms/*.css is one stylesheet per room —
+                      #   views.css keeps what the small shared views
+                      #   need, and a room that owns a screen owns its
+                      #   own file.
                       #   EVERY nav entry is backed by a real endpoint — no
                       #   placeholder screens. org.js flattens the /org tree
                       #   into SEATS (unit chain + effective lead + inherited
                       #   mcp_env) — views consume seats, never the raw
-                      #   payload; cards.js renders the shared seat card
-                      #   (agents + human seats), with state.js statusLine
-                      #   deriving "what it is doing" from live state only.
+                      #   payload, with state.js statusLine deriving "what
+                      #   it is doing" from live state only.
+                      #   views/agents.js is the Agents room — "who is
+                      #   working, who is not, and why", the product's
+                      #   most-asked question and formerly its worst-buried
+                      #   answer (one LENS of the Org room, which files it
+                      #   under how the company is ARRANGED rather than
+                      #   what it is DOING, with the LLM calls two clicks
+                      #   further down a tab of a seat page reachable only
+                      #   from there — while the most prominent agent list
+                      #   in the product, Mission Control's pulse strip,
+                      #   drew every row with a pointer cursor and did
+                      #   nothing when clicked). It is the ONLY seats list:
+                      #   Org keeps the structure, this owns the live
+                      #   state, and two screens answering one question
+                      #   eventually disagree. classify() groups by what a
+                      #   seat ASKS OF THE READER, not by the state enum —
+                      #   a seat parked on a question and a seat that fell
+                      #   over are both "not working" and only one is
+                      #   broken, which the enum cannot express. THE WHOLE
+                      #   ROW opens the seat — it was a div whose only
+                      #   target was the name, on the room whose whole job
+                      #   is reaching a seat — which also retires the
+                      #   "Open seat" button beside it, since a second
+                      #   control for what the row already does makes the
+                      #   row's own click look like it must do something
+                      #   else. The nested "LLM calls" button still wins
+                      #   (closest() resolves innermost-first, no
+                      #   stopPropagation); the shell's Enter-on-a-row
+                      #   handler now leaves NATIVE controls alone, since
+                      #   a <button> already fires its own click and the
+                      #   row's action was landing second and winning.
+                      #   COLOUR SAYS WHAT A SEAT IS DOING, never who it
+                      #   is: state.js seatTone() is the one derivation
+                      #   (needs | broken | working | quiet) and every
+                      #   surface drawing a seat calls it. The hashed
+                      #   identity hue it replaces (roleColor/roleInk) drew
+                      #   from the SAME eight families as event category,
+                      #   phase and integration brand — so a seat whose
+                      #   name hashed to amber looked like a seat needing
+                      #   attention — and it tinted unconditionally, so an
+                      #   idle seat carried a lit blob on the one screen
+                      #   whose job is telling working from not. quiet is
+                      #   UNTINTED; avatarFor defaults to it, so a caller
+                      #   with no state renders no claim.
                       #   See docs/reference/dashboard-design.md
   extensions/         # Extension system
 tests/                # Mirror structure of src/crewlet/, plus three that

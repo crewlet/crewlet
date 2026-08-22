@@ -268,3 +268,120 @@ export function installDom() {
   if (!globalThis.location) globalThis.location = { origin: "http://localhost" };
   return { document, root };
 }
+
+/**
+ * Install a session history, a location that writes to it, and a window
+ * that reports scroll — enough to test a router.
+ *
+ * The dashboard's router had no test at all, and the defects that cost
+ * were not parsing bugs: a redirect that PUSHED made Back re-run the
+ * redirect for ever, sub-sections that REPLACED made Back leave the room
+ * entirely, and every mount reset the scroll so Back landed at the top of
+ * a list the reader had scrolled halfway down. None of those is visible
+ * in a parse; all of them are visible in a stack of entries.
+ *
+ * Modelled faithfully on the two rules that produce those bugs:
+ *   - assigning `location.hash` PUSHES an entry whose state is null;
+ *   - `history.replaceState` overwrites the current entry in place and
+ *     does NOT fire `hashchange`.
+ */
+export function installHistory(initial = "#/") {
+  const entries = [{ url: initial, state: null }];
+  let index = 0;
+  const listeners = { hashchange: [], popstate: [], scroll: [] };
+  let scrollY = 0;
+
+  const fire = (type) => {
+    for (const fn of [...listeners[type]]) fn({ type });
+  };
+
+  const location = {
+    origin: "http://localhost",
+    get hash() {
+      return entries[index].url;
+    },
+    set hash(value) {
+      const url = value.startsWith("#") ? value : `#${value}`;
+      if (url === entries[index].url) return;
+      entries.length = index + 1;
+      entries.push({ url, state: null });
+      index += 1;
+      fire("hashchange");
+    },
+  };
+
+  const history = {
+    scrollRestoration: "auto",
+    get state() {
+      return entries[index].state;
+    },
+    get length() {
+      return entries.length;
+    },
+    pushState(state, _title, url) {
+      entries.length = index + 1;
+      entries.push({ url: url ?? entries[index].url, state });
+      index += 1;
+    },
+    replaceState(state, _title, url) {
+      entries[index] = { url: url ?? entries[index].url, state };
+    },
+    go(delta) {
+      const next = Math.min(entries.length - 1, Math.max(0, index + delta));
+      if (next === index) return;
+      index = next;
+      fire("popstate");
+      fire("hashchange");
+    },
+    back() {
+      this.go(-1);
+    },
+    forward() {
+      this.go(1);
+    },
+  };
+
+  globalThis.location = location;
+  globalThis.history = history;
+  // Router code says `window.addEventListener`, not the bare global. In
+  // a browser they are the same object; here they have to be made so, or
+  // every listener the router registers goes somewhere nothing fires.
+  globalThis.window = globalThis;
+  globalThis.dispatchEvent = (event) => {
+    for (const fn of [...(listeners[event.type] || [])]) fn(event);
+    return true;
+  };
+  globalThis.addEventListener = (type, fn) => {
+    (listeners[type] || (listeners[type] = [])).push(fn);
+  };
+  globalThis.removeEventListener = (type, fn) => {
+    const list = listeners[type];
+    if (!list) return;
+    const at = list.indexOf(fn);
+    if (at >= 0) list.splice(at, 1);
+  };
+  globalThis.scrollTo = (_x, y) => {
+    scrollY = typeof y === "number" ? y : (y && y.top) || 0;
+  };
+  Object.defineProperty(globalThis, "scrollY", { get: () => scrollY, configurable: true });
+  globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  globalThis.HashChangeEvent = class {
+    constructor(type) {
+      this.type = type;
+    }
+  };
+
+  return {
+    location,
+    history,
+    /** Every URL in the stack, oldest first, with a caret on the current. */
+    stack: () => entries.map((e, i) => (i === index ? `>${e.url}` : ` ${e.url}`)),
+    urls: () => entries.map((e) => e.url),
+    index: () => index,
+    setScroll: (y) => {
+      scrollY = y;
+    },
+    scroll: () => scrollY,
+  };
+}

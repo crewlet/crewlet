@@ -23,7 +23,19 @@ class ExtensionContext(BaseModel):
     event_queue: Any = None
     agent_pool: Any = None
     execution_tracker: Any = None
+
     tool_registry: Any = None
+    """The engine's tool registry, scoped to this extension: tools
+    registered through it report ``extension:<name>`` as their origin
+    (``GET /tools`` ``source``, the dashboard's Tools grouping) instead
+    of passing for engine builtins.
+
+    That scoping is why it must be registered through *this* object. A
+    registry reached any other way — a reference captured elsewhere, the
+    engine object directly — records the tool as a builtin, and nothing
+    downstream can tell otherwise: an extension's tool is structurally
+    identical to one the engine ships."""
+
     role_mcp_tools: Any = None
     storage: Any = None
     notification_service: Any = None

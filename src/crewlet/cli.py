@@ -1762,12 +1762,9 @@ def cmd_budgets_show(args: argparse.Namespace) -> int:
     """Print token usage per scope."""
 
     async def _run() -> int:
-        db, _store = await _open_budget_store(args)
+        db, store = await _open_budget_store(args)
         try:
-            rows = await db.execute(
-                "SELECT scope, used_tokens, updated_at FROM token_budget_usage "
-                "ORDER BY scope"
-            )
+            rows = await store.list_usage()
         finally:
             await db.close()
         if not rows:

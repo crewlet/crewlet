@@ -16,8 +16,7 @@
 // applied literally rather than decoratively: a dot is lit because a seat
 // was working in that minute.
 
-import { esc, escAttr, fmtCompact, fmtNum } from "./format.js";
-import { effectiveAgentState, roleColor, roleInk } from "./state.js";
+import { effectiveAgentState } from "./state.js";
 import { MAX_EVENTS } from "./store.js";
 
 // The window and its resolution. One cell per minute over an hour: the
@@ -28,16 +27,20 @@ export const PULSE_MINUTES = 60;
 export const PULSE_BUCKETS = 60;
 
 // Floor under a lit cell's opacity. A single event in a minute has to be
-// clearly visible next to an empty cell, or the quiet seats vanish and
-// the panel only ever shows the busiest one.
-const MIN_LIT = 0.3;
+// clearly visible next to an empty cell, or the quiet minutes vanish and
+// the track only ever shows the busiest one. Exported because the cell
+// brightness is computed at the render site: two renderers each picking
+// their own floor is two different claims about what "one event" looks
+// like, and the difference only shows up on a quiet hour, which is
+// exactly when it misleads.
+export const MIN_LIT = 0.3;
 
 /**
  * Roll the event feed up into per-seat, per-minute activity.
  *
  * `seats` are flattened org seats (see org.js); `agents` are the live
  * projection rows; `tokens` is the spend rollup. Returns a plain data
- * object — `pulseGrid` renders it, and the split keeps the bucketing
+ * object — the caller renders it — and the split keeps the bucketing
  * testable without a DOM.
  */
 export function buildPulse(
@@ -102,11 +105,34 @@ export function buildPulse(
   let max = 0;
   let total = 0;
   let failures = 0;
+  // The company-wide track: one cell per bucket, counting EVERY event in
+  // the window rather than only the ones a seat claims. Summing the rows
+  // instead would undercount by exactly the engine-authored events that
+  // match no `actor` — the same events `total` already counts, so the
+  // track and the sentence beside it would disagree.
+  const cells = Array.from({ length: buckets }, () => ({
+    n: 0,
+    failed: false,
+    unknown: false,
+  }));
+  let cellMax = 0;
   for (const ev of feed) {
     // Tracked before the roster check: the retention edge is a property
     // of the FEED, and engine-authored events with no seat still mark it.
     const at = Date.parse(withZone(ev.timestamp));
     if (at && at < oldest) oldest = at;
+    if (at) {
+      const trackAge = now - at;
+      if (trackAge <= span) {
+        const ti = Math.min(
+          buckets - 1,
+          Math.max(0, buckets - 1 - Math.floor(trackAge / width)),
+        );
+        cells[ti].n += 1;
+        if (ev.failed) cells[ti].failed = true;
+        if (cells[ti].n > cellMax) cellMax = cells[ti].n;
+      }
+    }
     const row = byName.get(ev.actor);
     if (!row || !at) continue;
     const age = now - at;
@@ -146,6 +172,7 @@ export function buildPulse(
   for (const row of rows) {
     for (let i = 0; i < blindTo; i++) row.cells[i].unknown = true;
   }
+  for (let i = 0; i < blindTo; i++) cells[i].unknown = true;
 
   return {
     minutes,
@@ -154,6 +181,11 @@ export function buildPulse(
     now,
     width,
     rows,
+    // The whole company as one row, and its own maximum: a track scaled
+    // by the busiest SEAT-cell would read as flat whenever one minute of
+    // company-wide traffic exceeds any single seat's.
+    cells,
+    cellMax,
     // Minutes the grid can actually speak for, which is what the panel
     // must claim — never the nominal window.
     covered: Math.max(1, Math.round(((buckets - blindTo) * width) / 60_000)),
@@ -174,90 +206,4 @@ function withZone(ts) {
   const s = String(ts || "");
   if (!s) return "";
   return /[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + "Z";
-}
-
-// ---------------------------------------------------------------------
-// Render
-// ---------------------------------------------------------------------
-
-function cellMarkup(cell, pulse, row, index, isNow) {
-  const minutesAgo = pulse.buckets - 1 - index;
-  const when = minutesAgo === 0 ? "this minute" : `${minutesAgo}m ago`;
-  if (cell.failed) {
-    return `<i class="pc is-failed" title="${escAttr(`${row.name} · ${when} · ${cell.n} event${cell.n === 1 ? "" : "s"}, failed`)}"></i>`;
-  }
-  if (cell.unknown) {
-    return `<i class="pc is-unknown" title="${escAttr(`${when} · outside the retained feed`)}"></i>`;
-  }
-  if (!cell.n) {
-    return `<i class="pc" title="${escAttr(`${row.name} · ${when} · idle`)}"></i>`;
-  }
-  const lit = MIN_LIT + (1 - MIN_LIT) * Math.min(1, cell.n / pulse.max);
-  const cls = isNow && row.state === "working" ? "pc is-lit is-now" : "pc is-lit";
-  return `<i class="${cls}" style="--lit:${lit.toFixed(2)}" title="${escAttr(
-    `${row.name} · ${when} · ${cell.n} event${cell.n === 1 ? "" : "s"}`,
-  )}"></i>`;
-}
-
-function rowMarkup(row, pulse) {
-  const nav = row.agentId
-    ? ` clickable" data-action="agent" data-id="${escAttr(row.agentId)}`
-    : "";
-  const cells = row.cells
-    .map((cell, i) => cellMarkup(cell, pulse, row, i, i === pulse.buckets - 1))
-    .join("");
-  const foot = row.failures
-    ? `<span class="pulse-fail">${fmtNum(row.failures)} failed</span>`
-    : row.events
-      ? `<span class="pulse-count">${fmtCompact(row.tokens)}</span>`
-      : `<span class="pulse-count is-zero">—</span>`;
-  return `
-    <div class="pulse-row${nav}" data-k="pulse:${escAttr(row.name)}"
-         style="--seat:${roleColor(row.name)}">
-      <span class="pulse-name" style="color:${roleInk(row.name)}">
-        <i class="dot ${esc(row.state)}"></i>${esc(row.name)}
-      </span>
-      <span class="pulse-track">${cells}</span>
-      <span class="pulse-foot">${foot}</span>
-    </div>`;
-}
-
-/**
- * The same track, shrunk to fit inside a seat card.
- *
- * Deliberately the same device rather than a second chart type: a reader
- * who has learned the hero grid already knows how to read the strip on a
- * card, and the two cannot disagree because they are built from one
- * bucketing pass.
- */
-export function pulseSpark(row, max) {
-  if (!row) return "";
-  const cells = row.cells
-    .map((cell) => {
-      if (cell.failed) return '<i class="pc is-failed"></i>';
-      if (!cell.n) return '<i class="pc"></i>';
-      const lit = MIN_LIT + (1 - MIN_LIT) * Math.min(1, cell.n / Math.max(max, 1));
-      return `<i class="pc is-lit" style="--lit:${lit.toFixed(2)}"></i>`;
-    })
-    .join("");
-  return `<span class="pulse-track is-mini" style="--seat:${roleColor(row.name)}"
-    title="${escAttr(`${row.name} · ${row.events} event${row.events === 1 ? "" : "s"} in the last hour`)}">${cells}</span>`;
-}
-
-/** The grid itself, plus its axis. */
-export function pulseGrid(pulse) {
-  if (!pulse.rows.length) return "";
-  return `
-    <div class="pulse">
-      ${pulse.rows.map((row) => rowMarkup(row, pulse)).join("")}
-      <div class="pulse-axis" data-k="pulse:axis">
-        <span class="pulse-name"></span>
-        <span class="pulse-track">
-          <span>−${pulse.minutes}m</span>
-          <span>−${Math.round(pulse.minutes / 2)}m</span>
-          <span>now</span>
-        </span>
-        <span class="pulse-foot"></span>
-      </div>
-    </div>`;
 }

@@ -149,6 +149,28 @@ jobs:
           command -v shellcheck && exit 0
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck || \
             echo "::warning::shellcheck unavailable — its suite will skip"
+      - name: Ensure node is present
+        # The dashboard's 300-odd tests run under plain `node` — no
+        # package.json, no node_modules, no runner. Nothing in this
+        # workflow declared that dependency: it worked only because the
+        # Ubuntu image happens to ship a node, and the day it stops, every
+        # dashboard suite becomes a skip and the build stays green. That
+        # is the dashboard's ONLY coverage, so unlike shellcheck above,
+        # this one fails rather than warning — and the wrapper
+        # (tests/test_dashboard/test_dashboard_js.py) fails too if it is
+        # still missing after this, so neither guard depends on the other.
+        #
+        # The version is recorded rather than pinned. The suites use ES
+        # modules and `node:assert` and nothing else, so a major bump is
+        # not a risk worth a setup action; what IS worth having is the
+        # number in the log, so "it broke on the new image" is a diff
+        # rather than a theory.
+        run: |
+          command -v node || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends nodejs
+          }
+          echo "node $(node --version)"
       - name: Run tests
         run: python -m pytest
 

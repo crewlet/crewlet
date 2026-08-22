@@ -1,8 +1,16 @@
 // The API bearer token the auth-gated views share.
 //
-// Configuration and the audit log both read `/config/*`, which sits behind
-// `ApiAuthMiddleware`. They keep one token between them so setting it in
-// either place unlocks both.
+// Configuration reads `/config/*`, which sits behind
+// `ApiAuthMiddleware`, and the socket carries the same credential on its
+// handshake and on every query frame. One token between them, so setting
+// it anywhere unlocks everything.
+//
+// Asking for it is the shell's job (`askForToken` in app.js, over a real
+// dialog). This module only knows how to read and write it, and what to
+// render in place of a view that cannot be shown without one — the
+// prompting used to live here as a `window.prompt`, which meant a
+// request for a credential arrived in a chrome-drawn box that could not
+// say who was asking or why.
 
 import { icon } from "./icons.js";
 
@@ -22,20 +30,20 @@ export function apiToken() {
   }
 }
 
-/** Prompt for a token; calls `onSet` when one is entered. */
-export function promptForToken(onSet) {
-  const v = window.prompt("Enter a Crewlet API token (from api.auth.tokens):");
-  if (!v) return;
+/**
+ * Persist a token. Returns false if the browser refused the write.
+ *
+ * The caller has to know: a silently-unsaved token works until the next
+ * reload and is then unauthenticated again, with nothing on screen to
+ * explain why.
+ */
+export function storeToken(token) {
   try {
-    localStorage.setItem(TOKEN_KEY, v.trim());
+    localStorage.setItem(TOKEN_KEY, String(token || "").trim());
+    return true;
   } catch {
-    // Storage refused the write (quota, privacy mode). Say so rather
-    // than carrying on as if the token were saved — the next reload
-    // would silently be unauthenticated again.
-    window.alert("This browser refused to store the token.");
-    return;
+    return false;
   }
-  if (onSet) onSet();
 }
 
 /** The "you need a token" panel, shown in place of an auth-gated view. */
@@ -50,25 +58,6 @@ export function tokenGate(what) {
       <div class="empty-sub">Set a bearer token matching one of your <code>api.auth.tokens</code> entries.</div>
       <button class="btn primary" data-action="set-token" style="margin-top:8px">${icon("key", "sm")} Set API token</button>
     </div>`;
-}
-
-/**
- * Show a one-time, page-level prompt when the engine rejects our token.
- *
- * Called from the socket's close handler, which is the only place that
- * can tell a refused credential from an unreachable engine. One time,
- * deliberately: reconnect backs off to 30 s and would otherwise reopen
- * the modal forever. The banner carries the state after a dismissal.
- */
-let promptedOnce = false;
-export function ensureTokenForApi(onSet) {
-  if (promptedOnce) return;
-  promptedOnce = true;
-  promptForToken(() => {
-    promptedOnce = false;
-    if (onSet) onSet();
-    else location.reload();
-  });
 }
 
 /** The "that token was rejected" panel. */

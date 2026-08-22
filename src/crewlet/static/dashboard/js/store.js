@@ -223,4 +223,28 @@ export class Store {
   agentById(id) {
     return this.state.agents.find((a) => a.id === id || a.role === id) || null;
   }
+
+  /**
+   * Resolve a seat by whatever the URL carried.
+   *
+   * Seats are addressed by handle — the canonical identity everywhere
+   * else in the system, and the one an operator can read off a Slack
+   * mention. Runtime ids and role names still resolve, because the links
+   * minted before the move used them and they are in people's history.
+   */
+  agentByKey(key) {
+    if (!key) return null;
+    const wanted = String(key);
+    const lower = wanted.toLowerCase();
+    return (
+      this.state.agents.find(
+        (a) =>
+          a.handle === wanted ||
+          a.id === wanted ||
+          a.role === wanted ||
+          String(a.handle || "").toLowerCase() === lower ||
+          String(a.role || "").toLowerCase() === lower,
+      ) || null
+    );
+  }
 }

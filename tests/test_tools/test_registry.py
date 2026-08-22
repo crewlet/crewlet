@@ -5,7 +5,15 @@ from typing import Any
 import pytest
 
 from crewlet.tools.protocol import AgentContext, CheckContext, ToolResult
-from crewlet.tools.registry import SimpleTool, ToolRegistry, build_availability_set
+from crewlet.tools.registry import (
+    BUILTIN_ORIGIN,
+    CUSTOM_ORIGIN,
+    SimpleTool,
+    ToolRegistry,
+    build_availability_set,
+    extension_origin,
+    mcp_origin,
+)
 
 
 def make_tool(name: str) -> SimpleTool:
@@ -192,8 +200,114 @@ def test_unregister_removes_a_tool_and_its_metadata() -> None:
 
     assert registry.get("doomed") is None
     assert registry.annotations_for("doomed") is None
+    assert registry.origin_for("doomed") == BUILTIN_ORIGIN  # the not-here answer
     assert "doomed" not in [t.name for t in registry.list_tools()]
 
 
 def test_unregister_is_false_for_an_unknown_tool() -> None:
     assert ToolRegistry().unregister("never-existed") is False
+
+
+# --- tool origins ---
+
+
+def test_registration_without_an_origin_is_a_builtin() -> None:
+    """The engine's own register_* helpers pass nothing, so the default
+    has to be the engine's own answer."""
+    registry = ToolRegistry()
+    registry.register(make_tool("lookup_colleague"))
+    assert registry.origin_for("lookup_colleague") == BUILTIN_ORIGIN
+
+
+def test_an_origin_is_recorded_verbatim() -> None:
+    registry = ToolRegistry()
+    registry.register(make_tool("acme_ping"), origin=extension_origin("acme"))
+    registry.register(make_tool("review_code"), origin=CUSTOM_ORIGIN)
+    registry.register(make_tool("jira_get_issue"), origin=mcp_origin("atlassian"))
+
+    assert registry.origin_for("acme_ping") == "extension:acme"
+    assert registry.origin_for("review_code") == "custom"
+    assert registry.origin_for("jira_get_issue") == "mcp:atlassian"
+
+
+def test_a_scoped_view_stamps_every_registration() -> None:
+    registry = ToolRegistry()
+    scoped = registry.for_origin(extension_origin("acme"))
+
+    scoped.register(make_tool("acme_ping"))
+    scoped.register(make_tool("acme_pong"), check_fn=lambda _ctx: False)
+
+    assert registry.origin_for("acme_ping") == "extension:acme"
+    assert registry.origin_for("acme_pong") == "extension:acme"
+    # The rest of the registry is the real one, not a copy of it.
+    assert registry.get("acme_ping") is not None
+    assert registry.check_fn_for("acme_pong") is not None
+
+
+def test_a_scoped_view_passes_every_other_call_through() -> None:
+    """Extensions are handed the view as ``ctx.tool_registry`` and use
+    the whole registry surface through it — a view that intercepted only
+    ``register`` and forwarded nothing else would break every extension
+    that reads back what it registered."""
+    registry = ToolRegistry()
+    scoped = registry.for_origin(extension_origin("acme"))
+    registry.register(make_tool("builtin_one"))
+
+    assert scoped.get("builtin_one") is not None
+    assert [t.name for t in scoped.list_tools()] == ["builtin_one"]
+    assert scoped.origin_for("builtin_one") == BUILTIN_ORIGIN
+
+    scoped.register(make_tool("acme_ping"))
+    assert scoped.unregister("acme_ping") is True
+    assert registry.get("acme_ping") is None
+
+
+class TestOriginCannotBeEscaped:
+    """A scoped view is a promise about who registered a tool.
+
+    The scope is a convention enforced at the seam an extension is
+    *handed*, not a sandbox — but a convention that forwards the very
+    method for changing it is not a convention at all.
+    """
+
+    def test_rescoping_a_scoped_view_keeps_its_origin(self) -> None:
+        registry = ToolRegistry()
+        scoped = registry.for_origin(extension_origin("acme"))
+        # `__getattr__` used to forward this to the real registry, so an
+        # extension could hand itself the builtin origin and its tools
+        # would sit in the engine's own group.
+        escaped = scoped.for_origin("builtin")
+        assert escaped.origin == extension_origin("acme")
+
+    def test_a_tool_registered_through_an_escaped_view_keeps_the_extension(
+        self,
+    ) -> None:
+        registry = ToolRegistry()
+        scoped = registry.for_origin(extension_origin("acme"))
+        scoped.for_origin("builtin").register(make_tool("acme_deploy"))
+        assert registry.origin_for("acme_deploy") == extension_origin("acme")
+
+
+class TestUnregisterByOrigin:
+    def test_dropping_an_origin_takes_only_its_tools(self) -> None:
+        """The counterpart to recording the origin at registration.
+
+        Without it, removing an extension left every tool it registered
+        in the shared registry — advertised in every later catalogue and
+        dispatching into a disposed object.
+        """
+        registry = ToolRegistry()
+        registry.register(make_tool("builtin_one"), origin=BUILTIN_ORIGIN)
+        registry.for_origin(extension_origin("acme")).register(make_tool("acme_a"))
+        registry.for_origin(extension_origin("acme")).register(make_tool("acme_b"))
+        registry.for_origin(extension_origin("other")).register(make_tool("other_a"))
+
+        dropped = registry.unregister_origin(extension_origin("acme"))
+
+        assert sorted(dropped) == ["acme_a", "acme_b"]
+        names = {t.name for t in registry.list_tools()}
+        assert "acme_a" not in names and "acme_b" not in names
+        assert {"builtin_one", "other_a"} <= names
+
+    def test_dropping_an_origin_nothing_registered_is_not_an_error(self) -> None:
+        assert ToolRegistry().unregister_origin(extension_origin("ghost")) == []

@@ -7,6 +7,13 @@
 // the client polls this snapshot so the page keeps telling the truth,
 // and it stops the moment the socket is back.
 //
+// It had a second entry, `fleet()`, and that one is why the Fleet view
+// shipped dead: a view reaching for its own transport takes its client
+// from somewhere, and the somewhere it chose was a context field the
+// shell never populated. The lease table is a `fleet` query now, so
+// there is one transport for reads again and no second place for a view
+// to reach. Only `socket.js` imports this file.
+//
 // The REST API itself is much larger than this — it is a public read
 // surface documented in docs/reference/api-endpoints.md. The dashboard
 // simply no longer uses it.
@@ -42,26 +49,6 @@ export const api = {
     } catch {
       // A refused connection, a DNS failure, or a proxy answering 200
       // with an HTML error page (which fails to parse as JSON).
-      return null;
-    }
-  },
-
-  /**
-   * The fleet as the lease table sees it, or `null`.
-   *
-   * A REST read rather than a socket query, and not live state: leases
-   * move on their own with no event to push, so the Fleet view polls.
-   */
-  async fleet() {
-    try {
-      const stored = apiToken();
-      const response = await fetch(
-        BASE + "/fleet",
-        stored ? { headers: { Authorization: "Bearer " + stored } } : undefined,
-      );
-      if (!response.ok) return null;
-      return await response.json();
-    } catch {
       return null;
     }
   },

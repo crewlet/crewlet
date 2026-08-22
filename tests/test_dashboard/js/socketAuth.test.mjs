@@ -63,13 +63,6 @@ globalThis.localStorage = {
 
 let prompts = 0;
 let answer = null;
-globalThis.window = {
-  prompt: () => {
-    prompts++;
-    return answer;
-  },
-  alert: () => {},
-};
 
 // The degraded poll fires from every close; it is not the subject here.
 globalThis.fetch = async () => {
@@ -101,6 +94,18 @@ function dial({ token = "" } = {}) {
   const socket = new LiveSocket(store);
   built.push(socket);
   socket.setToken(token);
+  // The shell owns the dialog; the socket only knows a refusal from an
+  // outage. This models what `askForToken` in app.js does with an
+  // answer — anything the socket needs to do on its own has to happen
+  // without help from here.
+  socket.onAuthRejected(() => {
+    prompts++;
+    if (!answer) return;
+    stored.set("crewlet_api_token", answer);
+    socket.setToken(answer);
+    store.setAuthRejected(false);
+    socket.reconnect();
+  });
   socket.start();
   return { store, socket, last: () => sockets[sockets.length - 1] };
 }
@@ -190,9 +195,30 @@ test("stopping the client stops the degraded poll too", async () => {
   }
 });
 
-// Last on purpose. `ensureTokenForApi` latches after a dismissal — that
-// is what stops a 30-second backoff from reopening the modal forever —
-// and the latch is module state shared by every test in this file.
+test("a dismissed prompt is not reopened by the reconnect backoff", () => {
+  const { last } = dial();
+  answer = null;
+  last().reject();
+  assert.strictEqual(prompts, 1);
+  last().reject();
+  last().reject();
+  assert.strictEqual(prompts, 1, "the backoff reopened the dialog");
+});
+
+test("a token the engine also refuses gets asked about again", () => {
+  // The ask-once latch exists for the backoff above, not to make a
+  // second refusal silent: a reader who mistyped the token would never
+  // be asked again and would sit on a page that never says why.
+  const { last } = dial();
+  answer = "wrong-token";
+  last().reject();
+  assert.strictEqual(prompts, 1);
+  answer = "right-token";
+  last().reject();
+  assert.strictEqual(prompts, 2);
+  assert.ok(last().url.includes("token=right-token"), last().url);
+});
+
 test("a dismissed prompt leaves the banner saying why, not 'retrying'", () => {
   const { store, last } = dial();
   answer = null;

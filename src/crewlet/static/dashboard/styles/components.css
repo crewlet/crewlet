@@ -35,29 +35,6 @@
   overflow: hidden;
 }
 
-/* The site's decorative accent dots — used sparingly, on the overview's
-   lead panel only, exactly as the marketing panels use it. */
-.dot-texture::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  opacity: 0.12;
-  background:
-    radial-gradient(
-      circle at 16px 16px,
-      color-mix(in srgb, var(--accent) 55%, transparent) 0 1.5px,
-      transparent 1.5px
-    ),
-    radial-gradient(
-      circle at calc(100% - 24px) 24px,
-      color-mix(in srgb, var(--accent) 28%, transparent) 0 1px,
-      transparent 1px
-    );
-  background-size: 72px 72px, 108px 108px;
-}
-
 /* ---- Section headers ---- */
 .sec {
   display: flex;
@@ -99,134 +76,13 @@
 .sec-link:hover {
   color: var(--text);
 }
-
-/* ---------------------------------------------------------------------------
- * Seat cards
- * ---------------------------------------------------------------------------
- * One card per seat — agent or human.  The card reads top-down as a
- * sentence: who this is and what phase it is in, what it is doing, an hour
- * of its real activity, then the surfaces it acts on and what it spent.
- *
- * It used to be a centred column with a 40px avatar and a status line, which
- * meant a five-seat company got five tall cards saying "idle — nothing in the
- * inbox" and nothing else.  Left-aligned and stacked, the same card carries
- * four facts in less height, and the activity strip is the same device as the
- * overview's pulse grid so the two cannot disagree.
- */
-.seat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(284px, 1fr));
-  gap: 12px;
-}
-
-.seat-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 15px 13px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--panel-shadow);
-  transition: transform var(--dur-slow) var(--ease-snappy),
-    box-shadow var(--dur-slow) var(--ease-snappy),
-    border-color var(--dur-slow) var(--ease-snappy);
-}
-/* The seat's own identity hue as a hairline down the leading edge — the
-   only place a card states its hue as a surface rather than as text, and
-   what makes a grid of cards scan as a roster rather than as a table. */
-.seat-card::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: var(--seat, var(--border-strong));
-  opacity: 0.55;
-}
-.seat-card.is-failed::before {
-  background: var(--red);
-  opacity: 1;
-}
-.seat-card.clickable {
-  cursor: pointer;
-}
-.seat-card.clickable:hover {
-  box-shadow: var(--lift-shadow);
-  transform: translateY(-2px);
-}
-/* The seat being looked at, or the one the operator pinned. */
-.seat-card.selected {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
-    var(--lift-shadow);
-}
-
-.seat-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.seat-card .avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-.seat-card .avatar .ic {
-  width: 14px;
-  height: 14px;
-}
-.seat-state {
-  flex-shrink: 0;
-}
-.seat-state.human {
-  background: var(--purple);
-}
-.seat-name {
-  font-size: 13.5px;
-  font-weight: 600;
-  letter-spacing: var(--track-display);
-  line-height: 1.3;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.seat-top .badge,
-.seat-top .ph-pill {
-  flex-shrink: 0;
-}
-.seat-status {
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  text-wrap: pretty;
-  /* Two lines, always — a card whose status is one line must not sit a
-     row shorter than its neighbour and break the grid's baseline. */
-  min-height: 2.9em;
-}
 /* ---- The budget bar ----
    The only place the dashboard divides one token figure by another, and
    it is honest exactly because both cover the same span: the engine's
    live meter against the cap that meter enforces. Everything else on a
-   card is a 24-hour or 7-day window and is stated, never divided. */
-.seat-budget {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-  min-width: 0;
-}
+   surface is a 24-hour or 7-day window and is stated, never divided.
+   Drawn by the seat page in two sizes; there is no third caller, so the
+   bar is the whole rule and there is no wrapper class. */
 .seat-budget-track {
   flex: 1 1 auto;
   min-width: 24px;
@@ -249,56 +105,11 @@
   background: var(--seat, var(--accent));
   transition: width var(--dur-slow) var(--ease);
 }
-.seat-budget.warn .seat-budget-track > i,
 .tok-chip.budget.warn .seat-budget-track > i {
   background: var(--amber);
 }
-.seat-budget.over .seat-budget-track > i,
 .tok-chip.budget.over .seat-budget-track > i {
   background: var(--red);
-}
-.seat-budget.over .seat-budget-note {
-  color: var(--red-ink);
-}
-.seat-budget-label {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-.seat-budget-note {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  opacity: 0.75;
-}
-/* A cap with no meter behind it: the figure is real config, so it is
-   shown — but it is not a measurement, so it gets no bar. */
-.seat-budget.is-unmetered .seat-budget-label {
-  flex: 1 1 auto;
-}
-
-/* Pinned to the bottom so the chip row and the cost line align across a
-   grid whose cards carry different numbers of chips. */
-.seat-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 2px;
-  min-height: 18px;
-}
-.seat-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
-}
-.seat-meta {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: var(--text-dim);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------------------------
@@ -429,6 +240,11 @@
 
 /* Soft-tinted identity tile — the hue reads as ink on its own wash, which is
    how the site renders every icon chip. */
+/* A seat's tile. Its icon says WHO; its tint says what it is DOING.
+   It used to be tinted by a hash of the seat's NAME, which put a lit,
+   coloured blob on every row whether or not anything was running — an
+   idle seat glowed exactly as brightly as a working one. Quiet is now
+   genuinely quiet: a hairline and a muted glyph, no fill. */
 .avatar {
   width: 32px;
   height: 32px;
@@ -437,10 +253,24 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--avatar-color, var(--text-secondary));
-  background: color-mix(in srgb, var(--avatar-color, var(--text-muted)) 13%, transparent);
-  border: 1px solid
-    color-mix(in srgb, var(--avatar-color, var(--text-muted)) 24%, transparent);
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.avatar.tone-working {
+  color: var(--green-ink);
+  background: color-mix(in srgb, var(--green) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--green) 26%, transparent);
+}
+.avatar.tone-needs {
+  color: var(--amber-ink);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--amber) 26%, transparent);
+}
+.avatar.tone-broken {
+  color: var(--red-ink);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
 }
 
 /* ---- Badges & pills ---- */
@@ -472,28 +302,28 @@
 .badge.live {
   color: var(--amber-ink);
   border-color: color-mix(in srgb, var(--amber) 26%, transparent);
-  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
 }
 .badge.warn {
   color: var(--orange-ink);
   border-color: color-mix(in srgb, var(--orange) 26%, transparent);
-  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  background: color-mix(in srgb, var(--orange) var(--tint), transparent);
 }
 .badge.done,
 .badge.idle {
   color: var(--green-ink);
   border-color: color-mix(in srgb, var(--green) 26%, transparent);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
+  background: color-mix(in srgb, var(--green) var(--tint), transparent);
 }
 .badge.failed {
   color: var(--red-ink);
   border-color: color-mix(in srgb, var(--red) 30%, transparent);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
 }
 .badge.afk {
   color: var(--orange-ink);
   border-color: color-mix(in srgb, var(--orange) 26%, transparent);
-  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  background: color-mix(in srgb, var(--orange) var(--tint), transparent);
 }
 .badge.pending {
   color: var(--text-muted);
@@ -501,12 +331,12 @@
 .badge.info {
   color: var(--blue-ink);
   border-color: color-mix(in srgb, var(--blue) 26%, transparent);
-  background: color-mix(in srgb, var(--blue) 10%, transparent);
+  background: color-mix(in srgb, var(--blue) var(--tint), transparent);
 }
 .badge.purple {
   color: var(--purple-ink);
   border-color: color-mix(in srgb, var(--purple) 26%, transparent);
-  background: color-mix(in srgb, var(--purple) 10%, transparent);
+  background: color-mix(in srgb, var(--purple) var(--tint), transparent);
 }
 /* A task title is prose, not a status code — keep it sentence-cased. */
 .badge.text {
@@ -614,8 +444,7 @@
   color: var(--bg);
   border-color: transparent;
   font-weight: 500;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 4px rgba(0, 0, 0, 0.05),
-    0 4px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--btn-shadow);
 }
 .btn.primary:hover {
   background: color-mix(in srgb, var(--heading) 88%, var(--bg));
@@ -629,6 +458,12 @@
 .btn.sm {
   padding: 4px 10px;
   font-size: 11.5px;
+}
+/* Points back the way it reads. The one chevron symbol faces right, and
+   nothing rotated it here, so the link out of a seat rendered "› Agents"
+   — an arrow pointing away from where the link goes. */
+.back-link .ic {
+  transform: rotate(180deg);
 }
 .back-link {
   display: inline-flex;
@@ -836,18 +671,6 @@
   border-radius: 5px;
   background: color-mix(in srgb, currentColor 11%, transparent);
 }
-.flash {
-  animation: flash 2.2s var(--ease);
-}
-@keyframes flash {
-  0%,
-  20% {
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-  100% {
-    box-shadow: inset 0 0 0 2px transparent;
-  }
-}
 
 /* ---- Tables ---- */
 .tbl {
@@ -922,74 +745,6 @@
   margin: 8px 0;
 }
 
-/* =====================================================================
-   The overview's lead panel
-   =====================================================================
-   One panel answering the first question anyone opens this page with: is
-   anything happening, and did anything break.  A headline, a strip of
-   figures, and the pulse grid — an hour of every seat's real activity,
-   one cell per minute.
-
-   The device is the site's masked dot field, used literally rather than
-   decoratively: a dot is lit because a seat was working in that minute,
-   its brightness is how much it did, and a red one is a real failure.
-   ===================================================================== */
-.hero {
-  padding: 20px 22px 18px;
-  margin-bottom: 20px;
-  overflow: hidden;
-}
-/* The brand mark as a hairline of light along the top edge — the one
-   place the full seven-stop gradient appears, and the same way the site
-   uses it: as illumination on an edge, never as a fill. */
-.hero::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: var(--brand-gradient);
-  opacity: 0.6;
-}
-.hero-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 26px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
-}
-.hero-lede {
-  flex: 1 1 260px;
-  min-width: 0;
-}
-.hero-figure {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-top: 9px;
-  line-height: 1.05;
-  flex-wrap: wrap;
-}
-.hero-figure .num {
-  font-size: 40px;
-  font-weight: 600;
-}
-.hero-rest {
-  font-size: 15.5px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  letter-spacing: var(--track-body);
-}
-.hero-sub {
-  margin-top: 7px;
-  font-size: 12.5px;
-  color: var(--text-muted);
-}
-.hero-phases {
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-subtle);
-}
-
 /* ---- The stat strip ----
    Four figures on one recessed rail instead of four panels.  A panel per
    integer is a lot of screen, and it pushed everything that actually
@@ -1024,141 +779,6 @@
   font-size: 10.5px;
   color: var(--text-dim);
   margin-top: 2px;
-}
-
-/* ---- The pulse grid ---- */
-.pulse {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.pulse-row {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr) 62px;
-  align-items: center;
-  gap: 12px;
-  padding: 2px 6px;
-  border-radius: 7px;
-  transition: background var(--dur);
-}
-.pulse-row.clickable {
-  cursor: pointer;
-}
-.pulse-row.clickable:hover {
-  background: var(--bg-hover);
-}
-.pulse-name {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 560;
-  letter-spacing: var(--track-body);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pulse-name .dot {
-  flex-shrink: 0;
-}
-.pulse-track {
-  display: flex;
-  gap: 2px;
-  min-width: 0;
-}
-/* A cell is one minute.  Unlit is a faint tint of the text colour rather
-   than a border, so an empty row still reads as a track — the dot field's
-   unlit dots — instead of disappearing into the panel. */
-.pulse-track .pc {
-  flex: 1 1 0;
-  min-width: 0;
-  height: 15px;
-  border-radius: 2.5px;
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-/* A minute the retained feed cannot speak for. Drawn as a hairline
-   rather than as an empty cell, because "no record" and "idle" are
-   different answers and only one of them is reassuring. */
-.pulse-track .pc.is-unknown {
-  background: none;
-  border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
-  border-radius: 0;
-  align-self: center;
-  height: 1px;
-}
-.pulse-track .pc.is-lit {
-  background: var(--seat, var(--accent));
-  opacity: var(--lit, 1);
-}
-.pulse-track .pc.is-failed {
-  background: var(--red);
-  opacity: 1;
-}
-/* The current minute of a seat that is working right now. This is the
-   only cell on the grid that moves, so motion here always means live
-   work — the same rule the rest of the live marks follow. */
-.pulse-track .pc.is-now {
-  animation: cell-breathe 1.9s var(--ease) infinite;
-}
-@keyframes cell-breathe {
-  0%,
-  100% {
-    opacity: var(--lit, 1);
-  }
-  50% {
-    opacity: 0.3;
-  }
-}
-.pulse-foot {
-  text-align: right;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.pulse-fail {
-  color: var(--red-ink);
-}
-.pulse-count.is-zero {
-  opacity: 0.45;
-}
-.pulse-axis {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr) 62px;
-  gap: 12px;
-  margin-top: 7px;
-  padding: 0 6px;
-}
-.pulse-axis .pulse-track {
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-/* The same track shrunk onto a seat card. */
-.pulse-track.is-mini {
-  gap: 1px;
-}
-.pulse-track.is-mini .pc {
-  height: 9px;
-  border-radius: 2px;
-}
-
-@media (max-width: 720px) {
-  .pulse-row,
-  .pulse-axis {
-    grid-template-columns: 96px minmax(0, 1fr) 48px;
-    gap: 8px;
-  }
-  .hero-figure .num {
-    font-size: 32px;
-  }
 }
 
 /* =====================================================================
@@ -1353,11 +973,6 @@
   font-weight: 640;
   font-size: 13px;
 }
-.live-model {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-dim);
-}
 .live-tokens {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1376,35 +991,6 @@
 .live-text.is-waiting {
   color: var(--text-dim);
   font-style: italic;
-}
-.live-tools {
-  display: flex;
-  gap: 5px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-  position: relative;
-}
-.live-tools .chip.err {
-  color: var(--red-ink);
-  border-color: color-mix(in srgb, var(--red) 40%, transparent);
-}
-
-/* The idle counterpart: an empty live board still holds its shape, so
-   the page does not jump when the first turn starts. */
-.idle-panel {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 20px;
-  margin-bottom: 18px;
-  border: 1px dashed var(--border-subtle);
-  border-radius: var(--radius);
-  min-height: 72px;
-}
-.idle-title {
-  font-weight: 620;
-  color: var(--text-secondary);
-  margin-bottom: 2px;
 }
 .dot.idle {
   width: 9px;
@@ -1493,7 +1079,7 @@
 .badge.failed {
   color: var(--red-ink);
   border-color: color-mix(in srgb, var(--red) 40%, transparent);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
 }
 .badge.failed .dot {
   background: var(--red);
@@ -1563,11 +1149,11 @@
   color: var(--red-ink);
 }
 .pill.failed.active {
-  background: color-mix(in srgb, var(--red) 16%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   border-color: color-mix(in srgb, var(--red) 34%, transparent);
 }
 .nav-count.alert {
-  background: color-mix(in srgb, var(--red) 15%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   color: var(--red-ink);
 }
 
@@ -1593,12 +1179,12 @@
    would show as a correctly-worded warning in body text. */
 .degraded.down {
   color: var(--red-ink);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--red) 26%, transparent);
 }
 .degraded.warn {
   color: var(--amber-ink);
-  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
 }
 
@@ -1765,4 +1351,257 @@
 .show-more:hover {
   color: var(--text);
   border-color: var(--border);
+}
+
+/* ---- Search affordance (topbar) ---- */
+.search-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur);
+}
+.search-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.search-btn kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 4px;
+}
+@media (max-width: 720px) {
+  .search-label,
+  .search-btn kbd {
+    display: none;
+  }
+}
+
+/* ---- Modal + command palette ----
+   Both are modal chrome at the document root: they take the keyboard
+   from whatever view is mounted, so they must not live inside it. The
+   veil composes its own ground rather than inventing a second material —
+   the panel wash layered over an opaque backdrop. */
+.modal-wrap,
+.palette-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+}
+.modal-veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh var(--space-4) var(--space-4);
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+  backdrop-filter: blur(3px);
+}
+.modal,
+.palette {
+  width: 100%;
+  max-width: 520px;
+  background: linear-gradient(var(--bg-card), var(--bg-card)) var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  animation: modal-in 0.16s var(--ease);
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.modal {
+  padding: var(--space-5);
+}
+.modal-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+  margin: 0 0 var(--space-2);
+}
+.modal-body {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-4);
+}
+.modal-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+.modal-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.modal-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.btn.danger {
+  background: color-mix(in srgb, var(--red) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red-ink);
+}
+
+.palette {
+  max-width: 580px;
+  padding: 0;
+  overflow: hidden;
+}
+.palette-input {
+  width: 100%;
+  padding: var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+  letter-spacing: var(--track-body);
+}
+.palette-input:focus {
+  outline: none;
+}
+.palette-results {
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+.pal-group + .pal-group {
+  margin-top: var(--space-2);
+}
+.pal-group-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+}
+.pal-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.pal-item.on {
+  background: var(--bg-active);
+}
+.pal-label {
+  color: var(--text);
+  font-size: var(--text-sm);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pal-hint {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pal-empty {
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* ---- Attention rows ----
+   The shared grammar for every "needs a person" list: a severity stripe
+   in the reserved status hue or the caution hue, the seat, what happened,
+   how long it has been waiting, and the one control that acts on it. */
+.att-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.att-row:first-child {
+  border-top: 0;
+}
+.att-row:hover {
+  background: var(--bg-hover);
+}
+.att-sev {
+  width: 3px;
+  align-self: stretch;
+  border-radius: 2px;
+  flex: none;
+  background: var(--amber);
+}
+.att-row.broke .att-sev {
+  background: var(--red);
+}
+.att-seat {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.att-what {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.att-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.att-detail {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.att-age {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.att-quiet {
+  padding: var(--space-4) var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }

@@ -13,7 +13,7 @@
 // stops the moment the socket is back.
 
 import { api } from "./api.js";
-import { apiToken, ensureTokenForApi } from "./authToken.js";
+import { apiToken } from "./authToken.js";
 
 const PATH = "/ws/stream";
 // The close code the server sends when it refuses the handshake
@@ -55,11 +55,20 @@ export class LiveSocket {
     // id → {resolve, reject, timer} for queries awaiting a reply.
     this.inflight = new Map();
     this.token = "";
+    // Whether the shell has already been asked to collect a token.
+    this._askedForToken = false;
+    this._onAuthRejected = null;
   }
 
   /** Operator bearer token, sent with config-family queries. */
   setToken(token) {
     this.token = token || "";
+    // A supplied credential clears the ask-once latch. The latch is
+    // there so a 30-second reconnect backoff cannot reopen the dialog
+    // forever — not to make a SECOND refusal silent. Without this, a
+    // reader who answered with a token the engine also rejects is never
+    // asked again and sits on a page that never says why.
+    if (this.token) this._askedForToken = false;
   }
 
   start() {
@@ -190,9 +199,10 @@ export class LiveSocket {
       this.store.setConnected(false);
       this._scheduleReconnect();
       this._startFallback();
-      // Last, and deliberately: the prompt inside blocks the thread, and
-      // re-dials on an answer. Running it mid-handler would have that
-      // re-dial race the teardown still finishing around it.
+      // Last, and deliberately: the shell's response to this is to ask
+      // for a token and re-dial on an answer. Running it before the
+      // teardown above would have that re-dial race the cleanup still
+      // finishing around it.
       if (e && e.code === CLOSE_UNAUTHORIZED) this._authRejected();
     };
     sock.onerror = () => {
@@ -205,22 +215,33 @@ export class LiveSocket {
   /**
    * The engine refused this browser's credential.
    *
-   * Two things happen, and both are needed. The prompt is the repair —
-   * the dashboard is served unauthenticated by design (the page that
-   * asks for a token cannot itself require one), so the browser has no
-   * other moment to learn it needs one. The store flag is what happens
-   * when the reader dismisses that prompt: `ensureTokenForApi` fires
-   * once and only once, deliberately, so that a 30-second reconnect
-   * backoff does not reopen a modal forever — which leaves the page
-   * looking like an outage unless the chrome can say otherwise.
+   * Two things happen, and both are needed. Asking for a token is the
+   * repair — the dashboard is served unauthenticated by design (the
+   * page that asks for a token cannot itself require one), so the
+   * browser has no other moment to learn it needs one. The store flag is
+   * what happens when the reader dismisses that request: it fires once
+   * and only once, deliberately, so that a 30-second reconnect backoff
+   * does not reopen a dialog forever — which leaves the page looking
+   * like an outage unless the chrome can say otherwise.
+   *
+   * The socket does not own the asking. It cannot: the dialog belongs to
+   * the shell, and a transport that reaches up into the DOM to draw one
+   * is a transport that cannot be tested without a browser.
    */
   _authRejected() {
     this.store.setAuthRejected(true);
-    ensureTokenForApi(() => {
-      this.setToken(apiToken());
-      this.store.setAuthRejected(false);
-      this.reconnect();
-    });
+    if (this._askedForToken || !this._onAuthRejected) return;
+    this._askedForToken = true;
+    this._onAuthRejected();
+  }
+
+  /**
+   * Register what to do the first time the engine refuses a credential.
+   *
+   * Called once by the shell at boot.
+   */
+  onAuthRejected(fn) {
+    this._onAuthRejected = fn;
   }
 
   _onMessage(raw) {

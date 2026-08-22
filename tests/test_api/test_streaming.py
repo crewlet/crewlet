@@ -709,6 +709,98 @@ class TestStreamQueries:
             assert "schedules" in env["data"]
             assert "recent_runs" in env["data"]
 
+    def test_fleet_query_answers_over_the_socket(self, app) -> None:
+        """The lease table is a query, not a view's private HTTP call.
+
+        Fleet was the last view reading over its own transport, and that
+        is where it cost: it took its client from a context field the
+        shell never populated, so every poll threw before reaching the
+        network and the page held a loading skeleton for ever. Answering
+        here means the view uses the one seam every other view uses.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "fleet")
+            assert env["kind"] == "result"
+            # Without a database there is no lease table, which is a real
+            # answer about a single-process deployment rather than an error.
+            assert "nodes" in env["data"]
+            assert "this_node" in env["data"]
+
+    def test_fleet_query_and_rest_route_agree(self, app) -> None:
+        """One function behind both surfaces, so they cannot drift."""
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            over_socket = self._query(ws, "fleet")["data"]
+            over_http = client.get("/fleet").json()
+            assert over_socket == over_http
+
+    def test_sandbox_runs_query_answers_or_says_why_not(self, app) -> None:
+        """The durable half of the Work board.
+
+        The live projection sweeps a sandbox entry after twelve hours and
+        a run parked on a question can wait days, so the states that most
+        need a person were the ones least likely to be in memory. Without
+        a database there is no durable row at all, and saying so beats an
+        empty board that reads as "no work".
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "sandbox_runs")
+            if env["kind"] == "result":
+                assert "runs" in env["data"]
+            else:
+                assert env["error"] == "no_pending_store"
+
+    def test_budgets_query_separates_the_two_counters(self, app) -> None:
+        """Caps, the shared counter, and the engine-run meter.
+
+        Three numbers over three different spans. `durable` says whether
+        the shared counter could be READ, which is a different statement
+        from "nothing has been spent" — drawing every seat at the bottom
+        of its cap would be the wrong one.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "budgets")
+            assert env["kind"] == "result"
+            assert "durable" in env["data"]
+            assert "org" in env["data"]
+            assert "seats" in env["data"]
+
+    def test_integrations_query_never_infers_health(self, app) -> None:
+        """Traffic is counted; health is not inferred.
+
+        An idle Slack and a 401-ing Slack are indistinguishable in the
+        event store, so the payload carries counts and a `traffic_known`
+        flag and leaves the reading to the surface.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "integrations")
+            assert env["kind"] == "result"
+            data = env["data"]
+            assert "traffic_known" in data
+            assert isinstance(data.get("integrations"), list)
+            for row in data["integrations"]:
+                # Never a health verdict, and never a secret VALUE.
+                assert "healthy" not in row
+                assert isinstance(row["secret_present"], bool | type(None))
+
+    def test_config_entities_is_operator_gated(self, app) -> None:
+        """Reading config structure needs a token, like every /config read.
+
+        The room's editor reads over the socket rather than with its own
+        fetch — a view with its own transport has a failure mode the
+        shell knows nothing about, which is how the Fleet view shipped
+        dead — so the gate has to hold on this channel too.
+        """
+        with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
+            ws.receive_text()
+            env = self._query(ws, "config_entities", {"kind": "roles"})
+            assert env["kind"] == "error"
+            assert env["error"] == "unauthorized"
+
     def test_tokens_query_answers_for_another_window(self, app) -> None:
         with TestClient(app) as client, client.websocket_connect("/ws/stream") as ws:
             ws.receive_text()

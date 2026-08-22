@@ -1,201 +1,528 @@
-// Configuration view: the active company-config revision, and the config
-// itself as the API serves it (secrets already redacted server-side).
+// Configuration: what this company is, how it got that way, and how to
+// change it.
 //
-// Auth-gated. Both `config` and `config_audit` sit behind the operator
-// token, which the shell attaches to every query frame — the view never
-// passes one itself, it only makes sure the socket has the token the
-// reader just typed. Nothing on this screen comes from the store, so
-// `slices` is empty and a render only ever follows a load or a click.
+// The server has shipped a full config write surface for a long time —
+// per-entity CRUD for roles, units, LLM providers, MCP servers,
+// integrations, budgets and extensions, all versioned, all with
+// optimistic concurrency and end-to-end attribution — and the dashboard
+// used none of it. It read the active document, and the audit log was a
+// second screen that shared sixty copy-pasted lines with this one.
+//
+// Three lenses now, one room:
+//
+//   active   the document in force, by section, with the raw payload
+//   history  every revision, its diff, and the revert
+//   edit     the entity editors, over the CRUD that already exists
+//
+// The editor is deliberately one generic form over the entity JSON
+// rather than eight bespoke ones. Eight forms would be eight partial
+// models of a schema that changes, and a form that silently drops a
+// field it does not know about is worse than no form: it would delete
+// configuration on save. The schema is published (`crewlet schema`), the
+// payload round-trips exactly, and the server validates — so the honest
+// editor is the one that shows what is there and sends back what you
+// wrote.
 
-import { esc, escAttr, fmtDateTime, prettyJson, shortId } from "../format.js";
+import { esc, escAttr, prettyJson, fmtDateTime, relTime, shortId } from "../format.js";
 import { icon } from "../icons.js";
-import { empty, sectionHead } from "../ui.js";
-import { apiToken, promptForToken, tokenGate, tokenRejected } from "../authToken.js";
+import { toast } from "../dom.js";
+import { apiToken, tokenGate, tokenRejected } from "../authToken.js";
+import { confirmModal } from "../modal.js";
+import { empty, sectionHead, skeletonRows } from "../ui.js";
+import { pushParams } from "../router.js";
 
-// Top-level config keys worth their own summary row, in reading order. The
-// rest still render in the raw payload below.
-const SECTIONS = [
-  ["providers", "cpu", "LLM, embeddings, sandbox, queue"],
-  ["integrations", "globe", "External surfaces"],
-  ["mcp_servers", "wrench", "MCP servers"],
-  ["units", "building", "Org units"],
-  ["roles", "users", "Root-level seats"],
-  ["extensions", "code", "Extensions"],
-  ["scheduling", "clock", "Scheduler defaults"],
+// Errors worth retrying on a timer rather than surfacing: the socket is
+// down, or the query outlived its answer window.
+const RETRIABLE = new Set(["offline", "closed", "timeout"]);
+const RETRY_MS = 750;
+const RETRY_CEILING_MS = 5_000;
+
+const LENSES = [
+  { key: "active", label: "Active" },
+  { key: "history", label: "History" },
+  { key: "edit", label: "Edit" },
 ];
 
-// Query codes that are about the transport rather than the answer: the
-// socket has not opened yet (the shell mounts a view before it connects,
-// so a cold load straight onto /config always starts here) or a reply
-// went missing. Both are worth asking again; every other code is a real
-// answer the reader has to see.
-const RETRIABLE = new Set(["offline", "timeout"]);
+// The top-level keys the active document is summarised by, and the icon
+// each one wears.
+const SECTIONS = [
+  ["providers", "cpu", "Providers"],
+  ["integrations", "globe", "Integrations"],
+  ["mcp_servers", "wrench", "MCP servers"],
+  ["units", "building", "Units"],
+  ["roles", "users", "Roles"],
+  ["extensions", "code", "Extensions"],
+  ["scheduling", "clock", "Scheduling"],
+];
 
-// Retry cadence for those. Fast enough that the page fills in the moment
-// the socket opens, doubling to a ceiling well under the socket's own
-// 30s reconnect cap — against a stopped engine each attempt is a locally
-// rejected promise, so this costs nothing but a timer.
-const RETRY_MS = 750;
-const RETRY_MAX_MS = 5_000;
+// The entity collections the API exposes CRUD for. `list` is the query
+// that enumerates them; `path` is the REST collection.
+const ENTITIES = [
+  { key: "roles", label: "Roles", path: "/config/roles", id: "handle" },
+  { key: "units", label: "Units", path: "/config/units", id: "name" },
+  {
+    key: "llm-providers",
+    label: "LLM providers",
+    path: "/config/llm-providers",
+    id: "key",
+  },
+  {
+    key: "mcp-servers",
+    label: "MCP servers",
+    path: "/config/mcp-servers",
+    id: "name",
+  },
+];
 
-// The one loading placeholder, shared by the first load and by a retry
-// that is still waiting on the socket.
-const SKELETON = '<div class="skel skel-row" style="margin:24px 0"></div>';
+export function createConfigView({ query, refresh, params, askForToken }) {
+  let lens = LENSES.some((l) => l.key === params.lens) ? params.lens : "active";
 
-function countOf(value) {
-  if (Array.isArray(value)) return value.length;
-  if (value && typeof value === "object") return Object.keys(value).length;
-  return value == null ? 0 : 1;
-}
-
-export function createConfigView({ query, refresh, setToken }) {
-  let active = null; // the `config` reply — null means no active revision
-  let revisions = []; // `config_audit` revisions, best-effort
-  let loaded = false; // the config query has answered at least once
-  let loadError = "";
-  let raw = false;
-  let retryTimer = 0;
-  let retryDelay = RETRY_MS;
-  // A reply can land after the reader has navigated away. Clearing the
-  // timer in `destroy` is not enough on its own: the late reply would
-  // arm a NEW one, and that poll outlives the view it was reading for
-  // with nothing left to clear it.
+  let doc = null;
+  let revisions = null;
+  let error = "";
+  let unauthorized = false;
+  let showRaw = false;
   let disposed = false;
+  let retry = RETRY_MS;
+  let retryTimer = 0;
 
-  async function load() {
-    // No token: `render` shows the gate, and asking would only earn an
-    // `unauthorized` the reader cannot act on any differently.
-    if (disposed || !apiToken()) return;
-    clearTimeout(retryTimer);
-    retryTimer = 0;
-    try {
-      active = await query("config", {});
-      if (disposed) return;
-    } catch (err) {
-      if (disposed) return;
-      loadError = err.message;
-      if (RETRIABLE.has(loadError)) {
-        retryTimer = setTimeout(load, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
-      }
-      refresh();
-      return;
-    }
-    loadError = "";
-    loaded = true;
-    retryDelay = RETRY_MS;
+  // History state
+  const diffs = new Map();
+  let openDiff = "";
+
+  // Editor state
+  let entityKind = ENTITIES[0].key;
+  let entities = null;
+  let editing = null; // {id, text, dirty}
+  let saving = false;
+
+  function setLens(next) {
+    lens = next;
+    // A push: the three lenses here are three screens — what is running,
+    // what ran before, and an editor — and Back out of the editor should
+    // land on the one you opened it from.
+    pushParams("config", { lens });
+    if (lens === "history" && revisions === null) loadHistory();
+    if (lens === "edit" && entities === null) loadEntities();
     refresh();
-
-    // The revision metadata is one line of the header, so it follows the
-    // first paint rather than gating it. Losing it (an engine with no
-    // config store) costs that line and nothing else on the screen.
-    query("config_audit", {})
-      .then((audit) => {
-        if (disposed) return;
-        revisions = (audit && audit.revisions) || [];
-        refresh();
-      })
-      .catch(() => {});
   }
 
-  // One summary row per configured top-level key, keyed by that key so
-  // the patcher matches rows across renders instead of rewriting them.
-  function renderRows() {
-    return SECTIONS.filter(([key]) => active[key] !== undefined)
-      .map(([key, iconId, blurb]) => {
-        const n = countOf(active[key]);
-        return `
-        <div class="row" data-k="cfg:${escAttr(key)}">
-          <span class="row-icon">${icon(iconId, "sm")}</span>
-          <div class="row-body">
-            <div class="row-title">${esc(key)}</div>
-            <div class="row-sub">${esc(blurb)}</div>
+  // ---- loading ----
+
+  function scheduleRetry(fn) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      if (!disposed) fn();
+    }, retry);
+    retry = Math.min(retry * 2, RETRY_CEILING_MS);
+  }
+
+  async function loadActive() {
+    if (!apiToken()) return;
+    try {
+      doc = await query("config");
+      error = "";
+      unauthorized = false;
+      retry = RETRY_MS;
+    } catch (err) {
+      const code = err && err.message ? err.message : "failed";
+      if (code === "unauthorized") unauthorized = true;
+      else if (RETRIABLE.has(code)) scheduleRetry(loadActive);
+      else error = code;
+    }
+    if (!disposed) refresh();
+  }
+
+  async function loadHistory() {
+    if (!apiToken()) return;
+    try {
+      const data = await query("config_audit", { limit: 50 });
+      revisions = (data && data.revisions) || [];
+      error = "";
+      retry = RETRY_MS;
+    } catch (err) {
+      const code = err && err.message ? err.message : "failed";
+      if (code === "unauthorized") unauthorized = true;
+      else if (RETRIABLE.has(code)) scheduleRetry(loadHistory);
+      else error = code;
+    }
+    if (!disposed) refresh();
+  }
+
+  async function loadDiff(revId) {
+    if (diffs.has(revId)) return;
+    try {
+      diffs.set(revId, await query("config_diff", { revision_id: revId }));
+    } catch (err) {
+      diffs.set(revId, { error: (err && err.message) || "failed" });
+    }
+    if (!disposed) refresh();
+  }
+
+  async function loadEntities() {
+    entities = null;
+    editing = null;
+    try {
+      const data = await query("config_entities", { kind: entityKind });
+      entities = (data && data.ids) || [];
+    } catch (err) {
+      const code = (err && err.message) || "failed";
+      if (code === "unauthorized") unauthorized = true;
+      entities = [];
+      error = code;
+    }
+    if (!disposed) refresh();
+  }
+
+  async function openEntity(id) {
+    try {
+      const data = await query("config_entities", { kind: entityKind, id });
+      const text = prettyJson(data.entity);
+      // `initial` is what the markup renders and `text` is what the
+      // reader has typed. They are separate on purpose: a textarea's
+      // content is a child text node, so re-rendering it from the live
+      // value on every patch would reset the caret to the top on each
+      // keystroke. The markup stays byte-stable while the editor is
+      // open, so the patcher computes no change for it at all.
+      editing = { id, initial: text, text, dirty: false };
+    } catch (err) {
+      toast(`Could not read that entity: ${(err && err.message) || "failed"}`, "err");
+    }
+    if (!disposed) refresh();
+  }
+
+  async function saveEntity() {
+    if (!editing || saving) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(editing.text);
+    } catch (err) {
+      // Caught here rather than sent: a malformed body would come back
+      // as a 400 with a server-side message about JSON, which is a
+      // slower way to learn what the editor already knows.
+      toast(`Not valid JSON: ${err.message}`, "err");
+      return;
+    }
+    const spec = ENTITIES.find((e) => e.key === entityKind);
+    saving = true;
+    refresh();
+    let ok = false;
+    let detail = "";
+    try {
+      const res = await fetch(`${spec.path}/${encodeURIComponent(editing.id)}`, {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer " + apiToken(),
+          "Content-Type": "application/json",
+          "X-Summary": `edit ${spec.label.toLowerCase()} ${editing.id} via dashboard`,
+        },
+        body: JSON.stringify(parsed),
+      });
+      ok = res.ok;
+      if (!ok) {
+        // 409 is the concurrency answer: somebody else activated a
+        // revision while this form was open. Say which one, because the
+        // repair is to re-open and re-apply, not to retry blindly.
+        const body = await res.json().catch(() => ({}));
+        detail =
+          res.status === 409
+            ? `the config moved on (${body.current_revision_id ? shortId(body.current_revision_id) : "newer revision"}) — reopen and re-apply`
+            : body.error || String(res.status);
+      }
+    } catch {
+      detail = "offline";
+    }
+    saving = false;
+    if (!disposed) {
+      if (ok) {
+        toast("Saved — new revision active", "ok");
+        editing = null;
+        diffs.clear();
+        revisions = null;
+        loadActive();
+        loadEntities();
+      } else {
+        toast(`Save failed: ${detail}`, "err");
+        refresh();
+      }
+    }
+  }
+
+  async function revert(revId) {
+    if (!revId) return;
+    const confirmed = await confirmModal({
+      title: "Revert to this revision?",
+      body: "This does not delete anything. It appends a NEW active revision carrying the old payload, so the history stays intact and this revert is itself revertible.",
+      confirm: "Revert",
+    });
+    if (!confirmed) return;
+    let ok = false;
+    let code = "";
+    // A WRITE, and deliberately still REST. Reads moved to the socket
+    // because two transports disagreed and a re-fetch on every streamed
+    // round made the page churn; neither applies to a POST fired by an
+    // explicit click. It stays on the authenticated route so the
+    // revision it creates is attributed to the operator by the same
+    // middleware that guards every other write.
+    try {
+      const res = await fetch(
+        `/config/revisions/${encodeURIComponent(revId)}/revert`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + apiToken(),
+            "X-Summary": "revert via dashboard",
+          },
+        },
+      );
+      ok = res.ok;
+      code = String(res.status);
+    } catch {
+      code = "offline";
+    }
+    if (disposed) return;
+    if (ok) {
+      toast("Reverted — new revision active", "ok");
+      diffs.clear();
+      openDiff = "";
+      revisions = null;
+      loadHistory();
+      loadActive();
+    } else {
+      toast(`Revert failed (${code})`, "err");
+    }
+  }
+
+  // ---- render ----
+
+  function lensBar() {
+    return `<div class="tok-window">
+      ${LENSES.map(
+        (l) =>
+          `<button class="${l.key === lens ? "active" : ""}" data-action="lens" data-lens="${l.key}">${esc(l.label)}</button>`,
+      ).join("")}
+    </div>`;
+  }
+
+  function countOf(value) {
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === "object") return Object.keys(value).length;
+    return 0;
+  }
+
+  function activeLens() {
+    if (!doc) return skeletonRows(4);
+    const payload = doc.payload || doc || {};
+    const rows = SECTIONS.map(([key, iconId, label]) => {
+      const n = countOf(payload[key]);
+      return `<div class="row" data-k="sec:${key}">
+        <div class="row-body">
+          <div class="row-title">${icon(iconId, "sm")} ${esc(label)}</div>
+        </div>
+        <span class="badge">${n} ${n === 1 ? "entry" : "entries"}</span>
+      </div>`;
+    }).join("");
+    return `
+      <div class="card cfg-active" data-k="cfg:active">
+        <div class="eyebrow">Active revision</div>
+        <div class="cfg-name display">${esc(payload.name || "unnamed company")}</div>
+        <div class="cfg-meta">
+          ${doc.revision_id ? `<span class="mono">${esc(shortId(doc.revision_id))}</span>` : ""}
+          ${doc.summary ? `<span>${esc(doc.summary)}</span>` : ""}
+          ${doc.created_by ? `<span>by ${esc(doc.created_by)}</span>` : ""}
+          ${doc.activated_at ? `<span>${esc(relTime(doc.activated_at))}</span>` : ""}
+        </div>
+      </div>
+      <div class="list">${rows}</div>
+      <div class="sec">
+        <span class="sec-title">Raw payload</span>
+        <span class="sec-link" data-action="toggle-raw" role="link" tabindex="0">
+          ${showRaw ? "Hide" : "Show"} →
+        </span>
+      </div>
+      ${
+        showRaw
+          ? `<pre class="code-block">${esc(prettyJson(payload))}</pre>
+             <p class="cfg-note">Secrets are redacted by the API before this reaches the browser. A <code>\${VAR}</code> reference is an inert pointer and is shown as written.</p>`
+          : ""
+      }`;
+  }
+
+  function diffPane(revId) {
+    const d = diffs.get(revId);
+    if (!d) return `<div class="cfg-diff">Reading…</div>`;
+    if (d.error) return `<div class="cfg-diff warn-ink">${esc(d.error)}</div>`;
+    const changes = d.changes || [];
+    if (!changes.length) {
+      return `<div class="cfg-diff">No structural difference from the active revision.</div>`;
+    }
+    return `<div class="cfg-diff">${changes
+      .map(
+        (c) => `<div class="cfg-change" data-k="ch:${escAttr(c.path)}">
+          <span class="cfg-op cfg-op-${esc(c.op)}">${esc(c.op)}</span>
+          <span class="mono">${esc(c.path)}</span>
+          <span class="cfg-val">${esc(String(c.value ?? "").slice(0, 200))}</span>
+        </div>`,
+      )
+      .join("")}</div>`;
+  }
+
+  function historyLens() {
+    if (revisions === null) return skeletonRows(5);
+    if (!revisions.length) return empty("database", "No revisions recorded");
+    return `<div class="list">${revisions
+      .map(
+        (r) => `
+      <div class="cfg-rev" data-k="rev:${escAttr(r.revision_id)}">
+        <div class="cfg-rev-top">
+          <span class="cfg-dot ${r.is_active ? "on" : ""}"></span>
+          <span class="cfg-rev-summary">${esc(r.summary || "no summary")}</span>
+          ${r.is_active ? `<span class="badge done">active</span>` : ""}
+          <span style="flex:1"></span>
+          <span class="btn sm" data-action="diff" data-rev="${escAttr(r.revision_id)}">
+            ${openDiff === r.revision_id ? "Hide diff" : "Diff"}
+          </span>
+          ${
+            r.is_active
+              ? ""
+              : `<span class="btn sm" data-action="revert" data-rev="${escAttr(r.revision_id)}">Revert</span>`
+          }
+        </div>
+        <div class="cfg-rev-meta">
+          <span class="mono">${esc(shortId(r.revision_id))}</span>
+          <span>${esc(r.created_by || "unknown")}</span>
+          <span class="mono">${esc(r.source || "")}</span>
+          <span>${esc(fmtDateTime(r.created_at))}</span>
+        </div>
+        ${openDiff === r.revision_id ? diffPane(r.revision_id) : ""}
+      </div>`,
+      )
+      .join("")}</div>`;
+  }
+
+  function editLens() {
+    const spec = ENTITIES.find((e) => e.key === entityKind);
+    const picker = `<div class="tok-window cfg-kinds">
+      ${ENTITIES.map(
+        (e) =>
+          `<button class="${e.key === entityKind ? "active" : ""}" data-action="kind" data-kind="${e.key}">${esc(e.label)}</button>`,
+      ).join("")}
+    </div>`;
+
+    if (editing) {
+      return `
+        ${picker}
+        <div class="card cfg-editor" data-k="edit:${escAttr(editing.id)}">
+          <div class="sec">
+            <span class="sec-title">${esc(spec.label)} · ${esc(editing.id)}</span>
+            <span class="sec-link" data-action="close-edit" role="link" tabindex="0">Close →</span>
           </div>
-          <span class="badge">${n} entr${n === 1 ? "y" : "ies"}</span>
+          <textarea class="cfg-text" data-action="edit-text" spellcheck="false"
+                    aria-label="${escAttr(spec.label)} ${escAttr(editing.id)} as JSON">${esc(editing.initial)}</textarea>
+          <div class="cfg-editor-foot">
+            <span class="cfg-note">Saving appends a new revision, attributed to your token. Secrets you cannot see round-trip unchanged.</span>
+            <span style="flex:1"></span>
+            <button class="btn primary" data-action="save-entity" ${saving ? "disabled" : ""}>
+              ${saving ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>`;
-      })
-      .join("");
+    }
+
+    if (entities === null) return picker + skeletonRows(4);
+    const names = Array.isArray(entities) ? entities : Object.keys(entities || {});
+    if (!names.length) {
+      return picker + empty("database", `No ${spec.label.toLowerCase()} configured`);
+    }
+    return (
+      picker +
+      `<div class="list">${names
+        .map((n) => {
+          const id = typeof n === "string" ? n : String(n[spec.id] || n.name || "");
+          return `<div class="row clickable" data-k="ent:${escAttr(id)}"
+                       data-action="open-entity" data-id="${escAttr(id)}">
+            <div class="row-body"><div class="row-title">${esc(id)}</div></div>
+            <span class="btn sm">Edit</span>
+          </div>`;
+        })
+        .join("")}</div>`
+    );
   }
 
   return {
-    // Query-loaded, every last field of it: no push should ever cost
-    // this view a render.
     slices: ["health"],
 
+    // Back and Forward move between the three lenses without a
+    // remount, so what each one needs is loaded here the same way
+    // `setLens` loads it — lazily, and once.
+    setParams(next = {}) {
+      lens = LENSES.some((l) => l.key === next.lens) ? next.lens : "active";
+      if (lens === "history" && revisions === null) loadHistory();
+      if (lens === "edit" && entities === null) loadEntities();
+      refresh();
+    },
+
     mount() {
-      load();
-    },
-
-    render(state) {
-      if (!apiToken()) return tokenGate("the company configuration");
-      if (loadError === "unauthorized") return tokenRejected();
-      if (RETRIABLE.has(loadError)) {
-        // A retry is already scheduled, so this is a waiting state and
-        // not a dead end. While the socket is still coming up that is
-        // indistinguishable from the first load — show the skeleton, and
-        // only call it a failure once the engine says it is there.
-        return state.connected
-          ? empty("database", "Could not load the configuration", "Reconnecting…")
-          : SKELETON;
-      }
-      if (loadError) {
-        return `<div class="banner err">${icon("alert", "sm")}<span>Could not load the configuration (${esc(loadError)}).</span></div>`;
-      }
-      if (!loaded) return SKELETON;
-
-      if (!active) {
-        return `
-        <div class="banner warn">${icon("alert", "sm")}<span>The engine is unconfigured — import a company config with <code>crewlet config import</code> or <code>PUT /config</code>.</span></div>
-        ${empty("database", "No active revision")}`;
-      }
-
-      const meta = revisions.find((r) => r.is_active);
-      const rows = renderRows();
-
-      return `
-      <div class="card" style="padding:16px 18px">
-        <div class="eyebrow">Active revision</div>
-        <div class="company-name" style="font-size:18px;margin-top:6px">${esc(active.name || "—")}</div>
-        <div class="row-sub" style="margin-top:4px">
-          <span class="mono">${esc(meta ? shortId(meta.revision_id, 12) : "")}</span>
-          ${meta ? `· ${esc(meta.summary || "")} · ${esc(meta.created_by || "")} · ${esc(fmtDateTime(meta.activated_at || meta.created_at))}` : ""}
-        </div>
-      </div>
-
-      ${sectionHead("database", "Configuration", null, { action: "set-token", label: "change token" })}
-      <div class="list">${rows || '<div class="empty-sub" style="padding:14px">Nothing configured</div>'}</div>
-
-      ${sectionHead("code", "Raw payload", null, { action: "toggle-raw", label: raw ? "hide" : "show" })}
-      ${
-        raw
-          ? `<pre class="code">${esc(prettyJson(active))}</pre>`
-          : '<div class="empty-sub" style="padding:4px 2px">Secrets are redacted by the API before this reaches the browser.</div>'
-      }`;
-    },
-
-    onAction(action) {
-      if (action === "set-token") {
-        promptForToken(() => {
-          // The bearer rides on the query frame, so the socket has to
-          // learn the new token before the reload goes out.
-          if (setToken) setToken(apiToken());
-          loadError = "";
-          loaded = false;
-          retryDelay = RETRY_MS;
-          load();
-          refresh();
-        });
-      } else if (action === "toggle-raw") {
-        // Pure render state: the payload is already in hand, so this
-        // costs one re-render and not a round trip.
-        raw = !raw;
-        refresh();
-      }
+      loadActive();
+      if (lens === "history") loadHistory();
+      if (lens === "edit") loadEntities();
     },
 
     destroy() {
       disposed = true;
       clearTimeout(retryTimer);
+    },
+
+    render() {
+      if (!apiToken()) return tokenGate("the configuration");
+      if (unauthorized) return tokenRejected();
+      if (error && lens === "active" && !doc) {
+        return empty("database", "Could not read the configuration", esc(error));
+      }
+      const body =
+        lens === "history"
+          ? historyLens()
+          : lens === "edit"
+            ? editLens()
+            : activeLens();
+      return `${lensBar()}${body}`;
+    },
+
+    onAction(action, el) {
+      if (action === "lens") setLens(el.dataset.lens);
+      else if (action === "toggle-raw") {
+        showRaw = !showRaw;
+        refresh();
+      } else if (action === "diff") {
+        const rev = el.dataset.rev;
+        openDiff = openDiff === rev ? "" : rev;
+        if (openDiff) loadDiff(openDiff);
+        refresh();
+      } else if (action === "revert") revert(el.dataset.rev);
+      else if (action === "kind") {
+        entityKind = el.dataset.kind;
+        loadEntities();
+      } else if (action === "open-entity") openEntity(el.dataset.id);
+      else if (action === "close-edit") {
+        editing = null;
+        refresh();
+      } else if (action === "edit-text") {
+        // Held in view state, never read back off the DOM: the next
+        // patch renders from state, and a value living only in the
+        // textarea would be reverted by it.
+        if (editing) {
+          editing.text = el.value;
+          editing.dirty = true;
+        }
+      } else if (action === "save-entity") saveEntity();
+      else if (action === "set-token") {
+        // The DIALOG, not a bare setter over stored state. Reading
+        // storage and handing the socket back the same missing (or
+        // already rejected) value re-renders this very gate, so the button
+        // appeared to do nothing — on the one screen whose entire content
+        // is behind it.
+        askForToken();
+      }
     },
   };
 }

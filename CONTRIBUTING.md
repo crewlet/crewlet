@@ -57,6 +57,16 @@ uv run pytest -m integration -s                         # -s to see measurements
   server: it cannot tell a correct statement from one PostgreSQL refuses to
   parse, and it cannot test exclusivity at all — an at-most-once claim is a
   property of the statement, not of the dict standing in for it.
+- **`node`** runs the dashboard's suites. `src/crewlet/static/dashboard/`
+  is a zero-build ES-module app — no package.json, no node_modules, no test
+  runner — so `tests/test_dashboard/js/*.test.mjs` execute under whatever
+  `node` is on PATH, driven by a pytest wrapper. Without one they skip, and
+  since the dashboard has almost no Python, that is a whole subsystem going
+  quiet. **CI runs these too**, and unlike the others here it *fails* rather
+  than skipping when node is missing: the `test` job installs one if the
+  runner image does not ship it, and the wrapper asserts it independently.
+  Any `node` recent enough for ES modules will do.
+
 - **`tests/test_queue/test_broker_behavior.py`** measures the broker
   behaviours the multi-node design rests on (redelivery timing, cursor
   continuity across a subscription's change of owner, prefetch size) and

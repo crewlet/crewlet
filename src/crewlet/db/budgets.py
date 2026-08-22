@@ -67,6 +67,8 @@ class BudgetUsageStore(Protocol):
 
     async def usage(self, scope: str) -> int: ...
 
+    async def list_usage(self) -> list[dict[str, Any]]: ...
+
     async def reset(self, scope: str = "") -> int: ...
 
 
@@ -170,6 +172,27 @@ class PostgresBudgetUsageStore:
         )
         return int(row["used_tokens"]) if row else 0
 
+    async def list_usage(self) -> list[dict[str, Any]]:
+        """Every scope that has spent anything, with when it last did.
+
+        This is the counter that ENFORCES: it is shared by every process
+        running the company and it survives restarts. The engine's live
+        meter is a different number over a different span — one process
+        run — so anything showing both has to say which it is showing.
+        """
+        rows = await self._db.execute(
+            "SELECT scope, used_tokens, updated_at FROM token_budget_usage "
+            "ORDER BY scope"
+        )
+        return [
+            {
+                "scope": str(row["scope"]),
+                "used_tokens": int(row["used_tokens"]),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     async def reset(self, scope: str = "") -> int:
         """Zero one scope, or every scope when ``scope`` is empty.
 
@@ -238,6 +261,15 @@ class MemoryBudgetUsageStore:
 
     async def usage(self, scope: str) -> int:
         return self._used.get(scope, 0)
+
+    async def list_usage(self) -> list[dict[str, Any]]:
+        # No `updated_at`: this twin does not keep one, and inventing
+        # `now()` here would make a figure that has not moved in an hour
+        # look like it moved this second.
+        return [
+            {"scope": scope, "used_tokens": used, "updated_at": None}
+            for scope, used in sorted(self._used.items())
+        ]
 
     async def reset(self, scope: str = "") -> int:
         if scope:

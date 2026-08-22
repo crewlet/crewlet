@@ -148,10 +148,91 @@ async def _schedules(app: Any, params: dict[str, Any], _client: Any = None) -> A
     return await schedules_payload(app)
 
 
+async def _integrations(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
+    """Configured external surfaces, their wiring, and recent traffic."""
+    from crewlet.api.routes.integrations import integrations_payload
+
+    return await integrations_payload(app)
+
+
+async def _budgets(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
+    """Caps, the durable counter, and which scopes are being refused.
+
+    The seat cards draw the engine-run meter because it shares a span
+    with the cap it is compared against. This is the other half: the
+    shared counter that actually enforces, which survives restarts and
+    is the number an operator is asking about when they ask whether a
+    seat is out of budget.
+    """
+    from crewlet.api.routes.budgets import budgets_payload
+
+    return await budgets_payload(app)
+
+
+async def _sandbox_runs(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
+    """The detached coding runs the engine is holding.
+
+    Read from the durable row rather than from the live projection: the
+    projection sweeps an entry after twelve hours and a run parked on a
+    question can wait days, so the states that most need a person were
+    the ones least likely to still be in memory.
+    """
+    from crewlet.api.routes.sandbox_runs import (
+        PendingStoreUnavailable,
+        sandbox_runs_payload,
+    )
+
+    try:
+        return await sandbox_runs_payload(app)
+    except PendingStoreUnavailable:
+        raise QueryError("no_pending_store") from None
+
+
+async def _fleet(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
+    """The lease table, over the socket.
+
+    Fleet was the last view still reaching for ``fetch`` on its own, and
+    it is where that cost was collected: the view took its HTTP client
+    from a context field the shell never populated, so every poll threw
+    before it reached the network and the page held its loading skeleton
+    for ever. The socket channel is wired for every other view, which is
+    why none of them could fail this way.
+
+    Leases still move with no event to push, so the view still polls —
+    but it polls through the one transport, and a failed poll is a
+    rejected promise the view already knows how to render.
+    """
+    from crewlet.api.routes.fleet import FleetUnavailable, fleet_payload
+
+    try:
+        return await fleet_payload(app)
+    except FleetUnavailable:
+        raise QueryError("fleet_unavailable") from None
+
+
 async def _config(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
     from crewlet.api.config_routes import config_document
 
     return await config_document(app)
+
+
+async def _config_entities(
+    app: Any, params: dict[str, Any], _client: Any = None
+) -> Any:
+    """One config collection's ids, or one entity's body.
+
+    Operator-gated like every other ``/config`` read: the fragment
+    carries structure, and structure is exactly what the guard on that
+    prefix exists to protect.
+    """
+    from crewlet.api.config_entity_routes import config_entities
+
+    try:
+        return await config_entities(app, _str(params, "kind"), _str(params, "id"))
+    except LookupError:
+        raise QueryError("no_active_revision") from None
+    except KeyError:
+        raise QueryError("not_found") from None
 
 
 async def _config_audit(app: Any, params: dict[str, Any], _client: Any = None) -> Any:
@@ -208,12 +289,17 @@ _QUERIES: dict[str, tuple[Handler, bool]] = {
     "trace": (_trace, False),
     "tokens": (_tokens, False),
     "schedules": (_schedules, False),
+    "fleet": (_fleet, False),
+    "sandbox_runs": (_sandbox_runs, False),
+    "budgets": (_budgets, False),
+    "integrations": (_integrations, False),
     # Named ``stream``, not ``health``: a query must never share a name
     # with a push kind, or a reader of the protocol has to know which
     # direction a frame was travelling to know what it means.
     "stream": (_stream, False),
     "config": (_config, True),
     "config_audit": (_config_audit, True),
+    "config_entities": (_config_entities, True),
     "config_diff": (_config_diff, True),
 }
 

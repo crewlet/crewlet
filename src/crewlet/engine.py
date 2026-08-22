@@ -65,7 +65,7 @@ from crewlet.task.tracker import ExecutionTracker
 from crewlet.tools.builtin import register_builtin_tools
 from crewlet.tools.colleague import register_colleague_tools
 from crewlet.tools.protocol import Tool
-from crewlet.tools.registry import ToolRegistry
+from crewlet.tools.registry import CUSTOM_ORIGIN, ToolRegistry, mcp_origin
 from crewlet.tools.run_sandbox_tool import register_run_sandbox_tool
 from crewlet.tools.spawn_subagent_tool import register_spawn_subagent_tool
 from crewlet.work_key import bind_work_key, derive_work_key
@@ -654,11 +654,14 @@ class Engine:
         # continue the turn with its result.
         register_run_sandbox_tool(self.tool_registry)
 
-        # Register custom tools
+        # Register custom tools.  Not ``builtin``: these come from the
+        # application embedding the engine, and an operator who cannot
+        # tell them from what the engine ships cannot tell a tool that
+        # disappeared with the host app from one the engine dropped.
         if tools:
             logger.debug("custom_tools_registered", count=len(tools))
             for tool in tools:
-                self.tool_registry.register(tool)
+                self.tool_registry.register(tool, origin=CUSTOM_ORIGIN)
 
         logger.info(
             "engine_initialized",
@@ -3542,8 +3545,13 @@ class Engine:
     def _build_tools_data(self) -> list[dict[str, Any]]:
         """Build tool descriptions for the API, tagged with source and roles.
 
-        Each entry contains name, description, source (builtin or
-        mcp:<server>), and roles (list of role names that have access).
+        Each entry contains name, description, source, and roles (list
+        of role names that have access).  ``source`` is the registered
+        origin (the tool-origin grammar in ``crewlet.tools.registry``:
+        ``builtin`` / ``custom`` / ``extension:<name>`` / ``mcp:<server>``).
+
+        Per-role MCP tools never enter the registry, so those keep
+        deriving their source from the wrapper's own ``server_name``.
         """
         from crewlet.mcp.bridge import MCPToolWrapper
 
@@ -3566,18 +3574,12 @@ class Engine:
                 continue
             seen.add(tool.name)
 
-            source = (
-                f"mcp:{tool._client.name}"
-                if isinstance(tool, MCPToolWrapper)
-                else "builtin"
-            )
-
             # Global tools are available to all roles.
             tools_data.append(
                 {
                     "name": tool.name,
                     "description": tool.description,
-                    "source": source,
+                    "source": self.tool_registry.origin_for(tool.name),
                     "roles": sorted(all_role_names),
                 }
             )
@@ -3590,11 +3592,12 @@ class Engine:
                 seen.add(tool.name)
 
                 if isinstance(tool, MCPToolWrapper):
-                    # Instance names use "server::Role_Name" convention;
-                    # strip the role suffix so tools group by base server.
-                    base_name = tool._client.name.split("::")[0]
-                    source = f"mcp:{base_name}"
+                    # ``server_name`` already strips the "server::Role_Name"
+                    # per-role suffix, so tools group by base server.
+                    source = mcp_origin(tool.server_name)
                 else:
+                    # Not a wrapper — an extension put it in
+                    # ``role_mcp_tools`` itself, so no server to name.
                     source = "mcp"
                 roles = sorted(role_only_tools.get(tool.name, {role_name}))
 
@@ -4350,7 +4353,9 @@ class Engine:
                         request_timeout_seconds=cfg.request_timeout_seconds,
                     )
                 for tool in tools:
-                    self.tool_registry.register(tool)
+                    self.tool_registry.register(
+                        tool, origin=mcp_origin(tool.server_name)
+                    )
                 logger.info(
                     "mcp_server_started",
                     server=cfg.name,
@@ -5198,6 +5203,13 @@ class Engine:
         if self.mcp_bridge is None:
             return False
         name = cfg.name
+        # What this server currently contributes, captured BEFORE the
+        # relaunch. Registration is by name, so a replacement that
+        # exposes the same tools overwrites them — but one that exposes
+        # FEWER, or that fails to start at all, leaves the missing names
+        # behind in every later catalogue, dispatching into a client the
+        # bridge has already stopped. Both exits below drop these.
+        doomed = {tool.name for tool in self.mcp_bridge.get_server_tools(name)}
         try:
             if cfg.transport == "http":
                 # ``restart_server`` would relaunch this as a stdio
@@ -5231,11 +5243,21 @@ class Engine:
                 )
         except Exception as exc:
             logger.error("mcp_server_restart_failed", server=name, error=str(exc))
+            # The server is stopped and is not coming back on this
+            # attempt. Advertising its tools would offer the model a
+            # catalogue entry that can only fail.
+            for stale in doomed:
+                self.tool_registry.unregister(stale)
             return False
         # Re-register the new wrapped tools with the engine
         # tool registry so subsequent turns see them.
         for tool in wrapped:
-            self.tool_registry.register(tool)
+            self.tool_registry.register(tool, origin=mcp_origin(tool.server_name))
+        # Anything the replacement no longer exposes goes. Registration
+        # by name overwrites what came back; only what did NOT come back
+        # needs removing.
+        for stale in doomed - {tool.name for tool in wrapped}:
+            self.tool_registry.unregister(stale)
         logger.info(
             "mcp_server_restarted_live",
             server=name,
@@ -6168,7 +6190,7 @@ class Engine:
             ext = new_by_name[name]
             try:
                 await self._extension_manager.register(ext, ctx)
-                await ext.on_engine_start(ctx)
+                await self._extension_manager.start(ext, ctx)
                 logger.info("extension_started_live", extension=name)
             except Exception as exc:
                 logger.error(
@@ -6187,7 +6209,7 @@ class Engine:
             await self._extension_manager.unregister(old_ext, ctx)
             try:
                 await self._extension_manager.register(new_ext, ctx)
-                await new_ext.on_engine_start(ctx)
+                await self._extension_manager.start(new_ext, ctx)
                 logger.info("extension_restarted_live", extension=name)
             except Exception as exc:
                 logger.error(

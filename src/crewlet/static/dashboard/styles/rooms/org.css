@@ -1,0 +1,390 @@
+/* org room internals.
+ *
+ * Panels take their surface from the shared recipe in components.css —
+ * this file holds only what is specific to this room's layout. No
+ * colour is defined here: every value is a token from tokens.css.
+ *
+ * The room has four lenses over one seat list. Three of them are lists
+ * and cards the shared components already draw; the chart is the one
+ * thing this dashboard could not previously render at all, so most of
+ * what follows is the chart.
+ */
+
+/* ---------------------------------------------------------------------------
+ * The lens bar
+ * ---------------------------------------------------------------------------
+ * A segmented control, not four nav entries: these are four views of the
+ * SAME data, and putting them in the sidebar is what made an operator
+ * navigate three times to answer one question. */
+.org-lens {
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.org-lens-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: calc(var(--radius-ctl) - var(--space-1));
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: var(--track-body);
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease-snappy),
+    background var(--dur) var(--ease-snappy);
+}
+.org-lens-tab:hover {
+  color: var(--text);
+  background: var(--glass-hover);
+}
+.org-lens-tab .ic {
+  color: currentColor;
+}
+.org-lens-tab.on {
+  color: var(--text);
+  background: var(--bg-active);
+  box-shadow: var(--panel-shadow);
+}
+.org-lens-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.org-lens-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.org-lens-tab.on .org-lens-count {
+  color: var(--text-muted);
+}
+
+/* On a narrow screen the labels go and the icons carry the control. */
+@media (max-width: 620px) {
+  .org-lens-label {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The chart
+ * ---------------------------------------------------------------------------
+ * A real top-down chart with drawn reporting lines, in its OWN horizontal
+ * scroller: a wide fan-out is a fact about the company, and squeezing it
+ * into the viewport either wraps the connectors into nonsense or makes
+ * the whole page scroll sideways. The panel scrolls; the page does not.
+ *
+ * The connectors are CSS rather than SVG on purpose — a view here renders
+ * to a markup string and never touches the DOM, so it has no measurements
+ * to draw lines from. Each subtree is a column: its node on top, its
+ * reports in a row underneath.
+ *
+ *   .org-kids::before      the stem dropping out of the parent node
+ *   .org-branch::before    the left half of the bar joining the siblings
+ *   .org-branch::after     the right half of that bar, plus the vertical
+ *                          drop into this node
+ *
+ * The outer halves are trimmed off the first and last sibling, and the
+ * last sibling's drop moves onto its ::before, because its ::after has no
+ * border left to carry it. */
+.org-chart {
+  padding: var(--space-4) var(--space-2) var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  box-shadow: var(--panel-shadow);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* `max-content` so the tree sizes to itself and the panel scrolls, and
+   `min-width: 100%` so a company narrower than the panel is centred in it
+   rather than pinned to the left edge. Deliberately NOT wrapping: a
+   wrapped row of roots would put a second rank of the chart below the
+   first with no line between them, which reads as a hierarchy that does
+   not exist. */
+.org-tree {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: var(--space-4);
+  width: max-content;
+  min-width: 100%;
+  margin: 0 auto;
+}
+
+.org-branch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.org-kids {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: var(--space-5);
+}
+/* The stem out of the parent node. */
+.org-kids::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 0;
+  height: var(--space-5);
+  border-left: 1px solid var(--border-strong);
+}
+
+.org-kids > .org-branch {
+  padding: var(--space-5) var(--space-2) 0;
+}
+.org-kids > .org-branch::before,
+.org-kids > .org-branch::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 50%;
+  width: 50%;
+  height: var(--space-5);
+  border-top: 1px solid var(--border-strong);
+}
+.org-kids > .org-branch::after {
+  right: auto;
+  left: 50%;
+  border-left: 1px solid var(--border-strong);
+}
+/* An only child needs no bar at all — the parent's stem already reaches
+   it, so it hangs straight down. */
+.org-kids > .org-branch:only-child {
+  padding-top: 0;
+}
+.org-kids > .org-branch:only-child::before,
+.org-kids > .org-branch:only-child::after {
+  display: none;
+}
+/* Trim the bar's outer halves, and hand the last sibling's vertical drop
+   to the pseudo-element that still has a border. */
+.org-kids > .org-branch:first-child::before,
+.org-kids > .org-branch:last-child::after {
+  border: 0 none;
+}
+.org-kids > .org-branch:last-child::before {
+  border-right: 1px solid var(--border-strong);
+  border-top-right-radius: var(--radius-sm);
+}
+.org-kids > .org-branch:first-child::after {
+  border-top-left-radius: var(--radius-sm);
+}
+
+/* ---- a node ---- */
+.org-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 176px;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-2);
+  box-shadow: var(--panel-shadow);
+  text-align: left;
+}
+/* The seat's identity hue, as a hairline down the leading edge — the
+   same device the seat card uses, so a person is the same colour
+   wherever they appear. */
+.org-node::before {
+  content: "";
+  position: absolute;
+  inset: auto auto 0 0;
+  width: 2px;
+  height: 100%;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: var(--seat, var(--border-strong));
+  opacity: 0.75;
+}
+.org-node.clickable {
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease-snappy),
+    background var(--dur) var(--ease-snappy),
+    transform var(--dur) var(--ease-snappy);
+}
+.org-node.clickable:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+}
+.org-node.clickable:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.org-node.is-human {
+  border-style: dashed;
+  background: var(--bg-card);
+}
+
+.org-node-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+/* `min-width: 0` is what actually makes the ellipsis happen: a flex item
+   refuses to shrink below its content by default, so a long seat name
+   would push out of the fixed-width node instead of being clipped in
+   it — and every node in the row would then sit on a different line. */
+.org-node-name {
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: var(--track-display);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.org-node-handle {
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.org-node-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+/* The live state dot.
+ *
+ * Its own element rather than the shared `.dot`, because this room needs
+ * a step for every state a seat can be in — including the two the shared
+ * set has no rule for, which render as an invisible dot. A human seat
+ * takes the purple that marks a human everywhere else; it is a marker,
+ * not a run state, and no runtime is invented for it. */
+.org-node-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.org-node-dot[data-state="working"],
+.org-node-dot[data-state="awaiting_sandbox"] {
+  background: var(--amber);
+  animation: org-node-pulse 1.6s var(--ease) infinite;
+}
+.org-node-dot[data-state="idle"] {
+  background: var(--green);
+}
+.org-node-dot[data-state="afk"] {
+  background: var(--orange);
+}
+.org-node-dot[data-state="failed"] {
+  background: var(--red);
+}
+.org-node-dot[data-state="human"] {
+  background: var(--purple);
+}
+
+/* Motion means live work: only the two states that ARE work animate.
+   Reduced motion is handled globally in base.css — it clamps every
+   animation on the page, so this needs no opt-out of its own. */
+@keyframes org-node-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.org-chart-note {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+.org-chart-note code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+  background: var(--bg-inset);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------------------
+ * The directory
+ * ------------------------------------------------------------------------- */
+.org-handle {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.org-contacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+.org-contacts:empty {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * The charter
+ * ------------------------------------------------------------------------- */
+.org-charter {
+  padding: var(--space-6);
+}
+.org-charter-name {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: var(--track-display);
+  color: var(--heading);
+}
+.org-charter-line {
+  margin: var(--space-3) 0 0;
+  max-width: 68ch;
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+.org-charter-line.is-quiet {
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+.org-charter + .strip {
+  margin-top: var(--space-4);
+}
+.org-unit-type {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}

@@ -45,7 +45,10 @@ class TemplateExtension:
         ctx.event_queue       — publish/subscribe events
         ctx.agent_pool      — query and manage agents
         ctx.execution_tracker — track agent ↔ issue mappings
-        ctx.tool_registry   — register custom tools
+        ctx.tool_registry   — register custom tools (they report
+                              "extension:<this extension's name>" as
+                              their source, so register through the
+                              context and not some other reference)
         ctx.storage         — persist arbitrary data
     """
 

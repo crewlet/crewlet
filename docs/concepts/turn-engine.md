@@ -171,7 +171,13 @@ The engine prompts never name these tools (see [Tool Capabilities](tool-capabili
 | `request_copilot_review` | GitHub | Request an automated review on an existing PR (an un-promoted lightweight option; code authoring goes through the [code sandbox](code-sandbox.md), not here) |
 | `a2a_ask` | Private A2A channel | The one engine builtin (`tools/colleague.py`). Narrowly scoped: tight-loop / mechanical sync only — one ask, one answer, then the channel closes. The answering turn's final response *is* the reply; there is no send/close tool. See the tool description |
 
-Every colleague-tool call publishes a `delegation.edge` event (`from_handle`, `to_handle`, `surface`, `context_id`, `reference`) so the dashboard can render a company-wide delegation graph.
+### What a delegation records
+
+Delegation bookkeeping rides on the base `Event` model (`crewlet.events.types.Event`) rather than on an event of its own: `delegation_depth`, `parent_turn_id` and `delegation_chain` are stamped onto every event the turn engine publishes for a turn, so each one names the turn it descends from and the handles the work has already passed through. A chain that reaches `turn_engine.delegation_depth_limit` ends the turn with `turn.guard_breach(kind="depth_cap")` before any phase runs.
+
+`a2a_ask` is the only colleague call the engine itself mediates, so it is the only one that also records the *edge*: `A2AService.request_channel` publishes `a2a_channel_opened` (`requester`, `target`, `participants`), wakes the target with an `a2a_request` carrying `delegation_depth + 1` and the requester appended to the chain, and `a2a_message_sent` / `a2a_message_delivered` / `a2a_channel_closed` follow it.
+
+A delegation graph drawn from this is therefore an **A2A graph, not a company-wide one**. Every other row above is an upstream MCP tool called like any other: the engine records that `jira_update_issue` ran, not who now holds the ticket, so a handoff across a shared surface is observed at neither end. It comes back as an inbound webhook, and no shipped integration round-trips the delegation metadata through the external surface, so that trigger arrives at depth 0 with an empty chain — a cross-surface hop breaks the chain rather than extending it.
 
 ---
 
@@ -412,7 +418,8 @@ Each phase row in that view is keyed to its **phase colour** (plan / execute / r
 |-------|---------|
 | `task_started` / `task_completed` / `task_failed` | Task lifecycle markers around the turn |
 | `agent_turn_completed` | Extended with top-level fields `turn_id`, `plan_model`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens`, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base) |
-| `delegation.edge` | Emitted on every successful colleague-tool call (`from_handle`, `to_handle`, `surface`, `context_id`, `reference`, `depth` = caller depth + 1) |
+| `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`) and `detail` carries its message |
+| `a2a_channel_opened` / `a2a_message_sent` / `a2a_message_delivered` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic — the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain` |
 | `execute.missing_tool` | Executor's LLM asked for a tool not in its surface AND not in the role's catalogue (typo / hallucination; distinct from a tool the executor could have recovered by activating) |
 | `phase.tool_activated` | Plan or Execute promoted a catalogue tool into its active surface via `activate_tool`. Plan activations are routine (in-Plan recon); Execute activations signal plan incompleteness — the planner missed a tool the executor needed and recovered mid-run |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
