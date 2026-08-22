@@ -2572,7 +2572,7 @@ class TurnEngine:
             skip_names=PLAN_META_TOOL_NAMES,
             reply=final_text or "",
             decision=decision,
-            review_notes=str(getattr(review, "notes", "") or ""),
+            # ``review.notes`` is deliberately absent — see SessionEntry.
             completed_work=str(getattr(review, "completed_work", "") or ""),
         )
 

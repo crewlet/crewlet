@@ -125,6 +125,47 @@ def test_budgets_are_applied_once_at_write_time():
     assert "slack_post" in entry.tool_calls
 
 
+def test_the_reviewers_next_round_correction_does_not_cross_the_turn():
+    """``ReviewOutcome.notes`` is scoped to the next round of ONE turn.
+
+    It is written as an instruction to that round — "the next round
+    should retry posting X" — so replaying it into a later turn stops
+    being history and becomes a standing order aimed at a round that
+    already came and went. The turn's outcome survives without it: the
+    calls that failed are in ``tool_calls`` and the verdict is in
+    ``decision``.
+    """
+    entry = build_session_entry(
+        turn_id="t1",
+        at="2026-08-20T09:30",
+        trigger="agent-cto: bridge restored, please retry",
+        plan_summary="retry the post",
+        plan_reasoning="the reviewer asked for a retry",
+        tool_executions=[
+            {
+                "name": "chat_post",
+                "arguments": "{}",
+                "success": False,
+                "result": "closed",
+            }
+        ],
+        read_only_names=(),
+        skip_names=(),
+        reply="still down",
+        decision="failed",
+        completed_work="Attempted the post; it failed with Connection closed.",
+    )
+
+    assert not hasattr(entry, "review_notes")
+    rendered = render_conversation_history([entry])
+    assert "next round should" not in rendered
+    assert "Reviewer's correction" not in rendered
+    # What actually happened is still on the record.
+    assert "chat_post" in rendered
+    assert "Turn ended: failed" in rendered
+    assert "Connection closed" in rendered
+
+
 # ── round-tripping ───────────────────────────────────────────────────
 
 

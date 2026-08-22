@@ -66,8 +66,16 @@ sent re-creates the duplicate-answer bug in a place nothing else can catch.
 - **Your reasoning** — the planner's own `reasoning` field
 - **You called** — the tool-call lines, writes always recorded, reads marked `(read)`
 - **You replied** — the turn's final text
-- **Reviewer** — `completed_work` and any correction
+- **Reviewer** — `completed_work`, the prose on what already landed
 - **Turn ended** — only when the decision was not `done`
+
+The reviewer's *other* field, `ReviewOutcome.notes`, is deliberately **not**
+carried. It is documented as "shown to the next Plan round when the decision is
+`self_iterate`" and is written as an instruction to that round — *"the next
+round should retry posting X"*. Replayed into a later turn it stops being
+history and becomes a standing order the reviewer never issued, aimed at a
+round that already came and went. Nothing is lost by dropping it: the calls
+that failed are in the tool lines and the verdict is in **Turn ended**.
 
 Every field is elided at write time against the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds):
 *elide payloads, never structure*.

@@ -99,8 +99,19 @@ class SessionEntry:
 
     reply: str = ""
     decision: str = ""
-    review_notes: str = ""
     completed_work: str = ""
+    """The reviewer's prose on what already landed — descriptive, so it
+    still reads true a week later.
+
+    Its sibling ``ReviewOutcome.notes`` is deliberately NOT carried.
+    That field is documented as "shown to the next Plan round when the
+    decision is ``self_iterate``" — a correction scoped to the next
+    round of ONE turn, and phrased as one ("the next round should retry
+    posting X"). Replayed into a later turn it stops being history and
+    becomes a standing order the reviewer never issued, aimed at a
+    round that already came and went. What actually happened survives
+    without it: the failed calls are in ``tool_calls`` and the outcome
+    is in ``decision``."""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-safe form, for the ``entry`` JSONB column."""
@@ -113,7 +124,6 @@ class SessionEntry:
             "tool_calls": self.tool_calls,
             "reply": self.reply,
             "decision": self.decision,
-            "review_notes": self.review_notes,
             "completed_work": self.completed_work,
         }
 
@@ -135,7 +145,6 @@ class SessionEntry:
             tool_calls=str(data.get("tool_calls", "") or ""),
             reply=str(data.get("reply", "") or ""),
             decision=str(data.get("decision", "") or ""),
-            review_notes=str(data.get("review_notes", "") or ""),
             completed_work=str(data.get("completed_work", "") or ""),
         )
 
@@ -152,7 +161,6 @@ def build_session_entry(
     skip_names: Collection[str],
     reply: str,
     decision: str,
-    review_notes: str = "",
     completed_work: str = "",
 ) -> SessionEntry:
     """Assemble one entry, applying every budget once at write time."""
@@ -172,7 +180,6 @@ def build_session_entry(
         ),
         reply=_elide(reply, SESSION_REPLY_LIMIT),
         decision=decision,
-        review_notes=_elide(review_notes, LEDGER_NOTE_LIMIT),
         completed_work=_elide(completed_work, LEDGER_NOTE_LIMIT),
     )
 
@@ -236,8 +243,6 @@ def _render_entry(entry: SessionEntry) -> str:
         lines.append(f"You replied: {entry.reply}")
     if entry.completed_work:
         lines.append(f"Reviewer, on what landed: {entry.completed_work}")
-    if entry.review_notes:
-        lines.append(f"Reviewer's correction: {entry.review_notes}")
     if entry.decision and entry.decision != "done":
         lines.append(f"Turn ended: {entry.decision}")
     return "\n".join(lines)
