@@ -29,6 +29,10 @@ _SKILL_FILES = sorted(_SKILLS_DIR.glob("*/SKILL.md"))
 #: must work when fetched away from the repository.
 _REL_LINK_RE = re.compile(r"\]\((\.\.?/[^)#\s]+)")
 
+#: Absolute links into the documentation site.  Both page links and the
+#: two JSON Schema URLs match; the suffix is what tells them apart.
+_DOCS_LINK_RE = re.compile(r"https://docs\.crewlet\.ai(/[^)>\s]*)")
+
 #: Fenced ``bash`` blocks, whose ``crewlet …`` lines must be real
 #: commands — a founder pastes these verbatim.
 _BASH_BLOCK_RE = re.compile(r"```bash\n(.*?)```", re.DOTALL)
@@ -61,6 +65,32 @@ class TestSkillFile:
         assert relative == [], (
             f"{skill} uses repo-relative links that break when the file "
             f"is fetched standalone: {relative}"
+        )
+
+    def test_documentation_links_carry_the_trailing_slash(self, skill: Path) -> None:
+        """docs.crewlet.ai is built with Astro's ``trailingSlash:
+        'always'``, so every page there is a directory and
+        ``/concepts/tool-skills`` is a 308 to ``/concepts/tool-skills/``.
+
+        The slashless spelling resolves, which is why seven of them sat
+        here unnoticed.  It is still the wrong URL to hand out.  This
+        file is read by an assistant that fetches exactly what it is
+        given, so each one costs a redirect per fetch, and the file is
+        published — the docs site serves ``skills/`` alongside the pages
+        themselves — so a crawler following these links files each URL
+        under "page with redirect" rather than as the page it reaches.
+
+        Schema URLs are exempt: ``/schema/company.schema.json`` names a
+        file, not a page, and a trailing slash there would be wrong.
+        """
+        unslashed = [
+            path
+            for path in _DOCS_LINK_RE.findall(skill.read_text())
+            if not path.endswith("/") and not Path(path).suffix
+        ]
+        assert unslashed == [], (
+            f"{skill} links documentation pages without the trailing "
+            f"slash, so each one redirects: {unslashed}"
         )
 
     def test_referenced_schema_urls_match_the_generated_ids(self, skill: Path) -> None:

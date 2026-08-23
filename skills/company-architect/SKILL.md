@@ -105,7 +105,7 @@ live-editable, so the first version does not need to be the last.
    the founder seat under invariants.
 4. **What surfaces does the work live on?** Tracker, knowledge base,
    chat, code host. Point them at
-   [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack)
+   [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack/)
    rather than re-deriving the trade-offs; it covers hosted vs
    self-hosted for each. **Do not wire integrations in the first pass**
    — see the sequencing rule below.
@@ -141,7 +141,7 @@ integrations one at a time, validating after each.
 Full worked examples to model the shape on — read them, don't
 reinvent them:
 
-- [Quickstart](https://docs.crewlet.ai/getting-started/quickstart) — four seats,
+- [Quickstart](https://docs.crewlet.ai/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
   a complete seven-seat company with Plane + GitLab + Mattermost + sandbox.
@@ -208,17 +208,17 @@ roles:
 inbox, no LLM. They require at least one `contact` identity and reject
 the runtime-only fields. Scope their `manages` to the top roles — a
 founder managing every seat floods them. See
-[Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org).
+[Humans in the org chart](https://docs.crewlet.ai/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and
 reviewing code is MCP; *writing* it is the sandbox (`role.sandbox`),
 which needs `providers.sandbox` configured. See
-[Code sandbox](https://docs.crewlet.ai/concepts/code-sandbox).
+[Code sandbox](https://docs.crewlet.ai/concepts/code-sandbox/).
 
 **The engine ships no tool-skill prose.** If they want agents to know
 *how* to use a tool, that is a knowledge-base page published with
 `crewlet plane import` / `crewlet confluence import`, not prompt text in
-the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills).
+the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills/).
 
 ## Writing style for the fields that become prompts
 
@@ -256,9 +256,9 @@ crewlet run config.yaml --import-company company.yaml
 ```
 
 Full field reference:
-[Configuration](https://docs.crewlet.ai/getting-started/configuration). Two-tier
+[Configuration](https://docs.crewlet.ai/getting-started/configuration/). Two-tier
 design, live reload, and secrets-at-rest:
-[Configuration concepts](https://docs.crewlet.ai/concepts/configuration).
+[Configuration concepts](https://docs.crewlet.ai/concepts/configuration/).
 
 Add this line at the top of each file so their editor autocompletes and
 flags typos as they type:
