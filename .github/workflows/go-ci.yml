@@ -1,0 +1,110 @@
+name: go-ci
+
+# CI for the Go rewrite (see REWRITE_PLAN.md). Runs alongside the Python
+# ci.yml until Phase 9 moves the Go tree to the repository root and the
+# Python implementation is deleted.
+
+on:
+  push:
+    branches: [main]
+    paths: ["go/**", ".github/workflows/go-ci.yml"]
+  pull_request:
+    paths: ["go/**", ".github/workflows/go-ci.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: go
+
+env:
+  # The module pins its own toolchain in go.mod; auto lets the setup-go
+  # toolchain fetch it rather than failing on a mismatch.
+  GOTOOLCHAIN: auto
+
+jobs:
+  build:
+    name: build + vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
+          fi
+
+  test:
+    name: test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      # The race detector is not optional here: the engine's whole
+      # concurrency model changed from one cooperative event loop to real
+      # parallelism, so every "atomic because asyncio" assumption the
+      # Python code made is a potential data race in the port.
+      - run: go test ./... -race -count=1
+
+  stores:
+    name: stores (dual driver)
+    runs-on: ubuntu-latest
+    # Turso is the chosen embedded database and mainline SQLite is the
+    # certified fallback driver (D4). Running the store contract suites
+    # against BOTH is what keeps the escape hatch real rather than
+    # theoretical, and what stops Turso-only SQL reaching the schema —
+    # Turso is currently the NARROWER dialect (see decisions/002).
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: [turso, sqlite]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - run: go test ./internal/store/... -race -count=1
+        env:
+          CREWLET_STORE_DRIVER: ${{ matrix.driver }}
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: go
+
+  integration:
+    name: integration (real brokers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      # Embedded NATS runs in-process, so the JetStream conformance and
+      # fleet suites need no service container. Pulsar is a testcontainer
+      # and is opted into by build tag so a laptop run stays fast.
+      - run: go test ./... -race -count=1 -tags=integration
+        env:
+          CREWLET_INTEGRATION: "1"

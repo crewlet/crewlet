@@ -1,0 +1,62 @@
+version: "2"
+
+# Linting posture for the rewrite: catch the classes of bug the port is
+# genuinely exposed to (data races the Python engine could not have, ignored
+# errors where Python raised, context misuse) without the noise that makes a
+# team disable the linter.
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - unparam
+    - usetesting
+    - wastedassign
+
+  settings:
+    errcheck:
+      # A deferred Close on a read-only handle is noise; anything that
+      # writes must still be checked.
+      exclude-functions:
+        - (io.Closer).Close
+    govet:
+      enable:
+        - shadow
+    revive:
+      rules:
+        - name: exported
+          # Every exported symbol carries a doc comment. The engine's
+          # value is in its documented invariants; an undocumented
+          # exported name is how one gets lost.
+          severity: error
+        - name: context-as-argument
+        - name: error-strings
+        - name: indent-error-flow
+        - name: var-naming
+
+  exclusions:
+    rules:
+      # Test helpers legitimately ignore errors on cleanup paths and
+      # build long table-driven cases.
+      - path: _test\.go
+        linters: [errcheck, gocritic, unparam]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/crewlet/crewlet
