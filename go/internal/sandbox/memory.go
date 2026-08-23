@@ -127,6 +127,24 @@ func (m *MemoryStore) SetStatus(_ context.Context, turnID, status string, fence 
 	return m.fenced(turnID, fence, func(run *PendingRun) { run.Status = status })
 }
 
+// ExpirePause flips a parked run to reseed if it is still parked. See the
+// contract on [PendingStore].
+func (m *MemoryStore) ExpirePause(_ context.Context, turnID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[turnID]
+	if !ok || run.Status != StatusAwaiting {
+		return false, nil
+	}
+	run.Status = StatusReseed
+	run.UpdatedAt = m.clock()
+	// Written back explicitly: the map holds VALUES, so mutating the local
+	// copy is a no-op and every racing reaper would still read the old
+	// status and win.
+	m.runs[turnID] = run
+	return true, nil
+}
+
 func (m *MemoryStore) AttachSandbox(_ context.Context, turnID string, box BoxRef, fence Fence) error {
 	return m.fenced(turnID, fence, func(run *PendingRun) {
 		run.SandboxID = box.SandboxID

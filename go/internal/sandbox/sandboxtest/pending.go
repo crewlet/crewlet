@@ -11,6 +11,7 @@ package sandboxtest
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +44,9 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AnAnswerWithNoConversationMatchesNothing", testAnAnswerWithNoConversationMatchesNothing},
 		{"TheReaperSeesOnlyOldSnapshots", testTheReaperSeesOnlyOldSnapshots},
 		{"ListingsAreStable", testListingsAreStable},
+		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
+		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
+		{"AnAnsweredRunCannotBeExpiredUnderTheResume", testAnAnsweredRunCannotBeExpiredUnderTheResume},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -435,5 +439,101 @@ func testListingsAreStable(t *testing.T, s sandbox.PendingStore) {
 				t.Fatalf("listing order changed: %v then %v", first, ids)
 			}
 		}
+	}
+}
+
+// The reaper's flip is the AUTHORITY for the whole reap — it decides whether
+// the box gets destroyed — so two reapers racing must produce exactly one
+// destruction.
+func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
+	mustCreate(t, s, run("t1"))
+	park(t, s, "t1")
+
+	const racers = 10
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			won, err := s.ExpirePause(context.Background(), "t1")
+			if err != nil {
+				t.Errorf("ExpirePause: %v", err)
+				return
+			}
+			if won {
+				wins.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("%d of %d reapers won the flip, want exactly 1 — each winner kills a box", got, racers)
+	}
+	got, _, err := s.Get(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != sandbox.StatusReseed {
+		t.Fatalf("status = %q, want %q", got.Status, sandbox.StatusReseed)
+	}
+}
+
+// Every other paused box belongs to a tail that is actively being driven, and
+// expiring one from the reaper would kill it out from under live work.
+func testOnlyAParkedRunCanExpire(t *testing.T, s sandbox.PendingStore) {
+	for _, status := range []string{
+		sandbox.StatusRunning, sandbox.StatusResumed,
+		sandbox.StatusDone, sandbox.StatusFailed, sandbox.StatusReseed,
+	} {
+		mustCreate(t, s, run(status))
+		if err := s.SetStatus(context.Background(), status, status, sandbox.Fence{}); err != nil {
+			t.Fatalf("SetStatus: %v", err)
+		}
+		won, err := s.ExpirePause(context.Background(), status)
+		if err != nil {
+			t.Fatalf("ExpirePause(%s): %v", status, err)
+		}
+		if won {
+			t.Fatalf("a run in %q was expired by the pause reaper", status)
+		}
+	}
+}
+
+// The answer that un-parks a run and the reaper that expires it are the same
+// race, from the two sides: whichever lands first, the other must lose.
+func testAnAnsweredRunCannotBeExpiredUnderTheResume(t *testing.T, s sandbox.PendingStore) {
+	mustCreate(t, s, run("t1"))
+	park(t, s, "t1")
+
+	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	won, err := s.ExpirePause(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("ExpirePause: %v", err)
+	}
+	if won {
+		t.Fatal("the reaper expired a run whose answer had already claimed it — it would destroy the box the resume is reconnecting to")
+	}
+}
+
+// park moves a seeded run to awaiting_clarification with a box attached.
+func park(t *testing.T, s sandbox.PendingStore, turnID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{
+		SandboxID: "box-" + turnID, CodingAgent: "claude-code", PauseTTLSec: 1800,
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{
+		Question: "which branch?", Audience: "requester",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
 	}
 }

@@ -167,6 +167,19 @@ type PendingStore interface {
 	// SetStatus moves the run, fenced on the epoch.
 	SetStatus(ctx context.Context, turnID, status string, fence Fence) error
 
+	// ExpirePause flips a run parked on a clarification to reseed, and
+	// reports whether THIS call won.
+	//
+	// The pause reaper's authority, and the reason it is a conditional flip
+	// rather than a plain SetStatus. The reaper decides from a snapshot
+	// taken seconds ago, and the answer that un-parks the run may have
+	// arrived since — ClaimForResume has already moved the row and an
+	// Execute loop is reconnecting to that very box. Killing the box before
+	// this returns true destroys it underneath that resume. Conditional on
+	// StatusAwaiting alone: a run already reseeded has no snapshot left to
+	// expire, and any other status means somebody else owns the tail.
+	ExpirePause(ctx context.Context, turnID string) (bool, error)
+
 	// AttachSandbox records the box and the command a run is using.
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
