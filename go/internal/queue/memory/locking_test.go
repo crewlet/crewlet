@@ -43,6 +43,16 @@ import (
 // the same. If this package ever legitimately stops using a mutex, DELETE this
 // guard rather than relaxing the count: a guard kept alive past its subject is
 // how the number gets quietly lowered to zero.
+//
+// This matcher needs the STRONG form of that check — the one that counts what it
+// matched, not just what it parsed — because every name it keys on is
+// repo-local and renameable. Its subject is a field literally called `mu`.
+// Measured: renaming that one field to `lock` makes every function here read as
+// lock-free, and without the acquisition count the guard reports zero
+// violations for ever while inspecting nothing. A matcher whose subject is a
+// language construct (an *ast.GoStmt, a stdlib method name) cannot be blinded
+// that way and needs only the file count; this one is not that, so it carries
+// both.
 func TestNoLogCallHoldsTheBrokerLock(t *testing.T) {
 	t.Parallel()
 	sources, err := filepath.Glob(filepath.Join(packageDir(t), "*.go"))

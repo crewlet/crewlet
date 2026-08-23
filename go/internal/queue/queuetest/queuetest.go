@@ -17,6 +17,34 @@
 // Subtests are named after the Python suite they are ported from
 // (tests/test_queue/test_protocol.py), so a failure here names the spec that
 // describes it.
+//
+// # If you are bringing up a new backend and a case fails, suspect the case
+//
+// Not politeness — the measured record of this suite. Every case here was
+// written against at most two backends, and each time a third opinion arrived
+// the suite was wrong more often than the backend was. What that looked like:
+//
+//   - It required a deferral to cost nothing. d-102 decisions 1-2 explicitly
+//     trade that away on JetStream and raise MaxDeliver to absorb it. Now
+//     FreeDeferral.
+//   - It required a nak to replay from the head. Measured Pulsar-only; JetStream
+//     returns redelivered messages behind never-delivered ones. Now
+//     HeadReplayOnNak.
+//   - It required a stopped queue to restart. The contract does not say, and two
+//     backends answered differently. Now Restartable.
+//   - It required a publish to `crewlet.events` — a subject the grammar cannot
+//     produce — to succeed, purely to have something for a wildcard to reject.
+//   - Its WithRedeliveryBudget doc invented a counting convention the contract
+//     never stated, and a backend then wrote `MaxDeliver: budget + 1` to satisfy
+//     the sentence. That agreement looked like evidence and was manufactured.
+//
+// So when this suite fails a backend nobody here wrote, the first question is
+// whether the case states a real invariant or an accident of the two backends
+// that already agreed. Check rewrite/decisions/ for the operation before
+// concluding the backend is wrong: a recorded degradation is a permitted
+// exception, and the corpus is where permission lives. If the property is real
+// but not universal, it becomes a Capabilities flag with the reason at the skip
+// — not a requirement, and not a deleted case.
 package queuetest
 
 import (

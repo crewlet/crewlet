@@ -38,6 +38,21 @@ var stopsTheGoroutine = map[string]bool{
 // BOUNDARY: it catches a stop-call written lexically inside a `go` statement.
 // A `go` statement calling a NAMED function that fatals is not caught, and
 // nothing here pretends otherwise.
+//
+// WHY THE VACUITY CHECK BELOW IS ONLY A COUNT. A guard can also go blind by
+// having its matcher stop recognising its subject, which is worse than a false
+// negative because it is permanent and silent — a teammate's lock guard keyed
+// on a receiver field literally named `mu`, so renaming that one field to
+// `lock` made every function in the package read as lock-free and the guard
+// reported zero for ever. This matcher cannot be blinded that way: its subject
+// is `*ast.GoStmt`, a language construct, and the method names are testing.T's
+// own, so nothing a refactor in this repo can rename is load-bearing. Measured
+// rather than assumed — an injected Fatal is still caught when called through
+// a renamed local alias, and when called on an unrelated receiver.
+//
+// That last case is deliberate, not a false positive worth suppressing:
+// log.Fatalf on a spawned goroutine is worse than t.Fatalf, because it takes
+// the process down instead of one goroutine.
 func TestNoFatalOffTheTestGoroutine(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()

@@ -36,6 +36,13 @@ import (
 // invisible to it — better to say so than to let the next reader infer coverage
 // the walk does not have.
 //
+// This walker is HALF rename-proof, which is why it carries the strong vacuity
+// check anyway. The `go` half keys on *ast.GoStmt and on testing.T's own method
+// names: language and stdlib, nothing this repo can rename. The handler half
+// keys on queue.Result and *events.Event, which are repo-local — rename either
+// and every handler literal reads as on-goroutine while the guard keeps
+// passing. A matcher is only as rename-proof as its weakest clause.
+//
 // Both counts below are asserted rather than logged. A guard that checks for
 // the ABSENCE of something passes identically when the thing is absent and when
 // the guard has stopped working, and those are indistinguishable from outside —
