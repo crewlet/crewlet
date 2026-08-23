@@ -296,6 +296,21 @@ func (q *Queue) Start(context.Context) error {
 		return nil
 	}
 	q.running, q.paused = true, false
+	// Clear the process-local gates here as well as in Stop.
+	//
+	// Stop clears them because "a hold that outlived a stop left a reused
+	// queue silently deaf" — but clearing on only one side leaves the window
+	// between the two open, and a hold taken there survives into the next
+	// life. Measured: Stop, PauseTopic, Start, Subscribe, Publish delivers
+	// nothing, with holds=[sandbox] on a queue that reports itself running.
+	// That is the same incident reached from the other side, and it is
+	// reachable by a sandbox gate or a config shed racing a drain.
+	//
+	// The invariant is about the START of a life, not the end of one: a
+	// queue that has been started serves, and is never silently gated by
+	// state from a previous one.
+	clear(q.pauses)
+	clear(q.quiescing)
 	q.broker.mu.Unlock()
 
 	log.Info("memory_event_queue_started")

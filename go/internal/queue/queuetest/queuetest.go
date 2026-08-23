@@ -81,6 +81,11 @@
 //     group here was a plain lowercase identifier, which no mutation could ever
 //     have revealed — and probing one dotted name found a live collision in a
 //     shipped backend.
+//   - Enumerate the POINTS IN A LIFECYCLE at which each operation is sent. A
+//     separate axis from the one above, and a suite can be thorough on values
+//     while never touching it: after a Stop this suite sent exactly two of
+//     eleven verbs, and the window it never visited held a hold that survived
+//     into the next life and left a restarted seat silently deaf.
 //
 // One limit, and it binds the two entries above that recommend a guard rather
 // than excusing them: a guard that names its own assumption DIAGNOSES a race,

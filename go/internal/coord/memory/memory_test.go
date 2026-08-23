@@ -66,17 +66,63 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 	cancel()
 	b := memory.New()
 
-	lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
-		Owner: "node-a:1", TTL: time.Minute,
-	})
-	if lease != nil {
-		t.Fatal("TryAcquire granted a lease on a cancelled context")
+	// EVERY verb, because a dead context is a point in this store's life and
+	// the suite's job is to send each verb at each such point. Three of the
+	// eight used to be sent here, and a mutation dropping the guard from any
+	// of the other five passed the whole package — the contract suite could
+	// not cover it either, since its fault injector short-circuits ABOVE the
+	// backend and so exercises the wrapper rather than this code.
+	//
+	// What each of them must not do is answer definitely: nil, false or an
+	// empty slice with no error all read as facts about ownership, and a call
+	// that never reached the store knows no facts about ownership.
+	verbs := []struct {
+		name string
+		call func() error
+	}{
+		{"TryAcquire", func() error {
+			lease, err := b.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+				Owner: "node-a:1", TTL: time.Minute,
+			})
+			if lease != nil {
+				t.Error("TryAcquire granted a lease on a cancelled context")
+			}
+			return err
+		}},
+		{"Renew", func() error {
+			ok, err := b.Renew(ctx, coord.SeatResource("ceo"), "node-a:1", 1, time.Minute)
+			if ok {
+				t.Error("Renew reported success on a cancelled context")
+			}
+			return err
+		}},
+		{"Release", func() error {
+			ok, err := b.Release(ctx, coord.SeatResource("ceo"), "node-a:1", 1)
+			if ok {
+				t.Error("Release reported success on a cancelled context")
+			}
+			return err
+		}},
+		{"Get", func() error { _, err := b.Get(ctx, coord.SeatResource("ceo")); return err }},
+		{"ListOwned", func() error { _, err := b.ListOwned(ctx, "node-a:1"); return err }},
+		{"ListLive", func() error { _, err := b.ListLive(ctx, coord.NodePrefix); return err }},
+		{"PreferredResources", func() error {
+			_, err := b.PreferredResources(ctx, coord.SeatPrefix, "node-a")
+			return err
+		}},
+		{"FleetProtocolFloor", func() error {
+			floor, any, err := b.FleetProtocolFloor(ctx)
+			if any {
+				t.Errorf("FleetProtocolFloor reported a floor of %d on a cancelled context", floor)
+			}
+			return err
+		}},
 	}
-	if err == nil {
-		t.Fatal("TryAcquire answered (nil, nil) — a call that never reached the store " +
-			"reads as a peer holding the resource")
-	}
-	if _, err := b.ListLive(ctx, coord.NodePrefix); err == nil {
-		t.Fatal("ListLive answered an empty fleet on a cancelled context")
+	for _, v := range verbs {
+		if err := v.call(); err == nil {
+			t.Errorf("%s answered definitely on a cancelled context — an unreachable store "+
+				"says nothing about ownership, and a caller reading that as fact sheds "+
+				"seats it still holds", v.name)
+		}
 	}
 }

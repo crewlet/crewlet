@@ -571,6 +571,42 @@ func (s *suite) runCore(t *testing.T) {
 		j.awaitLabels(t, "a restarted queue to deliver again", "resumed")
 	})
 
+	t.Run("a_hold_taken_while_stopped_does_not_survive_a_restart", func(t *testing.T) {
+		t.Parallel()
+		if !s.caps.Restartable {
+			t.Skip("backend treats Stop as terminal; a restart needs a fresh queue")
+		}
+		// stop_clears_pause covers a hold taken BEFORE the stop. This covers
+		// the window the suite never visited: a hold taken while the queue is
+		// stopped, by a sandbox gate or a config shed racing a drain.
+		//
+		// Found by asking at which points in the queue's own lifecycle each
+		// verb is sent — a different axis from what the suite sends. After a
+		// Stop this suite sent exactly two things, Start and Publish, and
+		// never the other nine verbs. Measured on the twin before the fix:
+		// the hold survived, and the restarted seat was silently deaf while
+		// reporting itself running, which is the incident Stop's own doc
+		// exists to prevent, reached from the other side.
+		q := s.start(t)
+		if err := q.Stop(ctx); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		if err := q.PauseTopic(ctx, "seat.restart", "grp", "sandbox"); err != nil {
+			// Refusing while stopped is a legitimate answer and closes the
+			// window just as well — see
+			// rewrite/questions/queue-contract-verbs-on-a-stopped-queue.md.
+			t.Skipf("backend refuses PauseTopic while stopped: %v", err)
+		}
+		if err := q.Start(ctx); err != nil {
+			t.Fatalf("restart: %v", err)
+		}
+
+		j := newJournal()
+		subscribe(t, q, "seat.restart", "grp", recordingHandler(j))
+		publish(t, q, "seat.restart", newEvent("work"))
+		j.awaitLabels(t, "a restarted queue to serve rather than stay gated", "work")
+	})
+
 	t.Run("wait_for_handlers_no_op_when_idle", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(t)
