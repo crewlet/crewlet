@@ -290,3 +290,36 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func (c *connector) Driver() driver.Driver { return c.drv }
+
+// Tx runs fn inside a transaction, committing when it returns nil and rolling
+// back otherwise.
+//
+// A PANIC rolls back and re-panics rather than leaving the transaction open.
+// Without that, a panic in fn returns through the runtime with the connection
+// still holding an uncommitted transaction — and on a single-writer database
+// that connection going back to the pool with an open transaction blocks every
+// subsequent write, so one bug in one handler wedges the whole process.
+//
+// The rollback error is deliberately discarded on the failure paths: fn's error
+// is what the caller needs, and replacing it with "rollback failed" would hide
+// the reason the rollback was necessary.
+func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit: %w", err)
+	}
+	return nil
+}

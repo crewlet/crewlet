@@ -42,10 +42,8 @@ package schedule
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -631,14 +629,7 @@ func runID(e Entry, label, runner string) string {
 // already stored stay meaningful across that change. crypto/rand cannot fail
 // on any supported platform — it panics internally instead — so there is no
 // error to handle and no degraded id to invent.
-func newTrace() events.TraceContext {
-	var buf [24]byte
-	_, _ = rand.Read(buf[:])
-	return events.TraceContext{
-		TraceID: hex.EncodeToString(buf[:16]),
-		SpanID:  hex.EncodeToString(buf[16:]),
-	}
-}
+func newTrace() events.TraceContext { return events.NewTrace() }
 
 // cmpOr returns v unless it is the zero string.
 func cmpOr(v, def string) string {

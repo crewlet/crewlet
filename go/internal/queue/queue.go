@@ -123,6 +123,16 @@ type BatchKeyFunc func(ev *events.Event) string
 // logged and never prevent the publish.
 type PublishListener func(ctx context.Context, topic string, ev *events.Event)
 
+// Publisher is the write half of the queue.
+//
+// Declared here rather than in each consumer because several subsystems
+// publish without ever subscribing, and a per-package copy of a one-method
+// interface is one more place for the signature to drift from the thing it
+// describes. EventQueue satisfies it, asserted below.
+type Publisher interface {
+	Publish(ctx context.Context, topic string, ev *events.Event) error
+}
+
 // EventQueue is the transport contract.
 type EventQueue interface {
 	// Publish sends an event to a topic. It must not return until the
@@ -468,3 +478,8 @@ func errText(err error) string {
 	}
 	return err.Error()
 }
+
+// EventQueue is a Publisher. A compile-time assertion rather than a
+// convention, because the narrow interface exists only to be satisfied by
+// this one.
+var _ Publisher = (EventQueue)(nil)

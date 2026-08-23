@@ -19,6 +19,8 @@
 package events
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -465,4 +467,25 @@ func DataAs[T Payload](e *Event) (T, bool) {
 		return zero, false
 	}
 	return v, true
+}
+
+// NewTrace mints a fresh trace context.
+//
+// One definition, in the package that owns the field. It was written twice
+// before this — once in the scheduler — and two generators for one wire format
+// is how they come to disagree about a length or a case and produce ids a
+// tracer silently drops.
+//
+// SHAPED rather than merely random: a 32-hex trace id and a 16-hex span id are
+// what a real tracer accepts when one is wired, so ids already stored stay
+// meaningful across that change. crypto/rand cannot fail on any supported
+// platform — it panics internally instead — so there is no error to handle and
+// no degraded id to invent.
+func NewTrace() TraceContext {
+	var buf [24]byte
+	_, _ = rand.Read(buf[:])
+	return TraceContext{
+		TraceID: hex.EncodeToString(buf[:16]),
+		SpanID:  hex.EncodeToString(buf[16:]),
+	}
 }
