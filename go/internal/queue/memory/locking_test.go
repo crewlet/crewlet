@@ -30,6 +30,19 @@ import (
 // prove a point becomes the thing that hangs CI. It is the same shape as the
 // tests that fail the build on a hand-built subject string: cheap, total, and
 // it states the rule where someone would break it.
+//
+// WHAT IT DOES NOT CATCH, stated so the next reader does not infer coverage the
+// walk does not have: a log call written LEXICALLY inside a locked region. A
+// locked region that calls a named helper which logs is invisible to it, as is
+// a log call reached through an interface. Moving a log line into a helper is
+// therefore a way to defeat this without touching it.
+//
+// Both counts below are asserted rather than logged, because a guard that
+// checks for the ABSENCE of something passes identically when the thing is
+// absent and when the guard has stopped working — and from outside those look
+// the same. If this package ever legitimately stops using a mutex, DELETE this
+// guard rather than relaxing the count: a guard kept alive past its subject is
+// how the number gets quietly lowered to zero.
 func TestNoLogCallHoldsTheBrokerLock(t *testing.T) {
 	t.Parallel()
 	sources, err := filepath.Glob(filepath.Join(packageDir(t), "*.go"))
@@ -37,7 +50,7 @@ func TestNoLogCallHoldsTheBrokerLock(t *testing.T) {
 		t.Fatalf("glob: %v", err)
 	}
 	fset := token.NewFileSet()
-	var scanned int
+	var scanned, acquisitions int
 	for _, path := range sources {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -47,6 +60,7 @@ func TestNoLogCallHoldsTheBrokerLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
+		acquisitions += countMutexAcquisitions(file)
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -62,8 +76,31 @@ func TestNoLogCallHoldsTheBrokerLock(t *testing.T) {
 	if scanned == 0 {
 		// A glob that silently matches nothing would make this a
 		// permanent, invisible pass.
-		t.Fatalf("scanned no source files; the check is not running")
+		t.Fatalf("parsed no source files; this guard was certifying nothing")
 	}
+	if acquisitions == 0 {
+		// The matcher keys on a field named `mu`. Rename it and every
+		// function below reads as lock-free, so the guard reports zero
+		// violations for ever while inspecting nothing.
+		t.Fatalf("found no mutex acquisitions to inspect; the matcher no longer " +
+			"recognises this package's lock, so the check is vacuous")
+	}
+}
+
+// countMutexAcquisitions reports how many lock acquisitions the matcher can
+// still see, which is the only evidence that the check above examined anything.
+func countMutexAcquisitions(file *ast.File) int {
+	var n int
+	ast.Inspect(file, func(node ast.Node) bool {
+		if expr, ok := node.(*ast.ExprStmt); ok && isMutexCall(expr.X, "Lock") {
+			n++
+		}
+		if def, ok := node.(*ast.DeferStmt); ok && isMutexCall(def.Call, "Unlock") {
+			n++
+		}
+		return true
+	})
+	return n
 }
 
 // packageDir is the directory this source file lives in.

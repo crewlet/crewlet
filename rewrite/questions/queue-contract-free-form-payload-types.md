@@ -5,6 +5,17 @@ lease store's `meta`) to `queuetest`. Same bug class, same cause — the suite's
 fixtures were in the shape its backend produces, so it could not see the
 question.
 
+**Sibling note: `coord-contract-meta-wire-shape.md`**, which is the same
+measurement on `coord.Lease.Meta`. The two reach *different* recommendations,
+and the difference is not a disagreement — it is the one asymmetry that matters
+here. An event has a typed path: a registered payload decodes into this build's
+struct, so a caller who needs a real Go type has somewhere to go, and the
+free-form bag can stay untyped precisely because opting out of it is possible.
+`Meta` has no such path — node presence carries whatever a build advertises and
+there is nothing to promote a field to — so the only honest instruction there is
+the negative one. Read either note without the other and the pair looks
+inconsistent; that is why both say so.
+
 ## Measured, this repo's memory twin
 
 ```
