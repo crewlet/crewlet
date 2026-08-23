@@ -137,6 +137,11 @@ func (m *MemoryStore) ExpirePause(_ context.Context, turnID string) (bool, error
 		return false, nil
 	}
 	run.Status = StatusReseed
+	// Cleared in the SAME write as the flip: two writes leave a state a
+	// reader can see, in which a reseeded run still names the box an
+	// arriving answer would be told to continue in.
+	run.SandboxID, run.CommandID = "", ""
+	run.PausedAt = time.Time{}
 	run.UpdatedAt = m.clock()
 	// Written back explicitly: the map holds VALUES, so mutating the local
 	// copy is a no-op and every racing reaper would still read the old

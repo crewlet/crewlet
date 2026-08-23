@@ -348,8 +348,26 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 // Kind names the backend, for logs and the operator surface.
 func (l *Local) Kind() string { return "local" }
 
-func (l *Local) layout(id string) boxLayout {
-	return boxLayout{id: id, root: filepath.Join(l.root, "boxes", id)}
+// layout is where one box's files live.
+//
+// AN EMPTY ID IS REFUSED, and this is not defensive tidiness: joining "" gives
+// the boxes DIRECTORY ITSELF, so an empty id produces a "box" whose root is
+// the parent of every box on the host — one whose Close or Kill would
+// os.RemoveAll every other box's checkout. It is reachable: a run's row exists
+// before its box is attached, so a poll landing in that window asks to connect
+// to "".
+func (l *Local) layout(id string) (boxLayout, error) {
+	if strings.TrimSpace(id) == "" {
+		return boxLayout{}, localErrorf("local sandbox: an empty sandbox id names no box " +
+			"(it would resolve to the directory holding every box)")
+	}
+	if strings.ContainsAny(id, `/\`) || id == "." || id == ".." {
+		// Ids are minted here and never come from config, but the same
+		// join is what a traversal would exploit, and the check is one
+		// comparison on a path that is about to be deleted from.
+		return boxLayout{}, localErrorf("local sandbox: %q is not a usable box id", id)
+	}
+	return boxLayout{id: id, root: filepath.Join(l.root, "boxes", id)}, nil
 }
 
 func (l *Local) containerName(id string) string { return ContainerPrefix + id }
@@ -358,7 +376,10 @@ func (l *Local) containerName(id string) string { return ContainerPrefix + id }
 func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	id := uuid.NewString()
 	id = strings.ReplaceAll(id, "-", "")[:16]
-	layout := l.layout(id)
+	layout, err := l.layout(id)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := os.MkdirAll(layout.workspace(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s at %s: %v", id, layout.root, err)
@@ -434,7 +455,10 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 // reattaches to must be runnable immediately. That is exactly why the pause
 // reaper must use Kill instead.
 func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
-	layout := l.layout(sandboxID)
+	layout, err := l.layout(sandboxID)
+	if err != nil {
+		return nil, err
+	}
 	if info, err := os.Stat(layout.root); err != nil || !info.IsDir() {
 		return nil, localErrorf("local sandbox %q is gone (its box directory %s no longer "+
 			"exists) — the engine host was rebuilt, or the box was reaped", sandboxID, layout.root)
@@ -461,7 +485,13 @@ func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) 
 // through it would restart the work purely to stop it. Best-effort — a box
 // that is already gone is not an error.
 func (l *Local) Kill(ctx context.Context, sandboxID string) error {
-	layout := l.layout(sandboxID)
+	layout, err := l.layout(sandboxID)
+	if err != nil {
+		// Nothing to reclaim, and refusing is what stops the join below
+		// resolving to the directory that holds every box.
+		log.Warn("local_sandbox_kill_refused", "sandbox_id", sandboxID, "error", err.Error())
+		return nil
+	}
 	if l.opts.Containment == Container {
 		runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
 	} else if pid := readPID(layout); pid > 0 {
@@ -474,16 +504,61 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		// stopped process really does never run to handle SIGTERM) would
 		// quietly defeat that here.
 		killGroup(pid)
+		// And WAIT for it to actually go. SIGKILL is delivered, not
+		// applied: the kernel takes the process down some moments later,
+		// and until it does the coding agent's wrapper is still writing
+		// its exit code and marker into the box. Removing the tree under
+		// those writes fails with the directory non-empty — a failure the
+		// removal below would report and nothing could act on, leaving a
+		// box for the orphan reaper to find hours later.
+		awaitGroupExit(ctx, pid)
 	}
 	// Kill is a teardown like any other, and the box on disk may hold a login
 	// the run refreshed before it was reclaimed. The files are already there
 	// — collecting them needs no resume, which is the one thing this method
 	// must not do.
 	collectCredentials(layout, readCredentialMap(layout))
-	os.RemoveAll(layout.root)
+	removeBox(layout)
 	log.Debug("local_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
 }
+
+// removeBox deletes a box's directory, saying so when it cannot.
+//
+// A box that survives its own teardown is not harmless: it holds the seeded
+// login and whatever the run wrote, and the only thing that will ever clean it
+// up is the orphan reaper on some later create. Reported rather than swallowed
+// so the operator learns of it now instead of finding the directory later.
+func removeBox(l boxLayout) {
+	if err := os.RemoveAll(l.root); err != nil {
+		log.Warn("local_sandbox_not_removed", "sandbox_id", l.id,
+			"path", l.root, "error", err.Error())
+	}
+}
+
+// awaitGroupExit waits for a signalled process group to actually be gone.
+//
+// Bounded by [termGrace] and by the caller's context: a group that will not go
+// is not a reason to hold a teardown open forever, and the caller proceeds
+// either way.
+func awaitGroupExit(ctx context.Context, pid int) {
+	deadline := time.Now().Add(termGrace)
+	for time.Now().Before(deadline) {
+		if !groupExists(pid) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(exitPollInterval):
+		}
+	}
+}
+
+// exitPollInterval is how often a teardown asks whether a signalled group has
+// gone. Short, because the answer is usually yes on the first ask and the
+// caller is holding a turn open.
+const exitPollInterval = 20 * time.Millisecond
 
 // ---------------------------------------------------------------------
 // orphan reaping
@@ -553,7 +628,7 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 			continue
 		}
 		collectCredentials(layout, readCredentialMap(layout))
-		os.RemoveAll(layout.root)
+		removeBox(layout)
 		log.Info("local_sandbox_orphan_reaped", "sandbox_id", layout.id)
 	}
 }

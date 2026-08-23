@@ -213,7 +213,8 @@ func (s *SQLStore) SetStatus(ctx context.Context, turnID, status string, fence F
 	return nil
 }
 
-// ExpirePause flips a parked run to reseed if it is still parked.
+// ExpirePause flips a parked run to reseed and clears its box, if it is still
+// parked.
 //
 // Unfenced on purpose: the reaper runs on whichever node holds the waiter
 // duty, which is rarely the node that owns the seat, so an epoch check here
@@ -221,7 +222,8 @@ func (s *SQLStore) SetStatus(ctx context.Context, turnID, status string, fence F
 // exactly one caller can move a row out of StatusAwaiting.
 func (s *SQLStore) ExpirePause(ctx context.Context, turnID string) (bool, error) {
 	result, err := s.db.SQL().ExecContext(ctx,
-		`UPDATE pending_sandbox_run SET status = ?, updated_at = ?
+		`UPDATE pending_sandbox_run
+		 SET status = ?, sandbox_id = '', command_id = '', paused_at = NULL, updated_at = ?
 		 WHERE turn_id = ? AND status = ?`,
 		StatusReseed, store.EncodeTime(time.Now().UTC()), turnID, StatusAwaiting)
 	if err != nil {

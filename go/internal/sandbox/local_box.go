@@ -319,22 +319,17 @@ func (b *directBox) Close(ctx context.Context) error {
 		// tree alive and the directory in use.
 		continueGroup(pid)
 		termGroup(pid)
-		deadline := time.Now().Add(termGrace)
-		for time.Now().Before(deadline) {
-			if !groupExists(pid) {
-				break
-			}
-			select {
-			case <-ctx.Done():
-			case <-time.After(50 * time.Millisecond):
-				continue
-			}
-			break
-		}
+		awaitGroupExit(ctx, pid)
+		// Whether or not it went: SIGKILL costs nothing on a group that is
+		// already gone, and the alternative is a tree left running because
+		// the grace expired.
 		killGroup(pid)
+		// Waited for again, because the removal below races the dying
+		// wrapper's last writes exactly as Kill's does.
+		awaitGroupExit(ctx, pid)
 	}
 	collectCredentials(b.layout, b.credentials)
-	os.RemoveAll(b.layout.root)
+	removeBox(b.layout)
 	log.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
 }
@@ -569,7 +564,7 @@ func (b *containerBox) unpause(ctx context.Context) {
 func (b *containerBox) Close(ctx context.Context) error {
 	runHost(ctx, hostCommand{argv: []string{b.runtime, "rm", "-f", b.container}})
 	collectCredentials(b.layout, b.credentials)
-	os.RemoveAll(b.layout.root)
+	removeBox(b.layout)
 	log.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
 }

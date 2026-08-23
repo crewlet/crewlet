@@ -461,6 +461,25 @@ the state machine; test_local pins the reaper/pid-reuse/escape guards.
 resume completes the same turn; clarification park → reseed path; local container +
 direct modes both green.
 
+**Status: met.** `go/internal/e2e/sandbox_test.go`, against a real local sandbox
+and a real detached process — the only stub is the vendor endpoint, as in G5.
+Four legs: the golden turn (plan → launch → suspend → poll → collect → resume,
+with Plan asserted to run exactly ONCE, so a resume that re-planned fails
+there); an engine stopped mid-run whose successor recovers the row on its seat
+claim and finishes the same conversation; the clarification park, its expiry,
+and the reseed still on the operator's board; and the container mode, which
+SKIPS where no runtime is usable rather than being dropped — a suite that
+quietly tested only the easy mode would report a gate it had not met.
+
+Four defects it found, each of which passed every existing test on both sides
+of its seam: `AllowSuspend` was a toolloop field nothing set, so the suspend was
+discarded and the turn ended believing the work was done; a seat's
+`pause_ttl_seconds` zero value read as "never pause", tearing down the checkout
+of every seat that said nothing about the knob; `role.sandbox.env` and every
+LLM `api_keys` entry reached their consumer with `${VAR}` unresolved; and
+`Connect("")` returned a box rooted at the directory holding EVERY box, whose
+teardown would have removed the lot. See `rewrite/decisions/601`.
+
 ## 12. Phase 7 — Notifications + integrations (L–XL, demand-ordered)
 
 Spec: `src/crewlet/notifications/` + per-vendor packages; suites:

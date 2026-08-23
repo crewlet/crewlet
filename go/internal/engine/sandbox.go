@@ -544,13 +544,14 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 }
 
 // startSandboxWaiter starts the completion poll, once the node exists.
-func (e *Engine) startSandboxWaiter(ctx context.Context) error {
+func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration) error {
 	if e.sandboxCoordinator == nil {
 		return nil
 	}
 	waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
 		Queue: e.backends.Queue, Pending: e.sandboxPending,
-		Manager: e.sandboxCoordinator.Manager(),
+		Manager:  e.sandboxCoordinator.Manager(),
+		Interval: interval,
 		// The duty is claimed per tick: the waiter polls EVERY active run
 		// in the company, not just this node's seats, so N nodes running it
 		// unclaimed means N reconnects per box per tick and N racing

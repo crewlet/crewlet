@@ -47,6 +47,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"APauseExpiresExactlyOnce", testAPauseExpiresExactlyOnce},
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
 		{"AnAnsweredRunCannotBeExpiredUnderTheResume", testAnAnsweredRunCannotBeExpiredUnderTheResume},
+		{"ExpiringAPauseClearsTheBoxInTheSameWrite", testExpiringAPauseClearsTheBoxInTheSameWrite},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -532,8 +533,44 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		Question: "which branch?", Audience: "requester",
+		// The branch is what the answer re-seeds from once the box is
+		// reclaimed, so a parked run without one is not a realistic
+		// starting point for anything the reaper does.
+		Question: "which branch?", Audience: "requester", Branch: "wip/" + turnID,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
+	}
+}
+
+// The gap between two writes is a state a reader can SEE: a run reading as
+// `reseed` while it still names its box tells an arriving answer that the
+// checkout is live, moments before the reaper destroys it. One statement, no
+// window.
+func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.PendingStore) {
+	mustCreate(t, s, run("t1"))
+	park(t, s, "t1")
+	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
+		t.Fatalf("MarkBoxPaused: %v", err)
+	}
+
+	won, err := s.ExpirePause(context.Background(), "t1")
+	if err != nil || !won {
+		t.Fatalf("ExpirePause = %v, %v", won, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusReseed {
+		t.Fatalf("status = %q, want %q", got.Status, sandbox.StatusReseed)
+	}
+	if got.SandboxID != "" || got.CommandID != "" {
+		t.Fatalf("the row still names a box that is about to be destroyed: %+v", got)
+	}
+	if !got.PausedAt.IsZero() {
+		t.Fatal("the row still claims a snapshot is held")
+	}
+	// The QUESTION survives: the run is not over, and the answer still has
+	// to find it.
+	if got.Question == "" || got.Branch == "" {
+		t.Fatalf("the reseed lost what the answer needs: question=%q branch=%q",
+			got.Question, got.Branch)
 	}
 }

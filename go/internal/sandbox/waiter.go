@@ -198,6 +198,15 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 		if run.Status != StatusRunning {
 			continue
 		}
+		if run.SandboxID == "" {
+			// The row exists before its box is attached — a launch writes
+			// it first, so a crash in that window leaves a record rather
+			// than a box nothing names. A poll landing in that window has
+			// nothing to connect to and nothing to keep alive, and asking
+			// the provider for "" is how a nameless box comes to be
+			// created. The next tick finds it attached.
+			continue
+		}
 		switch w.pollOne(ctx, run) {
 		case pollDone, pollGone:
 			// gone → the box vanished; fire anyway so the coordinator frees
@@ -361,15 +370,11 @@ func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
 		if err != nil || !won {
 			continue
 		}
-		// Release before the kill, for the same reason in the other
-		// direction: an answer claiming a reseed row must not find a
-		// sandbox_id we are about to destroy. Cleared, it provisions a fresh
-		// box and re-seeds from the pushed branch.
+		// The box record was cleared by the flip itself, so an answer
+		// claiming this run can no longer be told to continue in a
+		// checkout that is about to be destroyed. The id survives only
+		// here, in the snapshot the reaper is acting on.
 		sandboxID := run.SandboxID
-		if err := w.pending.ReleaseBox(ctx, run.TurnID); err != nil {
-			log.Warn("sandbox_pause_reap_release_failed",
-				"turn_id", run.TurnID, "error", err.Error())
-		}
 		// Kill by id: Connect would auto-resume the snapshot, booting the box
 		// back up purely to shut it down.
 		if err := w.manager.Provider().Kill(ctx, sandboxID); err != nil {

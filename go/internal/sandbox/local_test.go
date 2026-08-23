@@ -970,3 +970,66 @@ func ageBox(t *testing.T, home string, by time.Duration) {
 		}
 	}
 }
+
+// AN EMPTY ID NAMES NO BOX, and joining it gives the directory that holds
+// EVERY box — so a "box" built from one would take the whole estate down with
+// it on teardown. It is reachable: a run's row exists before its box is
+// attached, so a poll landing in that window asks to connect to "".
+func TestAnEmptyBoxIdIsRefusedRatherThanResolvingToTheWholeEstate(t *testing.T) {
+	local := newDirect(t)
+	alive := mustCreate(t, local, Spec{})
+
+	if box, err := local.Connect(t.Context(), ""); err == nil {
+		t.Fatalf("Connect(\"\") returned a box rooted at %q", box.Home())
+	}
+	// And a kill on one is a no-op rather than a recursive delete.
+	if err := local.Kill(t.Context(), ""); err != nil {
+		t.Fatalf("Kill(\"\"): %v", err)
+	}
+	if _, err := os.Stat(alive.Home()); err != nil {
+		t.Fatalf("a live box was destroyed by a teardown of the empty id: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(local.root, "boxes")); err != nil {
+		t.Fatalf("the directory holding every box was destroyed: %v", err)
+	}
+}
+
+// The ids are minted here and never come from config, but the join is the same
+// one a traversal would exploit and the check costs one comparison on a path
+// that is about to be deleted from.
+func TestABoxIdThatIsAPathIsRefused(t *testing.T) {
+	local := newDirect(t)
+	for _, id := range []string{"..", ".", "../elsewhere", "nested/id"} {
+		if _, err := local.Connect(t.Context(), id); err == nil {
+			t.Fatalf("Connect(%q) was accepted", id)
+		}
+	}
+}
+
+// A box that survives its own teardown holds the seeded login and whatever the
+// run wrote, and the only thing that will ever clean it up is the orphan
+// reaper on some later create.
+func TestKillWaitsForTheGroupBeforeRemovingTheBox(t *testing.T) {
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	home := box.Home()
+	// A job that keeps writing into the box right up to the moment it dies,
+	// which is what races the removal.
+	if _, err := box.StartBackground(t.Context(),
+		"while true; do date >> churn.log; done", ExecOptions{}); err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		return fileSize(filepath.Join(home, WorkspaceSubdir, "churn.log")) > 0
+	}, "the job never started writing")
+
+	if err := local.Kill(t.Context(), box.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the box survived its own teardown: %v", err)
+	}
+}

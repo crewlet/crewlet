@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
 // GATE G6 — the golden coding turn.
@@ -135,8 +137,9 @@ case "${FAKE_AGENT_MODE:-succeed}" in
     printf '{"result":"blocked","subtype":"success"}\n'
     ;;
   slow)
-    # Long enough that the engine can be stopped mid-run.
-    sleep 30
+    # Long enough that the engine can be stopped while the job runs, short
+    # enough that the test does not wait out a real coding job.
+    sleep 3
     printf 'Outcome: succeeded\nfinished after the restart\n' > "$work/findings.md"
     printf '{"result":"done","subtype":"success"}\n'
     ;;
@@ -169,7 +172,13 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
 
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot, Company: cfg})
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: &boot, Company: cfg,
+		// The completion poll, sped up. It is sized in production against
+		// coding jobs that run for minutes; at that cadence a test whose
+		// job finishes in a moment would wait out a real tick to see it.
+		SandboxPollInterval: 100 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -470,4 +479,229 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 		t.Fatalf("decode: %v", err)
 	}
 	return payload.Runs
+}
+
+// THE RESTART LEG of the gate. A coding job outlives the engine that started
+// it, so the state that matters is the row: a fresh process picks the run up
+// on the seat's next claim, drives it to completion, and re-enters the SAME
+// conversation the dead process suspended.
+func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("the local sandbox needs a POSIX shell")
+	}
+	stateDir := t.TempDir()
+	binDir := installFakeAgent(t)
+	t.Setenv("FAKE_AGENT_MODE", "slow")
+	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
+
+	// ONE store and ONE stream directory across both processes, which is
+	// what makes this a restart rather than a fresh company.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "crewlet.db")
+	streamDir := filepath.Join(dir, "stream")
+
+	model := newSandboxModel(t)
+	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
+
+	first := bootCompanyIn(t, doc, model, dbPath, streamDir)
+	firstNode := &codingNode{node: first, stateDir: stateDir, binDir: binDir}
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(first.engine.Node().Host().Held(), "swe")
+	})
+	first.wake(t, "swe", "the api test is flaking, please fix it")
+
+	// The run is launched and its conversation persisted — the two facts
+	// the restart depends on.
+	waitFor(t, "the run to be recorded with its conversation", func() bool {
+		for _, run := range firstNode.activeRuns(t) {
+			if run.Status == sandbox.StatusRunning && len(run.ExecuteState) > 0 {
+				return true
+			}
+		}
+		return false
+	})
+	launched := firstNode.runFor(t, sandbox.StatusRunning)
+
+	// The engine goes away with the job still running. Its box does NOT: a
+	// detached run is reparented to init and keeps going, which is the
+	// whole reason the row exists.
+	first.engine.Stop(context.Background())
+
+	second := bootCompanyIn(t, doc, model, dbPath, streamDir)
+	secondNode := &codingNode{node: second, stateDir: stateDir, binDir: binDir}
+	waitFor(t, "the new engine to claim the seat", func() bool {
+		return slices.Contains(second.engine.Node().Host().Held(), "swe")
+	})
+	// Recovery re-marked the seat busy from the row, so its mail is parked
+	// rather than starting a second turn beside the running job.
+	waitFor(t, "the recovered run to park the seat", func() bool {
+		return second.engine.AwaitingSandbox("swe")
+	})
+
+	// And it drives the same run to completion, re-entering the
+	// conversation the dead process suspended.
+	waitFor(t, "the recovered run to resume its turn", func() bool {
+		return slices.Contains(model.seen(), "resumed")
+	})
+	waitFor(t, "the recovered run to settle", func() bool {
+		return len(secondNode.activeRuns(t)) == 0
+	})
+	if got := countOf(model.seen(), "plan"); got != 1 {
+		t.Fatalf("Plan ran %d times across the restart; the resume must not re-plan. phases = %v",
+			got, model.seen())
+	}
+	_ = launched
+}
+
+// THE CONTAINER LEG. Same protocol, real host isolation — and the mode whose
+// in-box paths match a remote backend's, so a setup step that provisions a
+// system path works there and is refused in `direct`.
+//
+// Skipped where no container runtime is usable rather than dropped: it is the
+// half of the gate a workstation cannot always run, and a suite that quietly
+// tested only the easy mode would report a gate it had not met.
+func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
+	runtime := usableContainerRuntime(t)
+	if runtime == "" {
+		t.Skip("no usable container runtime; the direct mode covers the protocol here")
+	}
+	image := os.Getenv("CREWLET_TEST_SANDBOX_IMAGE")
+	if image == "" {
+		image = "alpine:3"
+	}
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{
+		Containment: sandbox.Container, StateDir: t.TempDir(),
+		Image: image, Runtime: filepath.Base(runtime),
+	})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	box, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { box.Close(context.Background()) })
+
+	// The in-box home matches a remote backend's, which is what makes a
+	// setup step written for one work on the other.
+	if box.Home() != sandbox.DefaultHome {
+		t.Fatalf("home = %q, want %q", box.Home(), sandbox.DefaultHome)
+	}
+	runner := codingagent.NewClaudeCode()
+	if err := runner.Install(t.Context(), box); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	p := codingagent.PathsFor(box)
+
+	// A file written from the host side of the mount is visible inside.
+	if err := box.WriteFile(t.Context(), p.WorkDir()+"/probe", []byte("hello")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	res, err := box.Exec(t.Context(), "cat "+p.WorkDir()+"/probe", sandbox.ExecOptions{})
+	if err != nil || res.ExitCode != 0 || !strings.Contains(res.Stdout, "hello") {
+		t.Fatalf("Exec = %+v, %v", res, err)
+	}
+	// And the ask shim runs, which is the one part of the protocol that is
+	// a script the engine wrote into somebody else's image.
+	if _, err := box.Exec(t.Context(),
+		`PATH='`+p.BinDir()+`':"$PATH" crewlet-ask "which branch?" --to team`,
+		sandbox.ExecOptions{}); err != nil {
+		t.Fatalf("the ask shim: %v", err)
+	}
+	blob, err := box.ReadFile(t.Context(), p.Ask())
+	if err != nil || !strings.Contains(string(blob), "which branch?") {
+		t.Fatalf("ask.json = %q, %v", blob, err)
+	}
+}
+
+// usableContainerRuntime returns a runtime that can actually start a
+// container, or "". Present-on-PATH is not enough: a daemon can be installed
+// and unreachable, which is the ordinary case in a container-in-container CI.
+func usableContainerRuntime(t *testing.T) string {
+	t.Helper()
+	found, err := sandbox.ResolveContainerRuntime("auto")
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, found, "info").Run(); err != nil {
+		return ""
+	}
+	return found
+}
+
+// THE RESEED LEG. A person can take days, and a paused box is held and paid
+// for the whole time — so the reaper reclaims it past its TTL. The run is NOT
+// over: the answer can still arrive, and the work re-seeds from the branch the
+// agent pushed, which was always the durable half.
+func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
+	n := startCodingWithPause(t, "ask", 1)
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "swe")
+	})
+	n.wake(t, "swe", "the api test is flaking, please fix it")
+
+	waitFor(t, "the run to park with its box held", func() bool {
+		for _, run := range n.activeRuns(t) {
+			if run.Status == sandbox.StatusAwaiting && run.SandboxID != "" {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Past the TTL, the reaper takes the box and the run moves to reseed.
+	waitFor(t, "the pause to expire", func() bool {
+		for _, run := range n.activeRuns(t) {
+			if run.Status == sandbox.StatusReseed {
+				return true
+			}
+		}
+		return false
+	})
+	reseeded := n.runFor(t, sandbox.StatusReseed)
+	if reseeded.SandboxID != "" {
+		t.Fatalf("the row still names a box that was reclaimed: %q", reseeded.SandboxID)
+	}
+	if reseeded.Question == "" {
+		t.Fatal("the question was lost, so the answer has nothing to match")
+	}
+	// The run is still on the board, still answerable — which is the whole
+	// point: a reseed used to look exactly like work that had finished.
+	found := false
+	for _, row := range n.board(t) {
+		if row["status"] == sandbox.StatusReseed {
+			found = true
+			if row["box_exists"] != false {
+				t.Fatalf("the board claims a box that is gone: %v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("a reseeded run has no surface, so nobody knows it is waiting")
+	}
+	// And the box really is gone from disk, not merely forgotten.
+	waitFor(t, "the box to be removed", func() bool { return len(n.liveBoxes(t)) == 0 })
+}
+
+// startCodingWithPause stands a node up whose paused boxes expire after
+// pauseTTL seconds, so a test can watch the reaper without waiting half an
+// hour for the production value.
+func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("the local sandbox needs a POSIX shell")
+	}
+	stateDir := t.TempDir()
+	binDir := installFakeAgent(t)
+	t.Setenv("FAKE_AGENT_MODE", mode)
+	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
+
+	model := newSandboxModel(t)
+	doc := strings.Replace(
+		fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir),
+		"default_pause_ttl_seconds: 1800",
+		fmt.Sprintf("default_pause_ttl_seconds: %d", pauseTTL), 1)
+	return &codingNode{node: bootCompany(t, doc, model), stateDir: stateDir, binDir: binDir}
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -90,6 +91,12 @@ type Options struct {
 	// is correct for a build with no sandbox provider wired: a seat that
 	// cannot start a detached run is never waiting on one.
 	AwaitingSandbox func(handle string) bool
+
+	// SandboxPollInterval overrides the completion poll's cadence. Zero
+	// takes the production value, which is sized against coding jobs that
+	// run for minutes; a test shrinks it so a run settles in a second
+	// rather than waiting out a real tick.
+	SandboxPollInterval time.Duration
 }
 
 // pauseReasonNoTurnEngine is the hold name the no-turn-engine park takes on a
@@ -193,7 +200,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.dispatch = e.buildDispatcher(opts, backends)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
-	if err := e.startSandboxWaiter(ctx); err != nil {
+	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	return e, nil
