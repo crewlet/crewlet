@@ -976,3 +976,66 @@ func slicesContains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// renewCut fails only Renew, leaving claims and reads working. A store that
+// is degraded rather than down — a renew timing out under load while a claim
+// on a different code path still answers — which is the shape that produces
+// the thrash below. coordtest.Faulty breaks everything at once and cannot
+// express it.
+type renewCut struct {
+	coord.Backend
+	cut atomic.Bool
+}
+
+func (r *renewCut) Renew(
+	ctx context.Context, resource, owner string, epoch int64, ttl time.Duration,
+) (bool, error) {
+	if r.cut.Load() {
+		return false, coord.ErrUnavailable
+	}
+	return r.Backend.Renew(ctx, resource, owner, epoch, ttl)
+}
+
+func TestASeatLostToAnUnrenewableLeaseIsNotImmediatelyRetaken(t *testing.T) {
+	t.Parallel()
+	// The thrash: a node whose renews fail while its claims succeed drops
+	// the seat when the TTL runs out and re-takes it on its very next
+	// sweep, roughly a hundred milliseconds later. It then loses it again
+	// one TTL on, forever — tearing down and respawning that seat's whole
+	// runtime each cycle and abandoning its in-flight work, while a healthy
+	// peer never wins a race for it. Every log line reads like a node doing
+	// its job.
+	//
+	// Measured in the fleet suite before the backoff existed: node-a
+	// claimed at epoch 107, 108, 109 in six seconds and node-b, idle and
+	// healthy throughout, never got the seat.
+	f := newFleet(t)
+	cut := &renewCut{Backend: f.store}
+	h := f.newHost("node-a", Config{Backend: cut, Seats: seatsNamed("ceo")})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantHeld(t, h, "ceo")
+
+	// The store degrades and the TTL runs out, so the seat is dropped:
+	// this node can no longer prove it owns it.
+	cut.cut.Store(true)
+	f.clock.Advance(SeatLeaseTTL + time.Second)
+	wantStrings(t, h.Heartbeat(f.ctx), []string{"ceo"}, "dropped")
+	wantHeld(t, h)
+
+	// The next sweep must NOT take it straight back, even though the claim
+	// would succeed — the seat is unclaimed and this node's TryAcquire
+	// still works.
+	h.Sweep(f.ctx)
+	if held := h.Held(); len(held) != 0 {
+		t.Fatalf("the seat was retaken immediately (held=%v); a node that just proved it "+
+			"cannot renew must stand back so a peer gets the next attempt", held)
+	}
+
+	// And it is a backoff, not a ban: once it expires the node may serve
+	// the seat again, which matters when there is no peer to take it.
+	f.clock.Advance(AcquireBackoff + time.Second)
+	cut.cut.Store(false)
+	h.Sweep(f.ctx)
+	wantHeld(t, h, "ceo")
+}

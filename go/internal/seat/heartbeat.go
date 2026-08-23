@@ -236,10 +236,31 @@ func (h *SeatHost) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
 	}
 	delete(h.held, t.handle)
 	delete(h.unprovenAdmission, t.handle)
+	// Stand back from this seat, the same negative stickiness a failed
+	// acquire gets and for the same reason: this node has just demonstrated
+	// it cannot hold this seat, so a peer should get the next attempt.
+	//
+	// Without it a node whose renews fail while its claims succeed — a
+	// store degraded rather than down, which is what a timeout under load
+	// looks like — re-takes the seat on its next sweep, roughly a hundred
+	// milliseconds later, and loses it again one TTL on. Measured in the
+	// fleet suite: an unbroken claim/lose cycle for as long as the
+	// degradation lasts, tearing down and respawning that seat's whole
+	// runtime every TTL and abandoning its in-flight work each time, while
+	// a healthy peer that could serve it never wins a race. The seat is
+	// nominally served the entire time.
+	//
+	// One backoff is AcquireBackoff, which defaults to the lease TTL —
+	// exactly long enough for a peer to claim and prove it can renew. The
+	// cost when there is no peer is one TTL of darkness on a seat this node
+	// could not prove it owned anyway; a blip shorter than the TTL never
+	// reaches here, because an unreachable store KEEPS the seat.
+	h.acquireBackoffs[t.handle] = h.now().Add(h.acquireBackoff)
 	h.mu.Unlock()
 
 	log.Warn("seat_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
-		"hint", "a peer may already own this seat; dropping it locally")
+		"hint", "a peer may already own this seat; dropping it locally, and standing back "+
+			"for one backoff so a peer gets the next attempt")
 
 	// Fenced: a peer may already be running this seat, so in-flight work is
 	// abandoned rather than finished. There is nothing to fail closed ON —
