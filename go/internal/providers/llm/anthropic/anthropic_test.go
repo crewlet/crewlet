@@ -1134,11 +1134,17 @@ func TestUnparseableToolArgumentsDoNotPoisonTheConversation(t *testing.T) {
 	if len(out.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls = %v", out.ToolCalls)
 	}
-	if len(out.ToolCalls[0].Arguments) != 0 {
-		t.Fatalf("Arguments = %v, want the half-decode discarded", out.ToolCalls[0].Arguments)
-	}
-	if _, err := json.Marshal(out.ToolCalls[0].Arguments); err != nil {
+	// The property is that the arguments can go back onto the wire, not
+	// that they were discarded: decoded with UseNumber, a number no float64
+	// holds survives EXACTLY and round-trips. Without that the map holds
+	// +Inf, the assistant turn replaying this tool call fails to encode,
+	// and every subsequent round of the turn fails with it.
+	blob, err := json.Marshal(out.ToolCalls[0].Arguments)
+	if err != nil {
 		t.Fatalf("the surviving arguments cannot be re-serialised: %v", err)
+	}
+	if string(blob) != `{"n":1e1000}` {
+		t.Fatalf("arguments round-tripped as %s, want the value unchanged", blob)
 	}
 }
 

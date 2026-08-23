@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,27 +311,62 @@ func TestDecodeArgs(t *testing.T) {
 // marshals back out as nothing at all. Keeping it would put a round-trip
 // failure in the conversation that fires a round later, on a request that has
 // nothing to do with the tool that caused it.
-func TestDecodeArgsDiscardsAPartialDecode(t *testing.T) {
+func TestDecodeArgsAlwaysProducesAReSerialisableMap(t *testing.T) {
 	t.Parallel()
-	// First, prove the premise: the input really does half-decode.
+	// The property that matters: whatever a model sends, what comes out can
+	// be marshalled back onto the wire. A map that cannot poisons the
+	// conversation — the assistant turn replaying that tool call fails to
+	// encode, and every subsequent round of the turn fails with it.
+	//
+	// 1e1000 is the case that found this. Plain unmarshalling HALF-decodes
+	// it: an error is returned but the map already holds +Inf, which
+	// json.Marshal then refuses. Decoding with UseNumber accepts it as an
+	// exact json.Number and it round-trips unchanged — so the guard is now
+	// "it survives", not "it is discarded".
 	var direct map[string]any
-	err := json.Unmarshal([]byte(`{"n":1e1000}`), &direct)
-	if err == nil {
-		t.Fatal("premise broken: 1e1000 unmarshalled cleanly")
+	if err := json.Unmarshal([]byte(`{"n":1e1000}`), &direct); err == nil {
+		t.Fatal("premise broken: 1e1000 unmarshalled cleanly without UseNumber")
 	}
 	if !math.IsInf(direct["n"].(float64), 1) {
-		t.Fatalf("premise broken: partial decode left %v, want +Inf", direct["n"])
+		t.Fatalf("premise broken: the partial decode left %v, want +Inf", direct["n"])
 	}
 	if _, err := json.Marshal(direct); err == nil {
 		t.Fatal("premise broken: the partial decode marshalled back out")
 	}
 
 	got := DecodeArgs([]byte(`{"n":1e1000}`), "some_tool")
-	if len(got) != 0 {
-		t.Fatalf("DecodeArgs kept %v from a failed decode", got)
-	}
-	if _, err := json.Marshal(got); err != nil {
+	blob, err := json.Marshal(got)
+	if err != nil {
 		t.Fatalf("DecodeArgs produced a map that cannot be re-serialised: %v", err)
+	}
+	if string(blob) != `{"n":1e1000}` {
+		t.Errorf("round trip = %s, want the value unchanged", blob)
+	}
+}
+
+func TestLargeIntegerArgumentsStayExact(t *testing.T) {
+	t.Parallel()
+	// The failure this decoder exists to prevent, and it is silent: a
+	// 19-digit id — a Jira issue id, a Slack timestamp, a GitHub node id —
+	// decoded as float64 comes back as 1.2345678901234568e+18 and
+	// re-encodes as 1234567890123456800. The tool call then reaches the
+	// server naming a DIFFERENT entity and succeeds against the wrong row,
+	// with nothing anywhere reporting an error.
+	got := DecodeArgs([]byte(`{"issue_id":1234567890123456789,"amount":100.50}`), "jira_get")
+	blob, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(blob), "1234567890123456789") {
+		t.Errorf("round trip = %s, want the id digit-for-digit", blob)
+	}
+	// The counterfactual, so this cannot pass for a decoder that stringifies
+	// everything: a genuine decimal is still a number on the way out.
+	if !strings.Contains(string(blob), "100.50") && !strings.Contains(string(blob), "100.5") {
+		t.Errorf("round trip = %s, want the decimal preserved", blob)
+	}
+	if strings.Contains(string(blob), `"1234567890123456789"`) {
+		t.Errorf("round trip = %s, want a number and not a string", blob)
 	}
 }
 

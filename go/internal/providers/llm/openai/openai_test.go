@@ -814,12 +814,11 @@ func TestToolCallsAreTranslated(t *testing.T) {
 	if out.ToolCalls[0].Arguments["path"] != "/tmp" {
 		t.Fatalf("first call = %+v", out.ToolCalls[0])
 	}
-	// A number no float64 holds half-decodes; keeping the half would put a
-	// value in the conversation that cannot be serialised a round later.
+	// The property is that the arguments can go back onto the wire. A
+	// number no float64 holds is decoded exactly and round-trips; keeping a
+	// half-decoded +Inf would put a value in the conversation that fails to
+	// serialise a round later and takes the rest of the turn with it.
 	for _, i := range []int{1, 2} {
-		if len(out.ToolCalls[i].Arguments) != 0 {
-			t.Fatalf("call %d kept %v", i, out.ToolCalls[i].Arguments)
-		}
 		if _, err := json.Marshal(out.ToolCalls[i].Arguments); err != nil {
 			t.Fatalf("call %d arguments cannot be re-serialised: %v", i, err)
 		}

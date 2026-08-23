@@ -12,6 +12,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -207,7 +208,16 @@ func DecodeArgs(raw []byte, tool string) map[string]any {
 		return map[string]any{}
 	}
 	args := map[string]any{}
-	if err := json.Unmarshal(raw, &args); err != nil {
+	// UseNumber, so an integer stays exact. Plain unmarshalling gives
+	// float64 and a 19-digit id — a Jira issue id, a Slack timestamp, a
+	// GitHub node id — comes back as 1.2345678901234568e+18 and re-encodes
+	// as 1234567890123456800. The tool call then reaches the server naming a
+	// DIFFERENT entity, and nothing anywhere reports an error: the call
+	// succeeds against the wrong row. Measured on
+	// {"issue_id": 1234567890123456789}.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil {
 		log.Warn("tool_arguments_unparseable",
 			"tool", tool, "bytes", len(raw), "error", err.Error())
 		return map[string]any{}
