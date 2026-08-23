@@ -692,3 +692,56 @@ func (g *growingSurface) Execute(ctx context.Context, call llm.ToolCall) (toollo
 	}
 	return res, err
 }
+
+func TestAFailedTerminatorDoesNotEndThePhase(t *testing.T) {
+	t.Parallel()
+	// Its failure went back to the model, which is expected to fix it and
+	// try again. Ending the phase there means the retry never happens and
+	// the phase finishes having produced nothing — on the one class of
+	// failure a model can reliably correct.
+	//
+	// Found by the golden-turn suite: a malformed plan submission ended
+	// Plan outright and the rescue path fired instead of the retry.
+	surface := &fakeSurface{
+		tools: []llm.ToolDef{{Name: "submit"}},
+		results: map[string]toolloop.ToolResult{
+			"submit": {Output: "Invalid submission: decision must be one of…", Failed: true},
+		},
+	}
+	provider := &scriptedProvider{turns: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "submit"}}},
+		{ToolCalls: []llm.ToolCall{{ID: "b", Name: "submit"}}},
+		{Content: "gave up"},
+	}}
+	res, err := toolloop.Run(context.Background(), toolloop.Config{
+		Provider: provider, Surface: surface, MaxRounds: 5,
+		Messages:       []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+		TerminateAfter: []string{"submit"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed < 2 {
+		t.Errorf("rounds = %d — a failed terminator ended the phase", res.RoundsUsed)
+	}
+
+	// The counterfactual: a SUCCESSFUL terminator ends it on the first
+	// round. Without this the assertion above passes for a terminator that
+	// never terminates at all.
+	surface.results["submit"] = toolloop.ToolResult{Output: "submitted"}
+	fresh := &scriptedProvider{turns: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "submit"}}},
+		{Content: "should never be reached"},
+	}}
+	res, err = toolloop.Run(context.Background(), toolloop.Config{
+		Provider: fresh, Surface: surface, MaxRounds: 5,
+		Messages:       []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+		TerminateAfter: []string{"submit"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 1 {
+		t.Errorf("rounds = %d, want the successful terminator to end it at 1", res.RoundsUsed)
+	}
+}

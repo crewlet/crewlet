@@ -105,7 +105,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 	})
 
 	res, err := r.runPhase(ctx, phase.Plan, surface, system, user,
-		r.cfg.Caps.PlanRounds, r.cfg.Caps.PlanCeiling, round)
+		r.cfg.Caps.PlanRounds, r.cfg.Caps.PlanCeiling, round, SubmitPlanTool)
 	if err != nil {
 		return turn.Plan{}, turn.Surface{}, err
 	}
@@ -204,7 +204,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 	})
 
 	res, err := r.runPhase(ctx, phase.Review, surface, system, r.cfg.Task,
-		r.cfg.Caps.ReviewRounds, 0, round)
+		r.cfg.Caps.ReviewRounds, 0, round, SubmitReviewTool)
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -239,7 +239,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 // through its submission tool, Execute by returning text with no calls — and a
 // generic loop would have to be told, which is the same thing said twice.
 func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Surface,
-	system, user string, rounds, ceiling, iteration int,
+	system, user string, rounds, ceiling, iteration int, terminateAfter ...string,
 ) (phaseResult, error) {
 	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
 	if err != nil {
@@ -267,6 +267,11 @@ func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Su
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
+			// A phase that has SUBMITTED is finished. Without this the
+			// loop asks again, the model submits again, and the phase
+			// spends its whole round budget re-deciding — measured at
+			// four identical submissions before the cap stopped it.
+			TerminateAfter: terminateAfter,
 		})
 		if err != nil {
 			return phaseResult{}, fmt.Errorf("runner: %s: %w", ph, err)

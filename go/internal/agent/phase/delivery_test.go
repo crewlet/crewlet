@@ -170,3 +170,46 @@ func TestAPhaseThatCalledNothingNeverDelivers(t *testing.T) {
 		}
 	}
 }
+
+func TestANamedREADIsNotADelivery(t *testing.T) {
+	t.Parallel()
+	// The plan contract REQUIRES tools_needed to name research tools as
+	// well as the delivery tool. So keying the gate off the whole planned
+	// list means any recon call satisfies it — the gate is defeated by the
+	// planner doing exactly what its prompt told it to.
+	//
+	// Found by the golden-turn suite: a turn that only ever read completed
+	// as done.
+	d := phase.Delivery{
+		Called:          []string{"slack_history"},
+		PlannedResolved: []string{"slack_history", "slack_post"},
+		MCPTools:        []string{"slack_history", "slack_post"},
+		KnownReads:      []string{"slack_history"},
+	}
+	if phase.Delivered(d) {
+		t.Error("a plan that named a read and a write, and called only the read, " +
+			"read as delivered")
+	}
+	// The counterfactual: calling the write delivers.
+	d.Called = []string{"slack_history", "slack_post"}
+	if !phase.Delivered(d) {
+		t.Error("calling the named write did not read as delivered")
+	}
+}
+
+func TestAPlanThatNamedOnlyReadsPromisedNoDelivery(t *testing.T) {
+	t.Parallel()
+	// A research turn. There is no delivery to be missing, so the gate is
+	// vacuously satisfied — the alternative is a plan that can never pass
+	// and loops until its round budget runs out. Whether it SHOULD have
+	// named a delivery tool is Review's question, not this one's.
+	d := phase.Delivery{
+		Called:          []string{"jira_get_issue"},
+		PlannedResolved: []string{"jira_get_issue", "confluence_get"},
+		MCPTools:        []string{"jira_get_issue", "confluence_get"},
+		KnownReads:      []string{"jira_get_issue", "confluence_get"},
+	}
+	if !phase.Delivered(d) {
+		t.Error("a research plan that did its research read as undelivered")
+	}
+}

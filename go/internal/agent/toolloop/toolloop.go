@@ -238,10 +238,14 @@ type Config struct {
 	// tool call is re-prompted rather than accepted.
 	ToolChoice string
 
-	// TerminateAfter names tools that end the loop once they have run,
-	// even if the model asked for more. A phase whose delivery tool has
-	// fired is finished; letting it keep going spends rounds re-deciding
-	// something already done.
+	// TerminateAfter names tools that end the loop once they have run
+	// SUCCESSFULLY, even if the model asked for more. A phase whose
+	// delivery tool has fired is finished; letting it keep going spends
+	// rounds re-deciding something already done — measured at four
+	// identical plan submissions before the round cap stopped it.
+	//
+	// A failed call does not terminate: its failure went back to the
+	// model, and ending the phase there means the retry never happens.
 	TerminateAfter []string
 
 	// AllowSuspend permits a tool to suspend this loop. Only Execute sets
@@ -516,12 +520,17 @@ func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 }
 
 // ranTerminator reports whether this round ran a tool that ends the loop.
+//
+// A terminator that FAILED does not terminate. Its failure went back to the
+// model, which is expected to fix it and try again — ending the phase there
+// means the retry never happens and the phase finishes having produced
+// nothing, on the one class of failure a model can reliably correct.
 func ranTerminator(execs []Execution, terminators map[string]struct{}, round int) bool {
 	if len(terminators) == 0 {
 		return false
 	}
 	for _, e := range execs {
-		if e.Round != round {
+		if e.Round != round || e.Failed {
 			continue
 		}
 		if _, ok := terminators[e.Name]; ok {

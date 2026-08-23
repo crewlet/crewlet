@@ -46,7 +46,10 @@ type Delivery struct {
 // Two rules, and the second exists because the first cannot always apply:
 //
 //   - NAME-PRECISE when the planner named tools that resolve in the
-//     catalogue: the exact tool must have been called.
+//     catalogue: one of the named tools that could actually DELIVER — the
+//     resolved ones that are not positively-known reads — must have been
+//     called. A plan that named only reads promised no action and is
+//     vacuously satisfied.
 //   - Otherwise the planner named ONLY PHANTOMS — MCP tool names it cannot
 //     see and guessed wrong — so there is nothing to name-match against.
 //     Delivered iff the phase called a SERVER-BACKED MCP TOOL that is not a
@@ -67,9 +70,33 @@ type Delivery struct {
 //     produces text, never calls Slack, and completes silently having acted
 //     on nothing.
 func Delivered(d Delivery) bool {
+	// The named-tool rule keys off the planned tools that could DELIVER —
+	// the resolved ones that are not positively-known reads.
+	//
+	// Not the whole planned list. The plan contract REQUIRES tools_needed
+	// to name research tools as well as the delivery tool, so keying off
+	// the whole list means any recon call satisfies the gate: a plan naming
+	// [jira_get_issue, slack_post] that only ever read would read as
+	// delivered, and the gate is defeated by the planner doing exactly what
+	// its prompt told it to.
 	if len(d.PlannedResolved) > 0 {
+		var deliverers []string
+		for _, name := range d.PlannedResolved {
+			if !slices.Contains(d.KnownReads, name) {
+				deliverers = append(deliverers, name)
+			}
+		}
+		if len(deliverers) == 0 {
+			// The plan named ONLY reads. It promised no action, so there
+			// is no delivery to be missing — vacuously satisfied. The
+			// alternative is a research turn that can never pass the gate
+			// and loops until its round budget runs out. Whether such a
+			// plan should have named a delivery tool is Review's question,
+			// not this one's.
+			return true
+		}
 		for _, name := range d.Called {
-			if slices.Contains(d.PlannedResolved, name) {
+			if slices.Contains(deliverers, name) {
 				return true
 			}
 		}

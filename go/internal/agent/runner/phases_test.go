@@ -101,6 +101,20 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 
 func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedProvider, *tools.Registry) {
 	t.Helper()
+	r, reg := build(t, []phase.Entry{{Key: "default", Provider: prov}})
+	return r, prov, reg
+}
+
+// runnerWithModels builds a runner over an explicit provider set, so a test
+// can give each phase its own model.
+func runnerWithModels(t *testing.T, entries []phase.Entry) *runner.Runner {
+	t.Helper()
+	r, _ := build(t, entries)
+	return r
+}
+
+func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry) {
+	t.Helper()
 	reg := tools.NewRegistry()
 	for _, tl := range []stubTool{{name: "lookup_colleague"}, {name: "reflect"}} {
 		if err := reg.Register(tl, tools.OriginBuiltin); err != nil {
@@ -116,11 +130,17 @@ func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedPro
 		t.Fatalf("Register: %v", err)
 	}
 
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
+	models, err := phase.NewRegistry(entries)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	// Each phase names its own key when one is configured. With only a
+	// default present these all miss and resolution falls back to it, which
+	// is the counterfactual the golden suite asserts.
+	role.LLMPlan = org.ProviderKeys{"planner"}
+	role.LLMExecute = org.ProviderKeys{"executor"}
+	role.LLMReview = org.ProviderKeys{"reviewer"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
 	r, err := runner.New(runner.Config{
@@ -136,7 +156,7 @@ func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedPro
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
-	return r, prov, reg
+	return r, reg
 }
 
 func TestPlanReturnsWhatTheModelSubmitted(t *testing.T) {
