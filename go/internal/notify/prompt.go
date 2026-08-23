@@ -196,6 +196,27 @@ func NewPrompts(prompts ...Prompt) Prompts {
 	return registry
 }
 
+// With returns a registry carrying one more vendor.
+//
+// A COPY, so a service handing its registry to a delivery in flight cannot
+// have it change underneath: the value is read once per event and a
+// registration that mutated it in place would be a data race on the one path
+// that runs on every inbound message.
+func (r Prompts) With(p Prompt) Prompts {
+	if p == nil || p.Source() == "" {
+		return r
+	}
+	next := Prompts{bySource: maps.Clone(r.bySource), fallback: r.fallback}
+	if next.bySource == nil {
+		next.bySource = map[string]Prompt{}
+	}
+	if next.fallback == nil {
+		next.fallback = Generic{}
+	}
+	next.bySource[p.Source()] = p
+	return next
+}
+
 // For returns the prompt for a source, or the generic fallback.
 //
 // NEVER NIL. Every caller would otherwise need the same nil check, and the one

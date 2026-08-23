@@ -57,6 +57,14 @@ type Engine struct {
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
 
+	// notify is this node's inbound edge: the party registry, the
+	// notification service and the vendor transports. On the ENGINE
+	// rather than on an epoch, because a transport holds live sockets and
+	// server-resolved identities — rebuilding it on every apply would
+	// drop every connection whenever an unrelated field changed. The
+	// registry inside it IS swapped per epoch; see notifications.go.
+	notify notifications
+
 	// maintenance is the retention sweep for the short-horizon tables. On
 	// the engine for the same reason the sandbox machinery is: it is a
 	// loop this process runs, and rebuilding it on an apply would start a
@@ -98,6 +106,15 @@ type Options struct {
 	// is correct for a build with no sandbox provider wired: a seat that
 	// cannot start a detached run is never waiting on one.
 	AwaitingSandbox func(handle string) bool
+
+	// Admits gates INBOUND work on the config posture, supplied by
+	// whoever holds the control plane — the engine does not, because the
+	// posture is a fleet question and the reconciler owns it.
+	//
+	// Nil admits everything, which is the single-node case and the case
+	// before a control plane exists. A shedding node PARKS a delivery
+	// rather than routing it against a company it is not sure of.
+	Admits func() bool
 
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
 	// takes the production value, which is sized against coding jobs that
@@ -211,6 +228,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	e.notify.admits = opts.Admits
+	if err := e.startNotifications(ctx, e.Company()); err != nil {
+		return fail(fmt.Errorf("engine: %w", err))
+	}
 	return e, nil
 }
 
@@ -298,6 +319,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
 	e.stopSandbox()
+	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.node.Stop(ctx)
 	if e.ownsBackends {

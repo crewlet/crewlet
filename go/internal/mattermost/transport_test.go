@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -377,4 +378,58 @@ func seatOrg(t *testing.T) *org.Organization {
 	}
 	o.Normalize()
 	return o
+}
+
+// Seats start CONCURRENTLY, and that is not an optimisation. Each resolves
+// its identity against the server, and a failing call spends the client's
+// whole retry budget — so started in sequence, an instance that is down
+// delays boot by that budget times the number of seats.
+func TestSeatsStartConcurrently(t *testing.T) {
+	var live atomic.Int32
+	var peak atomic.Int32
+	inst := newInstance(t, map[string]mattermost.User{})
+	inst.server.respond = func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/users/me") {
+			w.Write([]byte(`{}`))
+			return true
+		}
+		n := live.Add(1)
+		for {
+			was := peak.Load()
+			if n <= was || peak.CompareAndSwap(was, n) {
+				break
+			}
+		}
+		// Long enough that a sequential start could not overlap.
+		time.Sleep(50 * time.Millisecond)
+		live.Add(-1)
+		w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
+		json.NewEncoder(w).Encode(mattermost.User{ID: "bot", Username: "agent"})
+		return true
+	}
+
+	const seats = 4
+	tr := transport(t, inst, func(o *mattermost.TransportOptions) {
+		o.Config.Seats = nil
+		for i := range seats {
+			o.Config.Seats = append(o.Config.Seats, mattermost.SeatConfig{
+				Handle: "seat-" + string(rune('a'+i)), Token: "tok",
+			})
+		}
+	})
+
+	start := time.Now()
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if got := peak.Load(); got < 2 {
+		t.Fatalf("peak concurrent identity resolutions was %d, want them overlapping", got)
+	}
+	// Sequential would be at least seats × 50ms on the identity calls
+	// alone, before the instance read.
+	if elapsed > seats*50*time.Millisecond {
+		t.Fatalf("Start took %v, which is sequential for %d seats", elapsed, seats)
+	}
 }

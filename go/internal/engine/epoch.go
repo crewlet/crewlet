@@ -109,6 +109,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 		}
 	}
 
+	// The party index is rebuilt BEFORE the epoch is published, and the
+	// order is a choice between two brief windows. Refreshing first means
+	// a seat the revision REMOVED stays addressable for an instant, which
+	// costs a recorded skip. Refreshing after means a seat the revision
+	// ADDED is unresolvable while the epoch that has it is already
+	// current — and during a rollout the new company is the one being
+	// adopted, so the window that favours it is the right one.
+	e.refreshParties(next)
+
 	previous := e.Company()
 	e.epoch.current.Store(next)
 

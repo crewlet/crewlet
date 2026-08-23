@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -147,8 +148,12 @@ type Service struct {
 	admits   Admitter
 	now      func() time.Time
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	started bool
+	// parsers and prompts are guarded because a vendor can JOIN after the
+	// service is running — an extension registering a custom transport,
+	// or a backend that came up late — and the delivery path reads them
+	// on every event.
 }
 
 // New builds the inbound service.
@@ -184,6 +189,34 @@ func New(opts Options) (*Service, error) {
 	return s, nil
 }
 
+// Register adds a vendor to a running service.
+//
+// This is how a custom transport joins: an integration that is not one of
+// the shipped ones, or one that came up after boot. A source already claimed
+// is refused rather than replaced — two parsers for one source means every
+// delivery is interpreted by whichever registered last, which is not a
+// choice anybody made.
+//
+// The prompt may be nil, and then this source renders through the generic
+// fallback: a vendor that can say who a delivery is FOR is already useful,
+// and requiring it to also write a prompt before it can be routed at all
+// would be a higher bar than the seam needs.
+func (s *Service) Register(p Parser, prompt Prompt) error {
+	if p == nil || p.Source() == "" {
+		return fmt.Errorf("notify: a parser must name its source")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dup := s.parsers[p.Source()]; dup {
+		return fmt.Errorf("notify: source %q already has a parser", p.Source())
+	}
+	s.parsers[p.Source()] = p
+	if prompt != nil {
+		s.prompts = s.prompts.With(prompt)
+	}
+	return nil
+}
+
 // Start attaches to the inbound topic.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -195,15 +228,28 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("notify: subscribe inbound: %w", err)
 	}
 	s.started = true
-	log.Info("notify_inbound_started", "sources", s.sources())
+	// The list is built HERE rather than through Sources(): this holds
+	// the write lock, and Go's RWMutex is not reentrant — a read lock
+	// taken by the same goroutine deadlocks the boot.
+	sources := make([]string, 0, len(s.parsers))
+	for src := range s.parsers {
+		sources = append(sources, src)
+	}
+	slices.Sort(sources)
+	log.Info("notify_inbound_started", "sources", sources)
 	return nil
 }
 
-func (s *Service) sources() []string {
+// Sources lists the integrations this service can route, sorted — the
+// operator's answer to "which of my integrations is actually wired?".
+func (s *Service) Sources() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]string, 0, len(s.parsers))
 	for src := range s.parsers {
 		out = append(out, src)
 	}
+	slices.Sort(out)
 	return out
 }
 
@@ -237,7 +283,10 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		return queue.Ack()
 	}
 
+	s.mu.RLock()
 	parser, ok := s.parsers[ev.Source]
+	prompts := s.prompts
+	s.mu.RUnlock()
 	if !ok {
 		// RECORDED, not dropped. "Nobody parses this source" and
 		// "nothing happened" are opposite facts, and only the first one
@@ -264,7 +313,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 
 	var errs []error
 	for _, r := range routed {
-		if err := s.deliver(ctx, reg, ev, r); err != nil {
+		if err := s.deliver(ctx, prompts, reg, ev, r); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -279,7 +328,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 }
 
 // deliver resolves one recipient and wakes them, or records why not.
-func (s *Service) deliver(ctx context.Context, reg *Registry, ev *events.Event, r Routed) error {
+func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, ev *events.Event, r Routed) error {
 	party, ok := s.resolve(reg, r)
 	if !ok {
 		log.Warn("notification_undeliverable", "source", r.Source,
@@ -287,7 +336,7 @@ func (s *Service) deliver(ctx context.Context, reg *Registry, ev *events.Event, 
 		s.skip(ctx, r.Source, r.To.Handle, "no seat matches this recipient")
 		return nil
 	}
-	if deliverable, why := Deliverable(s.prompts, reg, r.Inbound, party); !deliverable {
+	if deliverable, why := Deliverable(prompts, reg, r.Inbound, party); !deliverable {
 		log.Info("notification_skipped", "source", r.Source,
 			"handle", party.Handle, "reason", why)
 		s.skip(ctx, r.Source, party.Handle, why)
@@ -304,7 +353,7 @@ func (s *Service) deliver(ctx context.Context, reg *Registry, ev *events.Event, 
 			"error", err.Error())
 	}
 
-	prompt := s.prompts.For(r.Source)
+	prompt := prompts.For(r.Source)
 	salient := r.Body
 	// A COPY, stamped with the resolved recipient before anything renders.
 	//

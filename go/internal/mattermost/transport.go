@@ -191,14 +191,32 @@ func (t *Transport) Start(ctx context.Context) error {
 	// bot, and reading them per seat would be N identical calls.
 	t.readInstance(ctx)
 
-	var failed []string
+	// CONCURRENTLY, and that is not an optimisation. Each seat resolves
+	// its identity against the server, and a failing call spends the
+	// client's whole retry budget — so started in sequence, an instance
+	// that is down delays boot by that budget times the number of seats.
+	// Started together, it costs one budget however many seats there are,
+	// and the fleet's own reconnect loop keeps trying afterwards.
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		failed []string
+	)
 	for _, cfg := range t.cfg.Seats {
-		if err := t.startSeat(ctx, cfg.Resolve()); err != nil {
-			failed = append(failed, cfg.Handle)
-			log.Error("mattermost_seat_failed", "handle", cfg.Handle,
-				"error", err.Error())
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := t.startSeat(ctx, cfg.Resolve()); err != nil {
+				mu.Lock()
+				failed = append(failed, cfg.Handle)
+				mu.Unlock()
+				log.Error("mattermost_seat_failed", "handle", cfg.Handle,
+					"error", err.Error())
+			}
+		}()
 	}
+	wg.Wait()
+	sort.Strings(failed)
 	log.Info("mattermost_started", "seats", len(t.cfg.Seats),
 		"connected", len(t.cfg.Seats)-len(failed), "failed", failed,
 		"typing_status", string(t.status.Mode()))
@@ -252,10 +270,13 @@ func (t *Transport) startSeat(ctx context.Context, cfg SeatConfig) error {
 // nobody and gets annotated as a stranger, while a human's identical message
 // is annotated as a colleague.
 func (t *Transport) register(seat Seat) {
-	if t.registry == nil {
+	t.mu.Lock()
+	lookup := t.registry
+	t.mu.Unlock()
+	if lookup == nil {
 		return
 	}
-	reg := t.registry()
+	reg := lookup()
 	if reg == nil {
 		return
 	}
@@ -270,6 +291,32 @@ func (t *Transport) register(seat Seat) {
 			log.Warn("mattermost_username_not_registered", "handle", seat.Handle,
 				"username", seat.Username, "error", err.Error())
 		}
+	}
+}
+
+// Reregister puts every running seat's identities into a NEW registry.
+//
+// An apply builds a fresh registry from the new org, and these identities
+// are facts about the SERVER rather than about the config — resolved once at
+// connect, against a live instance. Losing them on an apply would make every
+// agent's own message annotate as a stranger until something reconnected,
+// which is a thing nothing here would ever do on its own.
+func (t *Transport) Reregister(reg *notify.Registry) {
+	if reg == nil {
+		return
+	}
+	t.mu.Lock()
+	seats := make([]Seat, 0, len(t.seats))
+	for _, s := range t.seats {
+		seats = append(seats, s.seat)
+	}
+	previous := t.registry
+	t.registry = func() *notify.Registry { return reg }
+	t.mu.Unlock()
+	_ = previous
+
+	for _, seat := range seats {
+		t.register(seat)
 	}
 }
 

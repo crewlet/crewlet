@@ -1,0 +1,277 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// The inbound edge, wired.
+//
+// # Why the registry is rebuilt per epoch and the transports are not
+//
+// A party registry is DERIVED from one org and answers for it permanently —
+// so an apply builds a new one, and everything reading parties reads it
+// through a function rather than holding it. A transport is the opposite: it
+// holds live sockets and resolved vendor identities, and rebuilding it on
+// every apply would drop every connection whenever an unrelated field
+// changed. So the registry is swapped and the transports are reconciled.
+
+// notifications is this node's inbound machinery.
+type notifications struct {
+	mu       sync.Mutex
+	registry *notify.Registry
+	admits   notify.Admitter
+
+	service    *notify.Service
+	mattermost *mattermost.Transport
+
+	// off is the driver a company with no chat backend gets, built once
+	// and shared: it holds no state and raises nothing.
+	off *notify.StatusDriver
+}
+
+// Registry is the live party registry.
+//
+// NEVER NIL, and structurally so rather than by a guard here: the engine
+// indexes its first company during construction, before it returns and so
+// before anything can ask. A check on the read would suggest a window that
+// does not exist.
+func (e *Engine) Registry() *notify.Registry {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return e.notify.registry
+}
+
+// Status is the working-indicator driver for chat-triggered turns.
+//
+// NEVER NIL, like the registry and for the same reason: a company with no
+// chat backend gets a driver that is OFF, whose Begin reports no session and
+// whose nil session's methods are no-ops. The turn engine then says what
+// phase it is in without first asking whether indicators exist anywhere —
+// which is a question about this node's wiring that a turn has no business
+// knowing the answer to.
+func (e *Engine) Status() *notify.StatusDriver {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	if e.notify.mattermost == nil {
+		if e.notify.off == nil {
+			e.notify.off = notify.NewStatusDriver(notify.StatusOptions{})
+		}
+		return e.notify.off
+	}
+	return e.notify.mattermost.Status()
+}
+
+// refreshParties rebuilds the registry for a newly applied epoch.
+//
+// Called on EVERY apply, because an epoch is published rather than mutated:
+// a node that indexed only its first company would resolve every party
+// against an org that is no longer running, and a seat added by an apply
+// would be permanently unreachable with nothing failing.
+//
+// The vendor identities a transport resolved against a live server are
+// re-registered into the new registry, because they are facts about the
+// SERVER rather than about the config — losing them on an apply would make
+// every agent's own message annotate as a stranger until something
+// reconnected.
+func (e *Engine) refreshParties(c *Company) {
+	reg := notify.NewRegistry(c.Org)
+	rec := reg.ReconcileHumanContacts(c.Org, config.EnvOnly().LookupOK)
+
+	e.notify.mu.Lock()
+	e.notify.registry = reg
+	transport := e.notify.mattermost
+	e.notify.mu.Unlock()
+
+	if transport != nil {
+		transport.Reregister(reg)
+	}
+	log.Info("parties_indexed", "company", c.Config.Name, "parties", reg.Len(),
+		"human_contacts", rec.Registered, "unresolved", rec.Unresolved,
+		"conflicts", len(rec.Conflicts))
+}
+
+// startNotifications brings up the inbound edge for the applied company.
+//
+// It runs after the node, because the service subscribes to a fleet-wide
+// group and a transport publishes onto this node's queue.
+func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
+	if c == nil {
+		return nil
+	}
+	e.refreshParties(c)
+
+	var (
+		parsers []notify.Parser
+		prompts []notify.Prompt
+	)
+	if mm := c.Config.Integrations.Mattermost; mm != nil && mm.Enabled {
+		transport, err := e.startMattermost(ctx, c, mm)
+		if err != nil {
+			// The company runs WITHOUT that surface rather than not
+			// at all. A chat instance being unreachable at boot is
+			// an ordinary state — it restarts, it moves, its
+			// certificate lapses — and refusing to start the
+			// company over it takes down every seat's scheduled and
+			// tracker work too.
+			log.Error("mattermost_unavailable", "error", err.Error(),
+				"detail", "the company is running without its chat surface")
+		}
+		if transport != nil {
+			parsers = append(parsers, transport.Parser())
+			prompts = append(prompts, transport.Prompt())
+		}
+	}
+
+	svc, err := notify.New(notify.Options{
+		Queue:    e.backends.Queue,
+		Registry: e.Registry,
+		Prompts:  notify.NewPrompts(prompts...),
+		Parsers:  parsers,
+		Valve:    e.notifyValve(),
+		// Read live off the epoch rather than captured: an apply that
+		// changes the cap must take effect on the next notification,
+		// not on the next restart.
+		RateLimit: func() int { return e.Company().Config.NotificationRateLimit },
+		// The config posture, supplied by whoever holds the control
+		// plane. A shedding node PARKS inbound deliveries rather than
+		// routing them against a company it is not sure of — and nil
+		// admits everything, which is the single-node case and the case
+		// before a control plane exists.
+		Admits: e.admits,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: notifications: %w", err)
+	}
+	if err := svc.Start(ctx); err != nil {
+		return fmt.Errorf("engine: notifications: %w", err)
+	}
+
+	e.notify.mu.Lock()
+	e.notify.service = svc
+	e.notify.mu.Unlock()
+	return nil
+}
+
+// RouteInbound adds a vendor to this node's inbound edge after boot.
+//
+// The seam a CUSTOM TRANSPORT joins through — an integration that is not one
+// of the shipped ones, or one that came up late. Refused rather than queued
+// when the service is not running: a caller told its transport was routed
+// when nothing will ever reach it is worse off than one told it failed.
+func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompts []notify.Prompt) error {
+	e.notify.mu.Lock()
+	svc := e.notify.service
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return fmt.Errorf("engine: no inbound service is running")
+	}
+	bySource := make(map[string]notify.Prompt, len(prompts))
+	for _, p := range prompts {
+		if p != nil {
+			bySource[p.Source()] = p
+		}
+	}
+	for _, parser := range parsers {
+		if parser == nil {
+			continue
+		}
+		if err := svc.Register(parser, bySource[parser.Source()]); err != nil {
+			return fmt.Errorf("engine: %w", err)
+		}
+	}
+	log.Info("inbound_sources_routed", "sources", svc.Sources())
+	return nil
+}
+
+// startMattermost brings up the chat surface.
+func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Mattermost) (*mattermost.Transport, error) {
+	seats := mattermost.SeatsFrom(c.Org, config.EnvOnly().LookupOK)
+	if len(seats) == 0 {
+		// Enabled with no provisioned seats is a company mid-setup, not
+		// a failure: `crewlet mattermost provision` has not run yet.
+		log.Info("mattermost_enabled_with_no_seats", "url", cfg.URL)
+		return nil, nil
+	}
+	transport, err := mattermost.NewTransport(mattermost.TransportOptions{
+		Config: mattermost.Config{
+			URL: cfg.URL, Team: cfg.Team,
+			Status: notify.StatusMode(cfg.Status()),
+			Seats:  seats,
+		},
+		Publisher: e.backends.Queue,
+		Follows:   e.followStore(),
+		Registry:  e.Registry,
+	})
+	if err != nil {
+		return nil, err
+	}
+	e.notify.mu.Lock()
+	e.notify.mattermost = transport
+	e.notify.mu.Unlock()
+
+	if err := transport.Start(ctx); err != nil {
+		return transport, err
+	}
+	return transport, nil
+}
+
+// followStore is the durable thread-follow state, or nil with no store.
+//
+// Nil turns thread routing OFF rather than holding follows in memory: a
+// process-local follow set dies with the process, so every restart would
+// make every seat deaf to every thread it was following — and it would do so
+// silently, which is worse than not having the feature.
+func (e *Engine) followStore() notify.FollowStore {
+	if e.backends.Store == nil {
+		return nil
+	}
+	return e.backends.Store.ThreadFollows()
+}
+
+// notifyValve is the shared per-seat notification cap, or nil with no store.
+//
+// Nil leaves the valve off, which is right: the counter has to be FLEET-WIDE
+// to work at all — the loop it exists to catch bounces between nodes, so no
+// single process sees enough of it to trip — and a per-process substitute
+// would report a limit it is not enforcing.
+func (e *Engine) notifyValve() notify.Valve {
+	if e.backends.Store == nil {
+		return nil
+	}
+	return &notifyValve{limits: e.backends.Store.RateLimits()}
+}
+
+// notifyValve adapts the store's counter to the notification seam.
+type notifyValve struct{ limits *store.RateLimits }
+
+func (v *notifyValve) Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error) {
+	return v.limits.Allow(ctx, bucket, limit, now)
+}
+
+// admits reports whether this node may take inbound work, deferring to the
+// caller-supplied posture. Nil admits everything.
+func (e *Engine) admits() bool {
+	e.notify.mu.Lock()
+	gate := e.notify.admits
+	e.notify.mu.Unlock()
+	return gate == nil || gate()
+}
+
+// stopNotifications takes the inbound edge down.
+func (e *Engine) stopNotifications(ctx context.Context) {
+	e.notify.mu.Lock()
+	transport := e.notify.mattermost
+	e.notify.mattermost = nil
+	e.notify.mu.Unlock()
+	if transport != nil {
+		transport.Stop(ctx)
+	}
+}
