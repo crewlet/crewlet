@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"sync"
@@ -182,20 +183,39 @@ func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	// A channel has no JSON representation, so this fails in encoding
-	// rather than in anything queue-specific.
-	unencodable := &events.Event{
-		ID:        uuid.New(),
-		Type:      "unencodable",
-		Timestamp: time.Now().UTC(),
-		Source:    "memory_test",
-		Payload:   map[string]any{"ch": make(chan int)},
+	// Three triggers, because they are not equally instructive. A channel
+	// has no JSON representation at all, which is the obvious case and the
+	// one nobody hits by accident. The json.Number pair is the case that
+	// actually happens: meta assembled from previously decoded JSON carries
+	// json.Number as a matter of course, so anything built from config can
+	// hold one, and an overflowing or malformed number reaches this branch
+	// through ordinary data. Probed: they also take different routes inside
+	// Event.MarshalJSON — the malformed number fails marshalling the
+	// envelope, the overflowing one fails remapping it — so the three
+	// together cover the encode failure modes rather than one of them
+	// three times.
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+	}{
+		{"unencodable_type", map[string]any{"ch": make(chan int)}},
+		{"number_overflows_float64", map[string]any{"n": json.Number("1e1000")}},
+		{"malformed_number", map[string]any{"n": json.Number("not-a-number")}},
+	} {
+		ev := &events.Event{
+			ID:        uuid.New(),
+			Type:      tc.name,
+			Timestamp: time.Now().UTC(),
+			Source:    "memory_test",
+			Payload:   tc.payload,
+		}
+		if err := q.Publish(context.Background(), "topic", ev); err == nil {
+			t.Errorf("%s: Publish accepted an unencodable payload; a dropped event must "+
+				"never report success — the caller has no other way to learn it was lost",
+				tc.name)
+		}
 	}
 
-	if err := q.Publish(context.Background(), "topic", unencodable); err == nil {
-		t.Error("Publish accepted an unencodable payload; a dropped event must never " +
-			"report success — the caller has no other way to learn it was lost")
-	}
 	if got := q.History(); len(got) != 0 {
 		t.Errorf("a refused publish recorded %d events in history, want 0; "+
 			"serialization must happen before anything is mutated", len(got))

@@ -639,6 +639,14 @@ func (h *harness) mustBeUnheld(resource string) {
 // read-modify-write backend reaches by validating after the write instead of
 // before it, and every field here is one a refusal must not touch.
 //
+// Resource is compared too, which the first version of this helper omitted
+// while its comment claimed to cover "every field a refusal must not touch".
+// The answer was right — it caught every mutation put to it — and the stated
+// reason was not, which is the pairing that survives any review that checks
+// answers. Found by probing the claim rather than re-reading it, and the first
+// probe was itself vacuous: it extracted zero field names and reported no
+// omission, a measurement of nothing wearing the shape of a clean result.
+//
 // This generalises over the record only as far as it is kept in step with it:
 // a field added to coord.Lease and not added here is a field every negative
 // path may quietly write, and nothing fails to say so. Extend it with the
@@ -654,6 +662,9 @@ func (h *harness) requireUnchanged(what string, before, after *coord.Lease) {
 		return
 	}
 	switch {
+	case after.Resource != before.Resource:
+		h.t.Fatalf("%s: the record now names resource %q, not %q",
+			what, after.Resource, before.Resource)
 	case after.Owner != before.Owner:
 		h.t.Fatalf("%s: owner moved %q -> %q", what, before.Owner, after.Owner)
 	case after.Epoch != before.Epoch:

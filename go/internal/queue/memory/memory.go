@@ -761,12 +761,23 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 // that read identically and was NOT unreachable: it decodes bytes it had only
 // ENCODED, and json.Number("1e1000") marshals fine and then fails to unmarshal
 // into float64. Ours differs in exactly the way that matters, and it was
-// probed rather than argued: for those same payloads the first and second
-// decode of one byte slice agree, so Publish has already returned an error
-// before this is reached. Falling back to a clone
-// keeps mail flowing rather than dropping a delivery if it ever stops being
-// unreachable; it is a worse copy (it shares the payload pointer), not no
-// copy. Nothing is logged because this runs under the broker lock.
+// probed rather than argued: json.Number("1e1000"), a malformed number,
+// invalid UTF-8 and a 1MB string were each pushed through this path, and every
+// one either failed at ENCODE — so Publish refuses and nothing reaches here —
+// or decoded identically on both passes.
+//
+// One mechanism could still have made two decodes of one input disagree, and
+// it is worth naming because the byte-identity argument does not cover it:
+// Event.UnmarshalJSON is not a pure function of its input, since it consults a
+// global type registry to decode the typed body. It cannot open a failure here
+// regardless — the registry-dependent branch swallows its own error and falls
+// through to the envelope representation rather than returning one — so the
+// only error paths left are the two envelope decodes, which are byte-pure.
+//
+// Falling back to a clone keeps mail flowing rather than dropping a delivery
+// if it ever stops being unreachable; it is a worse copy (it shares the
+// payload pointer), not no copy. Nothing is logged because this runs under the
+// broker lock.
 func decodeWire(wire []byte, received *events.Event) *events.Event {
 	var out events.Event
 	if err := json.Unmarshal(wire, &out); err != nil {
