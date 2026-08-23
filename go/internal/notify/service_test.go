@@ -31,7 +31,7 @@ type trackerParser struct {
 
 func (*trackerParser) Source() string { return "tracker" }
 
-func (p *trackerParser) Parse(_ types.RawWebhook, r *notify.Registry) ([]notify.Routed, error) {
+func (p *trackerParser) Parse(_ context.Context, _ types.RawWebhook, r *notify.Registry) ([]notify.Routed, error) {
 	p.mu.Lock()
 	p.saw = r
 	p.mu.Unlock()

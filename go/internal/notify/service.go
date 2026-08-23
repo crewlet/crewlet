@@ -44,7 +44,13 @@ type Parser interface {
 	// Parse reports what a delivery means. An error is a malformed
 	// payload; no notifications is an ordinary outcome, and by far the
 	// most common one — most webhooks concern nobody here.
-	Parse(w types.RawWebhook, r *Registry) ([]Routed, error)
+	//
+	// It takes a context because parsing genuinely does I/O on some
+	// backends: a chat message consults the thread-follow store, and a
+	// tracker fans an update out to a work item's subscribers. Making it
+	// pure would only move that work somewhere with less context about
+	// what it is for.
+	Parse(ctx context.Context, w types.RawWebhook, r *Registry) ([]Routed, error)
 }
 
 // Routed is one parsed notification and who it is for.
@@ -242,7 +248,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	}
 
 	reg := s.registry()
-	routed, err := parser.Parse(*w, reg)
+	routed, err := parser.Parse(ctx, *w, reg)
 	if err != nil {
 		log.Error("inbound_parse_failed", "source", ev.Source,
 			"event", ev.ID, "error", err.Error())

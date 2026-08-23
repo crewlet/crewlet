@@ -88,7 +88,49 @@ type ChatMessage struct {
 	Thread string
 
 	Text string
+
+	// Targeting is what the BACKEND knows about this message that its
+	// text cannot show. See [Targeting].
+	Targeting Targeting
 }
+
+// Targeting is a backend's own answer to "was this seat a target?".
+//
+// Some backends compute one, and it is strictly better than any grammar: a
+// server resolving a collective address against real membership, or matching
+// a group and a notification keyword, knows things no pattern over the text
+// could. But it is only half an answer — a server that rewrites the field
+// per connection reports a broadcast and a personal mention identically,
+// because both resolved to this seat's own id.
+//
+// So the two signals answer DIFFERENT questions and neither can do the
+// other's job: the backend says WHETHER, the text says WHY. Using the list
+// for "why" turns every broadcast into a personal address, which is exactly
+// what the working-status modes exist to prevent; using the text for
+// "whether" misses every mention a pattern cannot see.
+type Targeting int
+
+const (
+	// TargetingUnknown: the backend has no answer, so the text decides
+	// alone. The ordinary case, and the one a backfilled message re-read
+	// over a REST API always falls into — those carry no mention list.
+	TargetingUnknown Targeting = iota
+
+	// TargetingPersonal: this seat is the addressee whatever the text
+	// says. A direct message, where there is nobody else it could be for
+	// — so even an "@channel" typed into one is addressed to this seat.
+	TargetingPersonal
+
+	// TargetingIncluded: this seat was among the targets, but the backend
+	// cannot say whether personally. The text decides why; being included
+	// at all is enough to follow the thread.
+	TargetingIncluded
+
+	// TargetingExcluded: this seat was NOT a target, and this VETOES the
+	// text. The backend resolved the addressees and this seat is not among
+	// them, which outranks anything a pattern thinks it found.
+	TargetingExcluded
+)
 
 // ThreadTracker decides whether a chat message reaches a seat.
 type ThreadTracker struct {
@@ -145,7 +187,7 @@ type Delivery struct {
 // bot sits in, which is a burst of turns nobody asked for and cannot be
 // taken back. The error rides along so the caller can log it.
 func (t *ThreadTracker) Reaches(ctx context.Context, handle, selfIdentity string, m ChatMessage, at time.Time) (Delivery, error) {
-	reason, triggered := t.grammar.Detect(m.Text, selfIdentity)
+	reason, triggered := t.trigger(m, selfIdentity)
 
 	var err error
 	if triggered && m.Thread != "" {
@@ -173,6 +215,28 @@ func (t *ThreadTracker) Reaches(ctx context.Context, handle, selfIdentity string
 		return Delivery{}, err
 	}
 	return Delivery{Deliver: following, Reason: FollowReason(held)}, nil
+}
+
+// trigger combines the backend's targeting with the text's grammar.
+//
+// The backend has the veto and the text has the reason — see [Targeting].
+func (t *ThreadTracker) trigger(m ChatMessage, selfIdentity string) (FollowReason, bool) {
+	switch m.Targeting {
+	case TargetingExcluded:
+		return "", false
+	case TargetingPersonal:
+		// Whatever the text says. A collective address typed into a
+		// direct message is still addressed to the one person in it.
+		return FollowMention, true
+	}
+	reason, triggered := t.grammar.Detect(m.Text, selfIdentity)
+	if m.Targeting == TargetingIncluded && !triggered {
+		// The backend saw a mention the text cannot show — a group, a
+		// notification keyword, a collective resolved against real
+		// membership. Being included at all is enough to follow.
+		return FollowMention, true
+	}
+	return reason, triggered
 }
 
 // Participated records that a seat posted in a thread, which auto-follows it

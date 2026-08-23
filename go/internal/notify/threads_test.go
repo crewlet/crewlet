@@ -285,3 +285,53 @@ func TestBackendsDoNotShareThreads(t *testing.T) {
 		t.Fatal("a Mattermost follow delivered a Slack thread reply")
 	}
 }
+
+// A backend that resolves addressees itself knows things no pattern over the
+// text could — and it knows them only about WHETHER, never about WHY.
+func TestTheBackendsTargetingOutranksTheText(t *testing.T) {
+	cases := []struct {
+		name      string
+		text      string
+		targeting notify.Targeting
+		deliver   bool
+		reason    notify.FollowReason
+	}{
+		// The ordinary case: no backend answer, the text decides alone.
+		{"unknown, named", "@agent-swe look", notify.TargetingUnknown, true, notify.FollowMention},
+		{"unknown, silent", "chatting", notify.TargetingUnknown, false, ""},
+
+		// A VETO. The backend resolved the addressees and this seat is
+		// not among them, which outranks anything the text seems to say
+		// — a stale identity making a pattern match somebody else's name
+		// must not wake this seat.
+		{"excluded despite a mention", "@agent-swe look", notify.TargetingExcluded, false, ""},
+
+		// A DM: nobody else it could be for, so even a collective
+		// address typed into one is addressed personally.
+		{"personal", "chatting", notify.TargetingPersonal, true, notify.FollowMention},
+		{"personal, broadcast text", "@channel heads up", notify.TargetingPersonal, true, notify.FollowMention},
+
+		// Included says WHETHER; the text still says WHY, so a broadcast
+		// stays a broadcast rather than being promoted to a personal
+		// address — which is exactly what the status modes turn on.
+		{"included, broadcast text", "@channel heads up", notify.TargetingIncluded, true, notify.FollowCollective},
+		{"included, named", "@agent-swe look", notify.TargetingIncluded, true, notify.FollowMention},
+		// A group or keyword mention the text cannot show still counts.
+		{"included, silent text", "the deploy broke", notify.TargetingIncluded, true, notify.FollowMention},
+	}
+	for _, c := range cases {
+		store := newFollows()
+		tr := threads(t, store)
+		m := msg("C1", "T1", c.text)
+		m.Targeting = c.targeting
+
+		got, err := tr.Reaches(t.Context(), "swe", "agent-swe", m, t0)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got.Deliver != c.deliver || got.Reason != c.reason {
+			t.Errorf("%s: %+v, want deliver=%v reason=%q",
+				c.name, got, c.deliver, c.reason)
+		}
+	}
+}
