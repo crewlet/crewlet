@@ -323,7 +323,7 @@ func TestPeekWalksTheBacklogWithoutConsumingIt(t *testing.T) {
 	topic, group := aliceInbox()
 	subPath := inboxPath + "/subscription/" + group
 	srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
-		`{"subscriptions":{"`+group+`":{"msgBacklog":2},"other":{"msgBacklog":9}}}`)
+		`{"subscriptions":{"`+group+`":{"msgBacklog":2,"unackedMessages":0},"other":{"msgBacklog":9}}}`)
 	srv.answer(http.MethodGet, subPath+"/position/1", http.StatusOK, eventJSON(t, "e0"))
 	srv.answer(http.MethodGet, subPath+"/position/2", http.StatusOK, eventJSON(t, "e1"))
 
@@ -350,7 +350,7 @@ func TestPeekStopsAtTheEndTheBrokerWillServe(t *testing.T) {
 	topic, group := aliceInbox()
 	subPath := inboxPath + "/subscription/" + group
 	srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
-		`{"subscriptions":{"`+group+`":{"msgBacklog":3}}}`)
+		`{"subscriptions":{"`+group+`":{"msgBacklog":3,"unackedMessages":0}}}`)
 	srv.answer(http.MethodGet, subPath+"/position/1", http.StatusOK, eventJSON(t, "e0"))
 	srv.answer(http.MethodGet, subPath+"/position/2", http.StatusNotFound, "no such position")
 	srv.answer(http.MethodGet, subPath+"/position/3", http.StatusOK, eventJSON(t, "never asked for"))
@@ -385,6 +385,54 @@ func TestPeekOnAnAbsentSubscriptionReadsEmpty(t *testing.T) {
 	got, err = admin.PeekBacklog(context.Background(), topic, group)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("PeekBacklog on another group's topic = (%d rows, %v), want (0, nil)", len(got), err)
+	}
+}
+
+// TestBacklogExcludesWhatAConsumerIsAlreadyHolding.
+//
+// "Backlog" means the mail an unowned seat is holding — retained and NOT
+// delivered — because that is what a successor receives. A message a consumer
+// already has is work in progress; it becomes backlog when that consumer
+// hands it back, which on Pulsar means closing.
+//
+// Counting the two together is not a cosmetic error. It makes "the mailbox is
+// filling up" and "the seat is busy" the same reading, and it makes a
+// deferral's effect unobservable: the deferred message is in msgBacklog
+// BEFORE the handler ever sees it, so anything waiting on the backlog to
+// learn that a deferral happened is told so immediately and wrongly.
+// Measured against the conformance suite, that turned
+// NegativePaths/a_deferral_spends_no_dead_letter_budget into a 20% flake.
+//
+// A Shared subscription dispatches in order, so the messages a consumer holds
+// are the oldest ones behind the mark-delete point — which is why the skip is
+// a position offset rather than a filter.
+func TestBacklogExcludesWhatAConsumerIsAlreadyHolding(t *testing.T) {
+	t.Parallel()
+	srv := newAdminServer(t)
+	topic, group := aliceInbox()
+	subPath := inboxPath + "/subscription/" + group
+	// Three unacked, of which the consumer is holding the two oldest.
+	srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
+		`{"subscriptions":{"`+group+`":{"msgBacklog":3,"unackedMessages":2}}}`)
+	srv.answer(http.MethodGet, subPath+"/position/1", http.StatusOK, eventJSON(t, "in-flight-0"))
+	srv.answer(http.MethodGet, subPath+"/position/2", http.StatusOK, eventJSON(t, "in-flight-1"))
+	srv.answer(http.MethodGet, subPath+"/position/3", http.StatusOK, eventJSON(t, "waiting"))
+
+	payloads, err := srv.admin(t).PeekBacklog(context.Background(), topic, group)
+	if err != nil {
+		t.Fatalf("PeekBacklog: %v", err)
+	}
+	if got := labelsOf(t, payloads); strings.Join(got, ",") != "waiting" {
+		t.Fatalf("PeekBacklog = %v, want only the undelivered message", got)
+	}
+
+	// Everything in flight and nothing behind it reads as an EMPTY backlog,
+	// which is the case the deferral assertion turns on.
+	srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
+		`{"subscriptions":{"`+group+`":{"msgBacklog":1,"unackedMessages":1}}}`)
+	payloads, err = srv.admin(t).PeekBacklog(context.Background(), topic, group)
+	if err != nil || len(payloads) != 0 {
+		t.Fatalf("PeekBacklog with everything in flight = (%d rows, %v), want (0, nil)", len(payloads), err)
 	}
 }
 

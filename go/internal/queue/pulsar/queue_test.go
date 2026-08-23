@@ -64,36 +64,22 @@ func TestActionForKeepsADeferralFree(t *testing.T) {
 	}
 }
 
-// TestHandBackDependsOnWhatHappensNext. The two mechanisms are not
-// interchangeable and picking the wrong one is silent either way:
+// TestEveryReasonToStopBlocksTheAttachment.
 //
-//   - a quiesce, a detach or a shutdown pause all end with the consumer
-//     closing or being recycled, and THAT is what returns unacked messages —
-//     free, in order, at redeliveryCount 0;
-//   - a topic hold is released in place, so nothing ever closes the consumer
-//     and a message left unacked would never come back at all. This client
-//     has no ack timeout to rescue it.
-func TestHandBackDependsOnWhatHappensNext(t *testing.T) {
-	t.Parallel()
-	if got := handBackAction(true); got != actionLeave {
-		t.Errorf("handBackAction(closing) = %v, want actionLeave", got)
-	}
-	if got := handBackAction(false); got != actionNak {
-		t.Errorf("handBackAction(held) = %v, want actionNak", got)
-	}
-}
-
-// TestClosingCoversEveryVerbThatEndsWithAClose, so a new flag cannot be added
-// to blocked() without someone deciding which side of the hand-back rule it
-// falls on.
-func TestClosingCoversEveryVerbThatEndsWithAClose(t *testing.T) {
+// A blocked attachment holds nothing: the loop closes its consumer, which
+// returns the prefetch AND everything unacked at redeliveryCount 0. That is
+// one mechanism for all four reasons, so what has to be pinned is that all
+// four reach it — a new flag added to the struct and forgotten here would
+// leave a consumer sitting on mail nobody can see, and this client has no ack
+// timeout to rescue it.
+func TestEveryReasonToStopBlocksTheAttachment(t *testing.T) {
 	t.Parallel()
 	q := offlineQueue(t)
 	key := attachKey{"seat.inbox", "grp"}
 	for _, tc := range []struct {
-		name    string
-		set     func(a *attachment)
-		closing bool
+		name string
+		set  func(a *attachment)
+		want bool
 	}{
 		{"nothing", func(*attachment) {}, false},
 		{"quiesced", func(a *attachment) { a.quiesced.Store(true) }, true},
@@ -102,25 +88,19 @@ func TestClosingCoversEveryVerbThatEndsWithAClose(t *testing.T) {
 	} {
 		a := &attachment{q: q, key: key, log: q.log}
 		tc.set(a)
-		if got := a.closing(); got != tc.closing {
-			t.Errorf("%s: closing() = %v, want %v", tc.name, got, tc.closing)
-		}
-		if !a.blocked() && tc.closing {
-			t.Errorf("%s: closing but not blocked — it would keep taking work", tc.name)
+		if got := a.blocked(); got != tc.want {
+			t.Errorf("%s: blocked() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 
-	// A pause HOLD blocks without closing: it is released in place, so the
-	// consumer keeps serving the seat afterwards.
+	// The fourth reason lives on the QUEUE, not the attachment, because a
+	// hold is routinely taken BEFORE anything attaches.
 	a := &attachment{q: q, key: key, log: q.log}
 	if err := q.PauseTopic(context.Background(), key.topic, key.group, "sandbox"); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
 	if !a.blocked() {
-		t.Error("a held subscription is not blocked")
-	}
-	if a.closing() {
-		t.Error("a held subscription reports closing — its mail would be left unacked with nothing to return it")
+		t.Error("a held subscription is not blocked — it would take exactly the work it was told not to")
 	}
 }
 

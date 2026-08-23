@@ -87,11 +87,29 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 		SubscriptionName:    "stream-" + uuid.NewString(),
 		Type:                pulsar.Shared,
 		SubscriptionMode:    pulsar.NonDurable,
-		// From here on, not from the beginning: a live feed that replayed
-		// a month of history on every browser refresh would be unusable,
-		// and the durable half of every such question is answered by a
-		// query rather than by this stream.
-		SubscriptionInitialPosition: pulsar.SubscriptionPositionLatest,
+		// EARLIEST, and this is the one place a Pulsar pattern subscription
+		// forces a choice the other backends never face.
+		//
+		// A pattern consumer is really N per-topic consumers, and a topic
+		// that did not exist when the pattern was registered gets its
+		// consumer at the NEXT discovery tick. At Latest that consumer
+		// starts after whatever was published in between — so the FIRST
+		// events on a brand-new subject are not delayed, they are lost,
+		// permanently and silently. Measured: every case in queuetest's
+		// Stream group failed exactly that way, because each publishes to
+		// a subject it has just created.
+		//
+		// "The first events on a new seat's subject" is precisely what an
+		// operator has the live feed open to watch, so losing them is the
+		// worse failure. What Earliest costs instead is a replay of
+		// whatever backlog a matching topic still retains when a dashboard
+		// connects — bounded, because a stream subscription is
+		// non-durable and acks everything immediately, and because the
+		// subjects it watches (crewlet.events.>) carry a fleet-wide
+		// durable group that acks them. The replay IS the unhandled
+		// routing backlog, which is not the worst thing to show an
+		// operator on arrival.
+		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
 		ReceiverQueueSize:           streamReceiverQueueSize,
 	})
 	if err != nil {

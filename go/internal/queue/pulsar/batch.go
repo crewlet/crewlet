@@ -80,14 +80,8 @@ func (q *Queue) SubscribeBatch(
 			if ctx.Err() != nil {
 				return
 			}
-			cons, ok := a.prepare(ctx)
+			cons, ok := a.resume(ctx)
 			if !ok {
-				continue
-			}
-			if a.blocked() {
-				if sleep(ctx, a.q.cfg.receiveWait()) != nil {
-					return
-				}
 				continue
 			}
 			batch := a.drain(ctx, cons, opts)
@@ -97,17 +91,16 @@ func (q *Queue) SubscribeBatch(
 			// A stop or a hold that landed DURING the linger window must
 			// not be flushed past: the whole point of pausing a seat's
 			// inbox is that no turn starts, and a batch collected a
-			// moment earlier would start one. Hand it straight back and
-			// keep looping — a hold is released in place, so ending the
-			// loop here would leave the seat permanently deaf on a
-			// perfectly ordinary code path.
-			if a.blocked() {
-				a.handBack(cons, batch)
+			// moment earlier would start one. Hand the whole drain back —
+			// one close covers every message in it — and keep looping,
+			// because a hold is released in place and ending the loop
+			// here would leave the seat permanently deaf.
+			if a.blocked() || ctx.Err() != nil {
+				a.handBack()
+				if ctx.Err() != nil {
+					return
+				}
 				continue
-			}
-			if ctx.Err() != nil {
-				a.handBack(cons, batch)
-				return
 			}
 			a.dispatchBatch(ctx, cons, batch, h, key)
 		}
@@ -191,13 +184,14 @@ func (a *attachment) dispatchBatch(ctx context.Context, cons pulsar.Consumer, ba
 
 	for _, part := range parts {
 		// A deferral, a detach or a pause taken mid-drain stops the rest
-		// of it: the remaining partitions are work this consumer has
-		// equally lost the right to run. They go back unhandled so the
-		// successor gets them, rather than being run by a consumer that
-		// has just admitted it should not.
+		// of it: every remaining partition is work this consumer has
+		// equally lost the right to run, and running one after admitting
+		// that is how a seat's mail comes back in reverse partition
+		// order. One close returns THIS partition and every one after it,
+		// unacked and in order — so there is nothing left to iterate.
 		if a.blocked() {
-			a.handBack(cons, part.Items)
-			continue
+			a.handBack()
+			return
 		}
 
 		evs := make([]*events.Event, len(part.Items))

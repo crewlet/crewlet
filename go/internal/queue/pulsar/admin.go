@@ -271,52 +271,74 @@ func (a *restAdmin) DeleteSubscription(ctx context.Context, subject, group strin
 // subscriptionStats is the sliver of Pulsar's topic stats this backend reads.
 type subscriptionStats struct {
 	Subscriptions map[string]struct {
+		// MsgBacklog is everything from the mark-delete position on:
+		// retained AND delivered-but-unacked.
 		MsgBacklog int64 `json:"msgBacklog"`
+		// UnackedMessages is the delivered-but-unacked half of it — the
+		// messages a consumer is currently holding.
+		UnackedMessages int64 `json:"unackedMessages"`
 	} `json:"subscriptions"`
 }
 
-// backlogDepth reports how many messages a subscription retains and has not
-// acked, and whether the subscription exists at all.
-func (a *restAdmin) backlogDepth(ctx context.Context, subject, group string) (int, bool, error) {
+// backlogDepth reports how many messages a subscription is holding OUT to
+// consumers and how many it retains behind them, and whether the subscription
+// exists at all.
+//
+// The split matters. "Backlog" in this codebase means the mail an unowned
+// seat is holding — retained and NOT delivered — because that is what a
+// successor will receive. A message a consumer already has is not that: it is
+// somebody's work in progress, and it becomes backlog only when that consumer
+// hands it back (which on Pulsar means closing). Counting the two together
+// makes "the mail is waiting" indistinguishable from "the mail is being
+// worked", which reads as the mailbox filling up at exactly the moment it is
+// being emptied.
+func (a *restAdmin) backlogDepth(ctx context.Context, subject, group string) (delivered, retained int, exists bool, err error) {
 	status, body, err := a.do(ctx, http.MethodGet, a.topicPath(subject)+"/stats", nil)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	if status == http.StatusNotFound {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 	if status != http.StatusOK {
-		return 0, false, fmt.Errorf("%w: stats for %q returned %s", ErrAdmin, subject, explain(status, body))
+		return 0, 0, false, fmt.Errorf("%w: stats for %q returned %s", ErrAdmin, subject, explain(status, body))
 	}
 	var stats subscriptionStats
 	if err := json.Unmarshal(body, &stats); err != nil {
-		return 0, false, fmt.Errorf("%w: stats for %q returned unreadable JSON: %w", ErrAdmin, subject, err)
+		return 0, 0, false, fmt.Errorf("%w: stats for %q returned unreadable JSON: %w", ErrAdmin, subject, err)
 	}
 	sub, ok := stats.Subscriptions[group]
 	if !ok {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
-	return int(sub.MsgBacklog), true, nil
+	delivered = min(max(int(sub.UnackedMessages), 0), int(sub.MsgBacklog))
+	return delivered, int(sub.MsgBacklog) - delivered, true, nil
 }
 
-// PeekBacklog reads a subscription's retained mail WITHOUT consuming it.
+// PeekBacklog reads a subscription's retained, UNDELIVERED mail without
+// consuming it.
 //
 // Pulsar's peek endpoint reads the Nth entry after the subscription's
-// mark-delete position, so this walks 1..depth and stops at the first
-// position the broker will not serve. Reading a mailbox must never change it,
-// and peek is the only route that does not: a throwaway consumer would join
-// the Shared subscription it is inspecting and take a share of the seat's
-// live traffic, which is the same hazard EnsureSubscription exists to avoid.
+// mark-delete position, so this walks the positions and stops at the first
+// one the broker will not serve. Reading a mailbox must never change it, and
+// peek is the only route that does not: a throwaway consumer would join the
+// Shared subscription it is inspecting and take a share of the seat's live
+// traffic, which is the same hazard EnsureSubscription exists to avoid.
+//
+// The first `delivered` positions are skipped because a Shared subscription
+// dispatches in order, so the messages a consumer is holding are the oldest
+// ones behind the mark-delete point. They are not backlog — see
+// backlogDepth.
 func (a *restAdmin) PeekBacklog(ctx context.Context, subject, group string) ([][]byte, error) {
 	if err := checkSubject(subject); err != nil {
 		return nil, err
 	}
-	depth, exists, err := a.backlogDepth(ctx, subject, group)
-	if err != nil || !exists || depth <= 0 {
+	delivered, retained, exists, err := a.backlogDepth(ctx, subject, group)
+	if err != nil || !exists || retained <= 0 {
 		return nil, err
 	}
-	out := make([][]byte, 0, depth)
-	for position := 1; position <= depth; position++ {
+	out := make([][]byte, 0, retained)
+	for position := delivered + 1; position <= delivered+retained; position++ {
 		endpoint := fmt.Sprintf("%s/position/%d", a.subPath(subject, group), position)
 		status, body, err := a.do(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {

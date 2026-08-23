@@ -52,21 +52,6 @@ type attachment struct {
 	// attached and silently deaf.
 	quiesced atomic.Bool
 
-	// recycle asks the loop to close and re-open the consumer.
-	//
-	// This is how Unquiesce RECLAIMS THE PREFETCH, which d-101 §3 requires
-	// of any prefetching backend. Pulsar pushes up to ReceiverQueueSize
-	// messages into a client-side queue whether or not anyone is reading,
-	// and this client exposes no RedeliverUnacknowledgedMessages — so the
-	// only way to hand that prefetch back is to close the consumer, which
-	// on Pulsar returns everything unacked at redeliveryCount 0 in about
-	// 9 ms. Re-opening immediately re-fetches it.
-	//
-	// Set by Unquiesce rather than done by Quiesce, because a quiesce must
-	// let a RUNNING handler finish and that handler's ack has to reach a
-	// live consumer.
-	recycle atomic.Bool
-
 	// paused is the process-wide shutdown delivery pause.
 	paused atomic.Bool
 
@@ -78,21 +63,24 @@ type attachment struct {
 }
 
 // blocked reports whether this consumer may take new work.
+//
+// A BLOCKED ATTACHMENT HOLDS NOTHING. This is the rule the whole loop is
+// built around, and it is a Pulsar-shaped rule: the broker PUSHES up to
+// ReceiverQueueSize messages into a client-side queue whether or not anyone
+// is reading them, and this client exposes no redeliver-unacknowledged
+// command. So a consumer that merely stops reading becomes a hostage-taker —
+// measured against the conformance suite, a node that paused one subscription
+// starved its peers of a quarter of a four-message round robin, and with no
+// ack timeout in this client those messages never come back at all.
+//
+// The loop therefore CLOSES the consumer whenever it is blocked and opens a
+// fresh one when it is not. Closing is what returns everything unacked and
+// everything prefetched, in order, at redeliveryCount 0 — measured at 9 ms
+// (rewrite/decisions/102-jetstream-redelivery.md). It is the same mechanism
+// for all four reasons a consumer can be blocked, which is why there is only
+// one of it.
 func (a *attachment) blocked() bool {
 	return a.detached.Load() || a.quiesced.Load() || a.paused.Load() || a.q.held(a.key)
-}
-
-// closing reports whether this attachment's consumer is about to be closed or
-// recycled — which is what decides how undispatched work is handed back. See
-// handBack.
-func (a *attachment) closing() bool {
-	return a.detached.Load() || a.quiesced.Load() || a.paused.Load()
-}
-
-func (a *attachment) current() pulsar.Consumer {
-	a.consMu.Lock()
-	defer a.consMu.Unlock()
-	return a.cons
 }
 
 // stop makes this attachment take no further work and unblocks its loop.
@@ -298,40 +286,52 @@ func (a *attachment) closeConsumer() {
 	}
 }
 
-// reopen recycles the consumer: close (handing back everything unacked and
-// everything prefetched) and subscribe again to the same subscription.
+// handBack returns everything this consumer holds and must not run.
 //
-// Re-joining is safe HERE and nowhere else: this node already owns the seat
-// and is re-attaching its own consumer, whereas the hazard restAdmin exists
-// for is joining a subscription a PEER is serving.
-func (a *attachment) reopen() error {
-	a.closeConsumer()
+// It does not ack, nak or republish — it CLOSES. On Pulsar a graceful close
+// returns every unacked message AND everything sitting in the prefetch to
+// whoever attaches next, in order and at redeliveryCount 0 (measured, 9 ms),
+// so a hand-back costs nothing against the dead-letter budget and reorders
+// nothing. That is why a deferral here is free where JetStream's is a NAK.
+//
+// One call covers the whole remainder of a batch: there is nothing to
+// enumerate, because "unacked" already means "not ours".
+func (a *attachment) handBack() { a.closeConsumer() }
+
+// resume is the per-cycle housekeeping every consume loop shares: while
+// blocked, hold nothing; otherwise make sure there is a consumer to fetch
+// from. Reports the consumer to use, or false to iterate again.
+//
+// Re-opening joins a subscription this node ALREADY owns, which is safe here
+// and nowhere else: the hazard restAdmin exists for is joining a subscription
+// a PEER is serving.
+func (a *attachment) resume(ctx context.Context) (pulsar.Consumer, bool) {
+	if a.blocked() {
+		// A blocked attachment holds nothing — see blocked().
+		a.closeConsumer()
+		_ = sleep(ctx, a.q.cfg.receiveWait())
+		return nil, false
+	}
+	a.consMu.Lock()
+	cons := a.cons
+	a.consMu.Unlock()
+	if cons != nil {
+		return cons, true
+	}
+
 	cons, err := a.q.client.Subscribe(a.opts)
 	if err != nil {
-		return fmt.Errorf("re-open consumer %s/%s: %w", a.key.topic, a.key.group, err)
+		a.log.Warn("consumer_reopen_failed", "error", err.Error())
+		// Try again next cycle: a seat whose consumer failed to come back
+		// is a seat that reads nothing, and giving up here would leave it
+		// that way for the life of the process.
+		_ = sleep(ctx, consumeErrorBackoff)
+		return nil, false
 	}
 	a.consMu.Lock()
 	a.cons = cons
 	a.consMu.Unlock()
-	return nil
-}
-
-// prepare runs the per-cycle housekeeping every consume loop shares: honour a
-// pending recycle, and report whether there is a consumer to fetch from.
-func (a *attachment) prepare(ctx context.Context) (pulsar.Consumer, bool) {
-	if a.recycle.Swap(false) {
-		if err := a.reopen(); err != nil {
-			a.log.Warn("consumer_reopen_failed", "error", err.Error())
-			_ = sleep(ctx, consumeErrorBackoff)
-			// Ask again next cycle: a seat whose consumer failed to come
-			// back is a seat that reads nothing, and giving up here would
-			// leave it that way for the life of the process.
-			a.recycle.Store(true)
-			return nil, false
-		}
-	}
-	cons := a.current()
-	return cons, cons != nil
+	return cons, true
 }
 
 // errNilHandler refuses a subscription with no handler. Accepting one would
@@ -351,17 +351,8 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 			if ctx.Err() != nil {
 				return
 			}
-			cons, ok := a.prepare(ctx)
+			cons, ok := a.resume(ctx)
 			if !ok {
-				continue
-			}
-			if a.blocked() {
-				// Nothing is fetched while blocked. What was already
-				// prefetched stays in the client's local queue, which is
-				// why Unquiesce recycles rather than merely resuming.
-				if sleep(ctx, a.q.cfg.receiveWait()) != nil {
-					return
-				}
 				continue
 			}
 			msg, err := receive(ctx, cons, a.q.cfg.receiveWait())
@@ -414,7 +405,7 @@ func (a *attachment) dispatchOne(ctx context.Context, cons pulsar.Consumer, msg 
 	// fresh turn from starting, and a message already fetched is exactly
 	// what would start one.
 	if a.blocked() {
-		a.handBack(cons, []delivery{{msg: msg, ev: ev}})
+		a.handBack()
 		return
 	}
 	a.q.beginHandler()
@@ -472,9 +463,10 @@ const (
 	// deliveries against the dead-letter budget.
 	actionNak
 	// actionLeave leaves the message unacked and does nothing else. On
-	// Pulsar this is the free hand-back: the consumer's close (or its
-	// recycle) returns it to the next attacher in order, at
-	// redeliveryCount 0.
+	// Pulsar that is the free hand-back: the consumer's close returns it
+	// to the next attacher in order, at redeliveryCount 0. It is only
+	// correct because a deferral always quiesces, and a quiesced
+	// attachment closes its consumer — see blocked().
 	actionLeave
 )
 
@@ -499,26 +491,6 @@ func actionFor(outcome queue.Outcome) brokerAction {
 	default:
 		return actionAck
 	}
-}
-
-// handBackAction decides how work this consumer must NOT run is returned.
-//
-// The two mechanisms are not interchangeable, and picking the wrong one is
-// silent either way:
-//
-//   - A quiesce, a detach or a shutdown pause all end with this consumer
-//     CLOSING or being RECYCLED, and that is what returns unacked messages —
-//     free, in order, at redeliveryCount 0. Leaving them is correct.
-//   - A topic HOLD is released in place: the same consumer keeps serving the
-//     seat and nothing ever closes it, so a message left unacked would never
-//     come back at all. This client has no ack timeout to rescue it. Those
-//     have to be NAKed, which costs one delivery and returns them after
-//     nakDelay.
-func handBackAction(closing bool) brokerAction {
-	if closing {
-		return actionLeave
-	}
-	return actionNak
 }
 
 // apply turns a handler outcome into broker operations.
@@ -549,23 +521,17 @@ func (a *attachment) act(cons pulsar.Consumer, action brokerAction, msg pulsar.M
 	}
 }
 
-// handBack returns deliveries this consumer must not run. See
-// handBackAction for why the mechanism depends on what happens next.
-func (a *attachment) handBack(cons pulsar.Consumer, items []delivery) {
-	action := handBackAction(a.closing())
-	for _, d := range items {
-		a.act(cons, action, d.msg)
-	}
-}
-
 // --- the four attachment verbs -------------------------------------------
 
 // Quiesce stops taking new work while staying attached.
 //
-// The consumer is deliberately left OPEN: a quiesce lets a running handler
-// finish, and that handler's ack has to reach a live consumer or a completed
-// turn is redelivered and run twice. Reclaiming the prefetch is Unquiesce's
-// job, which is where nothing is in flight any more.
+// The ATTACHMENT survives — this node keeps the seat, keeps its pause holds,
+// and Unquiesce brings it back. The CONSUMER does not: the loop closes it on
+// its next cycle, which returns the prefetch and everything unacked (see
+// blocked()). Closing there rather than here is what lets a quiesce keep the
+// contract's other promise, that a RUNNING handler finishes — the loop is one
+// goroutine, so it reaches the close only after the handler it was running has
+// applied its outcome to a live consumer.
 func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 	atts := q.lookup(topic, group)
 	for _, a := range atts {
@@ -574,16 +540,14 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 	return len(atts) > 0, nil
 }
 
-// Unquiesce resumes a quiesced attachment, RECYCLING its consumer.
+// Unquiesce resumes a quiesced attachment.
 //
-// The recycle is not an optimisation, it is the whole operation. Quiescing
-// stops the loop reading, but Pulsar keeps pushing up to ReceiverQueueSize
-// messages into the client's local queue, and this client exposes no
-// redeliver-unacknowledged command. Without the recycle those messages stay
-// hostage to a consumer nothing is reading — and with no ack timeout in this
-// client, hostage for as long as the process lives. Closing hands them back
-// at redeliveryCount 0 and re-opening fetches them again immediately, so a
-// two-second store blip costs a round trip rather than a seat's mail.
+// Required, not optional: a node whose coordination store blipped quiesces and
+// must be able to come back, or it holds the seat, stays attached and consumes
+// nothing for the rest of its life. Reclaiming the prefetch — which d-101 §3
+// demands of a prefetching backend — happened at the quiesce, when the loop
+// closed the consumer; this opens a fresh one, and everything handed back
+// arrives again at redeliveryCount 0.
 //
 // Does NOT touch pause holds: a seat resuming from a stale-renew window may
 // still be legitimately paused for a running sandbox, and clearing that would
@@ -592,7 +556,6 @@ func (q *Queue) Unquiesce(_ context.Context, topic, group string) (bool, error) 
 	var was bool
 	for _, a := range q.lookup(topic, group) {
 		if a.quiesced.Swap(false) {
-			a.recycle.Store(true)
 			was = true
 		}
 	}

@@ -83,7 +83,12 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 		cfg.ReceiveWait = 25 * time.Millisecond
 	}
 	if cfg.NackRedeliveryDelay == 0 {
-		cfg.NackRedeliveryDelay = 50 * time.Millisecond
+		// Well under the suite's 50 ms linger window, because one case
+		// deliberately makes a redelivered event race a freshly published
+		// sibling into the same batch. The client's nack tracker polls at
+		// delay/3, so this is what decides whether the redelivery lands
+		// inside the drain rather than one batch later.
+		cfg.NackRedeliveryDelay = 10 * time.Millisecond
 	}
 	if cfg.AutoDiscoveryPeriod == 0 {
 		// A broadcast subscription only sees a topic once the client's
