@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -102,6 +104,40 @@ func substrates() []substrate {
 					}
 					t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
 					return q
+				}, backend
+			},
+		},
+		{
+			// The production fleet topology, and the only substrate that
+			// exercises the mechanisms a fleet actually depends on:
+			// replication, quorum, leader election, placement. Its
+			// clients connect to DIFFERENT members, as separate
+			// processes would — a suite where every node talks to one
+			// server proves nothing about the cluster.
+			//
+			// Slow to stand up (cluster formation, then quorum writes),
+			// so it is last: a failure on the twin or the single server
+			// is the same failure, found sooner.
+			name: "cluster",
+			build: func(t *testing.T) (func(*testing.T) queue.EventQueue, coord.Backend) {
+				c := jetstreamtest.StartCluster(t, 3, jetstream.Config{
+					FetchWait: 25 * time.Millisecond,
+					NakDelay:  25 * time.Millisecond,
+					AckWait:   2 * time.Second,
+				})
+				admin := c.Client(t, 0)
+				backend, err := coordkv.Open(t.Context(), admin.Conn(), coordkv.Config{
+					TTL: fleetTTL, Replicas: len(c.Servers),
+				})
+				if err != nil {
+					t.Fatalf("coord kv: %v", err)
+				}
+				// Round-robin over the members, so consecutive nodes in a
+				// test land on different servers.
+				var next atomic.Int64
+				return func(t *testing.T) queue.EventQueue {
+					i := int(next.Add(1)-1) % len(c.Servers)
+					return c.Client(t, i)
 				}, backend
 			},
 		},
@@ -321,6 +357,64 @@ func TestFleet(t *testing.T) {
 				})
 				if got := f.workSeen("ceo"); got[0] != "w1" || got[1] != "w2" {
 					t.Errorf("backlog arrived as %v, want [w1 w2] — order was lost", got)
+				}
+			})
+
+			t.Run("a_seats_mail_survives_the_whole_fleet_restarting", func(t *testing.T) {
+				// The stronger form of the previous criterion, and the one
+				// a deploy actually performs: every node stops, so for a
+				// while NOTHING holds the seat or consumes its subject,
+				// and then a fresh fleet arrives. Mail published in that
+				// gap must be there when it does.
+				//
+				// This is where an in-memory mailbox and a durable one
+				// look different for the first time — a subscription that
+				// only exists while a consumer is attached loses
+				// everything here, and every earlier criterion still
+				// passes.
+				f := newFleet(t, sub, "ceo", "cto")
+				f.ensureMailboxes()
+				a, b := f.start("node-a"), f.start("node-b")
+				eventually(t, "the fleet to settle", func() bool {
+					return len(a.Attached())+len(b.Attached()) == 2
+				})
+				f.send("ceo", "before")
+				eventually(t, "the first turn", func() bool {
+					return len(f.workSeen("ceo")) == 1
+				})
+
+				// The whole fleet goes away, cleanly.
+				stop := context.WithoutCancel(t.Context())
+				if err := a.Stop(stop); err != nil {
+					t.Fatalf("stopping node-a: %v", err)
+				}
+				if err := b.Stop(stop); err != nil {
+					t.Fatalf("stopping node-b: %v", err)
+				}
+				eventually(t, "every seat to be unowned", func() bool {
+					return len(f.ownersSettled()) == 0
+				})
+
+				// Published into a company with no engine running at all.
+				f.send("ceo", "during-the-gap")
+				time.Sleep(200 * time.Millisecond)
+				if got := f.workSeen("ceo"); len(got) != 1 {
+					t.Fatalf("work ran with the whole fleet down: %v", got)
+				}
+
+				// A fresh fleet, with node identities a redeploy would
+				// produce rather than the ones that just left.
+				f.start("node-c")
+				f.start("node-d")
+				eventually(t, "the new fleet to work the gap's mail", func() bool {
+					return len(f.workSeen("ceo")) == 2
+				})
+				if got := f.workSeen("ceo"); got[1] != "during-the-gap" {
+					t.Errorf("the restarted fleet saw %v, want during-the-gap second", got)
+				}
+				last := f.records()[len(f.records())-1]
+				if last.node != "node-c" && last.node != "node-d" {
+					t.Errorf("the post-restart turn ran on %s, want one of the new nodes", last.node)
 				}
 			})
 

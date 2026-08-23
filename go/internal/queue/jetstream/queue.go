@@ -47,6 +47,18 @@ type Config struct {
 	ClusterURLs []string
 	ClusterPort int
 
+	// ServerName is this member's identity inside the cluster. REQUIRED
+	// when clustering and ignored otherwise.
+	//
+	// It must be unique across the cluster — NATS rejects a route from a
+	// server whose name it already knows — and it must be STABLE across
+	// restarts, because JetStream places replicas BY SERVER NAME. A node
+	// that comes back under a new name is a new peer: its old replicas
+	// are orphaned on a member that no longer exists, and the stream sits
+	// short of quorum waiting for a server that will never return. So it
+	// is the node's own durable id, not something generated at boot.
+	ServerName string
+
 	// Replicas is the stream replica count. 1 for solo; 3 for a fleet,
 	// where it is what makes a publish quorum-durable before Publish
 	// returns.
@@ -159,6 +171,17 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	if q.js, err = jetstream.New(q.nc); err != nil {
 		q.nc.Close()
 		return nil, fmt.Errorf("open jetstream: %w", err)
+	}
+	// A clustered member accepts connections long before its metadata
+	// group has a leader, and creating a replicated stream against a
+	// leaderless group BLOCKS rather than failing — so provisioning here
+	// hangs with nothing to diagnose. Waited for at the point that
+	// actually depends on it: doing it in StartServer instead would make
+	// the first member of a fresh cluster wait for a quorum that cannot
+	// exist until the peers it is blocking have started.
+	if err := embedded.awaitClusterReady(ctx); err != nil {
+		q.nc.Close()
+		return nil, err
 	}
 	if err := q.ensureStreams(ctx); err != nil {
 		q.nc.Close()

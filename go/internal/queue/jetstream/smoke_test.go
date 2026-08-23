@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -264,4 +265,33 @@ func TestMalformedSubjectsAreRefused(t *testing.T) {
 	if err := q.Publish(t.Context(), "extension.thing", ev(1)); err != nil {
 		t.Errorf("Publish to a foreign namespace failed: %v", err)
 	}
+}
+
+func TestAClusteredServerMustBeNamed(t *testing.T) {
+	t.Parallel()
+	// Refused rather than defaulted, because both halves of the
+	// requirement matter and only one is obvious. Unique: NATS rejects a
+	// route from a server whose name it already knows, so a fleet of
+	// identically-named members never forms — which is what every embedded
+	// server in this package used to be. Stable: JetStream places replicas
+	// by server name, so a member returning under a new name is a new
+	// peer, its old replicas are stranded on a server that no longer
+	// exists, and the stream sits below quorum waiting for it.
+	//
+	// A generated name satisfies the first and quietly breaks the second on
+	// every restart, which is why this is an error and not a default.
+	_, err := StartServer(Config{ClusterName: "unnamed", ClusterPort: 0})
+	if err == nil {
+		t.Fatal("a clustered server started with no ServerName")
+	}
+	if !strings.Contains(err.Error(), "ServerName") {
+		t.Errorf("error %q does not say which field is missing", err)
+	}
+
+	// Solo is unaffected: there is no cluster to be unique within.
+	srv, err := StartServer(Config{})
+	if err != nil {
+		t.Fatalf("a solo server needs no name: %v", err)
+	}
+	srv.Shutdown()
 }

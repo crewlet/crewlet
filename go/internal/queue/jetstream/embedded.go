@@ -24,6 +24,20 @@ import (
 // moment, and failing here fails the whole boot.
 const readyTimeout = 30 * time.Second
 
+const (
+	// clusterReadyTimeout bounds waiting for a clustered member's JetStream
+	// to become current. Measured at ~8s for a quiet three-member cluster
+	// on a loopback; the generous multiple is because this is a one-time
+	// boot cost and the alternative to waiting is a node that provisions
+	// into a leaderless metadata group and blocks with no diagnosis.
+	clusterReadyTimeout = 60 * time.Second
+
+	// clusterReadyPoll is how often that wait re-checks. Short enough that
+	// a fast local cluster is not held back by the poll itself, and it runs
+	// at most a few hundred times.
+	clusterReadyPoll = 100 * time.Millisecond
+)
+
 // embeddedServer is a nats-server running inside this process.
 //
 // The single-binary topology: no listener, no port, no service to operate.
@@ -39,6 +53,9 @@ type embeddedServer struct {
 	// scratch is a private directory this server owns and deletes on
 	// shutdown, used when no StoreDir was configured. See startEmbedded.
 	scratch string
+	// clustered records whether this member has peers, which decides
+	// whether anything has to wait for a metadata leader.
+	clustered bool
 }
 
 // Server is an embedded broker that outlives any one client of it.
@@ -89,8 +106,21 @@ func (s *Server) Shutdown() {
 }
 
 func startEmbedded(cfg Config) (*embeddedServer, error) {
+	clustered := cfg.ClusterName != "" || len(cfg.ClusterURLs) > 0 || cfg.ClusterPort != 0
+	name := cfg.ServerName
+	if name == "" {
+		if clustered {
+			// Refused rather than generated. A generated name is unique,
+			// which is half the requirement — the other half is that it
+			// survives a restart, and a name minted at boot silently
+			// orphans this member's replicas every time the process
+			// comes back. See Config.ServerName.
+			return nil, errors.New("jetstream: ServerName is required for a clustered embedded server")
+		}
+		name = "crewlet"
+	}
 	opts := &server.Options{
-		ServerName: "crewlet",
+		ServerName: name,
 		JetStream:  true,
 		Port:       -1,
 		// No listener in the solo case. This is a security property as
@@ -137,7 +167,46 @@ func startEmbedded(cfg Config) (*embeddedServer, error) {
 		removeScratch(scratch)
 		return nil, errors.New("embedded nats server did not become ready")
 	}
-	return &embeddedServer{ns: ns, inProcess: opts.DontListen, scratch: scratch}, nil
+	return &embeddedServer{
+		ns: ns, inProcess: opts.DontListen, scratch: scratch, clustered: clustered,
+	}, nil
+}
+
+// awaitClusterReady waits for this member's JetStream to catch up with the
+// cluster's metadata group.
+//
+// Accepting connections is NOT the same as being able to serve JetStream. A
+// clustered member answers its client port as soon as it is listening, while
+// the metadata group takes seconds to elect a leader — measured at around
+// eight on a quiet three-member cluster — and until it has one, creating a
+// replicated stream BLOCKS rather than failing. A node that provisioned at
+// boot therefore hung with nothing to diagnose, looking exactly like a broker
+// that is up and ignoring you.
+//
+// A no-op for a solo member and for an external URL: solo has no metadata
+// group to join, and an external cluster is somebody else's to have made
+// ready before pointing an engine at it.
+func (e *embeddedServer) awaitClusterReady(ctx context.Context) error {
+	if e == nil || !e.clustered {
+		return nil
+	}
+	deadline := time.Now().Add(clusterReadyTimeout)
+	for time.Now().Before(deadline) {
+		if e.ns.JetStreamIsCurrent() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for jetstream cluster %q: %w",
+				e.ns.ClusterName(), ctx.Err())
+		case <-time.After(clusterReadyPoll):
+		}
+	}
+	if e.ns.JetStreamIsCurrent() {
+		return nil
+	}
+	return fmt.Errorf("embedded nats server %q joined no jetstream cluster within %s",
+		e.ns.Name(), clusterReadyTimeout)
 }
 
 func (e *embeddedServer) connect() (*nats.Conn, error) {

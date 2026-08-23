@@ -227,6 +227,33 @@ Spec: `src/crewlet/seat/` (host 1.5k, placement, watchdog), `docs/concepts/scali
 **[GATE G3]** Fleet suite green on twins and on a real 3-node embedded cluster.
 **This gate is the architecture's proof.** Nothing in phases 4+ may merge until G3.
 
+**Status: met.** `go/internal/node/fleet_test.go`, three substrates — `twin`
+(memory queue + memory coordination), `embedded` (one embedded JetStream server +
+its KV), `cluster` (a real 3-member embedded NATS cluster with R3 streams and R3
+KV buckets, each node's client on a different member; started by
+`internal/queue/jetstream/jetstreamtest`). Five criteria, listed above.
+
+What the gate found, none of which was visible from one node or one server:
+
+- **Events changed Go type at the wire.** A payload built locally was a value and
+  a decoded one a pointer, so `DataAs[*T]` answered differently on the publishing
+  node. Fixed at the contract (d-103); the memory twin was hiding it by never
+  serializing at all, which it now does.
+- **A data race in the seat host.** `Sweep` published a pointer to the value it
+  returned, and a heartbeat appended through it. It also overwrote the sweep's
+  `Lost` list rather than appending, so a node that shed two seats and then lost a
+  third reported one.
+- **A seat-thrash livelock.** A node whose renews fail while its claims succeed
+  re-took a dropped seat ~100 ms later and lost it again every TTL, forever,
+  respawning that seat's runtime each cycle while a healthy peer never won a race.
+- **Every embedded server was named `crewlet`.** NATS requires server names unique
+  per cluster and places JetStream replicas BY name, so a real fleet would have
+  refused its own routes — and a node restarting under a generated name would
+  orphan its replicas. `Config.ServerName` is now required when clustering and must
+  be the node's stable id.
+- **The embedded broker shared one default store directory** with every other
+  crewlet process and test binary on the machine.
+
 ## 8. Phase 3b — The Pulsar stream backend (M) [BUILD]
 
 Deliberately scheduled immediately after G3: certifying a second real broker early
