@@ -2,6 +2,7 @@ package config
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -164,6 +165,7 @@ func (c *Company) Validate() error {
 	p.wrap(c.Scheduling.validate("scheduling"))
 	p.wrap(c.Integrations.validate("integrations"))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateProviderKeys())
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {
@@ -248,4 +250,76 @@ func (c *Company) validateKnowledgeBackend() error {
 type Knowledge struct {
 	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty" desc:"Org-wide Confluence read scope. Empty = unscoped."`
 	PlaneProjects    []string `yaml:"plane_projects,omitempty" json:"plane_projects,omitempty" desc:"Org-wide Plane read scope. Empty = unscoped. Requires integrations.plane."`
+}
+
+// validateProviderKeys holds the rule that a seat may only name a model the
+// company actually has.
+//
+// Without it a typo is invisible and permanent. `llm_plan: claude-sonet`
+// resolves through the runtime's fallback — per-phase, then the role's default
+// chain, then the "default" key, then the first provider configured — so the
+// seat boots, thinks, and bills, on a model the operator never chose. Nothing
+// downstream can catch it: the fallback exists precisely so a role that names
+// NOTHING still runs, and from inside resolution a name that misses and a name
+// that was never written are the same absence.
+//
+// Skipped entirely when providers.llm is empty. A company with no models is a
+// documented authoring state — an org chart written before the credentials
+// exist — and it fails at the first turn, where the failure is actionable.
+// Rejecting every role's key against an empty map would turn that supported
+// flow into a wall of errors about models the author has not added yet.
+func (c *Company) validateProviderKeys() error {
+	var p problems
+	if len(c.Providers.LLM) == 0 {
+		return nil
+	}
+	known := make([]string, 0, len(c.Providers.LLM))
+	for key := range c.Providers.LLM {
+		known = append(known, key)
+	}
+	slices.Sort(known)
+
+	for i := range c.Roles {
+		role := &c.Roles[i]
+		path := idx("roles", i)
+		// Both written surfaces are checked, and each is reported at the
+		// path the operator typed. Validating the RESOLVED chain instead
+		// would hide half of them: the flat field wins over the mapping,
+		// so a typo inside `llm.plan` under a role that also sets
+		// `llm_plan` never appears in the resolved value at all — and it
+		// is still a typo, still in the file, and still what the operator
+		// will edit next.
+		for _, field := range []struct {
+			path string
+			keys ProviderKeys
+		}{
+			{at(path, "llm"), role.LLM.Default},
+			{at(at(path, "llm"), "plan"), role.LLM.Plan},
+			{at(at(path, "llm"), "execute"), role.LLM.Execute},
+			{at(at(path, "llm"), "review"), role.LLM.Review},
+			{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
+			{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
+			{at(at(path, "llm"), "judge"), role.LLM.Judge},
+			{at(at(path, "llm"), "sandbox"), role.LLM.Sandbox},
+			{at(path, "llm_plan"), role.LLMPlan},
+			{at(path, "llm_execute"), role.LLMExecute},
+			{at(path, "llm_review"), role.LLMReview},
+			{at(path, "llm_subagent"), role.LLMSubagent},
+			{at(path, "llm_auxiliary"), role.LLMAuxiliary},
+			{at(path, "llm_judge"), role.LLMJudge},
+			{at(path, "llm_sandbox"), role.LLMSandbox},
+		} {
+			for _, key := range field.keys {
+				if _, ok := c.Providers.LLM[key]; !ok {
+					p.add(field.path, ErrUnknownValue,
+						"%q is not a configured provider — providers.llm has %s. "+
+							"A key that misses is not an error at run time: the seat "+
+							"falls back to another model and bills against it, so this "+
+							"is the only place the typo can be seen",
+						key, strings.Join(known, ", "))
+				}
+			}
+		}
+	}
+	return p.err()
 }

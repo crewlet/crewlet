@@ -22,6 +22,21 @@ providers:
       model: claude-sonnet-5
       api_keys:
         - "${ANTHROPIC_API_KEY}"
+    fast:
+      type: anthropic
+      model: claude-haiku-4-5
+      api_keys:
+        - "${ANTHROPIC_API_KEY}"
+    big:
+      type: anthropic
+      model: claude-opus-5
+      api_keys:
+        - "${ANTHROPIC_API_KEY}"
+    bigger:
+      type: openai
+      model: gpt-5
+      api_keys:
+        - "${OPENAI_API_KEY}"
 integrations:
   jira:
     url: "${JIRA_URL}"
