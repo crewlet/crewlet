@@ -145,3 +145,66 @@ func TestDefaultDeliveryBudgetMatchesPulsar(t *testing.T) {
 		t.Errorf("exhausted event reached the dead-letter subject %d times, want 1", len(dl))
 	}
 }
+
+// TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt covers the twin's
+// serialization boundary, which the conformance suite structurally cannot
+// reach: every payload it publishes is a string, documented there as a
+// deliberate choice so partitioning assertions never depend on a codec. That
+// makes json.Marshal succeed in every shared case, so the failure branch is
+// exercised by nothing portable and has to be pinned here.
+//
+// Measured before writing this: making the marshal failure return nil instead
+// of an error passes BOTH packages. A caller would get a successful publish
+// with the event never delivered, which on a queue is close to the worst silent
+// failure available.
+//
+// Two observables, because "returns an error" is only half of it. A publish
+// that refuses correctly but has already recorded the event tells the caller no
+// while leaving the event behind — refusing and mutating are independent, and
+// only the second assertion sees the difference. That is why the serialization
+// sits above the lock in Publish, and this is what holds it there.
+func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	delivered := make(chan struct{}, 1)
+	err := q.Subscribe(context.Background(), "topic", "grp",
+		func(context.Context, *events.Event) queue.Result {
+			delivered <- struct{}{}
+			return queue.Ack()
+		})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// A channel has no JSON representation, so this fails in encoding
+	// rather than in anything queue-specific.
+	unencodable := &events.Event{
+		ID:        uuid.New(),
+		Type:      "unencodable",
+		Timestamp: time.Now().UTC(),
+		Source:    "memory_test",
+		Payload:   map[string]any{"ch": make(chan int)},
+	}
+
+	if err := q.Publish(context.Background(), "topic", unencodable); err == nil {
+		t.Error("Publish accepted an unencodable payload; a dropped event must never " +
+			"report success — the caller has no other way to learn it was lost")
+	}
+	if got := q.History(); len(got) != 0 {
+		t.Errorf("a refused publish recorded %d events in history, want 0; "+
+			"serialization must happen before anything is mutated", len(got))
+	}
+	if got := q.Backlog("topic", "grp"); len(got) != 0 {
+		t.Errorf("a refused publish left %d events in the subscription mail, want 0", len(got))
+	}
+	select {
+	case <-delivered:
+		t.Error("a refused publish still reached a handler")
+	default:
+	}
+}

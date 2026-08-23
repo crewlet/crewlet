@@ -53,7 +53,18 @@ Phases are ordered by dependency, not importance. Sizes are relative
    stay byte-stable across rounds (provider prompt caching depends on it), and the
    event schema evolves additively with unknown-type fallback (rolling upgrades
    depend on it).
-7. No TODOs, no stubs, no deferred halves inside a phase — a phase is done when its
+7. **Stage by path, never `git add -A`, while other executors share the checkout.**
+   A blanket add takes whatever is on disk at that instant — which may be another
+   executor's half-written file — and files it under a subject that does not
+   describe it. This has already happened once here (`9510102` swept queue and
+   coordination guard work into a prompts commit). On the RECORD question it
+   raised: this branch squash-merges into ONE commit whose subject is the pull
+   request title, so per-commit scope buys reviewable history, not release notes
+   — the PR title is the release note and must cover the whole branch. That is
+   why the mis-scoped commit is not being rewritten: published history on a
+   branch other executors are working against is not worth disturbing for a
+   subject line, and the practice, not the commit, was the defect.
+8. No TODOs, no stubs, no deferred halves inside a phase — a phase is done when its
    gate is green and its docs section exists.
 
 ## 3. Decisions already made [DECIDED]
