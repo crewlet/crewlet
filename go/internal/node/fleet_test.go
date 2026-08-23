@@ -211,7 +211,7 @@ func (f *fleet) start(id string) *node.Node {
 	if err := n.Start(f.t.Context()); err != nil {
 		f.t.Fatalf("node.Start(%s): %v", id, err)
 	}
-	f.t.Cleanup(func() { _ = n.Stop(context.WithoutCancel(f.t.Context())) })
+	f.t.Cleanup(func() { n.Stop(context.WithoutCancel(f.t.Context())) })
 	return n
 }
 
@@ -385,12 +385,8 @@ func TestFleet(t *testing.T) {
 
 				// The whole fleet goes away, cleanly.
 				stop := context.WithoutCancel(t.Context())
-				if err := a.Stop(stop); err != nil {
-					t.Fatalf("stopping node-a: %v", err)
-				}
-				if err := b.Stop(stop); err != nil {
-					t.Fatalf("stopping node-b: %v", err)
-				}
+				a.Stop(stop)
+				b.Stop(stop)
 				eventually(t, "every seat to be unowned", func() bool {
 					return len(f.ownersSettled()) == 0
 				})

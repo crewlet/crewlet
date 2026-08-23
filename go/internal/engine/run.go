@@ -131,7 +131,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
 			Labels: opts.Bootstrap.Node.Labels,
 		},
-		Turn:     e.dispatchTurn,
+		Turn:     e.Dispatch,
 		LeaseTTL: leaseTTL(opts.Bootstrap),
 	})
 	if err != nil {
@@ -205,9 +205,7 @@ func (e *Engine) Start(ctx context.Context) error {
 // back every seat, and waits for in-flight handlers before anything closes.
 func (e *Engine) Stop(ctx context.Context) {
 	e.node.Drain(ctx)
-	if err := e.node.Stop(ctx); err != nil {
-		log.Warn("node_stop_failed", "error", err)
-	}
+	e.node.Stop(ctx)
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
@@ -221,8 +219,22 @@ func (e *Engine) Company() *Company { return e.company }
 // surfaces that report which seats it holds.
 func (e *Engine) Node() *node.Node { return e.node }
 
-// dispatchTurn is the node's TurnFunc.
-func (e *Engine) dispatchTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
+// Backends exposes the infrastructure this engine runs on.
+//
+// For the MERGED topology, where one process is both engine and API: the two
+// halves share one broker and one store, and the half that did not open them
+// needs a handle. A second set would be worse than inconvenient — two
+// connections to one broker fail independently, and the store is exclusive to
+// one process, so a second open is contention with itself.
+func (e *Engine) Backends() *Backends { return e.backends }
+
+// Dispatch delivers one inbox partition to a seat.
+//
+// This is the node's TurnFunc, exported because it is also the entry point for
+// a delivery that did not come from the seat's own subscription — a sandbox
+// run completing, which resumes a suspended Execute loop rather than waiting
+// for the broker to hand the seat something.
+func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Event) queue.Result {
 	return e.dispatch.Dispatch(ctx, handle, evs)
 }
 

@@ -140,9 +140,18 @@ func (n *Node) Start(ctx context.Context) error {
 }
 
 // Stop gives up every seat and stops consuming.
-func (n *Node) Stop(ctx context.Context) error {
+func (n *Node) Stop(ctx context.Context) {
+	// The seat host's own stop releases every held seat, and each release
+	// detaches that seat's mailbox through OnRelease — so by the time this
+	// returns the node consumes nothing.
+	//
+	// It does NOT stop the queue. A node is GIVEN its broker client; the
+	// caller that opened it decides when it closes, and on the merged
+	// topology that client is shared with an API process which outlives
+	// the engine's shutdown. Stopping it here took the API's broker down
+	// with the engine — and did so through a layer that had no way to know
+	// it was not the owner.
 	n.host.Stop(ctx)
-	return n.cfg.Queue.Stop(ctx)
 }
 
 // drainLogInterval is how often a drain says how much work is left.
