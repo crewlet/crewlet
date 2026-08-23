@@ -143,6 +143,11 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		SkipNames:    MetaToolNames(),
 		Publisher:    in.Publisher,
 		Turn:         in.Turn,
+		Onboarding: runner.Onboarding{
+			Markers: in.Markers, Latch: in.Latch,
+			Rounds:  te.OnboardingMaxToolRounds,
+			Ceiling: te.OnboardingMaxToolRoundsCeiling,
+		},
 	})
 }
 
@@ -165,6 +170,14 @@ type RunnerInput struct {
 	// rather than epoch configuration.
 	Publisher queue.Publisher
 	Turn      runner.Turn
+
+	// Markers and Latch drive the first-turn onboarding pass. Nil markers
+	// disable it: without somewhere to mark, the pass would run every turn
+	// forever. The latch is the PROCESS's, not the turn's — it is what
+	// stops a transient marker-read failure re-onboarding a seat this
+	// process has already seen marked.
+	Markers runner.Markers
+	Latch   *runner.Latch
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.

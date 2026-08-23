@@ -71,6 +71,11 @@ type Config struct {
 
 	// Turn identifies the turn these events belong to.
 	Turn Turn
+
+	// Onboarding wires the dedicated first-turn pass. Zero disables it,
+	// which is what a node with no marker store has — a pass that could
+	// never be marked would run every turn forever.
+	Onboarding Onboarding
 }
 
 // Runner implements [turn.Phases] against real models and real tools.
@@ -466,12 +471,34 @@ func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit too
 func (r *Runner) planActive(snapshot tools.Snapshot) []string {
 	var out []string
 	for _, e := range snapshot.Entries() {
-		if _, fromMCP := e.FromMCP(); !fromMCP {
-			out = append(out, e.Name())
+		if _, fromMCP := e.FromMCP(); fromMCP {
+			continue
 		}
+		if phaseScoped[e.Name()] {
+			continue
+		}
+		out = append(out, e.Name())
 	}
 	return out
 }
+
+// phaseScoped names the first-party tools that belong to ONE phase and must
+// not be offered by the others.
+//
+// mark_onboarded is the whole list, and it earns its place: onboarding is its
+// own pass now, and a seat that could mark itself from inside Plan would
+// permanently skip orientation — the marker suppresses the pass for ever
+// after, so a single stray call means an agent that never reads its team's
+// conventions and never will. Measured: the Plan surface offered it, and a
+// model that called it there produced a Plan that never submitted, rescued to
+// `direct`, and skipped Review.
+//
+// Everything else stays available to Plan on purpose. lookup_colleague,
+// use_skill, query_episodes and refresh_memory are recon, which is what Plan
+// is for; reflect_and_persist is deliberate too — an agent that learns
+// something while planning should be able to keep it, and the reflect engine's
+// no-action gate reads the plan tool sequence for exactly that.
+var phaseScoped = map[string]bool{MarkOnboardedTool: true}
 
 // executeActive is what the plan named plus the always-on set — or everything,
 // for a `direct` plan that committed to one shot.

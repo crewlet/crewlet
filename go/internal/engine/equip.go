@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -83,4 +84,12 @@ type agentSeats struct{ org *org.Organization }
 
 func (d agentSeats) IsAgentSeat(handle string) bool {
 	return d.org != nil && d.org.AgentSeatByHandle(handle) != nil
+}
+
+// markers is the onboarding marker store, or nil on a node with none.
+func (e *Engine) markers() runner.Markers {
+	if e.backends == nil || e.backends.Store == nil {
+		return nil
+	}
+	return learning.NewOnboarding(e.backends.Store)
 }

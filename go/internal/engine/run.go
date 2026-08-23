@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
@@ -41,6 +42,15 @@ type Engine struct {
 	// dispatch turns one inbox partition into one turn. Held so a test can
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
+
+	// onboarded remembers which seats this PROCESS has seen onboarded.
+	//
+	// On the engine rather than on an epoch, because it is a fact about
+	// what this process has observed and not about the company: an apply
+	// publishes a new epoch, and a latch that came with it would forget
+	// every seat and re-run a pass for agents already marked. It is keyed
+	// by chain hash, so a live restructure still re-onboards by design.
+	onboarded *runner.Latch
 }
 
 // Options configure an engine.
@@ -106,7 +116,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// Only what this engine OPENED does it close. A caller that supplied
 	// backends keeps their lifetime — the merged API process outlives the
 	// engine's own shutdown and still needs its broker.
-	e := &Engine{backends: backends, ownsBackends: ownsBackends}
+	e := &Engine{backends: backends, ownsBackends: ownsBackends, onboarded: runner.NewLatch()}
 	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
 	// current, and one that found an empty registry would run a seat with
 	// no tools at all — a company that boots cleanly and can do nothing.
@@ -336,6 +346,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
 		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth),
+		Markers:      e.markers(),
+		Latch:        e.onboarded,
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A
@@ -344,6 +356,22 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// completion for a turn that never ran would put a failed turn in
 		// the record of a seat that did not take one.
 		return turn.Result{}, err
+	}
+
+	// BEFORE Plan, on its own budget. A seat's first ever turn used to run
+	// onboarding inside Plan and could spend the whole plan budget reading
+	// pages — the turn most likely to produce no plan at all was the one
+	// where a seat had never planned before.
+	//
+	// A failure here does NOT fail the turn: the seat is un-onboarded, which
+	// is the state it was already in, and refusing to work over it would
+	// make a knowledge base that is briefly unreachable stop the company.
+	if ran, err := r.Onboard(ctx); err != nil {
+		log.WarnContext(ctx, "onboarding_pass_failed", "handle", req.Handle,
+			"error", err, "detail", "the seat stays un-onboarded and retries "+
+				"next turn; the turn continues")
+	} else if ran {
+		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})

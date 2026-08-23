@@ -27,9 +27,9 @@ import (
 // surface is both robust and closer to the truth — the offered tools ARE what
 // distinguishes the phases.
 type scriptedProvider struct {
-	plan, execute, review []llm.Completion
-	seen                  []llm.Request
-	n                     map[string]int
+	plan, execute, review, onboarding []llm.Completion
+	seen                              []llm.Request
+	n                                 map[string]int
 }
 
 func (p *scriptedProvider) Model() string { return "scripted" }
@@ -56,6 +56,12 @@ func (p *scriptedProvider) scriptFor(req llm.Request) (string, []llm.Completion)
 		return "plan", p.plan
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review", p.review
+	case slices.Contains(offered, runner.MarkOnboardedTool):
+		// Checked AFTER the submit tools, because it is the pass that
+		// offers mark_onboarded and NEITHER of them: Plan used to offer
+		// mark_onboarded too, and keying on it first answered a plan with
+		// an onboarding mark. See runner.phaseScoped.
+		return "onboarding", p.onboarding
 	default:
 		return "execute", p.execute
 	}

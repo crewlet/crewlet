@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -130,8 +132,9 @@ func start(t *testing.T) *node {
 type scriptedModel struct {
 	url string
 
-	mu    sync.Mutex
-	calls []string
+	mu      sync.Mutex
+	calls   []string
+	offered []string
 }
 
 func newScriptedModel(t *testing.T) *scriptedModel {
@@ -146,7 +149,19 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	offered := offeredTools(raw)
+	m.mu.Lock()
+	names := make([]string, 0, len(offered))
+	for n := range offered {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	m.offered = append(m.offered, strings.Join(names, "+"))
+	m.mu.Unlock()
 
+	// Keyed on the tool that DISTINGUISHES each phase, in the order that
+	// makes each one unambiguous. submit_* first, because those name one
+	// phase each; onboarding is then the pass that offers mark_onboarded
+	// and neither submit tool.
 	var reply string
 	switch {
 	case offered["submit_review"]:
@@ -170,6 +185,15 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			"tools_needed":     []string{},
 			"steps":            []map[string]string{{"intent": "reply", "approach": "state the numbers"}},
 			"success_criteria": []string{"the founder has the numbers"},
+		})
+	case offered["mark_onboarded"]:
+		// The first-turn pass, before Plan and on its own budget. A model
+		// that never marked would burn all ten rounds and retry next turn
+		// — correct behaviour, and thirty seconds of it in a test, which
+		// is how this case came to exist.
+		m.saw("onboarding")
+		reply = toolUse("mark_onboarded", map[string]any{
+			"notes": "Read the team pages; deploys go out on Thursdays.",
 		})
 	default:
 		m.saw("execute")
@@ -200,6 +224,13 @@ func offeredTools(raw []byte) map[string]bool {
 		out[t.Name] = true
 	}
 	return out
+}
+
+// offers records what each request offered, for diagnosis.
+func (m *scriptedModel) offers() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.offered...)
 }
 
 func (m *scriptedModel) saw(phase string) {

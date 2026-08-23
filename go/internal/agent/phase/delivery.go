@@ -16,6 +16,11 @@ const (
 	Auxiliary Phase = "auxiliary"
 	Judge     Phase = "judge"
 	Sandbox   Phase = "sandbox"
+	// Onboarding is the dedicated first-turn pass, BEFORE Plan. Its own
+	// phase rather than a hint inside Plan's, because on a genuine first
+	// turn reading the team's pages and persisting conventions consumed
+	// Plan's whole round budget and could starve submit_plan entirely.
+	Onboarding Phase = "onboarding"
 )
 
 func (p Phase) String() string { return string(p) }

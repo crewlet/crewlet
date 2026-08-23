@@ -245,14 +245,22 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			return false
 		}
 		phases, _ := r["by_phase"].([]any)
-		return len(phases) == 3
+		return len(phases) == 4 // onboarding, plan, execute, review
 	})
 	cancel()
 
 	// --- what the model was actually asked ---------------------------- //
-	if got := n.model.seen(); !slices.Contains(got, "plan") ||
-		!slices.Contains(got, "execute") || !slices.Contains(got, "review") {
-		t.Errorf("phases run = %v, want a full Plan/Execute/Review loop", got)
+	got := n.model.seen()
+	for _, want := range []string{"onboarding", "plan", "execute", "review"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("the %s phase never ran; phases = %v", want, got)
+		}
+	}
+	// Onboarding runs BEFORE Plan and on its own budget — that is the whole
+	// reason it is a phase rather than a hint inside Plan's prompt, where it
+	// could spend the plan budget on reading and starve submit_plan.
+	if len(got) > 0 && got[0] != "onboarding" {
+		t.Errorf("the first model call was %q, not the onboarding pass", got[0])
 	}
 
 	// --- what reached the socket -------------------------------------- //
@@ -287,7 +295,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			phases[p] = true
 		}
 	}
-	for _, want := range []string{"plan", "execute", "review"} {
+	for _, want := range []string{"onboarding", "plan", "execute", "review"} {
 		if !phases[want] {
 			t.Errorf("no live call named the %s phase; saw %v", want, phases)
 		}
@@ -306,8 +314,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Errorf("the rollup reports %v tokens for a turn that ran three "+
 			"phases", totals["total_tokens"])
 	}
-	if n, _ := totals["calls"].(float64); n != 3 {
-		t.Errorf("the rollup counted %v calls, want one per phase", totals["calls"])
+	if n, _ := totals["calls"].(float64); n != 4 {
+		t.Errorf("the rollup counted %v calls, want one per phase "+
+			"(onboarding, plan, execute, review)", totals["calls"])
 	}
 
 	// --- and what the store kept -------------------------------------- //
