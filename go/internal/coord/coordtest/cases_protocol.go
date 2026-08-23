@@ -133,28 +133,52 @@ var protocolCases = []testCase{
 		})
 	}},
 
-	{"an_unset_protocol_reads_as_the_oldest", func(h *harness) {
-		// Zero is not a protocol. A record whose version is unknown has
-		// to read as the OLDEST one — fail-closed, and converging: it
-		// gates newer claims until it lapses, exactly as a real v1 hold
-		// would. Storing the zero verbatim would instead refuse every
-		// gated claim in the fleet until that one lease expired.
+	{"an_omitted_protocol_claims_at_this_build", func(h *harness) {
+		// Go moves the danger, so the contract moves the default.
 		//
-		// This case is the suite settling something coord.go does not
-		// say, which a suite should not do on its own: Go's struct zero
-		// makes OMITTING Protocol the dangerous case, where Python's
-		// keyword default of 1 made it safe. Enforced fail-closed and
-		// written up for a contract owner in
-		// rewrite/questions/coord-contract-unset-protocol.md.
+		// Python's Protocol was a keyword argument defaulting to 1, so
+		// OMITTING it was harmless. Go's is a struct zero, so omitting
+		// it is the case that happens by accident — and read as
+		// "oldest", one AcquireOptions{Owner, TTL} anywhere in the
+		// engine would hold a live lease below every newer node's floor
+		// and stall the whole fleet's claims, looking exactly like a
+		// rolling upgrade that never finishes.
+		//
+		// So the zero value is SAFE: an omitted protocol claims at this
+		// build's version, which is what the caller meant. The opposite
+		// case — a STORED record with no protocol — still reads as the
+		// oldest, because that record genuinely predates the concept;
+		// coord.StoredProtocol is the read-side half.
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
-		if lease.Protocol != 1 {
-			h.t.Fatalf("a claim with no protocol recorded %d, want 1", lease.Protocol)
+		if lease.Protocol != coord.ProtocolVersion {
+			h.t.Fatalf("a claim with no protocol recorded %d, want %d (this build)",
+				lease.Protocol, coord.ProtocolVersion)
 		}
-		if floor, any := h.floor(); !any || floor != 1 {
-			h.t.Fatalf("FleetProtocolFloor = (%d, %v), want (1, true)", floor, any)
+		if floor, any := h.floor(); !any || floor != coord.ProtocolVersion {
+			h.t.Fatalf("FleetProtocolFloor = (%d, %v), want (%d, true)",
+				floor, any, coord.ProtocolVersion)
 		}
-		h.refused("seat:engineer", coord.AcquireOptions{
+		// And crucially it does NOT gate a peer running this same build.
+		h.claim("seat:engineer", coord.AcquireOptions{
 			Owner: "node-b:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
+		})
+	}},
+
+	{"a_stored_record_with_no_protocol_reads_as_the_oldest", func(h *harness) {
+		// The read-side half, and the fail-closed one: a record written
+		// before the field existed must gate newer claims until it
+		// lapses, exactly as a real v1 hold would.
+		if got := coord.StoredProtocol(0); got != 1 {
+			h.t.Fatalf("StoredProtocol(0) = %d, want 1", got)
+		}
+		if got := coord.StoredProtocol(3); got != 3 {
+			h.t.Fatalf("StoredProtocol(3) = %d, want 3", got)
+		}
+		// An explicit older claim still gates, which is the behaviour
+		// the stored reading exists to reproduce.
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old:1", TTL: LongTTL, Protocol: 1})
+		h.refused("seat:engineer", coord.AcquireOptions{
+			Owner: "new:1", TTL: LongTTL, Protocol: coord.ProtocolVersion,
 		})
 	}},
 

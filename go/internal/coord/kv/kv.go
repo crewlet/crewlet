@@ -287,7 +287,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	if err := s.validateTTL(resource, opts.Owner, opts.TTL); err != nil {
 		return nil, err
 	}
-	protocol := effectiveProtocol(opts.Protocol)
+	protocol := opts.EffectiveProtocol()
 	key := encodeKey(resource)
 
 	for range casAttempts {
@@ -708,7 +708,7 @@ func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 		if !s.held(e, now) {
 			continue
 		}
-		if p := effectiveProtocol(e.value.Protocol); !found || p < floor {
+		if p := coord.StoredProtocol(e.value.Protocol); !found || p < floor {
 			floor, found = p, true
 		}
 	}
@@ -1086,7 +1086,7 @@ func (s *Store) storeNow(ctx context.Context) (time.Time, error) {
 // blockedByOlder is the mixed-version gate's predicate.
 func (s *Store) blockedByOlder(entries []entry, now time.Time, protocol int) bool {
 	for _, e := range entries {
-		if s.held(e, now) && effectiveProtocol(e.value.Protocol) < protocol {
+		if s.held(e, now) && coord.StoredProtocol(e.value.Protocol) < protocol {
 			return true
 		}
 	}

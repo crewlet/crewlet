@@ -123,7 +123,7 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 }
 
 func (b *Backend) acquire(resource string, opts coord.AcquireOptions) *coord.Lease {
-	protocol := effectiveProtocol(opts.Protocol)
+	protocol := opts.EffectiveProtocol()
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -375,19 +375,6 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 		return errBadTTL
 	}
 	return nil
-}
-
-// effectiveProtocol reads an unset protocol as the OLDEST one.
-//
-// Zero is not a protocol. Storing it verbatim would put every build in the
-// fleet above the floor forever, so a record whose version nobody stated has
-// to gate newer claims exactly as a real v1 hold does — fail-closed, and
-// converging, because it lapses like any other lease.
-func effectiveProtocol(p int) int {
-	if p < 1 {
-		return 1
-	}
-	return p
 }
 
 // copyMeta deep-copies the JSON-shaped payload a holder advertises about

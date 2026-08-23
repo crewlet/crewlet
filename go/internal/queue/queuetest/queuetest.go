@@ -50,11 +50,32 @@ type Capabilities struct {
 	// fleet in one process.
 	Peer func(t *testing.T, q queue.EventQueue) queue.EventQueue
 
-	// WithRedeliveryBudget returns a fresh UNSTARTED queue whose
-	// dead-letter budget is exactly budget redeliveries after the first
-	// delivery. The dead-letter subtests need a small budget; running
-	// them against a production default would mean dozens of handler
-	// invocations per assertion.
+	// WithDeliveryAttempts returns a fresh UNSTARTED queue configured so
+	// that a persistently failing event is handed to a handler exactly
+	// attempts times in total before it is dead-lettered. The dead-letter
+	// subtests need a small number; a production default would mean dozens
+	// of handler invocations per assertion.
+	//
+	// It asks for TOTAL ATTEMPTS — an observable — rather than for a
+	// "budget", because a budget is not one number and the contract never
+	// says which one it is. Pulsar and the Python twin count redeliveries
+	// AFTER the first delivery (10 means 11 attempts); NATS MaxDeliver
+	// counts deliveries INCLUDING the first (25 means 25). Both numbers
+	// live in this repo, in different documents, meaning different things.
+	//
+	// The earlier form of this field named a budget and defined the
+	// convention in this comment, which made every backend that passed
+	// agree with the suite because the suite told it to — the agreement was
+	// real code and read exactly like evidence for a convention nothing had
+	// decided. Naming the observable lets each backend translate from
+	// whatever its broker counts, and leaves the suite asserting only what
+	// it can actually see.
+	WithDeliveryAttempts func(t *testing.T, attempts int) queue.EventQueue
+
+	// WithRedeliveryBudget is the superseded form of WithDeliveryAttempts,
+	// counting redeliveries after the first delivery. Kept so a backend
+	// that already supplies it keeps being certified; set
+	// WithDeliveryAttempts instead and this can go.
 	WithRedeliveryBudget func(t *testing.T, budget int) queue.EventQueue
 
 	// Backlog reports the events a subscription retains and has not
@@ -536,12 +557,23 @@ func (s *suite) needDeadLetters(t *testing.T) func(q queue.EventQueue, topic, gr
 	return s.caps.DeadLetters
 }
 
-func (s *suite) needBudget(t *testing.T) func(t *testing.T, budget int) queue.EventQueue {
+// needAttempts returns a constructor for a queue that gives a persistently
+// failing event exactly attempts deliveries before dead-lettering it.
+func (s *suite) needAttempts(t *testing.T) func(t *testing.T, attempts int) queue.EventQueue {
 	t.Helper()
-	if s.caps.WithRedeliveryBudget == nil {
-		t.Skip("backend cannot be built with a specific redelivery budget")
+	if s.caps.WithDeliveryAttempts != nil {
+		return s.caps.WithDeliveryAttempts
 	}
-	return s.caps.WithRedeliveryBudget
+	if legacy := s.caps.WithRedeliveryBudget; legacy != nil {
+		// The superseded field counts redeliveries after the first, so one
+		// fewer than the attempts the suite observes.
+		return func(t *testing.T, attempts int) queue.EventQueue {
+			t.Helper()
+			return legacy(t, attempts-1)
+		}
+	}
+	t.Skip("backend cannot be built with a specific delivery-attempt limit")
+	return nil
 }
 
 func (s *suite) needPeer(t *testing.T) func(t *testing.T, q queue.EventQueue) queue.EventQueue {

@@ -91,9 +91,9 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// A handler failure on one conversation must not replay or block
 		// the other conversation from the same flush.
-		newBudgeted := s.needBudget(t)
+		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(t, newBudgeted(t, 2))
+		q := startQueue(t, newQueueWithAttempts(t, 3))
 
 		attempts := newJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",

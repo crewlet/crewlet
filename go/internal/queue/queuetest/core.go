@@ -302,10 +302,11 @@ func (s *suite) runCore(t *testing.T) {
 		// Counting total attempts and then dropping made every retry-count
 		// assertion off by one and every "poison message is recoverable"
 		// claim false.
-		newBudgeted := s.needBudget(t)
+		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
 		backlog := s.needBacklog(t)
-		q := startQueue(t, newBudgeted(t, 2))
+		// Three attempts total, however this backend's broker counts them.
+		q := startQueue(t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
 		subscribe(t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
@@ -314,7 +315,7 @@ func (s *suite) runCore(t *testing.T) {
 		})
 		publish(t, q, "topic", newEvent("t"))
 
-		j.await(t, "first delivery plus two redeliveries",
+		j.await(t, "the configured number of delivery attempts",
 			func(seen []string) bool { return len(seen) == 3 })
 		j.staysAt(t, 3, "a dead-lettered event")
 

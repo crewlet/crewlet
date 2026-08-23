@@ -98,22 +98,9 @@ func (e entry) lease() *coord.Lease {
 		Epoch:     e.value.Epoch,
 		ExpiresAt: e.created.Add(e.value.ttl()).UTC(),
 		Preferred: e.value.Preferred,
-		Protocol:  effectiveProtocol(e.value.Protocol),
+		Protocol:  coord.StoredProtocol(e.value.Protocol),
 		Meta:      e.value.Meta,
 	}
-}
-
-// effectiveProtocol reads an unset protocol as the OLDEST one.
-//
-// Zero is not a protocol. Storing it verbatim would put every build in the
-// fleet above the floor forever, so a record whose version nobody stated has
-// to gate newer claims exactly as a real v1 hold does — fail-closed, and
-// converging, because it lapses like any other lease.
-func effectiveProtocol(p int) int {
-	if p < 1 {
-		return 1
-	}
-	return p
 }
 
 func encodeValue(v any) ([]byte, error) {

@@ -24,8 +24,12 @@ func TestConformance(t *testing.T) {
 			Peer: func(_ *testing.T, q queue.EventQueue) queue.EventQueue {
 				return q.(*memory.Queue).Client()
 			},
-			WithRedeliveryBudget: func(_ *testing.T, budget int) queue.EventQueue {
-				return memory.New(memory.WithMaxRedeliveries(budget))
+			// This backend's knob counts redeliveries after the first
+			// delivery, so N attempts is a budget of N-1. The suite asks
+			// for the observable and leaves the translation here, where
+			// the convention actually lives.
+			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
+				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
 			Backlog: func(q queue.EventQueue, topic, group string) []*events.Event {
 				return q.(*memory.Queue).Backlog(topic, group)

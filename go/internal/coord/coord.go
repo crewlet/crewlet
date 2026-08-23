@@ -117,6 +117,27 @@ type Lease struct {
 	Meta map[string]any
 }
 
+// EffectiveProtocol resolves the protocol a claim is made at, normalising
+// the zero value to this build. Backends MUST call this rather than reading
+// the field, so the safe-zero rule has one implementation.
+func (o AcquireOptions) EffectiveProtocol() int {
+	if o.Protocol <= 0 {
+		return ProtocolVersion
+	}
+	return o.Protocol
+}
+
+// StoredProtocol normalises the protocol read back from a record. A record
+// written before the field existed reads as the OLDEST protocol, which is
+// the fail-closed reading: it holds newer nodes back rather than letting
+// them claim beside a build whose meaning of ownership they cannot know.
+func StoredProtocol(raw int) int {
+	if raw <= 0 {
+		return 1
+	}
+	return raw
+}
+
 // Live reports whether the lease is unexpired relative to a store-supplied
 // now. Callers that have a Lease from the store already know it was live
 // when read; this exists for backends and tests reasoning about records.
@@ -125,6 +146,11 @@ func (l Lease) Live(now time.Time) bool {
 }
 
 // AcquireOptions carries the non-identity inputs to a claim.
+//
+// The zero value is deliberately usable and SAFE: an AcquireOptions naming
+// only an owner and a TTL claims at this build's protocol, ungated only if
+// the caller says so. Every field whose zero value would be dangerous says
+// what its zero means.
 type AcquireOptions struct {
 	// Owner is the process incarnation claiming the resource.
 	Owner string
@@ -133,6 +159,20 @@ type AcquireOptions struct {
 	// Preferred is the stable node id recorded as the stickiness hint.
 	Preferred string
 	// Protocol is the claiming build's protocol version.
+	//
+	// ZERO MEANS THIS BUILD (ProtocolVersion), not "oldest". The
+	// distinction is the difference between a safe omission and a
+	// fleet-wide stall, and Go moves it: Python's value was a keyword
+	// default of 1, so leaving it out was harmless, while Go's is a
+	// struct zero, so leaving it out is the DANGEROUS case. Read as
+	// "oldest", a single AcquireOptions{Owner, TTL} anywhere in the
+	// engine would hold a live lease below every newer node's floor and
+	// stall the fleet's claims — looking exactly like a rolling upgrade
+	// that never finishes.
+	//
+	// A STORED record with no protocol is the opposite case and still
+	// reads as 1: that record genuinely predates the concept, so the
+	// oldest reading is the honest one. Backends normalise on read.
 	Protocol int
 	// Meta rides with the record; see Lease.Meta.
 	Meta map[string]any
