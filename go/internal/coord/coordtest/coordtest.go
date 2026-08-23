@@ -112,6 +112,11 @@ const (
 	// wrong. A case that needs a second, distinguishable TTL takes a
 	// FRACTION of this one; asking for a multiple makes a correct backend
 	// fail an unrelated assertion with a confusing error.
+	//
+	// The rule is that no case may DEPEND on a TTL above this, not that
+	// none may send one: exactly one case deliberately asks for more, to
+	// certify that a store refuses rather than clamps, and it accepts a
+	// refusal as the correct answer.
 	LongTTL = 5 * time.Minute
 
 	// ShortTTL is the TTL for the lease a case intends to lapse.

@@ -1,6 +1,7 @@
 package coordtest
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -67,6 +68,82 @@ var readCases = []testCase{
 		h.claim("seat:cto", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		h.release("seat:ceo", "node-a", lease.Epoch)
 		h.requireResources(`ListOwned("node-a")`, h.listOwned("node-a"), "seat:cto")
+	}},
+
+	{"resources_that_need_encoding_round_trip_and_stay_distinct", func(h *harness) {
+		// A STIMULUS gap, found by reading what the suite sends rather
+		// than by mutating what a backend answers: every other case here
+		// names a resource like "seat:ceo", so no case could ever reach a
+		// backend's key encoding. No mutation can reveal that — the input
+		// simply never arrives.
+		//
+		// It is not hypothetical. A resource name is "seat:" plus a
+		// HANDLE, handles come from the org, and nothing in coord.go
+		// restricts them. On a subject-addressed store a dot is a
+		// separator and * and > are wildcards, so an unescaped name is
+		// not a lookup failure but a COLLISION: two seats sharing one
+		// record, which is the mutual exclusion this whole primitive
+		// exists to provide. internal/coord/kv carries its own key
+		// round-trip test because its author knew that; the contract
+		// suite gave the next backend no such warning.
+		//
+		// The assertion is a property, never an encoding. A backend that
+		// cannot represent a name may REFUSE it — the same latitude a
+		// store has to refuse a TTL it cannot honour rather than clamp it
+		// silently — but one that accepts it must return it unchanged and
+		// must never let two names land on one record.
+		type claimed struct {
+			resource string
+			owner    string
+		}
+		var accepted []claimed
+		for i, handle := range []string{
+			"alice.smith", "a/b", "a b", "ünïcødé", "a=b", "*", ">", "a:b", "A.B",
+		} {
+			name := coord.SeatResource(handle)
+			owner := fmt.Sprintf("owner-%02d:1", i)
+			lease, err := h.b.TryAcquire(h.ctx, name, coord.AcquireOptions{
+				Owner: owner, TTL: LongTTL,
+			})
+			if err != nil {
+				h.t.Logf("backend refused %q (allowed — refusing beats mangling): %v", name, err)
+				continue
+			}
+			if lease == nil {
+				h.t.Fatalf("%q was refused as already held, but nothing else claimed it — "+
+					"an earlier name in this list encoded onto the same record", name)
+			}
+			if lease.Resource != name {
+				h.t.Fatalf("claim on %q returned a lease for %q", name, lease.Resource)
+			}
+			accepted = append(accepted, claimed{name, owner})
+		}
+		if len(accepted) == 0 {
+			h.t.Fatal("the backend accepted none of these names — this case certified nothing")
+		}
+
+		// Every accepted name is still held by ITS OWN owner. Two names
+		// sharing a record shows up here as one owner wearing another's
+		// lease, which is the failure the encoding exists to prevent.
+		for _, c := range accepted {
+			read := h.get(c.resource)
+			if read == nil {
+				h.t.Fatalf("%q reads as unheld right after being claimed", c.resource)
+			}
+			if read.Resource != c.resource || read.Owner != c.owner {
+				h.t.Fatalf("%q reads back as resource %q held by %q, want %q held by %q — "+
+					"two names collided onto one record",
+					c.resource, read.Resource, read.Owner, c.resource, c.owner)
+			}
+		}
+
+		// And the prefix read still finds them, so whatever encoding a
+		// backend applies has not moved them out of their own namespace.
+		live := h.listLive(coord.SeatPrefix)
+		if len(live) != len(accepted) {
+			h.t.Fatalf("ListLive(%q) returned %d of %d accepted names: %v",
+				coord.SeatPrefix, len(live), len(accepted), resources(live))
+		}
 	}},
 
 	{"list_live_filters_by_prefix", func(h *harness) {

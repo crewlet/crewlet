@@ -333,6 +333,45 @@ var leaseCases = []testCase{
 
 	// --- the deadline --------------------------------------------------
 
+	{"a_ttl_beyond_the_suites_maximum_is_refused_or_honoured_never_clamped", func(h *harness) {
+		// The one case that deliberately asks for more than LongTTL, and
+		// the reason the rule there is "no case may DEPEND on a longer
+		// TTL" rather than "never send one".
+		//
+		// It closes a stimulus gap: a backend sizes its retention to the
+		// suite's advertised maximum, so nothing else here can reach the
+		// behaviour above it, and no mutation can reveal a clamp that the
+		// suite never provokes. Silently shortening is the dangerous
+		// answer — a heartbeat computes its next tick from ExpiresAt, so
+		// a deadline quietly cut to the store's ceiling has every node
+		// renewing too late and shedding seats it still holds. Refusing
+		// is fine; lying is not.
+		baseline := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		lease, err := h.b.TryAcquire(h.ctx, "seat:cto", coord.AcquireOptions{
+			Owner: "node-b:1", TTL: LongTTL * 2,
+		})
+		if err != nil {
+			h.t.Logf("backend refused a TTL beyond its ceiling (the correct answer): %v", err)
+			return
+		}
+		if lease == nil {
+			h.t.Fatal("an unclaimed resource was refused without an error")
+		}
+		// The gap must be roughly the difference between the two TTLs, not
+		// merely positive. "Is later" passes for the wrong reason: a store
+		// that clamps BOTH claims to its ceiling still stamps the second
+		// one microseconds after the first, purely because it happened
+		// second. Measured — the first version of this assertion was that
+		// weak, and a clamping mutation sailed through it.
+		gap := lease.ExpiresAt.Sub(baseline.ExpiresAt)
+		if gap < LongTTL/2 {
+			h.t.Fatalf("a %v TTL landed only %v beyond a %v one — the store clamped "+
+				"silently instead of refusing, and every heartbeat computed from that "+
+				"deadline renews too late and sheds a seat it still holds",
+				LongTTL*2, gap, LongTTL)
+		}
+	}},
+
 	{"expires_at_is_a_utc_deadline_on_the_stores_clock", func(h *harness) {
 		// A heartbeat computes its next tick from this field, and a
 		// dashboard renders it. A backend that answered in local time,
