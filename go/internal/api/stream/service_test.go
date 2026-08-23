@@ -55,12 +55,27 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	if agents == nil {
 		t.Fatalf("no agents push: %v", kindsOf(c))
 	}
-	overlays, ok := agents.Data.(map[string]*livestate.Overlay)
-	if !ok || overlays["Lead"] == nil {
-		t.Fatalf("agents data = %#v", agents.Data)
+	// A LIST of rows, each carrying its own role. This test asserted a
+	// map keyed by role and passed for it — while store.js guards
+	// applyAgents with Array.isArray and DISCARDED every push, so a full
+	// turn ran with the seat rendered idle from start to finish. The
+	// client is the compatibility reference (rewrite/decisions/502), so
+	// the assertion is written the way the client reads the frame.
+	rows, ok := agents.Data.([]map[string]any)
+	if !ok {
+		t.Fatalf("agents data is %T, not the row list the client requires; "+
+			"anything else fails its Array.isArray guard and is dropped",
+			agents.Data)
 	}
-	if overlays["Lead"].State != "working" {
-		t.Errorf("overlay state = %q, want working", overlays["Lead"].State)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want the one seat that moved", len(rows))
+	}
+	if got := rows[0]["role"]; got != "Lead" {
+		t.Errorf("row role = %v; the client keys on this field and drops a "+
+			"row without it", got)
+	}
+	if got := rows[0]["state"]; got != "working" {
+		t.Errorf("row state = %v, want working", got)
 	}
 }
 

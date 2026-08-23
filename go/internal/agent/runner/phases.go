@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -57,11 +58,28 @@ type Config struct {
 
 	// SkipNames are the meta-tools the ledger filters out.
 	SkipNames []string
+
+	// Publisher receives the phase telemetry — see telemetry.go. Nil
+	// publishes nothing, which is the right answer for a runner driven
+	// directly by a test and for a sub-agent, whose host phase is already
+	// the visible one.
+	//
+	// This is the ONLY source of every agent_* event in the company: no
+	// publisher means a seat that renders as idle for the whole of a turn
+	// and leaves no durable record it ran.
+	Publisher queue.Publisher
+
+	// Turn identifies the turn these events belong to.
+	Turn Turn
 }
 
 // Runner implements [turn.Phases] against real models and real tools.
+//
+// One per turn — see [Company.RunnerFor] on the engine side. That is what
+// makes the spend tally below a per-turn fact rather than state to reset.
 type Runner struct {
-	cfg Config
+	cfg   Config
+	spend Spend
 }
 
 var _ turn.Phases = (*Runner)(nil)
@@ -123,6 +141,19 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
 	}
 
+	r.emitter().completed(ctx, phaseRecord{
+		Phase: phase.Plan, Iteration: round, System: system, User: user,
+		Result: res.Result, Exhausted: res.Exhausted,
+		Decision: payload.Decision, Rescued: !submitted,
+		Available: surface.Active(),
+		// Plan alone offers a catalogue: the names it was shown as prose,
+		// with no schemas. Sending every MCP server's tool definitions is
+		// what made planning expensive, and this is what replaced it —
+		// which is why Available (the schemas actually passed) is the
+		// short meta-tool list here and the catalogue is the long one.
+		Catalogue: snapshot.Names(),
+	})
+
 	return turn.Plan{
 		Decision:        turn.PlanDecision(payload.Decision),
 		Reasoning:       payload.Reasoning,
@@ -169,10 +200,20 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 		return turn.Execution{}, turn.Surface{}, err
 	}
 
+	missing := missingTools(surface, snapshot)
+	r.emitter().completed(ctx, phaseRecord{
+		Phase: phase.Execute, Iteration: round, System: system, User: user,
+		Result: res.Result, Exhausted: res.Exhausted,
+		// Execute reaches no structured verdict and never rescues — it has
+		// no submit tool to miss.
+		Notes:     missingNote(missing),
+		Available: surface.Active(),
+	})
+
 	return turn.Execution{
 		Text:            res.Text,
 		Calls:           calls(surface),
-		MissingTools:    missingTools(surface, snapshot),
+		MissingTools:    missing,
 		ExhaustedRounds: res.Exhausted,
 		Suspended:       res.Suspended,
 	}, describe(surface), nil
@@ -217,19 +258,53 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		// identical downstream. Loop back instead — the delivery gate and
 		// the stall guard bound how long that can go on.
 		log.Warn("review_never_submitted", "round", round, "rounds_used", res.Rounds)
-		return turn.Review{
+		rescue := turn.Review{
 			Decision: phase.SelfIterate,
 			Notes: "The review phase produced no decision. Re-check the plan's " +
 				"success criteria against what Execute actually did, and call " +
 				SubmitReviewTool + ".",
-		}, nil
+		}
+		r.emitter().completed(ctx, reviewRecord(round, system, r.cfg.Task, res,
+			string(rescue.Decision), rescue.Notes, true, surface))
+		return rescue, nil
 	}
+	r.emitter().completed(ctx, reviewRecord(round, system, r.cfg.Task, res,
+		payload.Decision, payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      phase.Decision(payload.Decision),
 		Notes:         payload.Notes,
 		CompletedWork: payload.CompletedWork,
 		FinalArtifact: payload.FinalArtifact,
 	}, nil
+}
+
+// reviewRecord builds Review's completed record.
+//
+// A function because Review reports from TWO places — its decoded payload and
+// its rescue — and the two must describe the same phase. Written out twice,
+// the rescue path is the one that quietly loses a field.
+func reviewRecord(round int, system, user string, res phaseResult,
+	decision, notes string, rescued bool, surface *tools.Surface,
+) phaseRecord {
+	return phaseRecord{
+		Phase: phase.Review, Iteration: round, System: system, User: user,
+		Result: res.Result, Exhausted: res.Exhausted,
+		Decision: decision, Notes: notes, Rescued: rescued,
+		Available: surface.Active(),
+	}
+}
+
+// missingNote names the tools an Execute phase called that its surface did not
+// have, for the phase event's short free-text field.
+//
+// Worth carrying: a model that guessed an MCP tool's name wrong produces a
+// phase that looks like it simply chose not to deliver, and the note is the
+// difference between reading that as a model problem and as a config one.
+func missingNote(missing []string) string {
+	if len(missing) == 0 {
+		return ""
+	}
+	return "missing tools: " + strings.Join(missing, ", ")
 }
 
 // runPhase drives one phase's loop, extending it when the judge allows.
@@ -241,17 +316,37 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Surface,
 	system, user string, rounds, ceiling, iteration int, terminateAfter ...string,
 ) (phaseResult, error) {
+	// The phase's own record of what it managed, so the FAILURE path has
+	// something to report. A phase that dies returns no Result at all, and
+	// without this the only trace of it is the started event — a dashboard
+	// left showing an in-flight call with no response and no reason.
+	emit := r.emitter()
+	progress := &toolloop.Progress{}
+	fail := func(err error) (phaseResult, error) {
+		emit.completed(ctx, phaseRecord{
+			Phase: ph, Iteration: iteration, System: system, User: user,
+			Result: progress.Snapshot(), Available: surface.Active(),
+			Failed: true, Err: err,
+		})
+		return phaseResult{}, err
+	}
+
 	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
 	if err != nil {
-		return phaseResult{}, err
+		return fail(err)
 	}
 	// A chain even for one member. The wrapper is a pass-through there, and
 	// uniform behaviour is worth more than the allocation: a one-member seat
 	// and a three-member one then fail, log and report identically.
 	provider, err := chain.New(members, chain.Options{})
 	if err != nil {
-		return phaseResult{}, fmt.Errorf("runner: %s: %w", ph, err)
+		return fail(fmt.Errorf("runner: %s: %w", ph, err))
 	}
+
+	// Published BEFORE the first provider call, so a seat that is thinking
+	// says which phase it is thinking in. The completed event is the durable
+	// record and may be minutes away.
+	emit.started(ctx, ph, iteration, system, user)
 
 	messages := []llm.Message{
 		{Role: llm.RoleSystem, Content: system},
@@ -272,14 +367,26 @@ func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Su
 			// spends its whole round budget re-deciding — measured at
 			// four identical submissions before the cap stopped it.
 			TerminateAfter: terminateAfter,
+			// Progress feeds the failure path above; OnProgress feeds the
+			// live view. Both, because they answer different questions:
+			// one is read after the loop returns nothing, the other while
+			// it is still running.
+			Progress: progress,
+			OnProgress: func(live toolloop.Result) {
+				emit.progress(ctx, ph, iteration, live)
+			},
 		})
 		if err != nil {
-			return phaseResult{}, fmt.Errorf("runner: %s: %w", ph, err)
+			return fail(fmt.Errorf("runner: %s: %w", ph, err))
 		}
 		out.Rounds += res.RoundsUsed
 		out.Text = res.Text
 		out.Suspended = res.Suspended
 		out.Exhausted = res.ExhaustedRounds
+		out.Result = *res
+		// The loop's own count is per-invocation; an extended phase runs it
+		// more than once and the record must carry the phase's total.
+		out.Result.RoundsUsed = out.Rounds
 		messages = res.Messages
 
 		if res.Suspended || !res.ExhaustedRounds {
@@ -309,6 +416,12 @@ type phaseResult struct {
 	Rounds    int
 	Exhausted bool
 	Suspended bool
+
+	// Result is the loop's own outcome, kept whole so the phase can report
+	// what it spent and what it called. The fields above are the ones the
+	// loop's CALLER acts on; this is what its telemetry publishes, and
+	// re-deriving one from the other is how the two come to disagree.
+	Result toolloop.Result
 }
 
 // surfaceWith builds a phase surface, registering the phase's submission tool

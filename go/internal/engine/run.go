@@ -318,14 +318,32 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// the next is running a company that never existed — the exact failure
 	// publishing-instead-of-mutating exists to remove (d-404).
 	company := e.Company()
+	// Assembled BEFORE the runner, because the runner needs it: every phase
+	// event carries the turn's identity, and a runner built without it
+	// publishes phases attributed to nobody.
+	tel := e.describeTurn(company, req)
 	r, err := company.RunnerFor(req.Handle, RunnerInput{
 		Task:         DescribeTrigger(req.Events),
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
+		Publisher:    e.backends.Queue,
+		Turn:         tel.runnerTurn(req.WorkKey),
 	})
 	if err != nil {
+		// No turn-completed event: nothing started, so nothing ended. A
+		// seat whose runner could not be built never published a started
+		// phase either, so there is no live row to close — and publishing a
+		// completion for a turn that never ran would put a failed turn in
+		// the record of a seat that did not take one.
 		return turn.Result{}, err
 	}
-	return turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+
+	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+	// Published on BOTH paths. An error here means a phase broke, which is
+	// precisely when a dashboard most needs the turn closed: the phase
+	// events already put the seat into `working`, and returning without this
+	// leaves it there until the seat happens to take another turn.
+	e.publishTurnCompleted(ctx, tel, req.WorkKey, r.Spend(), res, err)
+	return res, err
 }
 
 // nodeRoles turns the configured role names into a set.

@@ -91,6 +91,29 @@ jobs:
       # Python code made is a potential data race in the port.
       - run: go test ./... -race -count=1
 
+  gates:
+    name: end-to-end gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      # internal/e2e runs a real engine, a real broker and the real API, then
+      # replays the frames its socket produced through the dashboard's own
+      # store.js. Both halves of the wire protocol are checked against each
+      # other here and nowhere else, so a missing node fails rather than skips.
+      - name: Ensure node is present
+        working-directory: .
+        run: |
+          command -v node || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends nodejs
+          }
+          echo "node $(node --version)"
+      - run: go test ./internal/e2e/... -race -count=1 -v
+
   stores:
     name: stores (dual driver)
     runs-on: ubuntu-latest

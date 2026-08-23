@@ -2,6 +2,8 @@ package stream
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -121,11 +123,14 @@ func (s *Service) Ingest(env livestate.Envelope) {
 		s.hub.Broadcast(Push(KindEvent, env, now))
 	}
 	if len(change.Agents) > 0 {
-		overlays := make(map[string]*livestate.Overlay, len(change.Agents))
-		for role := range change.Agents {
-			overlays[role] = s.state.AgentOverlay(role)
+		// Sorted, so a push carrying two seats is byte-stable across
+		// runs — Go map iteration is randomised, and a frame whose row
+		// order changes for no reason makes a diff of two captures
+		// unreadable.
+		roles := slices.Sorted(maps.Keys(change.Agents))
+		if rows := s.state.OverlayRows(roles); len(rows) > 0 {
+			s.hub.Broadcast(Push(KindAgents, rows, now))
 		}
-		s.hub.Broadcast(Push(KindAgents, overlays, now))
 	}
 	if change.Sandboxes {
 		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))

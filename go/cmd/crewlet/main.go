@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/version"
@@ -274,8 +275,9 @@ func runEngine(args []string, stderr io.Writer) error {
 
 // httpSurface is the API half of a merged node.
 type httpSurface struct {
-	app    *api.App
-	server *http.Server
+	app       *api.App
+	server    *http.Server
+	projector *observe.Projector
 }
 
 // stop shuts the HTTP surface down before the engine drains.
@@ -291,6 +293,10 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 		// drain: the seats are the expensive thing to strand.
 		log.Warn("api_shutdown_failed", "error", err)
 	}
+	// After the listener, so no socket can be reading the projection while
+	// its feed is torn down, and before the engine drains, so the drain's
+	// own turns are not projected onto a page nobody can reach.
+	s.projector.Stop(shutdown)
 	s.app.Stop()
 }
 
@@ -401,6 +407,20 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	app.SetConfigured(true)
 	app.Start(ctx)
 
+	// The other half of the observability pipeline. The engine already
+	// persists what THIS node publishes (see engine.Backends); this is what
+	// puts the whole company's events on this node's dashboard, and it is a
+	// broadcast subscription because a browser attached here must see turns
+	// that ran anywhere — see observe.Projector.
+	//
+	// Started before the listener binds, so a socket cannot open onto a
+	// projection that is not yet being fed.
+	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
+	if err := projector.Start(ctx); err != nil {
+		app.Stop()
+		return nil, err
+	}
+
 	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -434,7 +454,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "reads serve without a token on an address other machines "+
 				"can reach; set api.auth.allow_anonymous_read to false to close them")
 	}
-	return &httpSurface{app: app, server: server}, nil
+	return &httpSurface{app: app, server: server, projector: projector}, nil
 }
 
 // apiReadHeaderTimeout bounds how long a client may take to send its request

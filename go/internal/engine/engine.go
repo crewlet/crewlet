@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -140,6 +141,8 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		Conversation: in.Conversation,
 		AlwaysOn:     te.ExecutorAlwaysOnTools,
 		SkipNames:    MetaToolNames(),
+		Publisher:    in.Publisher,
+		Turn:         in.Turn,
 	})
 }
 
@@ -155,6 +158,13 @@ type RunnerInput struct {
 	// Judge decides round-cap extensions. Nil sends every exhaustion
 	// straight to the rescue path.
 	Judge extension.Judge
+
+	// Publisher receives the phase telemetry, and Turn identifies the turn
+	// it belongs to. Nil publishes nothing — the right answer for a runner
+	// a test drives directly, and the reason both are per-turn inputs
+	// rather than epoch configuration.
+	Publisher queue.Publisher
+	Turn      runner.Turn
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.

@@ -289,6 +289,39 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 	return out
 }
 
+// OverlayRows renders the live overlays for the named roles as the wire rows
+// the `agents` push carries: one object per seat, with its role INSIDE it.
+//
+// A LIST, and the role in the row, because that is what the client reads —
+// store.js does `rows.map(r => [r.role, r])` behind an `Array.isArray` guard,
+// so a map keyed by role is not merely a different spelling of the same thing:
+// it fails the guard and the push is DISCARDED, silently, every time. Measured
+// end to end (internal/e2e): a full turn ran, four agents pushes went out per
+// phase, and the seat stayed idle on the dashboard from start to finish.
+//
+// The client is the compatibility reference and wins any disagreement about a
+// frame's shape (rewrite/decisions/502). This is that rule applied.
+//
+// A role with no live state is SKIPPED rather than sent as an empty overlay:
+// the client merges these onto its existing rows, so a blank one would erase
+// the state of a seat that simply had not changed.
+func (s *LiveState) OverlayRows(roles []string) []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]map[string]any, 0, len(roles))
+	for _, role := range roles {
+		live := s.agents[role]
+		if live == nil {
+			continue
+		}
+		row := map[string]any{"role": role}
+		mergeOverlay(row, live.overlay())
+		out = append(out, row)
+	}
+	return out
+}
+
 // AgentOverlay returns the live overlay for one role, or nil.
 func (s *LiveState) AgentOverlay(role string) *Overlay {
 	s.mu.Lock()

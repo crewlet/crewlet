@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/pulsar"
@@ -174,6 +175,19 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 		return nil, err
 	}
 	out.Store = db
+
+	// The node's own observability, registered the moment both halves
+	// exist and BEFORE anything can publish. A listener attached later
+	// races the first turn a restarting node picks up off its durable
+	// inbox — that turn's phases would be projected onto a dashboard and
+	// missing from the record of the same seat.
+	//
+	// Here rather than beside the dashboard because persisting what this
+	// node did is the engine's business: a worker-only node with no API
+	// still keeps a record of its turns. The other half of the pipeline —
+	// feeding a live projection — is the API's, and is a broadcast
+	// subscription for reasons observe.Projector states.
+	out.Queue.AddPublishListener(observe.NewWriter(db.Events()).Listen())
 	return out, nil
 }
 
