@@ -18,6 +18,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -114,6 +115,14 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 	if err := validateTTL(resource, opts.Owner, opts.TTL); err != nil {
 		return nil, err
 	}
+	// Meta crosses a wire on every real backend, so it crosses one here.
+	// See wireCopy: an in-process shortcut past this is a divergence the
+	// twin would certify rather than catch.
+	wire, err := wireCopy(opts.Meta)
+	if err != nil {
+		return nil, err
+	}
+	opts.Meta = wire
 	lease := b.acquire(resource, opts)
 	if lease == nil {
 		return nil, nil
@@ -377,9 +386,42 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 	return nil
 }
 
+// wireCopy puts meta through the encoding a real backend puts it through.
+//
+// The twin's job is to be the store, and this is the one field that crosses a
+// wire: d-201 §2 records the ownership key carrying meta AS JSON, and
+// placement.rolesFromMeta is written to accept "the []any a JSON round trip
+// through the lease store returns" — so JSON shapes are what a deployment
+// actually sees. An in-process store that skipped the encoding handed callers
+// their own Go types back, measurably: an int stayed an int here and returned
+// as float64 from the KV backend, a []string stayed a []string here and
+// returned as []any. A caller asserting meta["n"].(int) then passes every
+// memory-backed test in the tree and panics the first time it runs against
+// the store a company is deployed on — a bug the twin would certify rather
+// than catch.
+//
+// A payload that will not encode is a caller bug, not a store answer, so it
+// is an error: a real backend's write would fail on it too, and discovering
+// that in production instead of here is the whole failure this closes.
+func wireCopy(meta map[string]any) (map[string]any, error) {
+	if len(meta) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return nil, fmt.Errorf("coord: meta is not encodable: %w", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("coord: meta did not survive its encoding: %w", err)
+	}
+	return out, nil
+}
+
 // copyMeta deep-copies the JSON-shaped payload a holder advertises about
 // itself, so neither side can reach into the other's state after the call.
-// Anything that is not a map or slice is a leaf and travels as it is.
+// The value is already in wire shape by the time it is stored, so this is
+// isolation only — the encoding happened at the door, in wireCopy.
 func copyMeta(meta map[string]any) map[string]any {
 	if len(meta) == 0 {
 		return nil

@@ -15,6 +15,23 @@
 // process holds this node id's presence lease" at an operator while it
 // quietly stopped refreshing its own presence.
 //
+// # Before adding a case that says a backend must NOT do something
+//
+// Grep rewrite/decisions/ for the operation first. A recorded degradation is a
+// PERMITTED exception, and the corpus is where permission lives — d-201 §3
+// records that a KV cannot express the protocol gate inside a compare-and-swap
+// and so does check → claim → re-check → release, which means a gate-refused
+// claim may legitimately leave a touched record. A "must not" written without
+// that grep forbids what the contract allows, and the way that surfaces is a
+// correct backend failing, its author investigating, and this suite changing.
+// It has already cost that twice in the sibling queue suite. The grep costs
+// about fifteen seconds.
+//
+// The same applies to what a case QUIETLY assumes. Every meta payload here is
+// JSON-shaped, which is why none of them could see that a value's Go type does
+// not survive a real backend's round trip; that gap is stated at the meta
+// cases rather than left for someone to discover in production.
+//
 // # What the suite does NOT require
 //
 // A backend may answer "unknown" at any moment. That is the contract's third
@@ -41,6 +58,7 @@ package coordtest
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"sync"
@@ -377,6 +395,41 @@ func (h *harness) requireUnchanged(what string, before, after *coord.Lease) {
 	case !reflect.DeepEqual(after.Meta, before.Meta):
 		h.t.Fatalf("%s: meta moved %v -> %v", what, before.Meta, after.Meta)
 	}
+}
+
+// requireSameValues asserts a meta payload came back with the same VALUES it
+// went in with, saying nothing about the Go types carrying them.
+//
+// Canonical JSON is the comparison because it is exactly the distinction the
+// contract draws and no more: under it int(3) and float64(3) are one value,
+// []string{"a"} and []any{"a"} are one list, and a DROPPED or corrupted entry
+// is still a difference. A backend is free to choose its wire format — so
+// asserting types here would forbid what the contract permits — but no
+// backend is free to lose what a holder advertised about itself, because a
+// peer reads it to decide whether this node may run a seat.
+func (h *harness) requireSameValues(what string, want, got map[string]any) {
+	h.t.Helper()
+	wantJSON, err := canonicalJSON(want)
+	if err != nil {
+		h.t.Fatalf("%s: the fixture does not encode: %v", what, err)
+	}
+	gotJSON, err := canonicalJSON(got)
+	if err != nil {
+		h.t.Fatalf("%s: the returned payload does not encode: %v", what, err)
+	}
+	if wantJSON != gotJSON {
+		h.t.Fatalf("%s: meta came back as %s, want the same values as %s", what, gotJSON, wantJSON)
+	}
+}
+
+// canonicalJSON renders a payload for value comparison. encoding/json sorts
+// map keys, so two payloads differing only in iteration order agree.
+func canonicalJSON(v map[string]any) (string, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // requireResources compares a listing against an expected set. Order is

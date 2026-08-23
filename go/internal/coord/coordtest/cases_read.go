@@ -191,9 +191,61 @@ var readCases = []testCase{
 
 	// --- meta: what the holder IS --------------------------------------
 	//
-	// The payloads below stay JSON-native (strings, slices and maps of
-	// them) on purpose: a backend that persists meta as JSON must not fail
-	// this suite over its codec's choice of number type.
+	// The payloads below stay JSON-native — strings, and slices and maps of
+	// them — and that is a KNOWN GAP, not a courtesy. Meta is the one field
+	// that crosses a wire (d-201 §2: the ownership key carries it as JSON),
+	// so a value's Go TYPE need not survive a round trip: measured, an int
+	// written to the embedded-NATS backend reads back as a float64 and a
+	// []string as a []any. Every payload here is already in the shape JSON
+	// decoding produces, so these cases cannot tell a backend that encodes
+	// from one that hands the caller its own map straight back.
+	//
+	// What that would certify, if left unsaid: a caller writing
+	// meta["n"].(int) passing every memory-backed test in the tree and
+	// panicking against the store the company is actually deployed on. The
+	// twin closes it from its own side by encoding at the door, and
+	// placement.rolesFromMeta reads both shapes deliberately — but nothing
+	// HERE requires either, so a third backend may still diverge. See
+	// rewrite/questions/coord-contract-meta-wire-shape.md.
+
+	{"meta_values_survive_the_round_trip", func(h *harness) {
+		// The property the free-form payload actually owes, separated
+		// from the one it does not.
+		//
+		// A backend picks its own wire format, so the Go TYPE carrying a
+		// value is its business — measured, a number written here comes
+		// back float64 from a JSON store and int from one that keeps Go
+		// types, and both are correct. What no backend may do is LOSE
+		// what a holder advertised about itself, because a peer reads it
+		// to decide whether this node may run a seat, and a codec that
+		// silently drops the entries it cannot encode leaves that peer
+		// deciding against a profile the node never published.
+		//
+		// So this compares canonical JSON: int(3) and float64(3) are one
+		// value, []string{"a"} and []any{"a"} are one list, and a dropped
+		// or mangled entry is still a difference. Deliberately the only
+		// case here that writes NON-JSON-native Go types — every other
+		// meta fixture is pre-shaped, which is precisely why none of them
+		// can see a codec that loses things.
+		payload := map[string]any{
+			"replicas": 3,
+			"ratio":    1.5,
+			"on":       true,
+			"roles":    []string{"seats", "workers"},
+			"labels":   map[string]any{"zone": "eu"},
+		}
+		lease := h.claim(coord.NodeResource("n1"), coord.AcquireOptions{
+			Owner: "n1:a", TTL: LongTTL, Ungated: true, Meta: payload,
+		})
+		h.requireSameValues("meta returned by the claim", payload, lease.Meta)
+		h.requireSameValues("meta read back", payload, h.mustHold(coord.NodeResource("n1"), "n1:a").Meta)
+
+		live := h.listLive(coord.NodePrefix)
+		if len(live) != 1 {
+			h.t.Fatalf("ListLive returned %d leases, want 1", len(live))
+		}
+		h.requireSameValues("meta from the membership read", payload, live[0].Meta)
+	}},
 
 	{"meta_round_trips_through_every_read", func(h *harness) {
 		payload := map[string]any{
