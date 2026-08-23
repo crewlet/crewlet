@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -147,24 +148,41 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 	b := memory.New()
 	resource := coord.NodeResource("n1")
 
-	lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
-		Owner: "n1:a", TTL: time.Minute, Ungated: true,
-		Meta: map[string]any{"roles": []any{"seats"}, "ch": make(chan int)},
-	})
-	if err == nil {
-		t.Fatalf("TryAcquire = (%v, nil) for a payload no store could encode — a real "+
-			"backend's write would fail on it, and answering success with the profile "+
-			"silently gone is the one outcome a caller cannot detect", lease)
-	}
-	if lease != nil {
-		t.Fatal("TryAcquire granted a lease it could not record the meta for")
-	}
-	// And nothing was written on the way to refusing.
-	held, err := b.Get(ctx, resource)
-	if err != nil {
-		t.Fatalf("Get after a refused claim: %v", err)
-	}
-	if held != nil {
-		t.Fatalf("the resource is held by %q after a claim that was refused", held.Owner)
+	// Both failure branches, because the second one is REACHED, not
+	// unreachable. It decodes bytes the encoder just produced, which reads
+	// like it cannot fail — and a probe refuted that: json.Number("1e1000")
+	// marshals happily and will not decode into map[string]any, because it
+	// overflows float64. Not exotic either; meta assembled from previously
+	// decoded JSON carries json.Number values as a matter of course. The
+	// reasoning that said "unreachable, label it" was wrong, and only
+	// running it said so.
+	for _, bad := range []struct {
+		name  string
+		value any
+	}{
+		{"a value no encoder accepts", make(chan int)},
+		{"a value that encodes but will not decode", json.Number("1e1000")},
+	} {
+		lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+			Owner: "n1:a", TTL: time.Minute, Ungated: true,
+			Meta: map[string]any{"roles": []any{"seats"}, "bad": bad.value},
+		})
+		if err == nil {
+			t.Fatalf("%s: TryAcquire = (%v, nil) — a real backend's write would fail on "+
+				"this, and answering success with the profile silently gone is the one "+
+				"outcome a caller cannot detect", bad.name, lease)
+		}
+		if lease != nil {
+			t.Fatalf("%s: TryAcquire granted a lease it could not record the meta for", bad.name)
+		}
+		// And nothing was written on the way to refusing.
+		held, err := b.Get(ctx, resource)
+		if err != nil {
+			t.Fatalf("%s: Get after a refused claim: %v", bad.name, err)
+		}
+		if held != nil {
+			t.Fatalf("%s: the resource is held by %q after a claim that was refused",
+				bad.name, held.Owner)
+		}
 	}
 }
