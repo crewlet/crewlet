@@ -91,6 +91,21 @@ type Options struct {
 	// environment, and an unset environment means DriverTurso.
 	Driver Driver
 
+	// WrapDriver wraps the certified driver before any connection is
+	// opened. It exists for FAULT INJECTION and nothing else.
+	//
+	// Every fail-open read in this codebase has a branch that only runs
+	// when a result set fails PART WAY THROUGH — after the query
+	// succeeded, during iteration. That branch decides whether a caller
+	// gets "nothing is known" or a silent PARTIAL answer, which is the
+	// dangerous one, and no amount of closing the database reaches it:
+	// closing makes the query itself fail, which is the other branch.
+	//
+	// It wraps rather than replaces, so the two-certified-drivers rule
+	// holds: what runs underneath is still turso or sqlite. Nil in every
+	// non-test caller, and there is no config field for it.
+	WrapDriver func(driver.Driver) driver.Driver
+
 	// MaxOpenConns bounds the connection pool; 0 means defaultMaxOpenConns.
 	MaxOpenConns int
 
@@ -139,7 +154,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		busy = defaultBusyTimeout
 	}
 
-	pool, err := openPool(string(drv), path, busy)
+	pool, err := openPool(string(drv), path, busy, opts.WrapDriver)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +247,9 @@ func (d *DB) SQL() *sql.DB { return d.sql }
 // does not, and a per-driver DSN dialect is exactly the divergence this
 // package exists to avoid. A connector wrapping the driver is the one place
 // that runs on every connection, on both drivers, identically.
-func openPool(driverName, path string, busy time.Duration) (*sql.DB, error) {
+func openPool(driverName, path string, busy time.Duration,
+	wrap func(driver.Driver) driver.Driver,
+) (*sql.DB, error) {
 	// sql.Open is lazy — it validates the driver name and nothing else — so
 	// this costs no I/O and exists only to reach the registered driver
 	// value, which database/sql offers no other accessor for.
@@ -242,6 +259,9 @@ func openPool(driverName, path string, busy time.Duration) (*sql.DB, error) {
 	}
 	drv := probeHandle.Driver()
 	_ = probeHandle.Close()
+	if wrap != nil {
+		drv = wrap(drv)
+	}
 
 	return sql.OpenDB(&connector{
 		drv: drv,
