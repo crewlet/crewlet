@@ -106,9 +106,44 @@ type TraceContext struct {
 	ParentSpanID string
 }
 
+// The optional interfaces below let a payload contribute to the envelope's
+// derived fields. They are deliberately narrow: a payload states the ONE fact
+// it knows and the envelope owns the resolution order, so "who was the actor"
+// has a single definition instead of one per event type.
+//
+// Handing a payload the whole *Event was the alternative. It would let sixty
+// payloads each re-derive the chain, and the moment two of them disagree the
+// same turn reads differently on two surfaces.
+type (
+	// Summarizer provides a summary needing nothing but the payload.
+	Summarizer interface{ Summary() string }
+
+	// ActorSummarizer provides a summary that leads with the actor. The
+	// RESOLVED actor is passed in, so a payload never has to know how the
+	// chain reaches it.
+	ActorSummarizer interface{ SummaryFor(actor string) string }
+
+	// Actorer names the actor outright, overriding the chain — for events
+	// whose actor is neither the role nor the publisher, such as an
+	// inbound notification's human sender.
+	Actorer interface{ Actor() string }
+
+	// Roler contributes the payload's role, the chain's first link.
+	Roler interface{ Role() string }
+
+	// AgentIdentified contributes an agent id, the chain's last resort
+	// before falling back to the engine itself.
+	AgentIdentified interface{ AgentID() string }
+)
+
 // Summary is the human-readable "who did what" line the dashboard shows in
-// its trace view. A payload may override it by implementing Summarizer.
+// its trace view.
 func (e *Event) Summary() string {
+	if s, ok := e.Data.(ActorSummarizer); ok {
+		if out := s.SummaryFor(e.Actor()); out != "" {
+			return out
+		}
+	}
 	if s, ok := e.Data.(Summarizer); ok {
 		if out := s.Summary(); out != "" {
 			return out
@@ -131,25 +166,34 @@ func titleWords(s string) string {
 	return strings.Join(parts, " ")
 }
 
-// Summarizer lets a payload provide its own dashboard summary line.
-type Summarizer interface{ Summary() string }
-
-// Actor names who performed the event, preferring an explicit actor from the
-// payload over the envelope's source. Used by the dashboard's per-seat views.
+// Actor names who performed the event.
+//
+// The chain, in order: an explicit override, the payload's role, the
+// envelope's source, an agent id, then the engine itself. Each link is what
+// some family of events actually knows about itself, and resolving them in
+// one place is what keeps a seat's activity attributable across every surface
+// that renders it.
 func (e *Event) Actor() string {
 	if a, ok := e.Data.(Actorer); ok {
 		if out := a.Actor(); out != "" {
 			return out
 		}
 	}
+	if r, ok := e.Data.(Roler); ok {
+		if out := r.Role(); out != "" {
+			return out
+		}
+	}
 	if e.Source != "" {
 		return e.Source
 	}
+	if a, ok := e.Data.(AgentIdentified); ok {
+		if out := a.AgentID(); out != "" {
+			return out
+		}
+	}
 	return "system"
 }
-
-// Actorer lets a payload name its own actor.
-type Actorer interface{ Actor() string }
 
 // Clone returns a deep-enough copy for requeue: identity, timestamp and trace
 // are preserved verbatim, which the completion ledger's idempotency and the

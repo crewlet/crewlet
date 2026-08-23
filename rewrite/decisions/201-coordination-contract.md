@@ -26,18 +26,29 @@ the epoch survived release. A KV with per-key TTL deletes the key on expiry —
 which would reset the epoch, handing the next owner a token a zombie from the
 previous tenure is still fencing with.
 
-So:
+So — and this shape is **measured**, not inferred (`internal/coord/kv/behavior_test.go`):
 
-- `lease.<resource>` — the **ownership** key. Carries owner, epoch, preferred,
-  protocol, meta as JSON. Written with **per-key TTL** (`KeyTTL`), so the
-  store's own expiry is the arbiter clock — the role Postgres `now()` played.
-  Nodes never compare their own wall clocks to decide ownership.
-- `epoch.<resource>` — the **epoch counter**. Persistent, never deleted, only
-  ever incremented by CAS. Gaps are harmless; resets are not.
+- **`crewlet_leases` bucket, `TTL` (bucket MaxAge) = the lease TTL.** One key
+  per resource carrying owner, epoch, preferred, protocol and meta as JSON.
+  Every write refreshes that entry's age, so `Update` at the current revision
+  IS the renew, an unrenewed key expires server-side, and a peer's `Create`
+  succeeds afterwards. The store's own expiry is the arbiter clock — the role
+  Postgres `now()` played, and nodes never compare their own wall clocks.
+- **`crewlet_epochs` bucket, NO TTL.** One persistent counter per resource,
+  only ever CAS-incremented. Measured: it survives the lease key's expiry,
+  which is the whole point. Gaps are harmless; resets are not.
 
-**Bucket `MaxAge` must be unset on these buckets.** JetStream's bucket-level
-MaxAge takes precedence over a per-key TTL, so a MaxAge set for tidiness would
-silently expire live leases.
+**Per-key TTL (`KeyTTL`) cannot be used for this.** It is create-only by
+design — "the TTL is set when the key is created and cannot be changed later"
+— and `Update` clears it. Measured: a lease renewed through `Update` became
+**immortal**, which would mean a dead node's seat could never be reclaimed.
+The bucket-MaxAge form is the renewable one.
+
+**Consequence: one TTL per bucket, so the backend takes its TTL at
+construction** and rejects a per-call TTL that disagrees. That is honest
+rather than limiting — seats, singleton duties and node presence all run on
+the same 45 s TTL, and a backend that silently accepted a different one would
+be lying about when a lease expires.
 
 ### Acquire
 
