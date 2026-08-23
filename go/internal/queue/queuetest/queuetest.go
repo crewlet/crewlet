@@ -21,6 +21,7 @@ package queuetest
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -475,6 +476,18 @@ func newEvent(label string) *events.Event {
 }
 
 // newConvEvent is newEvent plus the conversation key batch partitioning uses.
+//
+// The key is a STRING, and every other free-form payload value this suite
+// publishes is too. That is convenient — a string survives any codec unchanged,
+// so partitioning assertions never depend on the wire — but it means these
+// fixtures cannot see a payload change type or go missing in transit. A suite
+// whose fixtures are already in the shape its backend produces is not testing
+// the boundary, it is arranging not to look at it.
+//
+// Wire/a_free_form_payload_value_survives_whatever_type_it_lands_as is the case
+// that does look, with a number, a slice, a bool and a nested map. Anything
+// added here should stay string-keyed for the partitioning cases and leave the
+// wire question to that one.
 func newConvEvent(label, conv string) *events.Event {
 	ev := newEvent(label)
 	ev.Payload = map[string]any{"conv": conv}
@@ -492,6 +505,17 @@ func convKey(ev *events.Event) string {
 	// Empty is the contract's signal to fall back to a per-event key, so
 	// an event with no conversation is its own partition.
 	return ""
+}
+
+// canonicalJSON renders a value the way the wire would, so two payloads can be
+// compared for VALUE equality without either side asserting a Go type.
+func canonicalJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("canonicalise %v: %v", v, err)
+	}
+	return string(raw)
 }
 
 func labelOf(ev *events.Event) string {

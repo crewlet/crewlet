@@ -69,6 +69,57 @@ func (s *suite) runWire(t *testing.T) {
 		}
 	})
 
+	t.Run("a_free_form_payload_value_survives_whatever_type_it_lands_as", func(t *testing.T) {
+		t.Parallel()
+		// Event.Payload is the UNTYPED bag beside the registered body, and
+		// it is where a wire boundary shows first. Measured on this repo's
+		// twin: int -> float64, []string -> []any, string -> string. So a
+		// caller writing Payload["replicas"].(int) reads correctly on the
+		// publishing node and panics on every consumer.
+		//
+		// This asserts the VALUE survives, never the Go type it lands as:
+		// d-103 explicitly leaves the encoding to the backend, so requiring
+		// float64 would forbid what a decision permits. Comparison is the
+		// canonical JSON of the map, under which int 3 and float64 3 are
+		// the same value and []string{"a"} and []any{"a"} are the same
+		// list — which is exactly the equivalence a caller is entitled to
+		// rely on, and nothing more.
+		//
+		// It exists because every other payload in this suite is a string,
+		// which survives any codec unchanged. A suite whose fixtures are
+		// already in the shape its backend produces is not testing the
+		// boundary, it is arranging not to look at it: a backend that
+		// silently DROPS a value it cannot encode passed every case here
+		// before this one.
+		q := s.start(t)
+		seen := make(chan *events.Event, 1)
+		subscribe(t, q, "wire.freeform", "g", func(_ context.Context, ev *events.Event) queue.Result {
+			seen <- ev
+			return queue.Ack()
+		})
+
+		sent := newEvent("freeform")
+		sent.Payload = map[string]any{
+			"replicas": 3,
+			"roles":    []string{"lead", "reviewer"},
+			"ratio":    0.5,
+			"enabled":  true,
+			"nested":   map[string]any{"depth": 2},
+			"conv":     "c1",
+		}
+		want := canonicalJSON(t, sent.Payload)
+		publish(t, q, "wire.freeform", sent)
+
+		select {
+		case got := <-seen:
+			if have := canonicalJSON(t, got.Payload); have != want {
+				t.Errorf("free-form payload arrived as %s, want %s", have, want)
+			}
+		case <-t.Context().Done():
+			t.Fatal("no delivery")
+		}
+	})
+
 	t.Run("the_envelope_survives_the_trip", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(t)

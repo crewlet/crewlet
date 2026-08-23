@@ -37,6 +37,23 @@ import (
 // The snapshot helper compares everything the suite can observe about a
 // subscription, so a new observable is covered here by default rather than
 // needing a new case.
+//
+// BEFORE ADDING A "MUST NOT" CASE HERE, GREP rewrite/decisions/ FOR THE
+// OPERATION. A recorded degradation is a permitted exception, and the corpus is
+// where permission lives — a case that forbids what a decision allows makes a
+// correct backend look broken, and the author who investigates pays far more
+// than the grep cost. This suite has already made that mistake twice: it
+// required a free deferral, which d-102 decisions 1-2 explicitly trade away on
+// JetStream, and it required head-replay on nak, which d-102 measures as
+// Pulsar-only. Both are capabilities now, not requirements.
+//
+// The four cases below were checked that way rather than by waiting for a
+// failure. d-101 §3 defines all four verbs and permits none of these writes;
+// d-102's only nearby exceptions are the deferral cost (gated as FreeDeferral)
+// and Unquiesce not needing to reclaim a prefetch on a pull backend, which
+// nothing here asserts either way. d-102 also records that delete-and-recreate
+// "resets the cursor, so unusable", which is the same conclusion case A reaches
+// from the other direction.
 func (s *suite) runNegativePaths(t *testing.T) {
 	ctx := context.Background()
 
@@ -184,6 +201,14 @@ func (s *suite) runNegativePaths(t *testing.T) {
 // case names: an operation that declines to act declines to touch ANY of it, so
 // the next observable a backend learns to report is covered here without a new
 // assertion being written for it.
+//
+// Its honesty has one condition, and it has already failed once: this covers
+// every observable only as long as a new Capabilities field that reports
+// subscription state is also added HERE. Quiescing was missing at first — an
+// observable the backend already exported — and the case meant to catch a stale
+// quiesce passed against a backend setting one. A helper that silently stops
+// generalising is exactly the failure it exists to prevent, so treat this
+// struct as part of the Capabilities definition, not as a local convenience.
 type subscriptionState struct {
 	backlog     []string
 	deadLetters []string
