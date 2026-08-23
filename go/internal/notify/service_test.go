@@ -629,3 +629,52 @@ func TestDelegationMetadataIsSafeParsed(t *testing.T) {
 		t.Fatalf("chain = %v, want the 0 kept and the empties dropped", chain)
 	}
 }
+
+// The resolved handle is the one fact about a notification a parser cannot
+// know — which seat an account id or an email belongs to is answered by the
+// org, not by the payload — so the service stamps it after the cascade.
+func TestTheResolvedRecipientIsStamped(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Email: "lead@example.com"}, "hi")}
+
+	h.svc.Handle(t.Context(), delivery("tracker"))
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("the seat was woken %d times", len(woken))
+	}
+	n, _ := events.DataAs[*types.ExternalNotification](woken[0])
+	if got := n.Metadata[notify.RecipientField]; got != "engineering-lead" {
+		t.Fatalf("the recipient stamp reads %q", got)
+	}
+}
+
+// A parser producing several recipients from one payload may hand back ONE
+// shared metadata map. Stamping into it would make every copy claim the last
+// recipient — and the digest a seat then reads would name somebody else.
+func TestASharedMetadataMapIsNotStampedInPlace(t *testing.T) {
+	h := newService(t, nil)
+	shared := map[string]string{"issue_id": "u-1", "event_type": "comment"}
+	mk := func(handle string) notify.Routed {
+		r := to(notify.Recipient{Handle: handle}, "hi")
+		r.Metadata = shared // deliberately the same map
+		return r
+	}
+	h.parser.out = []notify.Routed{mk("engineering-lead"), mk("backend-engineer")}
+
+	h.svc.Handle(t.Context(), delivery("tracker"))
+	for _, handle := range []string{"engineering-lead", "backend-engineer"} {
+		woken := h.inbox(t, handle)
+		if len(woken) != 1 {
+			t.Fatalf("%s was woken %d times", handle, len(woken))
+		}
+		n, _ := events.DataAs[*types.ExternalNotification](woken[0])
+		if got := n.Metadata[notify.RecipientField]; got != handle {
+			t.Fatalf("%s received a notification stamped for %q", handle, got)
+		}
+	}
+	// And the parser's own map is untouched, so a parser reusing one
+	// across deliveries is not accumulating other seats' stamps.
+	if _, stamped := shared[notify.RecipientField]; stamped {
+		t.Fatal("the parser's own metadata map was written through")
+	}
+}

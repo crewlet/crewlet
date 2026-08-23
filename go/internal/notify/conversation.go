@@ -36,6 +36,14 @@ import (
 // KeyField is the payload field a producer stamps the key into.
 const KeyField = "conversation_key"
 
+// RecipientField carries the handle a notification was resolved to.
+//
+// Stamped by the inbound service after the recipient cascade, because it is
+// the one fact about a notification a parser genuinely cannot know: which
+// seat a vendor's account id or email belongs to is answered by the org, not
+// by the payload.
+const RecipientField = "recipient_handle"
+
 // EventPrefix namespaces the fallback key.
 //
 // Its own namespace so it can never collide with a derived key: a vendor's

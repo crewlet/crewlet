@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"sync"
 	"time"
@@ -305,6 +306,20 @@ func (s *Service) deliver(ctx context.Context, reg *Registry, ev *events.Event, 
 
 	prompt := s.prompts.For(r.Source)
 	salient := r.Body
+	// A COPY, stamped with the resolved recipient before anything renders.
+	//
+	// The copy is not tidiness: a parser producing several recipients from
+	// one payload may hand back one shared metadata map, and stamping the
+	// handle into it would make every copy claim the last recipient. The
+	// handle itself is a fact the prompt needs and the parser cannot know
+	// — resolution happens here, after the cascade.
+	meta := maps.Clone(r.Metadata)
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	meta[RecipientField] = party.Handle
+	r.Metadata = meta
+
 	out := types.ExternalNotification{
 		NotificationSource:   r.Source,
 		SourceEventType:      r.EventType,
@@ -314,14 +329,14 @@ func (s *Service) deliver(ctx context.Context, reg *Registry, ev *events.Event, 
 		Subject:              r.Subject,
 		Body:                 prompt.Build(r.Inbound, reg),
 		SalientBody:          &salient,
-		Metadata:             r.Metadata,
+		Metadata:             meta,
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),
 	}
 	// The conversation key rides on the event so the inbox coalescer can
 	// partition by it without re-deriving a vendor's rule. Stamped here,
 	// where the vendor's prompt is already in hand.
-	if key := prompt.ConversationKey(r.Metadata, r.Subject); key != "" {
-		out.Metadata = stamped(out.Metadata, KeyField, Namespaced(r.Source, key))
+	if key := prompt.ConversationKey(meta, r.Subject); key != "" {
+		meta[KeyField] = Namespaced(r.Source, key)
 	}
 
 	// The SAME trace the webhook edge started, so a delivery and the turn
@@ -401,15 +416,6 @@ func (s *Service) skip(ctx context.Context, source, handle, reason string) {
 		log.Warn("notification_skip_unrecorded", "source", source,
 			"handle", handle, "reason", reason, "error", err.Error())
 	}
-}
-
-// stamped sets a metadata key, allocating a map when there is none.
-func stamped(m map[string]string, key, value string) map[string]string {
-	if m == nil {
-		return map[string]string{key: value}
-	}
-	m[key] = value
-	return m
 }
 
 // DelegationOf reads the delegation bookkeeping a producer put on a
