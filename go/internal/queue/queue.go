@@ -342,20 +342,44 @@ func eventType(ev *events.Event) string {
 	return ev.Type
 }
 
-// OrderPartitionsOldestFirst sorts partitions by their oldest constituent
-// event, stably, so ties keep arrival order.
+// OrderForDispatch establishes BOTH levels of ordering a drained batch
+// needs, and is the one place either is decided.
 //
-// Receive order alone starves a quiet conversation behind a hot one under
-// deferral: the quiet conversation's requeued copies re-enter the topic
-// AFTER whatever arrived during the hot conversation's turn, so
-// receive-ordered dispatch picks the hot one on every drain. Event
-// timestamps survive requeue by design, so they carry the aging signal — the
+// Between partitions: oldest constituent event first. Receive order alone
+// starves a quiet conversation behind a hot one under deferral — the quiet
+// conversation's requeued copies re-enter the topic AFTER whatever arrived
+// during the hot conversation's turn, so receive-ordered dispatch picks the
+// hot one on every drain. Timestamps carry the aging signal, so the
 // conversation that has waited longest dispatches first.
-func OrderPartitionsOldestFirst[T any](parts []Partition[T], eventOf func(T) *events.Event) []Partition[T] {
-	oldest := make(map[string]time.Time, len(parts))
-	for _, p := range parts {
+//
+// Within a partition: event timestamp, not delivery order. This is what
+// makes a conversation read correctly regardless of how a broker interleaves
+// redeliveries with fresh arrivals — measured, JetStream returns a
+// redelivered message BEHIND never-delivered ones, where Pulsar replays it
+// from the head (see rewrite/decisions/102-jetstream-redelivery.md). Relying
+// on the timestamps the engine already trusts, rather than on one broker's
+// replay semantics, removes a correctness dependency that would otherwise
+// have to be re-verified for every backend.
+//
+// Both levels are stable sorts, so ties keep arrival order, and both fall
+// back to arrival order rather than failing: ordering is a fairness and
+// readability policy, and must never block delivery.
+func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event) []Partition[T] {
+	out := slices.Clone(parts)
+	oldest := make(map[string]time.Time, len(out))
+	for i, p := range out {
+		items := slices.Clone(p.Items)
+		slices.SortStableFunc(items, func(a, b T) int {
+			ea, eb := eventOf(a), eventOf(b)
+			if ea == nil || eb == nil {
+				return 0
+			}
+			return ea.Timestamp.Compare(eb.Timestamp)
+		})
+		out[i].Items = items
+
 		var min time.Time
-		for _, item := range p.Items {
+		for _, item := range items {
 			ev := eventOf(item)
 			if ev == nil {
 				continue
@@ -366,7 +390,6 @@ func OrderPartitionsOldestFirst[T any](parts []Partition[T], eventOf func(T) *ev
 		}
 		oldest[p.Key] = min
 	}
-	out := slices.Clone(parts)
 	slices.SortStableFunc(out, func(a, b Partition[T]) int {
 		ta, tb := oldest[a.Key], oldest[b.Key]
 		switch {
