@@ -465,10 +465,12 @@ Spec: `src/crewlet/notifications/` + per-vendor packages; suites:
   thread-follow model + MentionGrammar, conversation coalescing with per-source
   supersede rules, WorkingStatusDriver, NotificationPrompt registry, KnowledgeSearcher
   contract (never raises; fail-closed draft hiding; exactly one backend per org).
-- **[DECIDE d-701] Vendor order for v1.** Constraint: whatever the driving deployment
-  uses goes first (the operator's chat + tracker + knowledge + code host). Hint: the
-  webhook parsers are pure functions with rich suites — highly delegable; the
-  provisioning CLIs are operator tooling and can trail the transports.
+- **[DECIDED d-701] Vendor order for v1: Mattermost (chat), Plane (tracker +
+  knowledge), GitLab (code host)** — the three the example company enables, the
+  three with docker-compose profiles, and the three with bootstrap scripts. Spine
+  first, then the three in parallel (they share nothing beyond it), parser before
+  transport in each. Provisioning CLIs and `doctor` trail the transports. Full
+  reasoning: `rewrite/decisions/701-vendor-order.md`.
 - **[BUILD]** Per-vendor ports in the decided order, each: parser + routing fidelity
   suite, transport, prompt, provisioning CLI (if in scope), doctor (Mattermost).
 
