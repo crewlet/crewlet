@@ -3,6 +3,7 @@ package queuetest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -133,34 +134,48 @@ func (s *suite) runCore(t *testing.T) {
 		// while a real Shared subscription split the traffic and ran two
 		// interleaved turn streams.
 		by := newJournal()
-		subscribe(t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
-			by.record("a")
-			return queue.Ack()
-		})
-		subscribe(t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
-			by.record("b")
-			return queue.Ack()
-		})
+		for _, who := range []string{"a", "b"} {
+			subscribe(t, q, "topic", "grp", func(_ context.Context, ev *events.Event) queue.Result {
+				by.record(who + "|" + labelOf(ev))
+				return queue.Ack()
+			})
+		}
 
-		for range 4 {
-			publish(t, q, "topic", newEvent("t"))
+		for i := range 4 {
+			publish(t, q, "topic", newEvent("e"+string(rune('0'+i))))
 		}
 
 		if s.caps.StrictRoundRobin {
-			by.awaitLabels(t, "strict round-robin across the group", "a", "b", "a", "b")
+			by.awaitLabels(t, "strict round-robin across the group",
+				"a|e0", "b|e1", "a|e2", "b|e3")
 			return
 		}
-		by.await(t, "the group to share four events", func(seen []string) bool {
-			var a, b int
-			for _, who := range seen {
-				switch who {
-				case "a":
-					a++
-				case "b":
-					b++
+		// Without strict rotation the group owes exactly one thing: every
+		// event reaches exactly ONE member. It does NOT owe the sharing of a
+		// burst — measured, Pulsar dispatches a Shared subscription by
+		// available permits and hands one consumer as many entries as it has
+		// room for, so at a production prefetch a single member legitimately
+		// takes all four. Requiring both to participate asserted the twin's
+		// dispatch strategy as though it were a broker requirement.
+		//
+		// Each event carries its own label so this checks per-EVENT delivery
+		// rather than counting deliveries, which a backend could satisfy by
+		// handling two events twice and losing two.
+		by.await(t, "every event to reach exactly one member", func(seen []string) bool {
+			handled := map[string]int{}
+			for _, entry := range seen {
+				_, label, _ := strings.Cut(entry, "|")
+				handled[label]++
+			}
+			if len(handled) != 4 {
+				return false
+			}
+			for _, n := range handled {
+				if n != 1 {
+					return false
 				}
 			}
-			return a+b == 4 && a > 0 && b > 0
+			return true
 		})
 	})
 
@@ -559,6 +574,10 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("wait_for_handlers_no_op_when_idle", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(t)
+		// quietFor here is only "a timeout that is not zero": an idle queue
+		// returns without consuming any of it, so this assertion does not
+		// depend on the length. It is not the positive-half dependency that
+		// constant's doc warns against.
 		remaining, err := q.WaitForHandlers(ctx, quietFor)
 		if err != nil {
 			t.Fatalf("WaitForHandlers: %v", err)

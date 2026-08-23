@@ -154,8 +154,25 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		})
 
 		publish(t, q, "topic.budget", newEvent("e0"))
+		// Wait for the QUIESCE, not for the backlog.
+		//
+		// The backlog is 1 from the moment the publish is acked — before the
+		// broker has dispatched anything and so before the handler has run,
+		// let alone deferred. On an asynchronous backend this wait returns at
+		// once, the Unquiesce below finds nothing quiesced and does nothing,
+		// the deferral lands a millisecond later, and the attachment is
+		// quiesced with nothing left to resume it. Measured by the Pulsar
+		// backend at 3 of 12 full-suite runs, and 16 of 20 run alone.
+		//
+		// It could not fail on the backend it was written against: the twin
+		// declares InlineDispatch, so Publish drains before returning and the
+		// window does not exist. Exactly the trap this suite's own doc warns
+		// about, committed in the group whose header claims its cases were
+		// checked against a plausible wrong backend — they were checked
+		// against a wrong backend, never against an asynchronous one.
+		quiescing := s.needQuiescing(t)
 		awaitState(t, "the deferral to quiesce the attachment", func() bool {
-			return len(backlog(s, q, "topic.budget", "grp")) == 1
+			return quiescing(q, "topic.budget", "grp")
 		})
 		if _, err := q.Unquiesce(ctx, "topic.budget", "grp"); err != nil {
 			t.Fatalf("Unquiesce: %v", err)
@@ -247,6 +264,13 @@ func (s *suite) snapshot(q queue.EventQueue, topic, group string) subscriptionSt
 	return out
 }
 
+// assertUntouched compares state against a snapshot taken before an operation
+// that should not have written.
+//
+// It reads with NO wait, because an absence has no signal to wait on — which
+// makes it depend on the read-your-own-write requirement stated on
+// Capabilities: if a backend's inspection lags its own completed operation, a
+// real write is invisible here and this passes having checked nothing.
 func (s *suite) assertUntouched(t *testing.T, q queue.EventQueue, topic, group string, before subscriptionState, what string) {
 	t.Helper()
 	if !before.known {

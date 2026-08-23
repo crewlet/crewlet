@@ -203,11 +203,14 @@ func (s *suite) runBatch(t *testing.T) {
 		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(5.0, 20))
 
+		setup := time.Now()
 		publish(t, q, "t", newConvEvent("a", "c1"))
 		if err := q.Stop(ctx); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
-		batches.staysAt(t, 0, "a stopped queue flushed its linger window")
+		setupTook := time.Since(setup)
+		batches.staysAtRacing(t, 0, "a stopped queue flushed its linger window",
+			5*time.Second, setupTook)
 
 		// RETAINED, not dropped: the linger buffer IS the backlog, and a
 		// subscription's mail outlives every attachment.
@@ -224,14 +227,20 @@ func (s *suite) runBatch(t *testing.T) {
 		q := s.start(t)
 		batches := newBatchJournal()
 		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(lingerFor.Seconds(), 20))
+			queue.NewBatchOptions(racingWindow.Seconds(), 20))
 
+		// The window must be OPEN when the pause lands and must EXPIRE while
+		// it is held — no ordering removes that, so this case buys slack with
+		// a longer window rather than pretending the race is gone.
+		setup := time.Now()
 		publish(t, q, "t", newConvEvent("a", "c1"))
 		if err := q.PauseDelivery(ctx); err != nil {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
-		time.Sleep(lingerFor * 3)
-		batches.staysAt(t, 0, "a paused queue flushed its linger window")
+		setupTook := time.Since(setup)
+		time.Sleep(racingWindow + quietFor)
+		batches.staysAtRacing(t, 0, "a paused queue flushed its linger window",
+			racingWindow, setupTook)
 
 		if got := labelsOf(backlog(q, "t", "g")); !equalStrings(got, []string{"a"}) {
 			t.Fatalf("backlog after a pause mid-window = %v, want [a]", got)
@@ -437,6 +446,21 @@ func (s *suite) runBatch(t *testing.T) {
 
 // fillOneBatch publishes one event per conversation while the subscription is
 // held, so they arrive as a single multi-partition batch when it is released.
+//
+// SCOPE, because this is an assumption and not a guarantee. Holding the
+// subscription makes the events available together, which is the most any
+// caller can arrange through the contract — but nothing obliges a backend to
+// hand them over as ONE batch. A backend that delivers them singly makes the
+// cases built on this pass without exercising the multi-partition loop they are
+// named for: the first single-partition batch defers, the attachment quiesces,
+// and there never was a "rest of the batch" to stop. That is a vacuous pass,
+// not a false one, and it is invisible from the assertions.
+//
+// The in-memory twin is where these genuinely exercise the loop, because it
+// drains everything available into one delivery. Treat a green result on an
+// asynchronous backend as "did not contradict" rather than "certified", and if
+// that distinction ever needs closing it needs an observable the contract does
+// not currently have — how many partitions a delivery was drawn from.
 func fillOneBatch(t *testing.T, q queue.EventQueue, topic, group string, convs ...string) {
 	t.Helper()
 	ctx := context.Background()

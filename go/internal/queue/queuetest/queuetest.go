@@ -50,7 +50,9 @@ package queuetest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -106,6 +108,30 @@ type Capabilities struct {
 	// that already supplies it keeps being certified; set
 	// WithDeliveryAttempts instead and this can go.
 	WithRedeliveryBudget func(t *testing.T, budget int) queue.EventQueue
+
+	// READ-YOUR-OWN-WRITE, required of every inspection function below.
+	//
+	// A backend supplying these must have them reflect an operation that has
+	// already RETURNED. Cases that assert an absence read them with no wait —
+	// most of NegativePaths does, because "this refusal wrote nothing" has no
+	// signal to wait on — so on a backend whose inspection lags, a real
+	// corruption is simply not visible yet and the whole group passes
+	// vacuously. Not a false result; an empty one, which is worse for being
+	// indistinguishable from a green.
+	//
+	// Stated here because no case can discover it: both backends this suite
+	// was built against make it true for free — the twin is a mutex over a
+	// map, and the broker-backed one reads statistics synchronously — so
+	// nothing here can tell a backend that GUARANTEES it from one that merely
+	// happens to. That is the same blindness as fixtures shaped like the
+	// backend, reached the same way, and the only remedy is to write the
+	// requirement down where the capability is supplied.
+	//
+	// It is deliberately a requirement on the CAPABILITY and not on
+	// EventQueue: nothing in the contract promises when a completed operation
+	// becomes observable, and this suite has no business inventing that
+	// promise. A backend that cannot honour it should leave these nil and
+	// skip the group rather than supply a lagging view of itself.
 
 	// Backlog reports the events a subscription retains and has not
 	// delivered — the mail an unowned seat is holding.
@@ -270,15 +296,37 @@ const (
 	settleFor = 3 * time.Second
 
 	// quietFor is how long a negative assertion — "this must NOT be
-	// delivered" — holds the window open. A paused attachment that leaks
-	// tends to leak immediately, so this only has to outlast one dispatch
-	// cycle.
+	// delivered" — holds the window open.
+	//
+	// WHAT IT DOES AND DOES NOT COVER, because the reason here was wrong
+	// before the number was. It used to say a leak "tends to leak
+	// immediately, so this only has to outlast one dispatch cycle" — written
+	// against a backend whose dispatch cycle is microseconds, and false for
+	// one where a cycle is a network round trip. On a backend slower than
+	// this window, a negative assertion passes because nothing had ARRIVED
+	// yet, not because nothing was leaked.
+	//
+	// That is a false PASS, which is worse than a flake: it quietly weakens
+	// coverage on exactly the backends most likely to leak, and it does so
+	// silently. The value stays — every negative assertion pays it, and no
+	// window is provably long enough for an arbitrary backend — but do not
+	// read this as a general "wait for something" budget, and do not add a
+	// case whose POSITIVE half depends on it. Positive halves wait on
+	// settleFor and on a signal.
 	quietFor = 150 * time.Millisecond
 
 	// lingerFor is the batch linger window the batching subtests use. It
-	// has to be long enough that several publishes land inside one window
-	// on a loaded machine, and short enough that a test which waits out
-	// several windows stays quick.
+	// has to be long enough that several publishes land inside one window,
+	// and short enough that a test waiting out several windows stays quick.
+	//
+	// "Several publishes land inside one window" was measured on the
+	// in-memory twin, where a publish is a mutex operation, and that is the
+	// claim to distrust rather than the number: max_batch_chunks_oversized_
+	// buffers needs FIVE publishes inside one window, which is 10ms each on
+	// a backend where a publish is a network round trip. No backend has
+	// reported a flake there, so the value stands — but it stands on
+	// evidence from the fastest backend, and a case needing more publishes
+	// per window than that should say so rather than assume this covers it.
 	//
 	// The suite never asks for a linger above queue.MaxLingerSeconds, and
 	// must not: backends size their dispatch budget to that ceiling and are
@@ -286,6 +334,23 @@ const (
 	// clamping it. A case needing a longer window to make something
 	// observable should find another way to observe it.
 	lingerFor = 50 * time.Millisecond
+
+	// racingWindow is the linger a case gets when its SETUP has to complete
+	// while the window is still open — the pause and stop cases, where the
+	// window must be open when the verb lands AND must expire afterwards.
+	// Neither ordering removes that, so those two pay a longer wait and no
+	// other case does.
+	//
+	// Sized from measurement, but deliberately not from the measurement that
+	// was available: the publish-to-pause gap is 1.0ms worst-case on the
+	// in-memory twin under 10x CPU load with -race -count=6, which made the
+	// old 50ms window look like 50x headroom. That is the FASTEST backend,
+	// where both calls are local mutex operations. On a networked backend a
+	// publish is a round trip, and the measured cost of a handful of those
+	// under a parallel -race suite is 200-330ms. A constant sized against the
+	// quickest backend is how a suite acquires a race it cannot see, so this
+	// is sized for the slowest one plausible.
+	racingWindow = 1 * time.Second
 )
 
 // --- observing handlers ---------------------------------------------------
@@ -306,6 +371,7 @@ func newJournal() *journal {
 }
 
 func (j *journal) record(label string) {
+	deliveriesObserved.Add(1)
 	j.mu.Lock()
 	j.seen = append(j.seen, label)
 	j.mu.Unlock()
@@ -335,6 +401,15 @@ func (j *journal) count() int {
 // with the last observation if the settle budget runs out.
 func (j *journal) await(t *testing.T, what string, cond func(seen []string) bool) {
 	t.Helper()
+	j.awaitExpecting(t, what, cond, nil, false)
+}
+
+// awaitExpecting is await plus, when the caller has one, the exact sequence it
+// is waiting for — which is the only thing that lets a timeout tell a lagging
+// delivery from a wrong one. Passed down rather than stored on the journal so
+// two awaits on one journal cannot inherit each other's expectation.
+func (j *journal) awaitExpecting(t *testing.T, what string, cond func(seen []string) bool, want []string, hasWant bool) {
+	t.Helper()
 	deadline := time.NewTimer(settleFor)
 	defer deadline.Stop()
 	for {
@@ -347,7 +422,8 @@ func (j *journal) await(t *testing.T, what string, cond func(seen []string) bool
 			if cond(j.all()) {
 				return
 			}
-			t.Fatalf("timed out waiting for %s; handlers saw %v", what, j.all())
+			seen := j.all()
+			timedOut(t, what, verdictFor(seen, want, hasWant), seen)
 		}
 	}
 }
@@ -355,7 +431,7 @@ func (j *journal) await(t *testing.T, what string, cond func(seen []string) bool
 // awaitLabels waits for exactly this sequence of labels, in order.
 func (j *journal) awaitLabels(t *testing.T, what string, want ...string) {
 	t.Helper()
-	j.await(t, what, func(seen []string) bool { return equalStrings(seen, want) })
+	j.awaitExpecting(t, what, func(seen []string) bool { return equalStrings(seen, want) }, want, true)
 }
 
 // staysAt holds a quiet window open and fails if anything more is delivered.
@@ -376,6 +452,133 @@ func (j *journal) staysAt(t *testing.T, want int, what string) {
 	}
 }
 
+// deliveriesObserved counts every delivery this suite records, across every
+// case in the run. It is the evidence a timeout needs and cannot otherwise get:
+// a backend that delivered thousands of events inside this same budget has
+// demonstrably not been starved by it.
+var deliveriesObserved atomic.Int64
+
+// deliveryVerdict is what a timeout can honestly conclude about its own cause.
+type deliveryVerdict int
+
+const (
+	// verdictNothing — nothing arrived at all.
+	verdictNothing deliveryVerdict = iota
+	// verdictPartial — what arrived is a strict PREFIX of what was expected.
+	verdictPartial
+	// verdictDiverged — what arrived contradicts what was expected.
+	verdictDiverged
+	// verdictUnknown — something arrived under an opaque condition, so
+	// whether more was still in flight cannot be determined.
+	verdictUnknown
+)
+
+// timedOut ends a case that overran the settle budget, naming only what the
+// evidence supports.
+//
+// An earlier version of this asserted its cause: anything that arrived at all
+// meant "a behavioural difference, not a timing one, so settleFor is not the
+// suspect". That is wrong for every case awaiting a SEQUENCE. A backend slower
+// than the budget delivers e1 and not yet e2, which is "something arrived,
+// condition unmet" — so the message told the one reader whose problem WAS
+// timing to look anywhere but there. The fix for misattribution shipped with
+// the same misattribution pointing the other way, which is worth remembering
+// the next time a diagnostic feels obviously right.
+//
+// So a prefix is now reported as a prefix and nothing is concluded from it, and
+// the no-delivery case cites how many deliveries this backend managed
+// elsewhere rather than offering advice.
+func timedOut(t *testing.T, what string, v deliveryVerdict, observed any) {
+	t.Helper()
+	const budgetNote = "settleFor is a constant this suite advertises, not a promise the " +
+		"contract makes. If a backend genuinely needs longer, that is a finding to raise — " +
+		"not a number to quietly raise here, which would blunt the check for every other backend."
+
+	switch v {
+	case verdictPartial:
+		t.Fatalf("timed out after %s waiting for %s; delivery is INCOMPLETE, not wrong: "+
+			"handlers saw %v, a prefix of what was expected\n"+
+			"\tThat is exactly what a backend slower than this budget produces, so timing "+
+			"and behaviour are both live. This helper cannot tell them apart and does not "+
+			"guess. %s", settleFor, what, observed, budgetNote)
+	case verdictDiverged:
+		t.Fatalf("timed out after %s waiting for %s; handlers saw %v, which CONTRADICTS "+
+			"what was expected rather than lagging it\n"+
+			"\tDelivery happened and was wrong, so settleFor is not the suspect.",
+			settleFor, what, observed)
+	case verdictUnknown:
+		t.Fatalf("timed out after %s waiting for %s; handlers saw %v under a condition this "+
+			"helper cannot decompose\n"+
+			"\tWhether more was still in flight is unknown, so treat timing and behaviour "+
+			"as both live. %s", settleFor, what, observed, budgetNote)
+	default:
+		seen := deliveriesObserved.Load()
+		evidence := fmt.Sprintf("This backend delivered %d events elsewhere in this run "+
+			"inside the same budget, so the budget is evidently sufficient for it — look "+
+			"at this case's own subject first.", seen)
+		if seen == 0 {
+			evidence = "This backend has delivered NOTHING anywhere in this run, so suspect " +
+				"its setup or this budget before this case."
+		}
+		t.Fatalf("timed out after %s waiting for %s; NOTHING was delivered\n\t%s %s",
+			settleFor, what, evidence, budgetNote)
+	}
+}
+
+// verdictFor classifies a timeout, conceding verdictUnknown when the caller had
+// no explicit expectation to compare against — an opaque condition genuinely
+// cannot say whether more was in flight, and saying so is better than picking.
+func verdictFor[T comparable](seen, want []T, hasWant bool) deliveryVerdict {
+	if len(seen) == 0 {
+		return verdictNothing
+	}
+	if !hasWant {
+		return verdictUnknown
+	}
+	return prefixVerdict(seen, want)
+}
+
+// prefixVerdict classifies what was seen against what was wanted.
+func prefixVerdict[T comparable](seen, want []T) deliveryVerdict {
+	if len(seen) == 0 {
+		return verdictNothing
+	}
+	for i, got := range seen {
+		if i >= len(want) || want[i] != got {
+			return verdictDiverged
+		}
+	}
+	return verdictPartial
+}
+
+// staysAtRacing is staysAt for a case whose SETUP had to land inside a window
+// the backend was already counting down.
+//
+// A plain negative assertion cannot tell the two causes apart, and its message
+// picked one: "a paused queue flushed its linger window" blames the backend for
+// what may have been the suite losing its own race. So this prints the raw
+// elapsed and lets it decide, which is the only honest split available — and
+// unlike a backend whose clock the suite can move, wall time here is always
+// real evidence, because nothing in this suite can travel.
+func (b *batchJournal) staysAtRacing(t *testing.T, want int, what string, window, setupTook time.Duration) {
+	t.Helper()
+	time.Sleep(quietFor)
+	got := b.all()
+	if len(got) == want {
+		return
+	}
+	if setupTook >= window {
+		t.Fatalf("%s: saw %v — but this case's own setup took %s against a %s window, "+
+			"so the SUITE lost its race and this is not a backend defect.\n"+
+			"\tIf a backend genuinely cannot complete the setup inside this window, that "+
+			"is a finding to raise — not a number to quietly raise here, which would blunt "+
+			"the check for every other backend.", what, got, setupTook, window)
+	}
+	t.Fatalf("%s: saw %v; the setup took %s, comfortably inside the %s window, so too "+
+		"little time passed for this suite's own timing to explain it — this is a BACKEND "+
+		"defect.", what, got, setupTook, window)
+}
+
 // batchJournal is journal for batch handlers: it keeps each batch whole,
 // because the shape of the batches IS what the batching contract promises.
 type batchJournal struct {
@@ -389,6 +592,7 @@ func newBatchJournal() *batchJournal {
 }
 
 func (b *batchJournal) record(evs []*events.Event) {
+	deliveriesObserved.Add(int64(len(evs)))
 	b.mu.Lock()
 	b.batches = append(b.batches, labelsOf(evs))
 	b.mu.Unlock()
@@ -417,6 +621,11 @@ func (b *batchJournal) sizes() []int {
 
 func (b *batchJournal) await(t *testing.T, what string, cond func(batches [][]string) bool) {
 	t.Helper()
+	b.awaitExpecting(t, what, cond, nil, false)
+}
+
+func (b *batchJournal) awaitExpecting(t *testing.T, what string, cond func(batches [][]string) bool, want []int, hasWant bool) {
+	t.Helper()
 	deadline := time.NewTimer(settleFor)
 	defer deadline.Stop()
 	for {
@@ -429,14 +638,14 @@ func (b *batchJournal) await(t *testing.T, what string, cond func(batches [][]st
 			if cond(b.all()) {
 				return
 			}
-			t.Fatalf("timed out waiting for %s; handlers saw %v", what, b.all())
+			timedOut(t, what, verdictFor(b.sizes(), want, hasWant), b.all())
 		}
 	}
 }
 
 func (b *batchJournal) awaitSizes(t *testing.T, what string, want ...int) {
 	t.Helper()
-	b.await(t, what, func([][]string) bool { return equalInts(b.sizes(), want) })
+	b.awaitExpecting(t, what, func([][]string) bool { return equalInts(b.sizes(), want) }, want, true)
 }
 
 func (b *batchJournal) staysAt(t *testing.T, want int, what string) {
@@ -462,7 +671,7 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 	case <-ch:
 	case <-time.After(settleFor):
 		rescue()
-		t.Fatalf("timed out after %s waiting for %s", settleFor, what)
+		timedOut(t, what, verdictNothing, nil)
 	}
 }
 
@@ -479,7 +688,10 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
+			// State the suite polls has no "saw something" half — the
+			// condition is simply still false — so this always reports the
+			// ambiguous case, which it genuinely is.
+			timedOut(t, what, verdictNothing, nil)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -695,6 +907,16 @@ func (s *suite) needAttempts(t *testing.T) func(t *testing.T, attempts int) queu
 	}
 	t.Skip("backend cannot be built with a specific delivery-attempt limit")
 	return nil
+}
+
+// needQuiescing returns the view of whether an attachment has stopped taking
+// work — the only signal that a deferral has actually been APPLIED.
+func (s *suite) needQuiescing(t *testing.T) func(q queue.EventQueue, topic, group string) bool {
+	t.Helper()
+	if s.caps.Quiescing == nil {
+		t.Skip("backend cannot report whether an attachment is quiesced")
+	}
+	return s.caps.Quiescing
 }
 
 func (s *suite) needPeer(t *testing.T) func(t *testing.T, q queue.EventQueue) queue.EventQueue {

@@ -35,6 +35,12 @@ func Match(pattern, subject string) bool {
 			// least one segment to match — "a.>" does not match "a".
 			return i == len(pat)-1 && len(sub) > i
 		case "*":
+			// Redundant, deliberately. No input can reach it: a `*` past
+			// the end of the subject means len(pat) > i == len(sub), so
+			// the length equality below already refuses. It stays because
+			// this branch is the one place a later edit would be tempted
+			// to read sub[i], and an out-of-range read here would panic
+			// inside a delivery path rather than fail a match.
 			if i >= len(sub) {
 				return false
 			}

@@ -295,8 +295,13 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	// ...and the names a caller may pass that the grammar never mints. The
 	// pairs whose halves differ only in where the boundary falls are the
 	// ones the old join collapsed.
-	subjects = append(subjects, "a", "a.b", "a.b.c", "a_b", "coll.shared", "coll.a.b", "", "a..b", "a b", "a/b", "a*b")
-	groups = append(groups, "g", "b.c", "c", "h.i", "h_i", "", "x.y.z", "g/h")
+	//
+	// "a"/"b" and "a"/"ab" are there for a sharper reason than variety:
+	// they are the pairs that collide when the two halves are digested
+	// without a separator between them ("a"+"b" and "ab"+""), which is the
+	// mistake a digest invites once it has replaced a join.
+	subjects = append(subjects, "a", "b", "a.b", "a.b.c", "a_b", "coll.shared", "coll.a.b", "", "a..b", "a b", "a/b", "a*b")
+	groups = append(groups, "g", "a", "ab", "b.c", "c", "h.i", "h_i", "", "x.y.z", "g/h")
 
 	// Deduped, because neither list is guaranteed distinct: the group
 	// grammar is not injective (see TestGroupNamesAreNotUniqueOnTheirOwn),
@@ -306,6 +311,17 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	subjects, groups = distinct(subjects), distinct(groups)
 
 	seen := map[string][2]string{}
+	// The DIGEST is asserted separately from the whole subject, and the
+	// separate assertion is the load-bearing one. The readable head is a
+	// second thing that varies with the pair, so whole-subject injectivity
+	// can hold while the digest itself aliases — measured: a digest taken
+	// over group+topic with no separator between them ("a"+"b" and
+	// "ab"+"") is invisible through the subject, because the heads "b.a"
+	// and "_.ab" still differ. That leaves the doc comment's claim that no
+	// two pairs share a digest untested, and the head is documented as
+	// lossy and truncatable, so it is exactly the half that may stop
+	// separating them.
+	digests := map[string][2]string{}
 	pairs := 0
 	for _, subject := range subjects {
 		for _, group := range groups {
@@ -317,6 +333,15 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 				continue
 			}
 			seen[dlq] = [2]string{subject, group}
+
+			id := dlq[strings.LastIndex(dlq, ".")+1:]
+			if prev, dup := digests[id]; dup {
+				t.Errorf("digest %q is shared by (%q, %q) and (%q, %q); the readable "+
+					"head is what is telling these apart, and it is lossy by design",
+					id, prev[0], prev[1], subject, group)
+				continue
+			}
+			digests[id] = [2]string{subject, group}
 		}
 	}
 	if pairs == 0 {
