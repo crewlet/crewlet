@@ -1,14 +1,13 @@
 # q — `Summarizer` / `Actorer` cannot see the envelope
 
-Status: **open** · Raised porting `src/crewlet/events/types.py` → `go/internal/events/types/`
-· Contract: `go/internal/events/event.go`
+Status: **resolved** — the contract was extended; `go/internal/events/event.go` and
+`go/internal/events/types/` both carry the answer. Raised porting
+`src/crewlet/events/types.py`.
 
-Nothing was changed in `event.go`. This records where the Python catalogue does not
-fit the Go contract, so the answer is decided once rather than re-derived per event.
+## What was wrong
 
-## What Python does
-
-`Event.actor` is a getattr chain over the *whole* event — envelope included:
+`Event.actor` in Python is a getattr chain over the *whole* event — payload and
+envelope in one object:
 
 ```python
 for field in ("role", "source"):     # payload field, then ENVELOPE field
@@ -16,57 +15,45 @@ for field in ("role", "source"):     # payload field, then ENVELOPE field
 return getattr(self, "agent_id", "") or "system"
 ```
 
-and almost every subclass's `summary` interpolates that value:
+and ~30 of the 60 subclasses interpolate that value into `summary`
+(`f"{self.actor} created task '{self.title}' for {self.target_role}"`).
 
-```python
-return f"{self.actor} created task '{self.title}' for {self.target_role}"
-```
+Go splits envelope from payload, and the original contract handed `Summarizer`
+and `Actorer` nothing. Two gaps followed: the `agent_id` tail was unreachable
+(a payload returns `""` to defer, and cannot say "use my agent id, but only if
+`source` is empty"), and an actor-led summary on a payload with no `role` field
+could not name the actor at all.
 
-Pydantic merges envelope and payload into one object, so `self.actor` is available
-to `summary` for free. Go splits them: `Payload` is a separate value and both
-`Summarizer.Summary() string` and `Actorer.Actor() string` are handed nothing.
+## The resolution
 
-## The two gaps
+`event.go` now owns the whole chain — override → payload role → envelope source
+→ payload agent id → `"system"` — and payloads contribute single facts through
+narrow optional interfaces: `Roler`, `AgentIdentified`, `Actorer` (an outright
+override), plus `ActorSummarizer`, whose `SummaryFor(actor string)` is handed the
+already-resolved actor.
 
-**1. The `agent_id` tail is unreachable.** A payload returns `""` from `Actor()` to
-defer, and the envelope then answers `Source` or `"system"`. It cannot say "use
-`agent_id`, but only if `source` is empty" — that decision needs both halves.
-Affects every event with `agent_id` and no `role` (`agent_reassigned`,
-`task_delegated` has neither, `external_notification` after its `sender` override).
-Only observable when `role` and `source` are BOTH empty, which is rare in practice:
-the engine's publishers stamp `source`.
+`SummaryFor(*Event)` was rejected deliberately: handing sixty payloads the whole
+envelope lets each re-derive the chain, and the moment two of them disagree the
+same turn reads differently on two surfaces.
 
-**2. An actor-led `summary` cannot name a source-derived actor.** ~30 of the 60
-events open their summary with `self.actor`. Where the payload carries `role` this
-ports exactly. Where it does not — `task_created`, `task_delegated`,
-`document_created`, `document_updated`, `provider_fallback`, `compaction_requested`,
-`compaction_completed`, `subagent_batched`, `message_sent` and `org_started` /
-`org_stopped` without a name — the actor lives only in the envelope's `source` and
-the Go payload has no way to reach it. `provider_fallback` / `compaction_*` /
-`subagent_batched` carry an `agent_handle` right there in the payload, but Python's
-chain does not look at it, so using it would change behaviour rather than port it.
+## What the catalogue does with it
 
-## What the port does meanwhile
+- `Role()` on all 32 payloads carrying a `role` field, `AgentID()` on all 33
+  carrying an `agent_id` field, so the tail is reachable everywhere Python's
+  getattr reached it. `Actor()` survives on `ExternalNotification` alone, where
+  the actor is genuinely neither the role nor the publisher but the human who
+  sent the message.
+- The ~30 actor-led summaries are `SummaryFor` and render the Python string
+  exactly, actor included. `lead()` remains, no longer as a workaround but as the
+  renderer for an actor-led line; a handful of lines pass a party the payload
+  names itself (an A2A channel's requester, a message's own sender) instead of
+  the resolved actor.
+- **Naming consequence, worth knowing before reading the structs:** Go forbids a
+  field and a method sharing a name, so the fields carrying `role` and
+  `agent_id` are `RoleName` and `Agent`. The JSON tags are unchanged; `Role()`
+  and `AgentID()` are how anything reads them.
 
-`lead(actor, phrase)` in `go/internal/events/types/types.go`: with an actor it
-renders Python's exact string; without one it capitalises the verb phrase, so
-`task_created` reads `Created task 'Build API' for Engineer` instead of leading
-with a blank. No detail is lost, only the name. Returning `""` (the contract's
-documented "defer to the default") was the alternative and is worse — it collapses
-the whole line to `Task Created`.
-
-## The fix, if wanted
-
-One added interface, no change to the existing two:
-
-```go
-// EnvelopeSummarizer renders a summary that needs envelope fields.
-type EnvelopeSummarizer interface{ SummaryFor(*Event) string }
-```
-
-`Event.Summary()` would try it before `Summarizer`, and an `EnvelopeActorer` would
-do the same for `Actor()`. That restores both behaviours exactly and keeps the
-plain `Summarizer` for payloads that need nothing. The cost is that a payload can
-then reach the whole envelope, which is the coupling the current contract avoids;
-passing just the resolved actor (`SummaryFor(actor string) string`) buys the same
-result with a narrower hole, but does not fix gap 1.
+Pinned by `TestActorChain` (each link, in order), `TestPayloadsContributeWhatTheyKnow`
+(derived from the wire tags, so a new event carrying a role and forgetting
+`Roler` fails rather than quietly attributing its turns to whatever published
+them) and `TestEverySummaryIsSpoken`.

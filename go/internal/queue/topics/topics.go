@@ -117,11 +117,19 @@ func Event(eventType string) string {
 	return EventsPrefix + eventType
 }
 
+// DeadLetterPrefix is the namespace dead letters live in.
+const DeadLetterPrefix = "dlq."
+
 // DeadLetter returns the dead-letter subject for a (topic, group) pair.
 //
 // Deliberately OUTSIDE the crewlet.* space: the dashboard streams
 // crewlet.events.> and a dead-lettered subject inside it would resurface
 // poison as live traffic.
+//
+// Dot-segmented rather than hyphenated so it is an ordinary subject in the
+// same grammar as everything else — a backend that groups subjects by their
+// leading segment can then carry dead letters without a special case, and a
+// special case in the poison path is exactly the code nobody exercises.
 func DeadLetter(topic, group string) string {
-	return "dlq-" + topic + "-" + group
+	return DeadLetterPrefix + topic + "." + group
 }

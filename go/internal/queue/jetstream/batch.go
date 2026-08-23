@@ -44,7 +44,7 @@ func (q *Queue) SubscribeBatch(
 				return
 			}
 			if a.blocked() {
-				if sleep(ctx, fetchWait) != nil {
+				if sleep(ctx, a.q.fetchWait()) != nil {
 					return
 				}
 				continue
@@ -52,6 +52,14 @@ func (q *Queue) SubscribeBatch(
 			batch := a.drain(ctx, opts)
 			if len(batch) == 0 {
 				continue
+			}
+			// A stop or a hold that landed DURING the linger window must
+			// not be flushed past: the whole point of pausing a seat's
+			// inbox is that no turn starts, and a batch collected a
+			// moment earlier would start one. Hand it straight back.
+			if ctx.Err() != nil || a.blocked() {
+				a.nakAll(batch)
+				return
 			}
 			a.dispatchBatch(ctx, batch, h, key)
 		}
@@ -66,7 +74,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	maxBatch := opts.EffectiveMaxBatch()
 	linger := opts.EffectiveLinger()
 
-	first, err := a.cons.Fetch(1, jetstream.FetchMaxWait(fetchWait))
+	first, err := a.cons.Fetch(1, jetstream.FetchMaxWait(a.q.fetchWait()))
 	if err != nil {
 		a.logFetchErr(ctx, err)
 		return nil
@@ -93,7 +101,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		}
 		wait := drainWait
 		if remaining := time.Until(deadline); remaining > wait {
-			wait = min(remaining, fetchWait)
+			wait = min(remaining, a.q.fetchWait())
 		}
 		more, err := a.cons.Fetch(maxBatch-len(batch), jetstream.FetchMaxWait(wait))
 		if err != nil {
@@ -125,11 +133,12 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 	parts := queue.OrderForDispatch(queue.PartitionByKey(batch, key, eventOf), eventOf)
 
 	for _, part := range parts {
-		// A deferral stops the whole drain: the remaining partitions are
-		// work this process has equally lost the right to do. They are
-		// Nak'd unhandled so the successor gets them, rather than being
-		// run by a node that just admitted it should not.
-		if a.quiesced.Load() {
+		// A deferral, a detach or a pause taken mid-drain stops the rest
+		// of it: the remaining partitions are work this consumer has
+		// equally lost the right to run. They go back unhandled so the
+		// successor gets them, rather than being run by a consumer that
+		// has just admitted it should not.
+		if a.blocked() {
 			a.nakAll(part.Items)
 			continue
 		}
@@ -143,7 +152,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		res := runBatchHandler(ctx, evs, h)
 		a.q.endHandler()
 
-		a.applyPartition(ctx, part.Items, res)
+		a.applyPartition(ctx, part.Key, part.Items, evs, res)
 	}
 }
 
@@ -152,12 +161,8 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 // Per-partition rather than per-message: the handler saw the conversation as
 // a unit and its verdict covers all of it. Acking some and NAKing others
 // would deliver a partial conversation to the successor.
-func (a *attachment) applyPartition(ctx context.Context, items []delivery, res queue.Result) {
-	var head *events.Event
-	if len(items) > 0 {
-		head = items[0].ev
-	}
-	queue.LogResult(a.log, a.topic, a.group, head, res)
+func (a *attachment) applyPartition(ctx context.Context, batchKey string, items []delivery, evs []*events.Event, res queue.Result) {
+	queue.LogBatchResult(a.log, a.key.topic, a.key.group, batchKey, evs, res)
 
 	switch res.Outcome {
 	case queue.OutcomeAck:

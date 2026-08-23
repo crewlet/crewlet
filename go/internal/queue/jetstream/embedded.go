@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -33,6 +34,40 @@ type embeddedServer struct {
 	// solo case: connections are made through an in-memory pipe, so the
 	// broker cannot be reached from outside the process at all.
 	inProcess bool
+}
+
+// Server is an embedded broker that outlives any one client of it.
+//
+// The split matters for the same reason the in-memory twin is a broker plus
+// N clients rather than one object: a node stopping must not take the broker
+// down for its peers. Open is the production convenience that owns both,
+// because the solo topology genuinely is one process owning one broker.
+type Server struct {
+	embedded *embeddedServer
+	cfg      Config
+}
+
+// StartServer starts an embedded broker without any client attached.
+func StartServer(cfg Config) (*Server, error) {
+	e, err := startEmbedded(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("start embedded nats: %w", err)
+	}
+	return &Server{embedded: e, cfg: cfg}, nil
+}
+
+// Client connects a new queue to this server. The client does NOT own the
+// server: stopping it leaves the broker and every peer running.
+func (s *Server) Client(ctx context.Context) (*Queue, error) {
+	return newQueueOn(ctx, s.cfg, s.embedded, false)
+}
+
+// Shutdown stops the broker. Every client of it should be stopped first.
+func (s *Server) Shutdown() {
+	if s.embedded != nil {
+		s.embedded.shutdown()
+		s.embedded = nil
+	}
 }
 
 func startEmbedded(cfg Config) (*embeddedServer, error) {
@@ -124,10 +159,14 @@ func dial(cfg Config) (*nats.Conn, error) {
 // messages rather than holding them, and the authoritative path for anything
 // that matters polls its own source.
 func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.StreamHandler) (queue.Unsubscribe, error) {
-	stream, err := streamForPattern(pattern)
+	spec, err := specForPattern(pattern, q.cfg.EventRetention)
 	if err != nil {
 		return nil, err
 	}
+	if err := q.ensureStream(ctx, spec); err != nil {
+		return nil, err
+	}
+	stream := spec.name
 	consCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	cons, err := q.js.CreateOrUpdateConsumer(consCtx, stream, jetstream.ConsumerConfig{
@@ -148,7 +187,15 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 		return nil, fmt.Errorf("create stream consumer on %s: %w", pattern, err)
 	}
 
+	// stopped gates dispatch rather than relying on the consume context
+	// alone: a message can already be in the client's callback path when
+	// Unsubscribe lands, and a dashboard that keeps receiving after it
+	// unsubscribed is a subscription that never really ended.
+	var stopped atomic.Bool
 	consumeCtx, err := cons.Consume(func(msg jetstream.Msg) {
+		if stopped.Load() {
+			return
+		}
 		var ev events.Event
 		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
 			q.log.Warn("stream_decode_failed", "pattern", pattern, "error", err.Error())
@@ -164,6 +211,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	var once sync.Once
 	return func(context.Context) error {
 		once.Do(func() {
+			stopped.Store(true)
 			consumeCtx.Stop()
 			cancel()
 		})

@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -48,6 +49,11 @@ const (
 	streamEvents        = "CREWLET_EVENTS"
 	streamNotifications = "CREWLET_NOTIFICATIONS"
 	streamConfig        = "CREWLET_CONFIG"
+	streamDeadLetter    = "CREWLET_DLQ"
+
+	// derivedPrefix names a stream provisioned for a subject namespace the
+	// engine does not itself define.
+	derivedPrefix = "CREWLET_NS_"
 )
 
 // maxDeliver is the delivery budget before a message is dead-lettered.
@@ -62,6 +68,16 @@ const (
 // The honest caveat the Python engine records still stands and no cap
 // solves it: a fast crash-loop is indistinguishable from poison.
 const maxDeliver = 25
+
+// budgetFor resolves the delivery budget for a queue, letting a test shrink
+// it. The dead-letter assertions need a small budget; running them against
+// the production default would mean dozens of handler invocations each.
+func budgetFor(cfg Config) int {
+	if cfg.MaxDeliver > 0 {
+		return cfg.MaxDeliver
+	}
+	return maxDeliver
+}
 
 // ackWait bounds how long a fetched-unacked message stays invisible.
 //
@@ -78,19 +94,17 @@ const ackWait = 30 * time.Minute
 // materialized index mirrors it.
 const defaultEventRetention = 30 * 24 * time.Hour
 
-// streamSpec describes the stream a subject belongs to.
+// streamSpec describes the stream carrying a subject namespace.
 //
-// Retention is the interesting field, and it differs by purpose rather than
+// Retention is the interesting field, and it differs by PURPOSE rather than
 // by taste:
 //
 //   - Agent inboxes and the notification work queues use INTEREST retention,
 //     which is precisely the engine's mailbox semantic: a message is kept
 //     while a durable consumer that has not acked it exists, and publishing
-//     to a subject no subscription covers drops it. The Python contract
-//     states that behaviour explicitly ("publishing to a topic with NO
-//     subscription drops the event silently"), so the broker enforcing it is
-//     a feature, not a hazard — and it is exactly why EnsureSubscription
-//     must run before anything publishes to a seat.
+//     to a subject no subscription covers drops it. The contract states that
+//     behaviour explicitly, so the broker enforcing it is a feature — and it
+//     is exactly why EnsureSubscription must run before anything publishes.
 //
 //   - The event stream uses LIMITS retention with an age bound, because its
 //     consumers are ephemeral dashboards and per-node materializers that
@@ -102,8 +116,9 @@ type streamSpec struct {
 	maxAge    time.Duration
 }
 
-// streamSpecs is the full topology, in match order.
-func streamSpecs(eventRetention time.Duration) []streamSpec {
+// engineStreams is the topology for the subjects the engine defines. Other
+// namespaces are provisioned on demand — see specForSubject.
+func engineStreams(eventRetention time.Duration) []streamSpec {
 	if eventRetention <= 0 {
 		eventRetention = defaultEventRetention
 	}
@@ -135,55 +150,100 @@ func streamSpecs(eventRetention time.Duration) []streamSpec {
 			retention: jetstream.LimitsPolicy,
 			maxAge:    time.Hour,
 		},
+		{
+			// Dead letters are kept by age, not by interest: nothing
+			// consumes them automatically, and an operator investigating
+			// poison needs them to still be there.
+			name:      streamDeadLetter,
+			subjects:  []string{topics.DeadLetterPrefix + ">"},
+			retention: jetstream.LimitsPolicy,
+			maxAge:    eventRetention,
+		},
 	}
 }
 
-// streamForSubject reports which stream carries a subject.
+// specForSubject reports which stream carries a subject.
 //
-// An unmapped subject is an error rather than a default stream: a publish
-// that lands somewhere nobody consumes is the exact failure the single topic
-// grammar exists to prevent, and it never raises on its own.
-func streamForSubject(subject string) (string, error) {
-	switch {
-	case subject == "":
-		return "", fmt.Errorf("%w: empty subject", ErrSubject)
-	case strings.HasPrefix(subject, topics.AgentInboxPrefix):
-		return streamAgent, nil
-	case strings.HasPrefix(subject, topics.EventsPrefix):
-		return streamEvents, nil
-	case strings.HasPrefix(subject, "crewlet.notifications."):
-		return streamNotifications, nil
-	case strings.HasPrefix(subject, "crewlet.config."):
-		return streamConfig, nil
-	case strings.HasPrefix(subject, "dlq-"):
-		// Dead letters live outside the crewlet.* space on purpose, so
-		// the dashboard's crewlet.events.> stream cannot resurface
-		// poison as live traffic. They ride the events stream's limits
-		// retention because nothing consumes them automatically.
-		return streamEvents, nil
-	default:
-		return "", fmt.Errorf("%w: %q belongs to no stream", ErrSubject, subject)
+// Subjects the engine defines get their purposeful stream. Anything else
+// gets a stream named for its leading segment, provisioned on demand.
+//
+// Provisioning rather than refusing is deliberate. The stream topology is
+// this backend's business; the SUBJECT SPACE is the engine's, and an
+// extension or a test that publishes under its own namespace is using the
+// contract correctly. A whitelist here would make the backend the authority
+// on what the engine may name — and the special case the whitelist needed
+// for dead letters was the smell that said so.
+//
+// The mailbox semantic (interest retention) is the default for a derived
+// namespace: a subject nobody subscribes to drops its messages, which is
+// what the contract already promises everywhere.
+func specForSubject(subject string, eventRetention time.Duration) (streamSpec, error) {
+	if subject == "" {
+		return streamSpec{}, fmt.Errorf("%w: empty subject", ErrSubject)
 	}
+	if strings.ContainsAny(subject, " \t\r\n") {
+		return streamSpec{}, fmt.Errorf("%w: %q contains whitespace", ErrSubject, subject)
+	}
+	if strings.Contains(subject, "..") || strings.HasPrefix(subject, ".") || strings.HasSuffix(subject, ".") {
+		// An empty segment is what an unroutable handle produces
+		// (crewlet.agent..inbox). It is a real subject nobody subscribes
+		// to, so it would swallow events silently.
+		return streamSpec{}, fmt.Errorf("%w: %q has an empty segment", ErrSubject, subject)
+	}
+
+	for _, spec := range engineStreams(eventRetention) {
+		for _, pattern := range spec.subjects {
+			if topics.Match(pattern, subject) {
+				return spec, nil
+			}
+		}
+	}
+
+	ns, _, _ := strings.Cut(subject, ".")
+	name := derivedPrefix + sanitizeStreamName(ns)
+	return streamSpec{
+		name:      name,
+		subjects:  []string{ns, ns + ".>"},
+		retention: jetstream.InterestPolicy,
+	}, nil
 }
 
-// streamForPattern reports which stream a wildcard subscription pattern
-// reads from. Patterns are only supported within one stream's subject space,
-// which every engine use is: the dashboard reads crewlet.events.>.
-func streamForPattern(pattern string) (string, error) {
-	trimmed := strings.TrimSuffix(strings.TrimSuffix(pattern, ">"), "*")
-	if trimmed == "" {
-		return "", fmt.Errorf("%w: pattern %q spans every stream", ErrSubject, pattern)
+// specForPattern reports which stream a wildcard subscription reads from.
+//
+// A pattern is resolved through the subject it would match, so a broadcast
+// subscription and a publish never disagree about where the messages are.
+func specForPattern(pattern string, eventRetention time.Duration) (streamSpec, error) {
+	probe := strings.TrimSuffix(strings.TrimSuffix(pattern, ">"), "*")
+	probe = strings.TrimSuffix(probe, ".")
+	if probe == "" {
+		return streamSpec{}, fmt.Errorf("%w: pattern %q spans every namespace", ErrSubject, pattern)
 	}
-	return streamForSubject(trimmed + "x")
+	return specForSubject(probe+".probe", eventRetention)
+}
+
+// sanitizeStreamName maps a subject segment onto a legal stream name.
+// JetStream forbids dots, spaces and wildcards in stream names.
+func sanitizeStreamName(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune('_')
+	}
+	if b.Len() == 0 {
+		return "DEFAULT"
+	}
+	return b.String()
 }
 
 // consumerName maps a (topic, group) pair onto a durable consumer name.
 //
 // JetStream durable names may not contain dots, spaces, or the wildcard
 // characters, while group names are already dot-free by construction
-// (agent-{handle}). The topic is folded in so two subscriptions that share a
-// group name on different subjects — which the engine does not do today but
-// which nothing prevents — cannot collide on one consumer.
+// (agent-{handle}). The topic is folded in so two subscriptions sharing a
+// group name on different subjects cannot collide on one consumer.
 func consumerName(topic, group string) string {
 	safe := func(s string) string {
 		return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)

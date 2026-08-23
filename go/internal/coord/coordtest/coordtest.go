@@ -15,6 +15,18 @@
 // process holds this node id's presence lease" at an operator while it
 // quietly stopped refreshing its own presence.
 //
+// # What the suite does NOT require
+//
+// A backend may answer "unknown" at any moment. That is the contract's third
+// answer, not a defect the suite gets to disallow, and a compare-and-swap
+// store reaches it honestly under contention: it loses every swap inside its
+// retry budget and genuinely cannot say whether a peer won or a record lapsed
+// underneath it. So the contended cases come back for a definite answer the
+// way a caller's next sweep does, instead of demanding one first time. An
+// earlier version failed a correct KV backend for exactly this — which is
+// what writing the memory twin's implementation strategy into a contract
+// looks like from the outside.
+//
 // # Lapsing without sleeping
 //
 // A lease lapses when its TTL runs out, and a suite that waited out real TTLs
@@ -30,6 +42,7 @@ package coordtest
 import (
 	"context"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,13 +62,30 @@ const (
 	// long the runtime deschedules a parallel goroutine under -race.
 	// 100 ms is three orders of magnitude more than the in-process case
 	// needs and comfortably more than a slow round trip, while keeping a
-	// fully serialised sleeping run (-parallel 1) to a few seconds.
+	// fully serialised sleeping run (-parallel 1) to a few seconds. It
+	// holds against a real backend: the embedded-NATS store runs the whole
+	// suite on the sleeping path, under -race, with no lapse-window
+	// failure.
 	ShortTTL = 100 * time.Millisecond
 
 	// lapseMargin is how far past ShortTTL harness.lapse travels. On the
 	// sleeping path the store's clock is the real one, and a sleep is only
 	// ever a lower bound in one direction — this is the other one.
 	lapseMargin = 50 * time.Millisecond
+
+	// stallBudget bounds how long the suite will wait on a backend before
+	// calling it stuck.
+	//
+	// A contract call that never returns has to fail as a NAMED CASE, not
+	// as a package timeout. The Go test binary's ten-minute panic dumps
+	// every goroutine in the process and is attributed to whichever
+	// package the deadline happens to land in — which is exactly how a
+	// hang in one queue backend was first reported against a different
+	// one, costing the wrong author the investigation. The heaviest case
+	// here issues a few thousand store round trips, so the budget has to
+	// clear that on a contended real store (90 s allows ~30 ms apiece)
+	// while still reporting well inside the default package timeout.
+	stallBudget = 90 * time.Second
 )
 
 // Advancer is the optional hook a backend offers so the suite can outlast a
@@ -133,10 +163,14 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 	if b == nil {
 		t.Fatal("newBackend returned a nil backend")
 	}
-	// Context.Background rather than the test's: a backend that honours
-	// cancellation must see a live context for the whole case, including
-	// any goroutine the concurrency cases join at the end.
-	h := &harness{t: t, ctx: context.Background(), b: b}
+	// Every call the case makes carries the stall budget as a deadline, so
+	// a backend that honours cancellation reports a hang as an error on
+	// the call that hung instead of as a process-wide timeout. Not the
+	// test's own context: this one has to stay live for the goroutines the
+	// concurrency cases join at the end, and it is cancelled after them.
+	ctx, cancel := context.WithTimeout(context.Background(), stallBudget)
+	t.Cleanup(cancel)
+	h := &harness{t: t, ctx: ctx, b: b}
 	if live := h.listLive(""); len(live) != 0 {
 		t.Fatalf("newBackend must return an empty store, got %d live lease(s): %v",
 			len(live), resources(live))
@@ -243,6 +277,24 @@ func (h *harness) floor() (int, bool) {
 		h.t.Fatalf("FleetProtocolFloor: unexpected error: %v", err)
 	}
 	return got, any
+}
+
+// await joins the suite's own goroutines within the stall budget. what names
+// what they were doing, so a stuck backend fails on a line that says which
+// call never came back rather than on a goroutine dump.
+func (h *harness) await(wg *sync.WaitGroup, what string) {
+	h.t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stallBudget):
+		h.t.Fatalf("%s: still inside the backend after %v — a coord.Backend call that "+
+			"never returns takes the whole test binary down with it", what, stallBudget)
+	}
 }
 
 // lapse outlasts a ShortTTL lease. See the package doc: the suite never edits

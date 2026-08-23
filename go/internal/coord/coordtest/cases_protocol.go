@@ -137,8 +137,15 @@ var protocolCases = []testCase{
 		// Zero is not a protocol. A record whose version is unknown has
 		// to read as the OLDEST one — fail-closed, and converging: it
 		// gates newer claims until it lapses, exactly as a real v1 hold
-		// would. Storing the zero verbatim would instead put every
-		// build in the fleet above the floor forever.
+		// would. Storing the zero verbatim would instead refuse every
+		// gated claim in the fleet until that one lease expired.
+		//
+		// This case is the suite settling something coord.go does not
+		// say, which a suite should not do on its own: Go's struct zero
+		// makes OMITTING Protocol the dangerous case, where Python's
+		// keyword default of 1 made it safe. Enforced fail-closed and
+		// written up for a contract owner in
+		// rewrite/questions/coord-contract-unset-protocol.md.
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		if lease.Protocol != 1 {
 			h.t.Fatalf("a claim with no protocol recorded %d, want 1", lease.Protocol)

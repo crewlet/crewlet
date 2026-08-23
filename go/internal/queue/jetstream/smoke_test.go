@@ -151,10 +151,11 @@ func TestDeferReturnsWorkAndQuiesces(t *testing.T) {
 	}
 
 	// The attachment quiesces itself, so a second call must not arrive.
-	a := q.lookup(topic, group)
-	if a == nil {
-		t.Fatal("attachment vanished")
+	atts := q.lookup(topic, group)
+	if len(atts) != 1 {
+		t.Fatalf("expected exactly one attachment, got %d", len(atts))
 	}
+	a := atts[0]
 	deadline := time.Now().Add(5 * time.Second)
 	for !a.quiesced.Load() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -239,13 +240,28 @@ func TestBatchCoalescesByConversation(t *testing.T) {
 	}
 }
 
-// TestUnroutableSubjectsAreRefused guards the failure that never raises on
-// its own: a publish to a subject nobody consumes.
-func TestUnroutableSubjectsAreRefused(t *testing.T) {
+// TestMalformedSubjectsAreRefused guards the failure that never raises on
+// its own: a publish to a subject nobody can consume.
+//
+// Note what is NOT refused: a well-formed subject in a namespace the engine
+// does not itself define. The subject space belongs to the engine and its
+// extensions, not to this backend, so an unfamiliar namespace is provisioned
+// rather than rejected. Only subjects that cannot be consumed at all are
+// errors — and an EMPTY SEGMENT is the important one, because that is what
+// an unroutable handle produces (crewlet.agent..inbox), a real subject
+// nobody subscribes to that would swallow events in silence.
+func TestMalformedSubjectsAreRefused(t *testing.T) {
 	q := newQueue(t)
-	for _, subject := range []string{"", "not.a.crewlet.subject", "crewlet.agent..inbox"} {
+	for _, subject := range []string{"", "crewlet.agent..inbox", ".leading", "trailing.", "has space"} {
 		if err := q.Publish(t.Context(), subject, ev(1)); err == nil {
-			t.Errorf("Publish(%q) succeeded; unroutable subjects must be refused", subject)
+			t.Errorf("Publish(%q) succeeded; a malformed subject must be refused", subject)
 		}
+	}
+	// A foreign but well-formed namespace is provisioned, not refused.
+	if _, err := q.EnsureSubscription(t.Context(), "extension.thing", "grp"); err != nil {
+		t.Fatalf("EnsureSubscription on a foreign namespace: %v", err)
+	}
+	if err := q.Publish(t.Context(), "extension.thing", ev(1)); err != nil {
+		t.Errorf("Publish to a foreign namespace failed: %v", err)
 	}
 }

@@ -1,7 +1,6 @@
 package coordtest
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -19,7 +18,7 @@ var tristateCases = []testCase{
 		f := NewFaulty(h.b)
 		f.Break(nil)
 
-		lease, err := f.TryAcquire(context.Background(), "seat:ceo",
+		lease, err := f.TryAcquire(h.ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		if lease != nil {
 			h.t.Fatal("TryAcquire granted a lease from an unreachable store")
@@ -38,11 +37,11 @@ var tristateCases = []testCase{
 		// definite, actionable answer, and turning it into an error
 		// would make a node quiesce over a race it simply lost.
 		f := NewFaulty(h.b)
-		if _, err := f.TryAcquire(context.Background(), "seat:ceo",
+		if _, err := f.TryAcquire(h.ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-a", TTL: LongTTL}); err != nil {
 			h.t.Fatalf("healthy claim errored: %v", err)
 		}
-		lease, err := f.TryAcquire(context.Background(), "seat:ceo",
+		lease, err := f.TryAcquire(h.ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
 		if err != nil {
 			h.t.Fatalf("a peer holding the resource reported an error: %v", err)
@@ -59,7 +58,7 @@ var tristateCases = []testCase{
 		// tear a healthy node's seats down for a whole TTL during which
 		// no peer could claim them either. The heartbeat's job is to
 		// retry; it has until the deadline to succeed.
-		ctx := context.Background()
+		ctx := h.ctx
 		f := NewFaulty(h.b)
 		lease, err := f.TryAcquire(ctx, "seat:ceo",
 			coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
@@ -101,7 +100,7 @@ var tristateCases = []testCase{
 		// this prefix" drives the capacity split, and "no live lease at
 		// all" tells a stalled node the gate is not what is blocking it.
 		// None of those may be what an unreachable store looks like.
-		ctx := context.Background()
+		ctx := h.ctx
 		f := NewFaulty(h.b)
 		f.Break(nil)
 
@@ -130,7 +129,7 @@ var tristateCases = []testCase{
 		// rolling upgrade.
 		f := NewFaulty(h.b)
 		f.Break(nil)
-		floor, any, err := f.FleetProtocolFloor(context.Background())
+		floor, any, err := f.FleetProtocolFloor(h.ctx)
 		if err == nil {
 			h.t.Fatalf("FleetProtocolFloor = (%d, %v, nil) from an unreachable store", floor, any)
 		}
@@ -148,7 +147,7 @@ var tristateCases = []testCase{
 		// honest shape — the third answer is "the store did not give you
 		// an answer", and a caller retrying a programming error retries
 		// it loudly and forever instead of proceeding on a lie.
-		ctx := context.Background()
+		ctx := h.ctx
 		bad := []struct {
 			name     string
 			resource string
@@ -186,7 +185,7 @@ var tristateCases = []testCase{
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		h.release("seat:ceo", "node-a", lease.Epoch)
 
-		ok, err := h.b.Release(context.Background(), "seat:ceo", "", lease.Epoch)
+		ok, err := h.b.Release(h.ctx, "seat:ceo", "", lease.Epoch)
 		if err == nil {
 			h.t.Fatalf("Release with a blank owner = (%v, nil), want an error", ok)
 		}

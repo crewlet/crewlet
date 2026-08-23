@@ -162,6 +162,19 @@ type EventQueue interface {
 	// messages return to the next attacher in order with no accrued
 	// redeliveries. Releases this attachment's pause holds — a hold that
 	// outlived a detach would leave a re-attaching node silently deaf.
+	//
+	// Detach does NOT wait for a running handler. It stops the
+	// subscription taking new work and returns; a handler already
+	// in-flight runs to completion and its outcome still applies.
+	//
+	// This is not a performance choice, it is the fenced-release path.
+	// A node that has LOST a seat's lease must detach FIRST and abandon
+	// whatever is in flight — the successor already owns the seat, and
+	// blocking the release until a multi-minute turn finishes would keep
+	// the seat unclaimable for exactly as long as the wrong node keeps
+	// working on it. The VOLUNTARY path gets the other behaviour by
+	// composing verbs it already has: quiesce, wait for in-flight, then
+	// detach.
 	Detach(ctx context.Context, topic, group string) (bool, error)
 
 	// EnsureSubscription creates the durable subscription if absent,
@@ -409,7 +422,9 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 	return out
 }
 
-// LogResult emits the standard structured line for a handler outcome.
+// LogResult emits the standard structured line for a single delivery's
+// outcome. An Ack logs nothing: the normal case is the overwhelming majority
+// of deliveries, and a line per success buries the two that matter.
 func LogResult(l *slog.Logger, topic, group string, ev *events.Event, r Result) {
 	switch r.Outcome {
 	case OutcomeNak:
@@ -418,6 +433,32 @@ func LogResult(l *slog.Logger, topic, group string, ev *events.Event, r Result) 
 	case OutcomeDefer:
 		l.Info("delivery_deferred", "topic", topic, "group", group,
 			"event_type", eventType(ev), "reason", r.Reason)
+	}
+}
+
+// LogBatchResult emits the standard line for one conversation partition's
+// outcome.
+//
+// A distinct event name from LogResult, carrying the conversation key and
+// the partition size, because the two failures are operationally different
+// things: one delivery failing is a bad event, a whole conversation failing
+// is a bad turn. A log consumer must be able to tell them apart without
+// parsing, and every backend must emit the same name for the same situation
+// — which is why this lives in the contract rather than in each backend.
+func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events.Event, r Result) {
+	var head *events.Event
+	if len(evs) > 0 {
+		head = evs[0]
+	}
+	switch r.Outcome {
+	case OutcomeNak:
+		l.Warn("batch_handler_failed", "topic", topic, "group", group,
+			"batch_key", batchKey, "event_count", len(evs),
+			"event_type", eventType(head), "error", errText(r.Err))
+	case OutcomeDefer:
+		l.Info("batch_delivery_deferred", "topic", topic, "group", group,
+			"batch_key", batchKey, "event_count", len(evs),
+			"event_type", eventType(head), "reason", r.Reason)
 	}
 }
 
