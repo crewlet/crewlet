@@ -360,10 +360,18 @@ Build items (each: port the suite, then implement):
   tools_needed), prior-work ledger with per-VALUE elision, 'direct' skips Review with
   the Execute-only forced-Review net, round caps + extension judge, stall detection,
   per-agent turn serialization (busy agent QUEUES, never NAKs).
-- **[BUILD] Inbox handler** — the ordering is load-bearing and enumerated:
+- **[BUILT] Inbox handler** — the ordering is load-bearing and enumerated:
   same-id dedupe FIRST → ownership Defer → park (requeue+ack+pause) → posture shed
-  (Defer) → re-entrancy requeue → completion-ledger drop → coalesce → bind work_key →
-  dispatch → record. Port with the engine tests that pin it.
+  (Defer) → completion-ledger drop → coalesce → bind work_key → dispatch → record.
+  Ported with the engine tests that pin it, in `internal/agent/inbox` (the decision,
+  no I/O reachable) and `internal/engine` (the sequence around it).
+  Python's re-entrancy requeue stage is deliberately ABSENT: it guarded an inline
+  dispatch that re-entered a handler within one asyncio task, and every Go backend
+  forecloses that structurally — the pull loops fetch again only after a handler
+  returns, and the in-process twin defers a nested drain to the loop already running.
+  Measured on both backends before the stage was dropped; `queuetest`'s Reentrancy
+  group pins the property, so a backend change that brought the hazard back fails
+  there rather than deadlocking a seat.
 - **[BUILD] Providers** — Anthropic/OpenAI on official SDKs, `max_retries=0` (the
   credential pool owns rotation), input_tokens = base + cache_read + cache_write,
   Retry-After / x-ratelimit-reset parsing, cooldowns on monotonic clocks, fallback

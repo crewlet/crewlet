@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
@@ -117,10 +118,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 			}
 		}
 		return d.park(ctx, handle, screening)
-	case inbox.ActionPark, inbox.ActionRequeueDetached:
-		// Both requeue; they differ only in WHERE. A re-entrant delivery
-		// is running inside the seat's own turn, so its requeue must not
-		// wait on that turn — the caller supplies a Park that detaches.
+	case inbox.ActionPark:
 		return d.park(ctx, handle, screening)
 	}
 
@@ -297,4 +295,37 @@ func conversationKeyOf(evs []*events.Event) string {
 		}
 	}
 	return ""
+}
+
+// DescribeTrigger renders a partition as the ask a turn is given.
+//
+// The FIRST event's own description leads, because a coalesced partition is
+// one conversation and its opening message is what the rest are replies to. A
+// digest that led with the newest would hand the seat a follow-up with no idea
+// what it follows.
+func DescribeTrigger(evs []*events.Event) string {
+	var parts []string
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if text, _ := ev.Payload["text"].(string); text != "" {
+			parts = append(parts, text)
+			continue
+		}
+		if summary, ok := ev.Data.(events.Summarizer); ok {
+			if s := summary.Summary(); s != "" {
+				parts = append(parts, s)
+				continue
+			}
+		}
+		// A trigger with no readable body is still a trigger: naming its
+		// TYPE is what stops the turn being handed a blank ask, which a
+		// model answers by inventing one.
+		parts = append(parts, "("+ev.Type+")")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
 }

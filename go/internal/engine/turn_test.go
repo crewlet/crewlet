@@ -116,9 +116,6 @@ func TestAGuardStopsTheTurnBeforeItStarts(t *testing.T) {
 		"shedding": {
 			inbox.Conditions{Owned: true, TurnEngineReady: true},
 			queue.OutcomeDefer, false, false, true},
-		"re-entrant": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Reentrant: true},
-			queue.OutcomeAck, true, false, false},
 	} {
 		r := &recorder{}
 		d := dispatcher(t, r)

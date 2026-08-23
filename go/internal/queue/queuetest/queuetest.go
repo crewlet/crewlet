@@ -362,6 +362,9 @@ func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Ca
 	t.Run("Attachment", s.runAttachment)
 	t.Run("Stream", s.runStream)
 	t.Run("Batch", s.runBatch)
+	// Not a feature — the reason the engine carries no re-entrancy
+	// guard. See runReentrancy.
+	t.Run("Reentrancy", s.runReentrancy)
 	t.Run("Fleet", s.runFleet)
 	// A "no" has two halves: the answer and the write that must not
 	// happen. See runNegativePaths.

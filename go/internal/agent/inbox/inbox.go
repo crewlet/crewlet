@@ -48,11 +48,6 @@ const (
 	// ActionPauseAndPark — pause the topic FIRST so the requeued copies
 	// buffer on the queue rather than looping straight back, then park.
 	ActionPauseAndPark
-
-	// ActionRequeueDetached — requeue from a SEPARATE goroutine and
-	// return. The re-entrant case: this delivery is running inside the
-	// seat's own turn, so requeuing inline would wait on ourselves.
-	ActionRequeueDetached
 )
 
 func (a Action) String() string {
@@ -67,8 +62,6 @@ func (a Action) String() string {
 		return "park"
 	case ActionPauseAndPark:
 		return "pause_and_park"
-	case ActionRequeueDetached:
-		return "requeue_detached"
 	default:
 		return "unknown"
 	}
@@ -97,10 +90,6 @@ type Conditions struct {
 	// apply an epoch its peers have, so it must not start NEW work under a
 	// stale company.
 	AdmitsTriggers bool
-
-	// Reentrant is whether this delivery is executing inside the seat's own
-	// running turn — a publish to its own inbox from within a turn.
-	Reentrant bool
 }
 
 // Screening is the outcome of the pre-ledger stages.
@@ -167,10 +156,16 @@ func (s Screening) Result() queue.Result {
 //     to, so a failed release means it comes straight back and is shed again,
 //     forever. Deferring cannot spin: the consumer stops after the first one.
 //
-//  6. RE-ENTRANCY. A publish to this seat's own inbox from inside its running
-//     turn would, if handled inline, wait for the turn from within the turn.
-//     Requeue from a separate goroutine; that later delivery waits like any
-//     other.
+// There is NO re-entrancy stage, and its absence is a decision rather than an
+// omission. The Python this replaces carried one: a publish to a seat's own
+// inbox from inside its running turn dispatched inline within the same asyncio
+// task, so handling it awaited the turn from within the turn. Every queue
+// backend here forecloses that structurally — the pull loops fetch again only
+// after a handler returns, and the in-process twin defers a nested drain to the
+// loop already running rather than starting a second one — so the condition
+// cannot arise and a guard for it would be a branch no delivery can reach.
+// queuetest's Reentrancy group pins that property on every backend, which is
+// where a change that brought the hazard back would fail.
 //
 // The completion-ledger read comes after ALL of these — so a parked partition
 // is never marked done — and before coalescing, so recorded constituents drop
@@ -189,8 +184,6 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 		return Screening{Action: ActionPark, Reason: "awaiting a detached sandbox run", Events: evs}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}
-	case c.Reentrant:
-		return Screening{Action: ActionRequeueDetached, Reason: "re-entrant delivery", Events: evs}
 	}
 	return Screening{Action: ActionProceed, Events: evs}
 }

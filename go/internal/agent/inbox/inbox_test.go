@@ -110,18 +110,18 @@ func TestTheGuardsFireInTheDocumentedOrder(t *testing.T) {
 		want inbox.Action
 	}{
 		{"ownership outranks everything", inbox.Conditions{}, inbox.ActionDefer},
-		{"no engine outranks sandbox, posture, re-entrancy", inbox.Conditions{
-			Owned: true, AwaitingSandbox: true, Reentrant: true,
+		{"no engine outranks sandbox and posture", inbox.Conditions{
+			Owned: true, AwaitingSandbox: true,
 		}, inbox.ActionPauseAndPark},
 		{"sandbox outranks posture", inbox.Conditions{
-			Owned: true, TurnEngineReady: true, AwaitingSandbox: true, Reentrant: true,
+			Owned: true, TurnEngineReady: true, AwaitingSandbox: true,
 		}, inbox.ActionPark},
-		{"posture outranks re-entrancy", inbox.Conditions{
-			Owned: true, TurnEngineReady: true, Reentrant: true,
+		{"posture is last", inbox.Conditions{
+			Owned: true, TurnEngineReady: true,
 		}, inbox.ActionDefer},
-		{"re-entrancy is last", inbox.Conditions{
-			Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Reentrant: true,
-		}, inbox.ActionRequeueDetached},
+		{"every guard passing proceeds", inbox.Conditions{
+			Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
+		}, inbox.ActionProceed},
 	} {
 		got := inbox.Screen(tc.c, []*events.Event{ev(t, "notification")})
 		if got.Action != tc.want {
