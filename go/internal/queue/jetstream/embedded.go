@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -34,6 +36,9 @@ type embeddedServer struct {
 	// solo case: connections are made through an in-memory pipe, so the
 	// broker cannot be reached from outside the process at all.
 	inProcess bool
+	// scratch is a private directory this server owns and deletes on
+	// shutdown, used when no StoreDir was configured. See startEmbedded.
+	scratch string
 }
 
 // Server is an embedded broker that outlives any one client of it.
@@ -94,11 +99,27 @@ func startEmbedded(cfg Config) (*embeddedServer, error) {
 		DontListen: len(cfg.ClusterURLs) == 0 && cfg.ClusterPort == 0,
 		StoreDir:   cfg.StoreDir,
 	}
+	var scratch string
 	if opts.StoreDir == "" {
 		// An in-memory server. Streams are memory-backed too (see
 		// ensureStreams), which suits tests and a stateless
 		// ingress-only node that materializes nothing.
 		opts.JetStreamMaxStore = -1
+
+		// It still needs somewhere to put its own metadata, and left
+		// empty nats-server picks a FIXED default path. That path is
+		// shared by every crewlet process and every test binary on the
+		// machine, so servers meant to be isolated recover each other's
+		// streams: measured as KV epochs arriving at 136 in a suite that
+		// had claimed a seat five times, and as a nil-pointer panic
+		// inside the server's own stream recovery when two runs
+		// overlapped. A private directory, removed on shutdown, is what
+		// "no store configured" was always meant to mean.
+		dir, err := os.MkdirTemp("", "crewlet-jetstream-")
+		if err != nil {
+			return nil, fmt.Errorf("embedded jetstream scratch dir: %w", err)
+		}
+		opts.StoreDir, scratch = dir, dir
 	}
 	if cfg.ClusterName != "" {
 		opts.Cluster = server.ClusterOpts{Name: cfg.ClusterName, Port: cfg.ClusterPort}
@@ -107,14 +128,16 @@ func startEmbedded(cfg Config) (*embeddedServer, error) {
 
 	ns, err := server.NewServer(opts)
 	if err != nil {
+		removeScratch(scratch)
 		return nil, fmt.Errorf("configure embedded server: %w", err)
 	}
 	go ns.Start()
 	if !ns.ReadyForConnections(readyTimeout) {
 		ns.Shutdown()
+		removeScratch(scratch)
 		return nil, errors.New("embedded nats server did not become ready")
 	}
-	return &embeddedServer{ns: ns, inProcess: opts.DontListen}, nil
+	return &embeddedServer{ns: ns, inProcess: opts.DontListen, scratch: scratch}, nil
 }
 
 func (e *embeddedServer) connect() (*nats.Conn, error) {
@@ -127,6 +150,19 @@ func (e *embeddedServer) connect() (*nats.Conn, error) {
 func (e *embeddedServer) shutdown() {
 	e.ns.Shutdown()
 	e.ns.WaitForShutdown()
+	removeScratch(e.scratch)
+}
+
+// removeScratch deletes a scratch store directory. A failure is logged rather
+// than returned: the broker is already down, and a leftover temp directory is
+// not a reason to fail a shutdown the caller cannot retry.
+func removeScratch(dir string) {
+	if dir == "" {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		logging.Get("queue.jetstream").Warn("embedded_scratch_not_removed", "dir", dir, "error", err)
+	}
 }
 
 func joinURLs(urls []string) string {
