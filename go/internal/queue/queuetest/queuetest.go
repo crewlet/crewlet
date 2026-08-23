@@ -82,6 +82,16 @@
 //     have revealed — and probing one dotted name found a live collision in a
 //     shipped backend.
 //
+// One limit, and it binds the two entries above that recommend a guard rather
+// than excusing them: a guard that names its own assumption DIAGNOSES a race,
+// it does not close one. Check-then-act only shrinks the window — measured in
+// this repo's sibling suite, both failures its guard was written for still
+// happened, one round trip after the check passed. So the racing cases here pay
+// a window sized for the slowest plausible backend AS WELL as reporting which
+// side lost; the message alone would have shipped the same race with a better
+// error string. Read a green from a guarded case as "the race did not fire",
+// never as "the race is gone".
+//
 // None of these require anyone to be suspicious at the right moment, which is
 // the only property that survives contact with a blind spot.
 package queuetest

@@ -332,6 +332,31 @@ var leaseCases = []testCase{
 		}
 	}},
 
+	{"releasing_a_lapsed_lease_reports_not_held", func(h *harness) {
+		// A lifecycle point no other case reaches: every release here is
+		// either of a LIVE lease, or of one already taken over. Releasing
+		// a lease that simply ran out, by its rightful owner at the right
+		// epoch, was never sent — and the two certified backends answered
+		// it differently, the twin true and the KV store false, for as
+		// long as both have existed.
+		//
+		// False is the contract's answer: Release gives up a lease the
+		// caller HOLDS, and a lapsed one is not held — the same reading
+		// that makes Get live-only. A drain that lost a seat to a lapse
+		// must not be told it handed the seat back cleanly.
+		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
+		h.lapse()
+		if h.release("seat:ceo", "node-a", lease.Epoch) {
+			h.t.Fatal("releasing a lapsed lease reported success — the caller is told it " +
+				"gave up something it no longer had")
+		}
+		// And the record survives it, so the epoch still fences the gap.
+		taken := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
+		if taken.Epoch <= lease.Epoch {
+			h.t.Fatalf("epoch %d after a refused release of epoch %d", taken.Epoch, lease.Epoch)
+		}
+	}},
+
 	{"release_of_an_unclaimed_resource_reports_not_held", func(h *harness) {
 		if h.release("seat:ceo", "node-a", 1) {
 			h.t.Fatal("release succeeded against a resource nobody ever claimed")

@@ -238,7 +238,14 @@ func (b *Backend) release(resource, owner string, epoch int64) bool {
 	row := b.rows[resource]
 	// The predicate is the whole point: an unqualified release lets a
 	// departing owner clear its SUCCESSOR's live lease.
-	if row == nil || row.owner != owner || row.epoch != epoch {
+	//
+	// Liveness is part of it. "Gives up a lease the caller holds" — and a
+	// lapsed lease is not held, which is the same reading that makes Get
+	// live-only. Releasing one is a no-op and must say so, or a drain that
+	// lost a seat to a lapse is told it handed it back cleanly. The twin
+	// answered true here while the KV backend answered false, and no case
+	// sent the operation that would have shown it.
+	if row == nil || row.owner != owner || row.epoch != epoch || !row.live(b.now()) {
 		return false
 	}
 	// Expire in place, never delete. The epoch counter has to be monotonic

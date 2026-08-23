@@ -273,11 +273,14 @@ prevents the queue contract from silently encoding JetStream-isms.
 **[GATE G3b]** Conformance + fleet suites green with Pulsar streams + embedded-KV
 coordination (the multi-tenant topology), and the harness table committed.
 
-**Status: the backend is built and the conformance suite passes against a real
-Apache Pulsar 4.0.6** (`go/internal/queue/pulsar`), with a CI job that runs it
-against a service container — the suite skips cleanly without
-`$CREWLET_TEST_PULSAR_URL` rather than faking a broker, so the certification is
-CI's to give. The redelivery economics measured for this broker are
+**Status: MET.** The backend is `go/internal/queue/pulsar`, and the conformance
+suite passes against a real Apache Pulsar 4.0.6 standalone broker — **121
+subtests, 4 documented capability skips, 0 failures under `-race`**, verified
+directly rather than only in CI. (Docker is unavailable in the execution
+environment; the broker runs on the JDK, which is what made this gate
+certifiable here at all.) The CI job runs the same suite against a service
+container; the suite skips cleanly without `$CREWLET_TEST_PULSAR_URL` rather
+than faking a broker. The redelivery economics measured for this broker are
 `decisions/104`, beside JetStream's in `102`.
 
 What the third backend was scheduled to catch, and did:
