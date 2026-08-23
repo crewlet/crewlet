@@ -19,7 +19,7 @@ type probe struct {
 
 func (probe) EventType() string { return "test.probe" }
 
-func init() { events.Register(probe{}) }
+func init() { events.Register[probe]() }
 
 func newQueue(t *testing.T) *Queue {
 	t.Helper()

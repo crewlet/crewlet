@@ -7,9 +7,9 @@ import "github.com/crewlet/crewlet/internal/events"
 // these three events are the only trace of work that outlives its turn.
 
 func init() {
-	events.Register(SandboxRunStarted{})
-	events.Register(SandboxRunCompleted{})
-	events.Register(SandboxClarificationRequested{})
+	events.Register[SandboxRunStarted]()
+	events.Register[SandboxRunCompleted]()
+	events.Register[SandboxClarificationRequested]()
 }
 
 // SandboxRunStarted marks a detached coding job being kicked off, after the

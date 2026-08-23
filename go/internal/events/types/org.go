@@ -10,12 +10,12 @@ import (
 // filled, emptied, moved or redefined under it.
 
 func init() {
-	events.Register(OrgStarted{})
-	events.Register(OrgStopped{})
-	events.Register(AgentSpawned{})
-	events.Register(AgentTerminated{})
-	events.Register(AgentReassigned{})
-	events.Register(RoleUpdated{})
+	events.Register[OrgStarted]()
+	events.Register[OrgStopped]()
+	events.Register[AgentSpawned]()
+	events.Register[AgentTerminated]()
+	events.Register[AgentReassigned]()
+	events.Register[RoleUpdated]()
 }
 
 // orgName is the organization's own name, falling back to the actor — which

@@ -11,12 +11,12 @@ import "github.com/crewlet/crewlet/internal/events"
 // role only in the envelope's source, which neither consumer reads.
 
 func init() {
-	events.Register(TaskCreated{})
-	events.Register(TaskAssigned{})
-	events.Register(TaskStarted{})
-	events.Register(TaskCompleted{})
-	events.Register(TaskFailed{})
-	events.Register(TaskDelegated{})
+	events.Register[TaskCreated]()
+	events.Register[TaskAssigned]()
+	events.Register[TaskStarted]()
+	events.Register[TaskCompleted]()
+	events.Register[TaskFailed]()
+	events.Register[TaskDelegated]()
 }
 
 // TaskCreated marks a unit of work coming into existence, before anyone holds it.

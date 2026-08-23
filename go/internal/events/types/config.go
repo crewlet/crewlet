@@ -10,8 +10,8 @@ import (
 // the one to serve, and each node reporting what it did about that.
 
 func init() {
-	events.Register(ConfigRevisionActivated{})
-	events.Register(ConfigRevisionApplied{})
+	events.Register[ConfigRevisionActivated]()
+	events.Register[ConfigRevisionApplied]()
 }
 
 // ConfigRevisionActivated is published when a new company_config revision is

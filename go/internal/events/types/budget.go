@@ -9,8 +9,8 @@ import (
 // Token budgets: the cap being hit, and the live meters behind it.
 
 func init() {
-	events.Register(BudgetExhausted{})
-	events.Register(BudgetReported{})
+	events.Register[BudgetExhausted]()
+	events.Register[BudgetReported]()
 }
 
 // BudgetScope is whose budget a figure belongs to.

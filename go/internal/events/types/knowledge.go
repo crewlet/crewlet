@@ -6,8 +6,8 @@ import "github.com/crewlet/crewlet/internal/events"
 // org) — the same scope the knowledge search reads back.
 
 func init() {
-	events.Register(DocumentCreated{})
-	events.Register(DocumentUpdated{})
+	events.Register[DocumentCreated]()
+	events.Register[DocumentUpdated]()
 }
 
 // DocumentCreated marks a document landing in the shared knowledge base.

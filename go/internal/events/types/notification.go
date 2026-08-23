@@ -12,11 +12,11 @@ import (
 // worked.
 
 func init() {
-	events.Register(MessageSent{})
-	events.Register(ExternalNotification{})
-	events.Register(TurnTriggerSkipped{})
-	events.Register(NotificationsCoalesced{})
-	events.Register(NotificationSkipped{})
+	events.Register[MessageSent]()
+	events.Register[ExternalNotification]()
+	events.Register[TurnTriggerSkipped]()
+	events.Register[NotificationsCoalesced]()
+	events.Register[NotificationSkipped]()
 }
 
 // MessageSent records a message the org put on a channel.

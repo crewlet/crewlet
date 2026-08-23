@@ -15,8 +15,8 @@ import (
 // bucket that would misdescribe it.
 
 func init() {
-	events.Register(LLMUnavailable{})
-	events.Register(ProviderFallback{})
+	events.Register[LLMUnavailable]()
+	events.Register[ProviderFallback]()
 }
 
 // LLMUnavailable fires when the fallback chain is exhausted.

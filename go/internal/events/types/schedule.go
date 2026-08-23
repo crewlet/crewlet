@@ -3,7 +3,7 @@ package types
 import "github.com/crewlet/crewlet/internal/events"
 
 func init() {
-	events.Register(ScheduledTaskFired{})
+	events.Register[ScheduledTaskFired]()
 }
 
 // ScheduleScope is what a recurring schedule is attached to.

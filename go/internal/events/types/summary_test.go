@@ -14,13 +14,13 @@ import (
 // live.
 
 func summaryOf(payload events.Payload, source string) string {
-	event := events.New(payload, events.TraceContext{})
+	event := events.NewFrom(payload, events.TraceContext{})
 	event.Source = source
 	return event.Summary()
 }
 
 func actorOf(payload events.Payload, source string) string {
-	event := events.New(payload, events.TraceContext{})
+	event := events.NewFrom(payload, events.TraceContext{})
 	event.Source = source
 	return event.Actor()
 }

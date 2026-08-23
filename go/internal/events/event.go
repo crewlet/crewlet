@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -37,6 +38,24 @@ type Payload interface {
 	// EventType returns the wire type string this payload is registered
 	// under, e.g. "task_assigned".
 	EventType() string
+}
+
+// PayloadPtr constrains a type parameter to *T where *T is a Payload.
+//
+// It exists to make ONE fact unconditional: Event.Data always holds the
+// POINTER form of a payload. Decoding produces a pointer because the decoder
+// must have something to write into, so if construction produced a value the
+// same event would carry a different Go type depending on whether it had
+// crossed a wire yet — and DataAs[*T] would work on one node and fail on
+// another for the same event. That divergence is invisible until a handler
+// runs on the publishing node.
+//
+// Both New and Register take payloads through this constraint, so the rule is
+// a compile error rather than a convention. A caller writes the value form
+// (events.New(TaskAssigned{...})) and inference does the rest.
+type PayloadPtr[T any] interface {
+	*T
+	Payload
 }
 
 // Event is the envelope every message on the queue carries.
@@ -84,10 +103,41 @@ var envelopeKeys = map[string]struct{}{
 // New builds an event of the given type carrying data, stamping a fresh id,
 // the current time, and the caller-supplied trace context.
 //
+// The payload is written as a value and stored as a pointer to a copy of it,
+// which is what makes Data's Go type the same here as it is after a decode
+// (see PayloadPtr). The copy also means a caller that keeps mutating its
+// struct after publishing does not mutate the published event.
+//
 // Trace context is passed rather than read from an ambient span: the Go
 // rewrite threads context explicitly (see rewrite/decisions/401), and the
 // callers that create events already hold the context that knows the span.
-func New(data Payload, tc TraceContext) *Event {
+func New[T any, P PayloadPtr[T]](data T, tc TraceContext) *Event {
+	p := P(&data)
+	return &Event{
+		ID:           uuid.New(),
+		Type:         p.EventType(),
+		Timestamp:    time.Now().UTC(),
+		TraceID:      tc.TraceID,
+		SpanID:       tc.SpanID,
+		ParentSpanID: tc.ParentSpanID,
+		Data:         p,
+	}
+}
+
+// NewFrom builds an event from a payload the caller holds as an INTERFACE —
+// a table-driven test, or a relay that forwards whatever it was handed
+// without knowing the concrete type.
+//
+// Prefer New. Generic inference cannot reach through an interface value, so
+// this is the one construction path that upholds the pointer invariant at run
+// time instead of at compile time: a value payload is boxed into a pointer to
+// a copy of it, so Data's Go type is the same as it would be after a decode
+// either way. Returns nil for a nil payload, since an event with no body is
+// not something a caller can do anything with.
+func NewFrom(data Payload, tc TraceContext) *Event {
+	if data == nil {
+		return nil
+	}
 	return &Event{
 		ID:           uuid.New(),
 		Type:         data.EventType(),
@@ -95,8 +145,26 @@ func New(data Payload, tc TraceContext) *Event {
 		TraceID:      tc.TraceID,
 		SpanID:       tc.SpanID,
 		ParentSpanID: tc.ParentSpanID,
-		Data:         data,
+		Data:         asPointer(data),
 	}
+}
+
+// asPointer returns the pointer form of a payload, boxing a value into a copy
+// of itself. Already-pointer payloads pass through untouched.
+func asPointer(data Payload) Payload {
+	rv := reflect.ValueOf(data)
+	if rv.Kind() == reflect.Pointer {
+		return data
+	}
+	box := reflect.New(rv.Type())
+	box.Elem().Set(rv)
+	if out, ok := box.Interface().(Payload); ok {
+		return out
+	}
+	// Unreachable for any payload whose methods have value receivers, which
+	// is every payload in the engine. Returning the value rather than
+	// panicking keeps a hypothetical pointer-receiver payload usable.
+	return data
 }
 
 // TraceContext is the W3C trace linkage stamped onto an event at creation.
@@ -339,15 +407,24 @@ var (
 	registry   = map[string]func() Payload{}
 )
 
-// Register associates a wire type string with a constructor for its payload.
+// Register associates a wire type string with a constructor for its payload:
+// events.Register[TaskAssigned]().
+//
 // Registration is explicit — there is no reflection scan over a types package
 // — so the set of types this build understands is greppable and a typo shows
 // up as an unknown type rather than a silently missing subclass.
 //
+// The type parameter is the VALUE type and the constructor hands back the
+// pointer, the same asymmetry New has and for the same reason (PayloadPtr).
+// Naming the type rather than passing a prototype instance is what makes
+// Register[*TaskAssigned]() — which would build a registry entry returning an
+// unusable **TaskAssigned — fail to compile instead of at decode time.
+//
 // Panics on a duplicate type string: two payloads under one name is a
 // programming error that would otherwise decode events into the wrong struct.
-func Register[T Payload](proto T) {
-	t := proto.EventType()
+func Register[T any, P PayloadPtr[T]]() {
+	var zero T
+	t := P(&zero).EventType()
 	if t == "" {
 		panic("events.Register: empty event type")
 	}
@@ -356,12 +433,7 @@ func Register[T Payload](proto T) {
 	if _, dup := registry[t]; dup {
 		panic("events.Register: duplicate event type " + t)
 	}
-	registry[t] = func() Payload {
-		var zero T
-		v := any(&zero)
-		//nolint:errcheck // T is constrained to Payload; *T implements it too.
-		return v.(Payload)
-	}
+	registry[t] = func() Payload { return P(new(T)) }
 }
 
 func lookup(t string) (func() Payload, bool) {

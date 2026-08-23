@@ -16,12 +16,12 @@ import (
 // no matter what the seat had spent.
 
 func init() {
-	events.Register(AgentTurnCompleted{})
-	events.Register(TurnCompleted{})
-	events.Register(AgentPhaseStarted{})
-	events.Register(AgentPhaseCompleted{})
-	events.Register(AgentTurnProgress{})
-	events.Register(SubagentBatched{})
+	events.Register[AgentTurnCompleted]()
+	events.Register[TurnCompleted]()
+	events.Register[AgentPhaseStarted]()
+	events.Register[AgentPhaseCompleted]()
+	events.Register[AgentTurnProgress]()
+	events.Register[SubagentBatched]()
 }
 
 // Phase names one leg of the turn engine's loop.

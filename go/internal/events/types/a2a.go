@@ -11,10 +11,10 @@ import (
 // seat's durable inbox, never a second in-process path.
 
 func init() {
-	events.Register(A2AChannelOpened{})
-	events.Register(A2AMessageSent{})
-	events.Register(A2AMessageDelivered{})
-	events.Register(A2AChannelClosed{})
+	events.Register[A2AChannelOpened]()
+	events.Register[A2AMessageSent]()
+	events.Register[A2AMessageDelivered]()
+	events.Register[A2AChannelClosed]()
 }
 
 // A2AChannelOpened marks a channel being created between two agents.

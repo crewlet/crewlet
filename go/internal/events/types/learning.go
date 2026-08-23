@@ -12,22 +12,22 @@ import (
 // parent rather than as free-floating background work.
 
 func init() {
-	events.Register(EpisodeWritten{})
-	events.Register(PersistDeciderCompleted{})
-	events.Register(SkillUsed{})
-	events.Register(PlanPrefetchSummary{})
-	events.Register(RelevantKnowledgeRefetched{})
-	events.Register(CounterpartyProfileUpdated{})
-	events.Register(SkillSynthesized{})
-	events.Register(SkillRefined{})
-	events.Register(SkillPromoted{})
-	events.Register(SkillStaled{})
-	events.Register(SkillArchived{})
-	events.Register(SkillRevived{})
-	events.Register(SkillTelemetryWriteFailed{})
-	events.Register(CompactionRequested{})
-	events.Register(CompactionCompleted{})
-	events.Register(ReflectionCompleted{})
+	events.Register[EpisodeWritten]()
+	events.Register[PersistDeciderCompleted]()
+	events.Register[SkillUsed]()
+	events.Register[PlanPrefetchSummary]()
+	events.Register[RelevantKnowledgeRefetched]()
+	events.Register[CounterpartyProfileUpdated]()
+	events.Register[SkillSynthesized]()
+	events.Register[SkillRefined]()
+	events.Register[SkillPromoted]()
+	events.Register[SkillStaled]()
+	events.Register[SkillArchived]()
+	events.Register[SkillRevived]()
+	events.Register[SkillTelemetryWriteFailed]()
+	events.Register[CompactionRequested]()
+	events.Register[CompactionCompleted]()
+	events.Register[ReflectionCompleted]()
 }
 
 // MemoryScope is whose memory a persisted reflection belongs to.

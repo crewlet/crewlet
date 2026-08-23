@@ -12,11 +12,11 @@ import (
 // a turn behaved oddly but did not fail.
 
 func init() {
-	events.Register(ExecuteMissingTool{})
-	events.Register(PhaseToolActivated{})
-	events.Register(ToolSkillGuardBlocked{})
-	events.Register(PromptSize{})
-	events.Register(TurnGuardBreach{})
+	events.Register[ExecuteMissingTool]()
+	events.Register[PhaseToolActivated]()
+	events.Register[ToolSkillGuardBlocked]()
+	events.Register[PromptSize]()
+	events.Register[TurnGuardBreach]()
 }
 
 // GuardKind names which runtime invariant a turn breached.
