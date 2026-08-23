@@ -40,11 +40,21 @@ NOTHING, and there is no signal to wait on for that — a write that did not
 happen produces no event. They read immediately and compare, which silently
 assumes that a write, had it happened, would already be visible.
 
-On a backend whose reads lag its own completed writes, a real corruption is
-simply not visible yet and all three pass. That is not a wrong answer, it is an
-empty one, and it is indistinguishable from a green. All four assertions read
-back the SAME resource the refused operation acted on, so a per-resource
-guarantee is exactly what makes that group mean anything.
+Which lag shape matters, and the first draft of this note was not precise
+enough about it. Measured, by making the twin serve reads from a snapshot one
+write behind: **15 cases fail**, the negative-path group among them, loudly.
+That is a general READ lag, and it does not produce vacuity — the baseline read
+is stale too, so the comparison sees a difference and the case reports it.
+
+The vacuous case is narrower and quieter: a backend where the baseline read is
+accurate but a subsequent WRITE is not yet visible. Then `before` is right,
+`after` is the same stale-but-correct value, the refusal's corruption has not
+landed in the view yet, and all three cases pass having proven nothing. That is
+the shape to worry about, because it is the one that looks like a green.
+
+Either way the group depends on the guarantee, and all four assertions read back
+the SAME resource the refused operation acted on — so a per-resource guarantee
+is exactly what makes them mean anything.
 
 ## The question
 

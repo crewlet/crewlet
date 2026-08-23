@@ -63,6 +63,7 @@
 //     before a claim to simulate a slow store consumed none of the TTL,
 //     because the lease only starts when the record is written. Two
 //     "verifications" that reached nothing they claimed to.
+//
 //   - A HARNESS MUST TELL "BUILD FAILED" FROM "CAUGHT", and both from "DID NOT
 //     LAND". Keying on a non-zero exit made every non-compiling mutation
 //     report as caught; thirty-six results rested on that until they were
@@ -74,26 +75,49 @@
 //     pattern. A false green is a missed catch; a false finding sends someone
 //     to change working code. Compare a marker count before and after, and
 //     report a patch that did not apply as its own verdict.
+//
 //   - A CONTROL SET NEEDS A ROW EXPECTED TO COME BACK CLEAN, for a reason
 //     written down. Without one, a harness biased toward CAUGHT and a suite
 //     that catches everything are indistinguishable. The documented meta gap
 //     is that row, and it re-checks the gap's boundary on every run.
+//
 //   - ANY INVARIANT ABOUT WHERE CODE SITS BELONGS ON THE SYNTAX TREE. A
 //     fixed-window grep under-reports by stopping early; a brace scan
 //     over-reports by running past a closure's end. Both are line-oriented
 //     tools answering a question about scope.
+//
 //   - A GUARD ASSERTING AN ABSENCE MUST ASSERT IT MATCHED ITS SUBJECT. "Found
 //     no violations" and "scanned nothing" are the same green otherwise.
+//
 //   - A DIAGNOSTIC MUST NOT ASSERT A CAUSE IT CANNOT DISTINGUISH. Two helpers
 //     here blamed the suite and the backend respectively on no evidence beyond
 //     a timer firing; both now report the measurement and name what each
 //     reading implies.
+//
+//   - TEST A GUARD'S STATED LIMITS, NOT ONLY ITS GUARANTEE. A "what this does
+//     not catch" paragraph is the claim with the least scrutiny on it
+//     anywhere in a suite: it reads as candour, so it is read past rather
+//     than checked, while an over-claim gets challenged on sight. Both of
+//     this package's are now landing-checked and both held — but a teammate
+//     audited theirs and found the named-as-uncaught form was the exact form
+//     the guard existed to find, in two separate guards.
+//
 //   - A WRAPPER'S VERDICT IS NOT THE BACKEND'S VERDICT. Faulty short-circuits
 //     ABOVE the backend, so the tri-state cases exercise the wrapper and never
 //     reach a backend's own handling of an unreachable store — full coverage
 //     in the contract suite, near-zero coverage of the code implementing it,
-//     and the number looks perfect. Measured: five of eight verbs in the twin
-//     could lose their context guard with nothing failing.
+//     and the number looks perfect. Measured: FOUR of eight verbs in the twin
+//     could lose their context guard with nothing failing — Renew, Release,
+//     PreferredResources and FleetProtocolFloor.
+//
+//     That number was published as five until it was landing-checked, which
+//     is the entry above earning its place on this list. ListOwned was in the
+//     first count and does not belong there: it was covered, but only because
+//     it shares one guard with ListLive, which the test did send. Coverage by
+//     shared implementation rather than by test is its own trap — it holds
+//     exactly until someone gives the verb its own guard, and nothing fails
+//     at the moment the coverage evaporates.
+//
 //   - ENUMERATE THE LIFECYCLE POINTS AT WHICH EACH VERB IS SENT, which is a
 //     different axis from what it is sent. This suite sent nine awkward
 //     resource names and never sent a Release at the one moment that mattered
@@ -101,13 +125,16 @@
 //     backends had answered differently for as long as both existed. Build
 //     the whole verb-by-state matrix; the verb you would suspect is chosen
 //     from inside the blind spot.
+//
 //   - ENUMERATE WHAT THE SUITE SENDS, not only what it asserts. No mutation
 //     can reveal an input that never arrives — both gaps found that way (no
 //     resource name ever needed encoding, no TTL ever exceeded the maximum).
+//
 //   - COMPARING TIMES, ASSERT AN INTERVAL, NEVER AN ORDERING. "Later than"
 //     admits a second reason: a store clamping both deadlines still stamps the
 //     second one later, purely because it happened second. Measured at 487ns
 //     of "later" satisfying an assertion meant to detect five minutes.
+//
 //   - A CHECK-THEN-ACT GUARD DIAGNOSES A RACE; IT CANNOT CLOSE ONE. stillLive
 //     made two failures legible and both still happened, one round trip after
 //     it passed. Legible is worth a great deal and is a different thing.
@@ -271,7 +298,12 @@ const (
 	// hang in one queue backend was first reported against a different
 	// one, costing the wrong author the investigation. The heaviest case
 	// here issues a few thousand store round trips, so the budget has to
-	// clear that on a contended real store (90 s allows ~30 ms apiece)
+	// clear that on a contended real store (90 s allows ~30 ms apiece).
+	// Measured rather than only derived, because arithmetic in a comment
+	// reads exactly like a measurement: the churn case runs in 8.8 s
+	// against the embedded broker under -race — roughly 2,700 operations
+	// at ~3 ms each — so the budget carries about ten times the observed
+	// worst case
 	// while still reporting well inside the default package timeout.
 	stallBudget = 90 * time.Second
 )
@@ -611,6 +643,10 @@ func (h *harness) mustBeUnheld(resource string) {
 // a field added to coord.Lease and not added here is a field every negative
 // path may quietly write, and nothing fails to say so. Extend it with the
 // struct.
+//
+// Measured, not assumed: dropping the Preferred comparison here while a
+// backend writes the hint on a refused claim passes the whole suite, both
+// mutations landing-checked. The limitation is real and this is what it costs.
 func (h *harness) requireUnchanged(what string, before, after *coord.Lease) {
 	h.t.Helper()
 	if after == nil {

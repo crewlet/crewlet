@@ -31,11 +31,21 @@ import (
 // tests that fail the build on a hand-built subject string: cheap, total, and
 // it states the rule where someone would break it.
 //
-// WHAT IT DOES NOT CATCH, stated so the next reader does not infer coverage the
-// walk does not have: a log call written LEXICALLY inside a locked region. A
-// locked region that calls a named helper which logs is invisible to it, as is
+// WHAT IT CATCHES AND WHAT IT DOES NOT, stated so the next reader does not
+// infer coverage the walk does not have. It catches a log call written
+// LEXICALLY inside a locked region, which is the form all eleven took —
+// measured, by adding one after the lock in `Start` and watching it come back
+// named by file, line and enclosing function. It does not see through a CALL: a
+// locked region that invokes a named helper which logs is invisible to it, as is
 // a log call reached through an interface. Moving a log line into a helper is
 // therefore a way to defeat this without touching it.
+//
+// That paragraph used to open "WHAT IT DOES NOT CATCH: a log call written
+// lexically inside a locked region", naming as uncovered the one form the walk
+// exists to find. Worth knowing why it survived: a sentence bounding a guard's
+// own coverage reads as modesty, and nobody re-checks a guard for claiming to do
+// LESS than it does. The bound is exactly as much a claim as the guarantee, and
+// it was the only one here never put to a test.
 //
 // Both counts below are asserted rather than logged, because a guard that
 // checks for the ABSENCE of something passes identically when the thing is

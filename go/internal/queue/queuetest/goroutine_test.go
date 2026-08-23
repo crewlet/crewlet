@@ -31,10 +31,20 @@ import (
 // of its body, so the scan ran on into the enclosing test function and found
 // its perfectly legal error checks. Hence the AST.
 //
-// WHAT IT DOES NOT CATCH: a stop-call written LEXICALLY inside a `go` statement
-// or a handler literal. A goroutine that calls a NAMED function which fatals is
-// invisible to it — better to say so than to let the next reader infer coverage
-// the walk does not have.
+// WHAT IT CATCHES AND WHAT IT DOES NOT. It catches a stop-call written
+// LEXICALLY inside a `go` statement or a handler literal — measured on both
+// halves separately, since they are different matchers: a t.Fatalf added inside
+// `go func()` and one added inside a handler literal each came back named by
+// file and line. It does not see through a CALL: a goroutine that invokes a
+// NAMED function which fatals is invisible to it — better to say so than to let
+// the next reader infer coverage the walk does not have.
+//
+// This paragraph used to open "WHAT IT DOES NOT CATCH: a stop-call written
+// lexically inside a `go` statement or a handler literal", i.e. it disclaimed
+// precisely what the guard is for. The same inverted sentence sat in the memory
+// backend's lock guard, which is the tell: one construction copied to a second
+// site, not two independent slips. See that guard for why the shape survives —
+// a stated limit reads as modesty and gets read past.
 //
 // This walker is HALF rename-proof, which is why it carries the strong vacuity
 // check anyway. The `go` half keys on *ast.GoStmt and on testing.T's own method

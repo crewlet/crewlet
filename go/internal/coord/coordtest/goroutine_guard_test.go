@@ -35,9 +35,17 @@ var stopsTheGoroutine = map[string]bool{
 // all false; "fixing" them would have converted correct Fatals into Errorfs
 // and let tests carry on into assertions whose preconditions never held.
 //
-// BOUNDARY: it catches a stop-call written lexically inside a `go` statement.
-// A `go` statement calling a NAMED function that fatals is not caught, and
-// nothing here pretends otherwise.
+// BOUNDARY, measured rather than reasoned. It CATCHES a stop-call written
+// lexically inside a `go` statement, directly or nested in a closure. It does
+// NOT catch a `go` statement calling a NAMED function that fatals: injecting
+// exactly that — `go namedWorkerThatFatals(h)` with the stop-call in the
+// function body — passes this guard, landing-checked.
+//
+// Both halves are stated because a limitation is the claim nobody audits. It
+// reads as candour, so it is thanked for and read past, while an over-claim
+// gets challenged on sight. A teammate found two guards of their own whose
+// "what this does not catch" paragraph named the exact form the guard was
+// built to find — wrong in the one direction no reader is motivated to check.
 //
 // WHY THE VACUITY CHECK BELOW IS ONLY A COUNT. A guard can also go blind by
 // having its matcher stop recognising its subject, which is worse than a false

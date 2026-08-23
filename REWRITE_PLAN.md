@@ -374,7 +374,11 @@ Build items (each: port the suite, then implement):
   (dependency-free), at-most-once via the scheduled_runs claim, catchup clamp,
   180s per-run cap, fleet-singleton via claim-per-tick duty.
 - **[BUILD] Prompts** — port `prompts.py` (752 lines of load-bearing English) verbatim
-  with its token-budget tests (Plan<2400, Execute<300, Review<450).
+  with its token-budget tests (Plan<2400, Execute<300, Review<600 — this plan
+  said 450, which is a transcription error: `tests/test_agent/test_prompts.py`
+  asserts 600, and REVIEW_HEADER alone is ~555, so 450 is below the floor of
+  the constant and unreachable without deleting decision rules the same item
+  requires be carried verbatim).
 
 **[GATE G4]** Golden-turn suite green: scripted mock-LLM turns (the Python repo's
 mock-provider approach) reproduce Plan→Execute→Review including suspend/resume

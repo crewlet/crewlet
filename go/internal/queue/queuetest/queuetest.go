@@ -62,9 +62,11 @@
 //     produce a prefix produced a divergence; disabling a flush check produced
 //     nothing, because the drain re-checked. Both "verified" a branch neither
 //     had reached. Read the failure message, not the exit status.
+//
 //   - A mutation harness must tell BUILD FAILED from CAUGHT. A non-compiling
 //     mutation satisfies "the suite failed", so a harness keyed on that reports
 //     every broken patch as a catch.
+//
 //   - It also needs DID NOT LAND, distinct from CLEAN, and this is the verdict
 //     worth the most. A patch whose anchor no longer matches leaves the tree
 //     unmodified; the suite then passes and the harness reports a GAP that does
@@ -72,22 +74,46 @@
 //     code — strictly worse than a false green, which only misses a catch.
 //     Compare a marker count before and after; do not trust a patch tool's
 //     silence.
+//
+//     Which gives the rule for when it matters: EVERY CLAIM RESTING ON A CLEAN
+//     RESULT NEEDS A LANDING CHECK, and claims resting on a FAIL do not. A
+//     failure naming a subtest is self-evidencing — a patch that never applied
+//     cannot produce one — so "this mutation is caught by that case" carries
+//     its own proof. "This mutation passes, therefore a gap exists" carries
+//     none, and CLEAN is the one verdict a non-landing patch can forge. Every
+//     documented gap in this suite is either landing-checked directly or
+//     retroactively evidenced by a later CAUGHT using the same patch text.
+//
 //   - A control set needs a row expected to come back CLEAN for a written-down
 //     reason. Without one, a harness biased toward CAUGHT and a suite that
 //     catches everything are indistinguishable.
+//
 //   - Any invariant about WHERE code sits belongs on the syntax tree. Line
 //     scans cannot see scope: one here reported six violations, all false, and
 //     another missed every function that unlocked inside an early return.
+//
 //   - A guard asserting an ABSENCE must also assert it matched its subject.
 //     Renaming one field named `mu` blinds such a matcher, and it then passes
 //     for ever having inspected nothing.
+//
+//   - Test a guard's STATED LIMITS, not only its guarantee. Both source guards
+//     here carried a "what this does not catch" paragraph that named the exact
+//     form the guard exists to find — one construction copied to a second site.
+//     Measured in both directions afterwards: each catches its lexical form and
+//     neither sees through a named call, which is what the paragraphs now say.
+//     The shape survives because a limit reads as modesty, and nobody re-checks
+//     a guard for claiming to do LESS than it does; a bound is as much a claim
+//     as a guarantee, and it was the only claim here never put to a test.
+//
 //   - A diagnostic must not assert a cause it cannot distinguish. "Delivery
 //     happened, so this is not timing" is false for every case awaiting a
 //     sequence, because a prefix is exactly what a slow backend produces.
+//
 //   - Enumerate what the suite SENDS, not only what it asserts. Every topic and
 //     group here was a plain lowercase identifier, which no mutation could ever
 //     have revealed — and probing one dotted name found a live collision in a
 //     shipped backend.
+//
 //   - Enumerate the POINTS IN A LIFECYCLE at which each operation is sent. A
 //     separate axis from the one above, and a suite can be thorough on values
 //     while never touching it: after a Stop this suite sent exactly two of
@@ -185,10 +211,25 @@ type Capabilities struct {
 	// A backend supplying these must have them reflect an operation that has
 	// already RETURNED. Cases that assert an absence read them with no wait —
 	// most of NegativePaths does, because "this refusal wrote nothing" has no
-	// signal to wait on — so on a backend whose inspection lags, a real
-	// corruption is simply not visible yet and the whole group passes
-	// vacuously. Not a false result; an empty one, which is worse for being
-	// indistinguishable from a green.
+	// signal to wait on.
+	//
+	// MEASURED, because this comment previously claimed something broader and
+	// was wrong. Serving inspection from a view one call stale does NOT make
+	// the group pass vacuously: 9 cases across the suite fail loudly, because
+	// a case reading an ABSOLUTE value sees a stale one and reports it.
+	//
+	// The vacuous shape is narrower and it is the one that matters here. A
+	// before/after DIFFERENTIAL cancels a uniform lag: assertUntouched reads a
+	// correct baseline, the operation writes, the second read has not caught up,
+	// before equals after, and the case passes. Verified by running a lagging
+	// view together with a real corruption — EnsureSubscription wiping the mail
+	// it must keep — and ensure_subscription_on_an_existing_one_keeps_its_mail
+	// reported PASS with the wipe in place.
+	//
+	// So the hazard is worse than "the group goes quiet". The group gets LOUD
+	// somewhere else, the noise is attributed to the lag, and the differential
+	// cases stay green while proving nothing — which is exactly the pair of
+	// symptoms that gets the wrong one investigated.
 	//
 	// Stated here because no case can discover it: both backends this suite
 	// was built against make it true for free — the twin is a mutex over a
