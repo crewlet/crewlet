@@ -196,6 +196,19 @@ func TestDayNamesAndSundayAliases(t *testing.T) {
 	}
 }
 
+func TestTheMonthFieldRestricts(t *testing.T) {
+	t.Parallel()
+	// A gap found by mutation: the Python suite PARSED "0 0 * jan-mar *" and
+	// never handed a month-restricted expression to the matcher, so deleting
+	// the month check was only caught incidentally, by a leap-year case
+	// several files away.
+	e := mustParse(t, "0 0 * jan-mar *")
+	requireMatch(t, e, at(2026, time.January, 15, 0, 0), true)
+	requireMatch(t, e, at(2026, time.March, 15, 0, 0), true)
+	requireMatch(t, e, at(2026, time.April, 15, 0, 0), false)
+	requireMatch(t, e, at(2026, time.December, 15, 0, 0), false)
+}
+
 func TestDayOfMonthAndDayOfWeekOR(t *testing.T) {
 	t.Parallel()
 	// Vixie semantics: with BOTH day fields restricted a day matches if

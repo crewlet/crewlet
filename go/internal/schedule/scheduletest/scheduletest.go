@@ -153,6 +153,11 @@ func newHarness(t *testing.T, newLedger func(t *testing.T) schedule.Ledger) *har
 	if l == nil {
 		t.Fatal("newLedger returned a nil ledger")
 	}
+	// Every call a case makes carries the budget as a deadline, so a backend
+	// that honours cancellation reports a hang as an error on the call that
+	// hung rather than as a process-wide timeout. Deliberately NOT the test's
+	// own context: that one is cancelled before cleanup, and the concurrency
+	// cases join goroutines that are still mid-call at that point.
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	t.Cleanup(cancel)
 	h := &harness{t: t, ctx: ctx, l: l}

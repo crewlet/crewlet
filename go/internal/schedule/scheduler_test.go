@@ -114,7 +114,7 @@ func (c *countingLedger) count() int {
 
 func (c *countingLedger) rows(t *testing.T) []Run {
 	t.Helper()
-	rows, err := c.inner.Recent(context.Background(), 100)
+	rows, err := c.inner.Recent(t.Context(), 100)
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
@@ -217,7 +217,7 @@ func (h *harness) lastTick() time.Time {
 
 func (h *harness) tick(now time.Time) int {
 	h.t.Helper()
-	return h.s.Tick(context.Background(), now)
+	return h.s.Tick(h.t.Context(), now)
 }
 
 // --- construction ---------------------------------------------------------
@@ -468,7 +468,7 @@ func TestAHandleNamingNoSeatDoesNotBurnTheClaim(t *testing.T) {
 	h := build(t, roleOrg())
 	entry := Entries(h.currentOrg())[0]
 	loc := time.UTC
-	if h.s.fire(context.Background(), h.currentOrg(), entry, "ghost", tickAt(9, 0, 0), loc) {
+	if h.s.fire(t.Context(), h.currentOrg(), entry, "ghost", tickAt(9, 0, 0), loc) {
 		t.Fatal("fire to an unknown handle reported success")
 	}
 	if got := h.ledger.count(); got != 0 {
@@ -1062,7 +1062,7 @@ func TestRunTicksUntilItsContextIsDone(t *testing.T) {
 	h := build(t, roleOrg(org.Schedule{Name: "minutely", Cron: "* * * * *", Task: "x"}),
 		func(o *Options) { o.Tick = time.Millisecond })
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		h.s.Run(ctx)

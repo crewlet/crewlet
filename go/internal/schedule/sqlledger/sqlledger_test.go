@@ -1,7 +1,6 @@
 package sqlledger_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -144,7 +143,7 @@ func TestTheStatementsNameTheirColumns(t *testing.T) {
 // exercise an arrangement nothing runs in.
 func open(t *testing.T, drv store.Driver) *store.DB {
 	t.Helper()
-	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "schedule.db"),
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "schedule.db"),
 		store.Options{Driver: drv})
 	if err != nil {
 		t.Fatalf("open %s: %v", drv, err)
