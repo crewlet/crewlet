@@ -812,8 +812,46 @@ func (a *APIAuth) validate(path string) error {
 		}
 		seen[t.ID] = struct{}{}
 	}
+
+	// "anonymous" is the attribution recorded when auth.disabled is true.
+	// A real token carrying it would collide in an audit row with the
+	// writes made while the guard was off — the one distinction those
+	// rows exist to keep.
+	if _, reserved := seen[ReservedOperatorID]; reserved {
+		p.add(at(path, "tokens"), ErrConflict,
+			"token id %q is reserved: it is the attribution recorded when "+
+				"api.auth.disabled is true. Pick a different id",
+			ReservedOperatorID)
+	}
+
+	// The pairing that leaves nothing reachable. No tokens means no
+	// candidate can ever match, and with reads closed too every route is
+	// guarded by a credential that does not exist — a process that starts
+	// cleanly, binds its port, and answers 401 to everything including
+	// its own dashboard.
+	//
+	// Checked HERE rather than at API startup, which is where the Python
+	// this replaces raised it, so `crewlet validate` catches it on a
+	// laptop rather than a deployment catching it at bind time.
+	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
+		p.add(at(path, "tokens"), ErrMissing,
+			"allow_anonymous_read is false and no tokens are configured, so "+
+				"every route is guarded by a token that does not exist and "+
+				"nothing is reachable. Configure at least one token, or leave "+
+				"allow_anonymous_read at its default to serve reads without one")
+	}
 	return p.err()
 }
+
+// ReservedOperatorID is the attribution stamped on writes made while the auth
+// guard is disabled.
+//
+// Exported because two packages need the same answer: config refuses it as a
+// token id, and the API stamps it on a disabled-mode request. A second copy of
+// the string is how those two would come to disagree about which id is
+// reserved — and the disagreement would be silent, because each side would
+// still be self-consistent.
+const ReservedOperatorID = "anonymous"
 
 // ---- secrets --------------------------------------------------------- //
 
