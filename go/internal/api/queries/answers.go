@@ -86,6 +86,12 @@ type Sources struct {
 	// them is a measurement.
 	Budget *store.Budgets
 
+	// Sandbox is the durable record of detached coding runs. Nil leaves
+	// the question unregistered, which is honest for a node with no
+	// sandbox backend: without one no run can be parked, so there is
+	// nothing this question could describe.
+	Sandbox PendingRuns
+
 	// Config serves the config family, and every one of those is
 	// operator-gated: reading the document exposes the whole company.
 	Config *configapi.Service
@@ -155,6 +161,9 @@ func Register(r *Registry, s Sources) {
 		// which is a different question from what it has done.
 		r.Register("schedules", s.schedules)
 		r.Register("integrations", s.integrations)
+	}
+	if s.Sandbox != nil {
+		r.Register("sandbox_runs", s.sandboxRuns)
 	}
 	if s.Conversations != nil {
 		r.Register("conversations", s.conversations)

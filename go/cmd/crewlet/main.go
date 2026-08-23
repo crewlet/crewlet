@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/version"
@@ -381,7 +382,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Episodes:      learning.NewEpisodes(e.Backends().Store),
 			Config:        configSurface,
 			Budget:        e.Backends().Store.Budgets(),
-			NodeID:        nodeID,
+			// The DURABLE record of detached coding runs. Read rather
+			// than projected: a run parked on a person's question can
+			// wait days, and the live projection sweeps long before
+			// that — so the states that most need somebody were the
+			// ones least likely to be on screen.
+			Sandbox: sandbox.NewSQLStore(e.Backends().Store),
+			NodeID:  nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through THIS node's store, which is what makes a

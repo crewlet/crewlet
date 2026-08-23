@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -188,6 +189,10 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		Sources: queries.Sources{
 			Events:  e.Backends().Store.Events(),
 			Company: func() *config.Company { return cfg },
+			// The DURABLE record, which is what the board must read: a
+			// run parked on a question waits days, and the live
+			// projection sweeps long before that.
+			Sandbox: sandbox.NewSQLStore(e.Backends().Store),
 		},
 		HealthInterval: tickInterval,
 	})
@@ -399,4 +404,70 @@ func countOf(list []string, want string) int {
 		}
 	}
 	return n
+}
+
+// The board an operator looks at when a run needs somebody.
+//
+// The DURABLE record, over the same query channel every other read uses: a run
+// parked on a question waits days, and the live projection sweeps long before
+// that — so the states that most need a person were the ones least likely to
+// be on screen.
+func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
+	n := startCoding(t, "ask")
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "swe")
+	})
+	n.wake(t, "swe", "the api test is flaking, please fix it")
+
+	waitFor(t, "the parked run to reach the board", func() bool {
+		for _, row := range n.board(t) {
+			if row["status"] == sandbox.StatusAwaiting {
+				return true
+			}
+		}
+		return false
+	})
+	var parked map[string]any
+	for _, row := range n.board(t) {
+		if row["status"] == sandbox.StatusAwaiting {
+			parked = row
+		}
+	}
+	if parked["question"] != "Which branch should I target?" {
+		t.Fatalf("question = %v", parked["question"])
+	}
+	if parked["agent_handle"] != "swe" || parked["coding_agent"] != "claude-code" {
+		t.Fatalf("row = %v", parked)
+	}
+	if parked["box_exists"] != true || parked["paused_at"] == "" {
+		t.Fatalf("the held snapshot is invisible, so nobody can see what is being paid for: %v", parked)
+	}
+	// The suspended conversation is by far the largest column in the row,
+	// and every prompt in it is already reachable through the event store.
+	for _, key := range []string{"execute_state", "messages"} {
+		if _, leaked := parked[key]; leaked {
+			t.Fatalf("%q reached a board that renders one line per run", key)
+		}
+	}
+}
+
+// board reads the sandbox-runs answer over the query surface, exactly as the
+// dashboard does.
+func (n *codingNode) board(t *testing.T) []map[string]any {
+	t.Helper()
+	res, err := http.Get(n.server.URL + "/query/sandbox_runs")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /query/sandbox_runs = %d", res.StatusCode)
+	}
+	var payload struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return payload.Runs
 }
