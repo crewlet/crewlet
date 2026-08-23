@@ -77,6 +77,7 @@ package seat
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -368,8 +369,11 @@ type SweepResult struct {
 	// Claimed are the seats this pass newly established. A seat is counted
 	// only once its acquire hook succeeded.
 	Claimed []string
-	// Lost are the seats this pass gave up (or, when a heartbeat overwrites
-	// it, the seats that heartbeat lost).
+	// Lost are the seats this node stopped holding from this pass onward:
+	// the ones the pass itself gave up, plus any a heartbeat has lost
+	// since. Both writers APPEND — a heartbeat that replaced the list
+	// erased whatever the pass had shed, so a node that gave back two
+	// seats and then lost a third reported only the third.
 	Lost []string
 	// Unplaceable are the seats whose placement matches no live
 	// seat-running node. Nothing this node can act on — a pin to a node
@@ -389,3 +393,18 @@ type SweepResult struct {
 // Blocked reports whether the mixed-version gate is what stopped this pass
 // from claiming.
 func (r SweepResult) Blocked() bool { return r.BlockedByProtocol > 0 }
+
+// clone returns a SweepResult that shares no backing array with the
+// original.
+//
+// It is what makes storing a pass's record safe: the value the caller gets
+// back and the value the host keeps must not alias, or a heartbeat appending
+// to the host's copy writes into a slice the caller is still reading. That is
+// a data race the race detector only finds when a heartbeat and a sweep
+// overlap — which needs a store failure to provoke.
+func (r SweepResult) clone() SweepResult {
+	r.Claimed = slices.Clone(r.Claimed)
+	r.Lost = slices.Clone(r.Lost)
+	r.Unplaceable = slices.Clone(r.Unplaceable)
+	return r
+}

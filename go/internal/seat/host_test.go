@@ -3,6 +3,7 @@ package seat
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -902,6 +903,69 @@ func TestHeartbeatLossesReachTheLastSweep(t *testing.T) {
 		t.Fatal("there was no last sweep to update")
 	}
 	wantStrings(t, last.Lost, []string{"ceo"}, "last sweep lost")
+}
+
+func TestHeartbeatLossesDoNotErasePassLosses(t *testing.T) {
+	t.Parallel()
+	// Two writers, one list. The heartbeat used to REPLACE it, so a node
+	// that shed seats to rebalance and then lost another to a peer
+	// reported only the last thing that happened — the shed seats
+	// vanished from the record entirely, on the one surface an operator
+	// reads to find out where a company's seats went.
+	f := newFleet(t)
+	a := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng")})
+	a.renewNodePresence(f.ctx)
+	a.Sweep(f.ctx)
+	wantHeld(t, a, "ceo", "eng")
+
+	// A peer arrives, so the fair share halves and this pass sheds one.
+	f.present("node-b", time.Minute, placement.NodeProfile{})
+	shed := a.Sweep(f.ctx).Lost
+	if len(shed) != 1 {
+		t.Fatalf("the rebalancing pass shed %v, want exactly one seat", shed)
+	}
+
+	// Then the seat it kept is taken out from under it.
+	kept := a.Held()[0]
+	epoch, _ := a.EpochFor(kept)
+	f.peerTakes(kept, "peer:1", a.Owner(), epoch)
+	wantStrings(t, a.Heartbeat(f.ctx), []string{kept}, "lost to the peer")
+
+	last, ok := a.LastSweep()
+	if !ok {
+		t.Fatal("there was no last sweep to amend")
+	}
+	want := append(slices.Clone(shed), kept)
+	slices.Sort(want)
+	got := slices.Clone(last.Lost)
+	slices.Sort(got)
+	wantStrings(t, got, want, "everything this node stopped holding")
+}
+
+func TestAStoredSweepDoesNotAliasTheReturnedOne(t *testing.T) {
+	t.Parallel()
+	// The aliasing that caused the race: Sweep stored a POINTER to the
+	// same value it returned, so a heartbeat appending to the host's copy
+	// wrote into a slice the caller was still reading. Provoked here
+	// single-threaded — a race detector only sees it when the two
+	// genuinely overlap, which needs a store failure to arrange.
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo")})
+	h.renewNodePresence(f.ctx)
+	returned := h.Sweep(f.ctx)
+
+	epoch, _ := h.EpochFor("ceo")
+	f.peerTakes("ceo", "peer:1", h.Owner(), epoch)
+	h.Heartbeat(f.ctx)
+
+	if len(returned.Lost) != 0 {
+		t.Errorf("the value Sweep returned grew to %v — the host is writing "+
+			"through the caller's copy", returned.Lost)
+	}
+	if returned.Held != 1 {
+		t.Errorf("the value Sweep returned now reports Held=%d, want the 1 it "+
+			"returned with", returned.Held)
+	}
 }
 
 func slicesContains(haystack []string, needle string) bool {

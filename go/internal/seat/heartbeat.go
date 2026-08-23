@@ -164,9 +164,16 @@ func (h *SeatHost) Heartbeat(ctx context.Context) []string {
 	}
 
 	if len(lost) > 0 {
+		// Amend the standing record rather than replace its list: a pass
+		// that shed two seats followed by a heartbeat that lost a third
+		// has lost three, and overwriting reported one.
 		h.mu.Lock()
 		if h.last != nil {
-			h.last.Lost = lost
+			for _, handle := range lost {
+				if !slices.Contains(h.last.Lost, handle) {
+					h.last.Lost = append(h.last.Lost, handle)
+				}
+			}
 			h.last.Held = len(h.held)
 		}
 		h.mu.Unlock()

@@ -132,7 +132,10 @@ func (h *SeatHost) Sweep(ctx context.Context) SweepResult {
 		Unplaceable:       plan.Unplaceable,
 		BlockedByProtocol: blocked,
 	}
-	h.last = &result
+	// A copy, never &result: a heartbeat appends to the stored record, and
+	// the value returned here would otherwise be the same object.
+	stored := result.clone()
+	h.last = &stored
 	h.mu.Unlock()
 
 	if len(claimed) > 0 || len(released) > 0 || blocked > 0 {
