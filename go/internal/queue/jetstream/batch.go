@@ -57,9 +57,24 @@ func (q *Queue) SubscribeBatch(
 			// not be flushed past: the whole point of pausing a seat's
 			// inbox is that no turn starts, and a batch collected a
 			// moment earlier would start one. Hand it straight back.
-			if ctx.Err() != nil || a.blocked() {
+			//
+			// The two are handled DIFFERENTLY and conflating them was a
+			// seat-killing bug. A cancelled context is teardown, so the
+			// loop ends. A hold is RELEASED IN PLACE — ResumeTopic clears
+			// it and the attachment is expected to carry on — so ending
+			// the loop there left the seat attached, owning its lease,
+			// and reading nothing for the rest of the process's life.
+			// Nothing detects that: the seat looks owned and healthy and
+			// its mail simply accumulates. It is the same condition the
+			// top of this loop already answers with `continue`, ten lines
+			// up, which is what it should have said here too.
+			if ctx.Err() != nil {
 				a.nakAll(batch)
 				return
+			}
+			if a.blocked() {
+				a.nakAll(batch)
+				continue
 			}
 			a.dispatchBatch(ctx, batch, h, key)
 		}

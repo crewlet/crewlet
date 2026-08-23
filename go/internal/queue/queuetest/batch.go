@@ -247,6 +247,45 @@ func (s *suite) runBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("a_hold_during_linger_is_released_in_place", func(t *testing.T) {
+		t.Parallel()
+		// The reversible half of the case above, and the half that was
+		// missing. PauseDelivery is one-way — the node is shutting down —
+		// so a backend may legitimately stop consuming for good. A
+		// PauseTopic HOLD is the opposite: ResumeTopic clears it and the
+		// attachment is expected to carry on.
+		//
+		// A backend that ends its consume loop on a hold taken during a
+		// linger window leaves the seat ATTACHED, owning its lease, and
+		// reading nothing for the rest of the process's life. Nothing
+		// detects that — the seat looks owned and healthy while its mail
+		// accumulates — which is why it survived: every other assertion
+		// about holds pauses BEFORE anything is in the window, and the
+		// single-event path answers the same condition correctly.
+		q := s.start(t)
+		batches := newBatchJournal()
+		subscribeBatch(t, q, "t.hold", "g", recordingBatchHandler(batches),
+			queue.NewBatchOptions(racingWindow.Seconds(), 20))
+
+		// Open the window, then take the hold while it is open.
+		publish(t, q, "t.hold", newConvEvent("during", "c1"))
+		if err := q.PauseTopic(ctx, "t.hold", "g", "test"); err != nil {
+			t.Fatalf("PauseTopic: %v", err)
+		}
+		time.Sleep(racingWindow + quietFor)
+		batches.staysAt(t, 0, "a held attachment dispatched its window")
+
+		if err := q.ResumeTopic(ctx, "t.hold", "g", "test"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+		batches.awaitSizes(t, "the held batch once the hold lifts", 1)
+
+		// And the attachment is still ALIVE, not merely flushed once:
+		// something published after the resume must arrive too.
+		publish(t, q, "t.hold", newConvEvent("after", "c1"))
+		batches.awaitSizes(t, "an event published after the hold lifted", 1, 1)
+	})
+
 	t.Run("an_aged_conversation_dispatches_before_a_fresher_one", func(t *testing.T) {
 		t.Parallel()
 		// Between-partition fairness, asserted against the BACKEND rather

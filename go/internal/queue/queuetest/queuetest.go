@@ -45,6 +45,45 @@
 // exception, and the corpus is where permission lives. If the property is real
 // but not universal, it becomes a Capabilities flag with the reason at the skip
 // — not a requirement, and not a deleted case.
+//
+// # Checks that do not depend on you being careful
+//
+// The section above asks you to suspect the case. Both conformance suites in
+// this repo carried that instruction, both authors had read it, and both then
+// shipped cases requiring more of a backend than the contract allowed. It does
+// not fail from being unread. It fails because a suite cannot audit itself: the
+// fixtures, the constants, the helpers and the doctrine are written by the same
+// mind as the cases, so they are blind in the same places and fail together.
+//
+// What actually caught things was mechanical. Each of these is here because it
+// caught something that careful reading had already missed:
+//
+//   - A mutation must LAND in the branch it is proving. A nak-to-drop meant to
+//     produce a prefix produced a divergence; disabling a flush check produced
+//     nothing, because the drain re-checked. Both "verified" a branch neither
+//     had reached. Read the failure message, not the exit status.
+//   - A mutation harness must tell BUILD FAILED from CAUGHT. A non-compiling
+//     mutation satisfies "the suite failed", so a harness keyed on that reports
+//     every broken patch as a catch.
+//   - A control set needs a row expected to come back CLEAN for a written-down
+//     reason. Without one, a harness biased toward CAUGHT and a suite that
+//     catches everything are indistinguishable.
+//   - Any invariant about WHERE code sits belongs on the syntax tree. Line
+//     scans cannot see scope: one here reported six violations, all false, and
+//     another missed every function that unlocked inside an early return.
+//   - A guard asserting an ABSENCE must also assert it matched its subject.
+//     Renaming one field named `mu` blinds such a matcher, and it then passes
+//     for ever having inspected nothing.
+//   - A diagnostic must not assert a cause it cannot distinguish. "Delivery
+//     happened, so this is not timing" is false for every case awaiting a
+//     sequence, because a prefix is exactly what a slow backend produces.
+//   - Enumerate what the suite SENDS, not only what it asserts. Every topic and
+//     group here was a plain lowercase identifier, which no mutation could ever
+//     have revealed — and probing one dotted name found a live collision in a
+//     shipped backend.
+//
+// None of these require anyone to be suspicious at the right moment, which is
+// the only property that survives contact with a blind spot.
 package queuetest
 
 import (
