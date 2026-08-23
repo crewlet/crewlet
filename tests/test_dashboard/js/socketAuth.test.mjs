@@ -14,6 +14,7 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
 
@@ -70,13 +71,13 @@ globalThis.fetch = async () => {
 };
 
 const { Store } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/store.js", import.meta.url)
+  new URL("store.js", JS_URL)
 );
 const { LiveSocket } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/socket.js", import.meta.url)
+  new URL("socket.js", JS_URL)
 );
 const { bannerFor, bannerTone } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/health.js", import.meta.url)
+  new URL("health.js", JS_URL)
 );
 
 // Every LiveSocket ever built here. A live one holds a ping interval, a

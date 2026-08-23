@@ -8,10 +8,11 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 const { root } = installDom();
 const { patch } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/patch.js", import.meta.url)
+  new URL("patch.js", JS_URL)
 );
 
 const ROWS = `<div data-k="a" class="row">alpha</div><div data-k="b" class="row">beta</div>`;

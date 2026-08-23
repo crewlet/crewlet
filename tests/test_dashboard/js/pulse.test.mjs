@@ -7,9 +7,10 @@
 
 import assert from "node:assert";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 const { buildPulse, PULSE_BUCKETS } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/pulse.js", import.meta.url)
+  new URL("pulse.js", JS_URL)
 );
 
 // A fixed "now" so the assertions are about bucketing, not about when

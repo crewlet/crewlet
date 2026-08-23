@@ -15,9 +15,10 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const base = JS_URL;
 const { createSeatView } = await import(new URL("views/seat.js", base));
 const { createActivityView } = await import(new URL("views/activity.js", base));
 const { parseRoute } = await import(new URL("router.js", base));

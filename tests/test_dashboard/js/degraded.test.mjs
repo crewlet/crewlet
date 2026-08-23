@@ -8,13 +8,14 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
 const { Store } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/store.js", import.meta.url)
+  new URL("store.js", JS_URL)
 );
 const { api } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/api.js", import.meta.url)
+  new URL("api.js", JS_URL)
 );
 
 function snapshot() {

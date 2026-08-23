@@ -10,9 +10,9 @@
 // Every number in tokens.css's header comment is computed here.
 
 import { readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { test, run } from "./harness.mjs";
+import { JS_URL, JS_DIR, STYLES_DIR } from "./dashboardRoot.mjs";
 import {
   parseTokens,
   themeTokens,
@@ -25,15 +25,8 @@ import {
   simulate,
 } from "./color.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const TOKENS_CSS = join(
-  HERE,
-  "../../../src/crewlet/static/dashboard/styles/tokens.css",
-);
-const STATE_JS = join(
-  HERE,
-  "../../../src/crewlet/static/dashboard/js/state.js",
-);
+const TOKENS_CSS = join(STYLES_DIR, "tokens.css");
+const STATE_JS = join(JS_DIR, "state.js");
 
 const blocks = parseTokens(readFileSync(TOKENS_CSS, "utf8"));
 const THEMES = {
@@ -191,7 +184,7 @@ function adjacentPairs(order) {
 // measured, because contrast maths cannot see a declaration the browser
 // threw away.
 
-const STYLE_DIR = join(HERE, "../../../src/crewlet/static/dashboard/styles");
+const STYLE_DIR = STYLES_DIR;
 
 function shippedStylesheets() {
   const out = [];
@@ -242,7 +235,7 @@ test("every token a stylesheet reaches for actually exists", () => {
   const defined = new Set();
   for (const [, block] of blocks) for (const [name] of block) defined.add(name);
 
-  const jsDir = join(HERE, "../../../src/crewlet/static/dashboard/js");
+  const jsDir = JS_DIR;
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
@@ -290,10 +283,10 @@ test("every token the RENDERERS reach for exists too", async () => {
   for (const [, block] of blocks) for (const [name] of block) defined.add(name);
 
   const state = await import(
-    new URL("../../../src/crewlet/static/dashboard/js/state.js", import.meta.url)
+    new URL("state.js", JS_URL)
   );
   const ui = await import(
-    new URL("../../../src/crewlet/static/dashboard/js/ui.js", import.meta.url)
+    new URL("ui.js", JS_URL)
   );
 
   const emitted = new Map(); // token -> what produced it
@@ -657,7 +650,7 @@ test("the category hues in CSS match the map in state.js", () => {
   // it, and the gates above are measured against the declaration. If they
   // drift, the suite validates an order the page does not render.
   const css = readFileSync(
-    join(HERE, "../../../src/crewlet/static/dashboard/styles/components.css"),
+    join(STYLES_DIR, "components.css"),
     "utf8",
   );
   const src = readFileSync(STATE_JS, "utf8");

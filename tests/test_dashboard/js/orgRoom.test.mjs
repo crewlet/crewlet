@@ -18,15 +18,14 @@
 
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { DASHBOARD_DIR, JS_URL } from "./dashboardRoot.mjs";
 
 const { document } = installDom();
-const HERE = dirname(fileURLToPath(import.meta.url));
-const DASH = join(HERE, "../../../src/crewlet/static/dashboard");
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const DASH = DASHBOARD_DIR;
+const base = JS_URL;
 const { createOrgRoomView, buildReporting } = await import(
   new URL("views/orgRoom.js", base)
 );

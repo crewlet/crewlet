@@ -7,13 +7,14 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
 const { turnRail } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/ui.js", import.meta.url)
+  new URL("ui.js", JS_URL)
 );
 const { staleness, STALE_MS, STALLED_MS } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/state.js", import.meta.url)
+  new URL("state.js", JS_URL)
 );
 
 // ---- the turn rail ----

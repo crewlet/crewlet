@@ -12,12 +12,10 @@
 
 import assert from "node:assert";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 const { createEventDetailView } = await import(
-  new URL(
-    "../../../src/crewlet/static/dashboard/js/views/eventDetail.js",
-    import.meta.url,
-  )
+  new URL("views/eventDetail.js", JS_URL)
 );
 
 const TRACE = "3f8a1c9d4b2e6071";

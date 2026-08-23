@@ -23,7 +23,20 @@ import (
 // default embed pattern silently skips them, and a stylesheet under one would
 // be missing from the binary with nothing failing until a browser asked for it.
 //
+// THE ICONS ARE NOT UNDER dashboard/ AND MUST STILL BE NAMED. The shell asks
+// for them at /static/crewlet-icon.svg (the favicon) and /static/crewlet-icon.png
+// (the sidebar brand) — one directory above the rest of the app, because they
+// are the product's marks rather than the dashboard's assets. Embedding only
+// `dashboard` left both 404ing from the binary while every module and
+// stylesheet served perfectly, which renders as a page with no logo and a blank
+// tab icon: the kind of break nothing fails on and nobody files.
+//
+// A NEW TOP-LEVEL ASSET NEEDS A NEW PATTERN HERE, and TestEveryStaticFileIsInTheBinary
+// is what says so — it walks this directory on disk and fails on anything the
+// embed did not take.
+//
 //go:embed all:dashboard
+//go:embed crewlet-icon.png crewlet-icon.svg
 var files embed.FS
 
 // FS is the embedded tree rooted at the dashboard directory's parent, so a

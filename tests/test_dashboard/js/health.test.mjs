@@ -9,14 +9,15 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
 const { dotClass, providerTrouble, renderHealthPopover, bannerFor, bannerTone } =
   await import(
-    new URL("../../../src/crewlet/static/dashboard/js/health.js", import.meta.url)
+    new URL("health.js", JS_URL)
   );
 const { emptyOrPending } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/ui.js", import.meta.url)
+  new URL("ui.js", JS_URL)
 );
 
 // ---- the dot ----

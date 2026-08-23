@@ -14,6 +14,7 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL, STYLES_URL } from "./dashboardRoot.mjs";
 
 const { document } = installDom();
 
@@ -40,11 +41,8 @@ function hasClass(node, name) {
   return (node.getAttribute("class") || "").split(/\s+/).includes(name);
 }
 const text = (node) => node.textContent || "";
-const AGENTS_CSS = new URL(
-  "../../../src/crewlet/static/dashboard/styles/rooms/agents.css",
-  import.meta.url,
-);
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const AGENTS_CSS = new URL("rooms/agents.css", STYLES_URL);
+const base = JS_URL;
 const { createAgentsView, classify } = await import(new URL("views/agents.js", base));
 
 const ORG = {

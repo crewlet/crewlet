@@ -67,6 +67,14 @@ uv run pytest -m integration -s                         # -s to see measurements
   runner image does not ship it, and the wrapper asserts it independently.
   Any `node` recent enough for ES modules will do.
 
+  **Which dashboard the suites test is a parameter.** They resolve it once,
+  in `tests/test_dashboard/js/dashboardRoot.mjs`, from
+  `CREWLET_DASHBOARD_ROOT` — unset, it is the tree in `src/crewlet/static/`.
+  The Go rewrite's `go-ci` workflow points it at the copy embedded in the Go
+  binary and runs the same suite files, so one set of assertions certifies
+  both servers. Spell the path in a suite instead and it becomes a fact that
+  can only ever be corrected in most of the places it appears.
+
 - **`tests/test_queue/test_broker_behavior.py`** measures the broker
   behaviours the multi-node design rests on (redelivery timing, cursor
   continuity across a subscription's change of owner, prefetch size) and

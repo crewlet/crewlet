@@ -8,9 +8,10 @@
 
 import assert from "node:assert";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 const { Store } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/store.js", import.meta.url)
+  new URL("store.js", JS_URL)
 );
 
 function snapshot(overrides = {}) {

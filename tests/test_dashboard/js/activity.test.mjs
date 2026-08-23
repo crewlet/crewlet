@@ -23,6 +23,7 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
 // `replaceParams` writes the filter state through the history API. A
@@ -36,7 +37,7 @@ globalThis.history = {
   },
 };
 
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const base = JS_URL;
 const { createActivityView } = await import(new URL("views/activity.js", base));
 const { newestFirst, oldestFirst, tsKey } = await import(new URL("format.js", base));
 const { EVENT_CATEGORIES } = await import(new URL("state.js", base));

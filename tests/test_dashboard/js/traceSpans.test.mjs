@@ -16,9 +16,10 @@
 
 import assert from "node:assert";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 const { arrangeSpans } = await import(
-  new URL("../../../src/crewlet/static/dashboard/js/traceNodes.js", import.meta.url)
+  new URL("traceNodes.js", JS_URL)
 );
 
 test("a trace nests children under their parent span", () => {

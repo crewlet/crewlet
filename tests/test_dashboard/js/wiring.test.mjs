@@ -19,12 +19,11 @@
 
 import assert from "node:assert";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { test, run } from "./harness.mjs";
+import { JS_DIR } from "./dashboardRoot.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const JS = join(HERE, "../../../src/crewlet/static/dashboard/js");
+const JS = JS_DIR;
 
 const appSource = readFileSync(join(JS, "app.js"), "utf8");
 

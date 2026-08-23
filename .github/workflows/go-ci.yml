@@ -4,12 +4,26 @@ name: go-ci
 # ci.yml until Phase 9 moves the Go tree to the repository root and the
 # Python implementation is deleted.
 
+# The dashboard's own paths are here because gate G5 lives in this workflow
+# and neither of its inputs is under go/: the JavaScript suites are still in
+# the Python tree (D14), and the tree they certify is the one package static
+# embeds — held byte-identical to src/crewlet/static/dashboard by
+# TestTheEmbeddedTreeMatchesTheSource. Without these, editing a dashboard
+# module would skip the only job that runs its tests against the Go server.
 on:
   push:
     branches: [main]
-    paths: ["go/**", ".github/workflows/go-ci.yml"]
+    paths:
+      - "go/**"
+      - "src/crewlet/static/dashboard/**"
+      - "tests/test_dashboard/js/**"
+      - ".github/workflows/go-ci.yml"
   pull_request:
-    paths: ["go/**", ".github/workflows/go-ci.yml"]
+    paths:
+      - "go/**"
+      - "src/crewlet/static/dashboard/**"
+      - "tests/test_dashboard/js/**"
+      - ".github/workflows/go-ci.yml"
 
 permissions:
   contents: read
@@ -51,6 +65,26 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
+      - name: Ensure node is present
+        # Gate G5 runs the dashboard's ~350 JavaScript assertions against the
+        # tree this binary embeds, under plain `node` — no package.json, no
+        # node_modules, no runner. That is the dashboard's ONLY coverage, and
+        # without node the gate skips and the build stays green, so this step
+        # fails rather than warning.
+        #
+        # The version is recorded rather than pinned: the suites use ES
+        # modules and `node:assert` and nothing else, so a major bump is not
+        # a risk worth a setup action; what IS worth having is the number in
+        # the log, so "it broke on the new image" is a diff rather than a
+        # theory. TestTheGoWorkflowDeclaresItsNodeDependency asserts this step
+        # is still here.
+        working-directory: .
+        run: |
+          command -v node || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends nodejs
+          }
+          echo "node $(node --version)"
       # The race detector is not optional here: the engine's whole
       # concurrency model changed from one cooperative event loop to real
       # parallelism, so every "atomic because asyncio" assumption the

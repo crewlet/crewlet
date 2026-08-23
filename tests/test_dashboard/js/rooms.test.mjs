@@ -10,9 +10,10 @@
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
 installDom();
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const base = JS_URL;
 const { createWorkView } = await import(new URL("views/work.js", base));
 const { createSpendView } = await import(new URL("views/spend.js", base));
 const { createIntegrationsView } = await import(

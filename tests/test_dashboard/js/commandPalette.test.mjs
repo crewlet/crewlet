@@ -13,8 +13,9 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const base = JS_URL;
 const { buildResults, flatResults, commands, ROOMS } = await import(
   new URL("commandPalette.js", base)
 );

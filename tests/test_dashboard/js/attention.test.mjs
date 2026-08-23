@@ -9,8 +9,9 @@
 
 import assert from "node:assert";
 import { test, run } from "./harness.mjs";
+import { JS_URL } from "./dashboardRoot.mjs";
 
-const base = new URL("../../../src/crewlet/static/dashboard/js/", import.meta.url);
+const base = JS_URL;
 const { buildAttention, attentionCounts, SEVERITY } = await import(
   new URL("attention.js", base)
 );
