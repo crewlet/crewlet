@@ -1,7 +1,10 @@
 package config
 
 import (
+	"slices"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -16,6 +19,24 @@ type Providers struct {
 	// naming a key that is not here has no model at all, so the keys are
 	// the company's model vocabulary.
 	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named LLM providers; seats select one by key."`
+
+	// LLMOrder is the order the providers were DECLARED in, preserved
+	// because per-phase resolution's last resort is "the first provider
+	// configured" — see agent/phase.Registry.
+	//
+	// It is a field and not a derivation because a Go map has no order and
+	// this document does not stay YAML: a company config is stored as JSON
+	// and re-read on every boot and every rollout, so an order recovered
+	// only at YAML-parse time is an order the running engine never sees.
+	// Two nodes booted from one stored revision would then resolve an
+	// unpinned seat to different models, and one node would change model
+	// across a restart.
+	//
+	// Populated by UnmarshalYAML and carried in JSON. A document that
+	// carries none — hand-written JSON, or a revision stored before this
+	// existed — falls back to sorted keys, which is arbitrary but stable;
+	// see ProviderOrder.
+	LLMOrder []string `yaml:"-" json:"llm_order,omitempty"`
 
 	// Embeddings powers the learning subsystem's vector recall. Nil
 	// disables it — episodes are still written, but nothing searches them
@@ -32,6 +53,129 @@ type Providers struct {
 // what lets an org chart be authored before the credentials exist — and
 // fails at the first turn, which is where the failure is actionable.
 func DefaultProviders() Providers { return Providers{} }
+
+// llmKeyOrder reads the declaration order of providers.llm off the document
+// node, which is the only place it exists.
+//
+// Called from ParseCompany against the WHOLE document rather than from an
+// UnmarshalYAML on Providers, and that is not a style choice. The package's
+// strict decoder round-trips a node through the encoder to get KnownFields,
+// which serialises that subtree ALONE — so an alias inside it pointing at an
+// anchor defined elsewhere in the file stops resolving. Measured: adding a
+// custom decoder to Providers turned `<<: [*one, *two]` into
+// "unknown anchor 'one' referenced" on a document that had parsed fine.
+// Reading the order from the document leaves every decoder exactly as it was.
+func llmKeyOrder(doc *yaml.Node) []string {
+	root := doc
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	providers := mappingValue(root, "providers")
+	if providers == nil {
+		return nil
+	}
+	return mappingKeys(mappingValue(providers, "llm"))
+}
+
+// mappingValue returns a mapping's value for key.
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// mappingKeys lists a mapping's keys in document order, expanding merge keys
+// in place.
+//
+// The merge expansion is not decoration. `<<: *shared` is how an operator
+// shares a block of providers between documents, and yaml.v3 resolves it during
+// DECODE — so the map ends up with the merged entries while a naive read of the
+// raw node sees only the literal `<<`. Those providers then fall off the order
+// entirely and are appended by the sorted-tail fallback, which silently moves
+// whichever one an operator listed first. Measured before this existed:
+// `<<: &base {zulu: …}` plus a literal `alpha` ordered [alpha zulu].
+//
+// Explicit keys still win over merged ones, which is YAML's own rule; here that
+// falls out of the dedupe in ProviderOrder rather than needing its own pass.
+//
+// NO ALIAS FOLLOWING, and that is a probed conclusion rather than an omission.
+// An alias node reached here can only ever name a mapping whose anchor was
+// defined at a point that ALREADY contributed its keys — YAML requires the
+// definition before the use, and every top-level key in this document is known
+// and typed, so an anchor-holder key is rejected as an unknown setting and
+// there is nowhere else a provider-map anchor can live. Following the alias
+// therefore cannot change the answer; it was written, mutated away, and no test
+// could be made to see the difference.
+//
+// If a future top-level field is ever shaped like a provider map, this becomes
+// reachable and its absence silently drops that block from the order. That is
+// the one thing to check here.
+func mappingKeys(node *yaml.Node) []string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := make([]string, 0, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		if key.Tag != "!!merge" && key.Value != "<<" {
+			out = append(out, key.Value)
+			continue
+		}
+		// A merge value is one mapping (usually via an alias) or a
+		// sequence of them, and a sequence merges left-to-right.
+		if value.Kind == yaml.SequenceNode {
+			for _, item := range value.Content {
+				out = append(out, mappingKeys(item)...)
+			}
+			continue
+		}
+		out = append(out, mappingKeys(value)...)
+	}
+	return out
+}
+
+// ProviderOrder is the order seats resolve providers in.
+//
+// It reconciles LLMOrder against the map rather than trusting it, because the
+// two travel separately through JSON and an operator editing a stored revision
+// can desync them. Keys the order names but the map lacks are dropped; keys the
+// map has but the order omits are appended in sorted order, so every configured
+// provider is reachable and the result is always a permutation of the map's
+// keys.
+//
+// The sorted tail is what makes a document with NO order deterministic. It is
+// arbitrary — an operator's first-listed provider is the one they think of as
+// primary, and sorting does not know that — but arbitrary-and-stable is the
+// only honest answer when the declaration order was never recorded, and it is
+// strictly better than a map range that answers differently every call.
+func (p *Providers) ProviderOrder() []string {
+	out := make([]string, 0, len(p.LLM))
+	seen := make(map[string]bool, len(p.LLM))
+	for _, key := range p.LLMOrder {
+		if _, ok := p.LLM[key]; !ok || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	if len(out) == len(p.LLM) {
+		return out
+	}
+	rest := make([]string, 0, len(p.LLM)-len(out))
+	for key := range p.LLM {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	slices.Sort(rest)
+	return append(out, rest...)
+}
 
 func (p *Providers) validate(path string) error {
 	var probs problems

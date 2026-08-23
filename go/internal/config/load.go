@@ -103,6 +103,13 @@ func ParseCompany(data []byte) (*Company, error) {
 	if err := decodeKnown(&doc, &cfg); err != nil {
 		return nil, err
 	}
+	// The declaration order of providers.llm exists only in the document —
+	// a Go map has none — and per-phase resolution's last resort is "the
+	// first provider configured". Read here, against the whole document,
+	// because the strict decoder serialises a subtree alone and an alias
+	// inside one pointing at an anchor defined elsewhere would stop
+	// resolving. See llmKeyOrder.
+	cfg.Providers.LLMOrder = llmKeyOrder(&doc)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
