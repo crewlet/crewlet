@@ -126,3 +126,45 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 		}
 	}
 }
+
+// A meta payload that cannot be encoded is refused, and refused BEFORE the
+// record is written.
+//
+// This is twin-only behaviour that the contract suite structurally cannot
+// reach: every meta payload in coordtest is JSON-native by deliberate design,
+// so no case there can hand the store something a codec would reject. A
+// portable suite cannot hold a backend-specific path, which is exactly the
+// gap where a defect sits unnoticed — measured, a silent drop here passes both
+// packages.
+//
+// Pinned on the OBSERVABLE rather than on the error text: what a caller needs
+// is that the claim did not appear to succeed with its profile quietly
+// missing, because a node whose roles were dropped is one peers make placement
+// decisions about against a profile it never published.
+func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := memory.New()
+	resource := coord.NodeResource("n1")
+
+	lease, err := b.TryAcquire(ctx, resource, coord.AcquireOptions{
+		Owner: "n1:a", TTL: time.Minute, Ungated: true,
+		Meta: map[string]any{"roles": []any{"seats"}, "ch": make(chan int)},
+	})
+	if err == nil {
+		t.Fatalf("TryAcquire = (%v, nil) for a payload no store could encode — a real "+
+			"backend's write would fail on it, and answering success with the profile "+
+			"silently gone is the one outcome a caller cannot detect", lease)
+	}
+	if lease != nil {
+		t.Fatal("TryAcquire granted a lease it could not record the meta for")
+	}
+	// And nothing was written on the way to refusing.
+	held, err := b.Get(ctx, resource)
+	if err != nil {
+		t.Fatalf("Get after a refused claim: %v", err)
+	}
+	if held != nil {
+		t.Fatalf("the resource is held by %q after a claim that was refused", held.Owner)
+	}
+}

@@ -11,6 +11,15 @@ import (
 // churnTTL is short enough that leases genuinely lapse mid-churn, so the
 // stress case exercises takeover and the epoch bumps that come with it rather
 // than just hammering one uncontested hold.
+//
+// Measured, because that is a claim about this SUITE rather than about a
+// backend and so is one nobody is motivated to check: instrumenting the churn
+// to report its final epoch gives 304 tenures against the twin and 313
+// against the embedded broker. Hundreds of real ownership changes, which is
+// what makes "no epoch is ever handed to two owners" a statement about
+// contention rather than about a single uncontested hold. If a future edit
+// lengthens this, re-measure — the case can degrade to proving nothing
+// without failing.
 const churnTTL = 2 * time.Millisecond
 
 // contendedClaimBudget is how long a claimant keeps coming back for a
