@@ -65,6 +65,13 @@
 //   - A mutation harness must tell BUILD FAILED from CAUGHT. A non-compiling
 //     mutation satisfies "the suite failed", so a harness keyed on that reports
 //     every broken patch as a catch.
+//   - It also needs DID NOT LAND, distinct from CLEAN, and this is the verdict
+//     worth the most. A patch whose anchor no longer matches leaves the tree
+//     unmodified; the suite then passes and the harness reports a GAP that does
+//     not exist. That is a false FINDING, which sends someone to change working
+//     code — strictly worse than a false green, which only misses a catch.
+//     Compare a marker count before and after; do not trust a patch tool's
+//     silence.
 //   - A control set needs a row expected to come back CLEAN for a written-down
 //     reason. Without one, a harness biased toward CAUGHT and a suite that
 //     catches everything are indistinguishable.
@@ -85,7 +92,17 @@
 //     separate axis from the one above, and a suite can be thorough on values
 //     while never touching it: after a Stop this suite sent exactly two of
 //     eleven verbs, and the window it never visited held a hold that survived
-//     into the next life and left a restarted seat silently deaf.
+//     into the next life and left a restarted seat silently deaf. Build the
+//     WHOLE matrix rather than probing the verb you suspect — the suspected one
+//     is chosen from inside the blind spot.
+//
+// One lifecycle this suite does not visit at all: the BACKEND'S REACHABILITY.
+// Every case here runs against a healthy broker, so nothing certifies what a
+// verb answers when the store is unreachable — and "nil, false, or an empty
+// slice with no error" all read as facts about a subscription that a call which
+// never reached the broker does not have. Closing it needs fault injection the
+// contract has no hook for, so it is named as a known gap rather than left as
+// an assumption.
 //
 // One limit, and it binds the two entries above that recommend a guard rather
 // than excusing them: a guard that names its own assumption DIAGNOSES a race,
