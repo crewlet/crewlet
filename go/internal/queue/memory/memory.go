@@ -753,7 +753,17 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 // publish serialised.
 //
 // The caller has already decoded those same bytes once — that is how it holds
-// `received` — so a failure here is unreachable. Falling back to a clone
+// `received` — so a failure here is unreachable.
+//
+// That reason is stated because "unreachable" without one is the label that
+// tells the next auditor to stop looking, and it is itself a claim about our
+// own code — the population nobody audits. The coordination twin has a branch
+// that read identically and was NOT unreachable: it decodes bytes it had only
+// ENCODED, and json.Number("1e1000") marshals fine and then fails to unmarshal
+// into float64. Ours differs in exactly the way that matters, and it was
+// probed rather than argued: for those same payloads the first and second
+// decode of one byte slice agree, so Publish has already returned an error
+// before this is reached. Falling back to a clone
 // keeps mail flowing rather than dropping a delivery if it ever stops being
 // unreachable; it is a worse copy (it shares the payload pointer), not no
 // copy. Nothing is logged because this runs under the broker lock.
