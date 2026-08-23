@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -76,6 +78,20 @@ type Config struct {
 	// which is what a node with no marker store has — a pass that could
 	// never be marked would run every turn forever.
 	Onboarding Onboarding
+
+	// Resume re-enters a suspended Execute phase. Non-nil makes this
+	// runner's turn a RESUME: Plan is skipped and Execute continues the
+	// saved conversation. See [Runner.Resume] and d-402.
+	Resume *Resume
+}
+
+// Resume is a suspended Execute conversation plus the answer that unblocks it.
+type Resume struct {
+	State execstate.State
+
+	// Answer is what the pending run_sandbox call is answered with: the
+	// coding agent's findings, or a person's reply to its question.
+	Answer string
 }
 
 // Runner implements [turn.Phases] against real models and real tools.
@@ -85,6 +101,11 @@ type Config struct {
 type Runner struct {
 	cfg   Config
 	spend Spend
+
+	// mu guards suspension, which the Execute phase writes and the engine
+	// reads once the turn returns.
+	mu         sync.Mutex
+	suspension *Suspension
 }
 
 var _ turn.Phases = (*Runner)(nil)
@@ -127,8 +148,11 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		ConversationHistory: r.cfg.Conversation,
 	})
 
-	res, err := r.runPhase(ctx, phase.Plan, surface, system, user,
-		r.cfg.Caps.PlanRounds, r.cfg.Caps.PlanCeiling, round, SubmitPlanTool)
+	res, err := r.runPhase(ctx, phaseRun{
+		phase: phase.Plan, surface: surface, system: system, user: user,
+		rounds: r.cfg.Caps.PlanRounds, ceiling: r.cfg.Caps.PlanCeiling, iteration: round,
+		terminateAfter: []string{SubmitPlanTool},
+	})
 	if err != nil {
 		return turn.Plan{}, turn.Surface{}, err
 	}
@@ -199,10 +223,16 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 		ConversationHistory: r.cfg.Conversation,
 	})
 
-	res, err := r.runPhase(ctx, phase.Execute, surface, system, user,
-		r.cfg.Caps.ExecuteRounds, r.cfg.Caps.ExecuteCeiling, round)
+	res, err := r.runPhase(ctx, phaseRun{
+		phase: phase.Execute, surface: surface, system: system, user: user,
+		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling, iteration: round,
+	})
 	if err != nil {
 		return turn.Execution{}, turn.Surface{}, err
+	}
+
+	if res.Suspended {
+		r.recordSuspension(round, surface, res.Result, history)
 	}
 
 	missing := missingTools(surface, snapshot)
@@ -249,8 +279,11 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
 	})
 
-	res, err := r.runPhase(ctx, phase.Review, surface, system, r.cfg.Task,
-		r.cfg.Caps.ReviewRounds, 0, round, SubmitReviewTool)
+	res, err := r.runPhase(ctx, phaseRun{
+		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
+		rounds: r.cfg.Caps.ReviewRounds, iteration: round,
+		terminateAfter: []string{SubmitReviewTool},
+	})
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -318,9 +351,43 @@ func missingNote(missing []string) string {
 // only the caller knows what FINISHING looks like for its phase — Plan exits
 // through its submission tool, Execute by returning text with no calls — and a
 // generic loop would have to be told, which is the same thing said twice.
-func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Surface,
-	system, user string, rounds, ceiling, iteration int, terminateAfter ...string,
-) (phaseResult, error) {
+// phaseRun is one phase's inputs.
+//
+// A struct rather than nine positional parameters, which is what it was: three
+// adjacent ints (rounds, ceiling, iteration) and two adjacent strings (system,
+// user) is a signature where a transposition compiles and produces a phase
+// that silently runs with the wrong budget.
+type phaseRun struct {
+	phase   phase.Phase
+	surface *tools.Surface
+
+	// system and user open the conversation. Both are ignored when Seed is
+	// set: a resumed loop already has its opening in the saved messages.
+	system string
+	user   string
+
+	rounds    int
+	ceiling   int
+	iteration int
+
+	// terminateAfter names tools that end the loop once they have run.
+	terminateAfter []string
+
+	// seed is the conversation a RESUMED loop starts from: the suspended
+	// messages plus the answer to their dangling call. Nil for an ordinary
+	// phase.
+	seed []llm.Message
+
+	// spent is what the pre-suspend rounds already cost, so a resumed
+	// phase's record is the turn's total rather than only its second half.
+	spent toolloop.Result
+}
+
+func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error) {
+	ph, surface := in.phase, in.surface
+	system, user := in.system, in.user
+	iteration, ceiling := in.iteration, in.ceiling
+	terminateAfter := in.terminateAfter
 	// The phase's own record of what it managed, so the FAILURE path has
 	// something to report. A phase that dies returns no Result at all, and
 	// without this the only trace of it is the started event — a dashboard
@@ -353,16 +420,19 @@ func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Su
 	// record and may be minutes away.
 	emit.started(ctx, ph, iteration, system, user)
 
-	messages := []llm.Message{
-		{Role: llm.RoleSystem, Content: system},
-		{Role: llm.RoleUser, Content: user},
+	messages := in.seed
+	if messages == nil {
+		messages = []llm.Message{
+			{Role: llm.RoleSystem, Content: system},
+			{Role: llm.RoleUser, Content: user},
+		}
 	}
 	policy := extension.Policy{
 		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
 	}
 
 	var out phaseResult
-	budget := rounds
+	budget := in.rounds
 	for {
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
@@ -392,6 +462,14 @@ func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Su
 		// The loop's own count is per-invocation; an extended phase runs it
 		// more than once and the record must carry the phase's total.
 		out.Result.RoundsUsed = out.Rounds
+		// A resumed phase adds what the pre-suspend rounds spent. The
+		// MESSAGES are not re-emitted (they are already recorded, and
+		// re-publishing them would redraw a turn the dashboard has and
+		// double-count every token) but the COUNTERS are the turn's, and a
+		// record showing only the second half understates every resumed
+		// turn's cost.
+		out.Result.InputTokens += in.spent.InputTokens
+		out.Result.OutputTokens += in.spent.OutputTokens
 		messages = res.Messages
 
 		if res.Suspended || !res.ExhaustedRounds {

@@ -28,6 +28,8 @@ type fake struct {
 	planErr, execErr, revErr error
 
 	planRounds, execRounds, revRounds int
+	resumeRounds                      int
+	resumeErr                         error
 	notesSeen                         []string
 	historySeen                       [][]ledger.Iteration
 }
@@ -62,6 +64,16 @@ func (f *fake) Execute(_ context.Context, round int, _ turn.Plan, _ []ledger.Ite
 		return at(f.execs, round), at(f.execSurfaces, round), nil
 	}
 	return at(f.execs, round), at(f.surfaces, round), nil
+}
+
+func (f *fake) Resume(_ context.Context, _ []ledger.Iteration) (turn.Execution, turn.Surface, error) {
+	f.resumeRounds++
+	if f.resumeErr != nil {
+		return turn.Execution{}, turn.Surface{}, f.resumeErr
+	}
+	// A resumed phase re-enters the FIRST round, so it reads the same slot
+	// an ordinary Execute would have.
+	return at(f.execs, 1), at(f.surfaces, 1), nil
 }
 
 func (f *fake) Review(_ context.Context, round int, _ turn.Plan, _ turn.Execution, _ []ledger.Iteration) (turn.Review, error) {
@@ -678,5 +690,97 @@ func TestOnlyTheReadsActuallyUsedAreRecorded(t *testing.T) {
 	}
 	if got := res.Iterations[0].Reads; len(got) != 1 || got[0] != "slack_history" {
 		t.Errorf("reads = %v, want only the read this round used", got)
+	}
+}
+
+// A resumed turn that re-planned would re-derive a plan for work already
+// half-done. The FIRST round re-enters the suspended conversation instead.
+func TestAResumedTurnSkipsPlanForItsFirstRound(t *testing.T) {
+	f := &fake{
+		execs:   []turn.Execution{{Text: "finished the code work"}},
+		reviews: []turn.Review{{Decision: "done", FinalArtifact: "shipped"}},
+	}
+	res, err := turn.Run(t.Context(), f, settings(), turn.Input{TurnID: "t1", Resume: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 {
+		t.Fatalf("Resume ran %d times, want 1", f.resumeRounds)
+	}
+	if f.planRounds != 0 {
+		t.Fatalf("Plan ran %d times on a resumed turn's first round", f.planRounds)
+	}
+	if f.execRounds != 0 {
+		t.Fatalf("Execute ran %d times instead of Resume", f.execRounds)
+	}
+	if f.revRounds != 1 {
+		t.Fatalf("Review ran %d times, want the resumed round judged", f.revRounds)
+	}
+	if res.Decision != phase.Done {
+		t.Fatalf("decision = %v, want done", res.Decision)
+	}
+}
+
+// Only the first round. A resumed executor that self-iterates gets an ordinary
+// planned round after that — otherwise the turn could never change course.
+func TestOnlyTheFirstRoundOfAResumedTurnSkipsPlan(t *testing.T) {
+	f := &fake{
+		plans: []turn.Plan{{Summary: "second pass"}},
+		execs: []turn.Execution{{Text: "resumed"}, {Text: "second pass"}},
+		reviews: []turn.Review{
+			{Decision: "self_iterate", Notes: "not there yet"},
+			{Decision: "done", FinalArtifact: "shipped"},
+		},
+	}
+	if _, err := turn.Run(t.Context(), f, settings(), turn.Input{TurnID: "t1", Resume: true}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 {
+		t.Fatalf("Resume ran %d times, want exactly the first round", f.resumeRounds)
+	}
+	if f.planRounds != 1 || f.execRounds != 1 {
+		t.Fatalf("round two ran plan %d / execute %d, want one of each", f.planRounds, f.execRounds)
+	}
+}
+
+// The resumed executor may call run_sandbox again to continue in the same box.
+func TestAResumedTurnCanSuspendAgain(t *testing.T) {
+	f := &fake{execs: []turn.Execution{{Text: "launched another job", Suspended: true}}}
+	res, err := turn.Run(t.Context(), f, settings(), turn.Input{TurnID: "t1", Resume: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Suspended {
+		t.Fatal("a second suspend was not reported")
+	}
+	if f.revRounds != 0 {
+		t.Fatal("Review judged a round that suspended before it finished")
+	}
+}
+
+// The suspended turn's closed rounds have to reach the resumed one, or it
+// re-fires deliveries that already went.
+func TestAResumedTurnInheritsTheSuspendedTurnsLedger(t *testing.T) {
+	prior := []ledger.Iteration{{Iteration: 1, PlanSummary: "clone and fix"}}
+	f := &fake{
+		execs:   []turn.Execution{{Text: "done"}},
+		reviews: []turn.Review{{Decision: "done", FinalArtifact: "shipped"}},
+	}
+	res, err := turn.Run(t.Context(), f, settings(), turn.Input{
+		TurnID: "t1", Resume: true, History: prior,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Iterations) == 0 || res.Iterations[0].PlanSummary != "clone and fix" {
+		t.Fatalf("iterations = %+v, want the suspended turn's round carried in", res.Iterations)
+	}
+}
+
+// A resume that cannot re-enter is an engine failure, not a turn outcome.
+func TestAFailedResumeIsAnError(t *testing.T) {
+	f := &fake{resumeErr: errors.New("state is unreadable")}
+	if _, err := turn.Run(t.Context(), f, settings(), turn.Input{TurnID: "t1", Resume: true}); err == nil {
+		t.Fatal("a resume that could not re-enter returned no error")
 	}
 }

@@ -239,9 +239,12 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	})
 	const user = "Complete your onboarding now."
 
-	res, err := r.runPhase(ctx, phase.Onboarding, surface, system, user,
-		r.cfg.Onboarding.Rounds, r.cfg.Onboarding.Ceiling, onboardingIteration,
-		MarkOnboardedTool)
+	res, err := r.runPhase(ctx, phaseRun{
+		phase: phase.Onboarding, surface: surface, system: system, user: user,
+		rounds: r.cfg.Onboarding.Rounds, ceiling: r.cfg.Onboarding.Ceiling,
+		iteration:      onboardingIteration,
+		terminateAfter: []string{MarkOnboardedTool},
+	})
 	if err != nil {
 		return false, fmt.Errorf("runner: onboarding: %w", err)
 	}

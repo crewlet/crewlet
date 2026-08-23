@@ -114,6 +114,14 @@ type Phases interface {
 
 	// Review judges the round. It is not called when the loop skips Review.
 	Review(ctx context.Context, round int, p Plan, e Execution, history []ledger.Iteration) (Review, error)
+
+	// Resume re-enters an Execute phase that suspended on a detached sandbox
+	// run, with the run's result spliced in as the pending call's reply.
+	//
+	// Called INSTEAD OF Plan and Execute for the first round of a resumed
+	// turn — a resumed turn that re-planned would re-derive a plan for work
+	// already half-done. Everything after that round is an ordinary turn.
+	Resume(ctx context.Context, history []ledger.Iteration) (Execution, Surface, error)
 }
 
 // Input is one turn's starting state.
@@ -123,10 +131,23 @@ type Input struct {
 	// Depth is the delegation depth this turn inherited.
 	Depth int
 
-	// History is the ledger carried across a sandbox suspend. A resumed
-	// turn is a NEW turn, so without this it would forget every round the
-	// suspended one closed and could re-fire their deliveries.
+	// History is the ledger carried across a sandbox suspend. The resumed
+	// turn re-enters mid-loop, so without this it would forget every round
+	// the suspended one closed and could re-fire their deliveries.
 	History []ledger.Iteration
+
+	// Resume re-enters a suspended Execute phase rather than starting from
+	// Plan. The SAME turn id continues (d-402): the resumed conversation is
+	// the one the sandbox call left waiting, not a fresh turn that would
+	// re-plan and re-investigate from scratch.
+	Resume bool
+
+	// ResumePlan is the plan the suspended turn was executing, so the
+	// delivery gate and Review judge the round against what it INTENDED
+	// rather than against nothing. Rebuilt from the pending row; a zero
+	// value means the plan could not be recovered, which downgrades the
+	// gate rather than failing the resume.
+	ResumePlan Plan
 }
 
 // Settings is the turn's pinned configuration.
@@ -208,26 +229,47 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	notes := ""
 	maxRounds := set.iterations()
 
+	resuming := in.Resume
 	for round := 1; round <= maxRounds; round++ {
 		res.Rounds = round
 
-		p, planSurface, err := ph.Plan(ctx, round, notes, res.Iterations)
-		if err != nil {
-			return res, fmt.Errorf("turn: plan round %d: %w", round, err)
-		}
+		var (
+			p           Plan
+			planSurface Surface
+			exec        Execution
+			execSurface Surface
+			err         error
+		)
+		if resuming {
+			// The first round of a resumed turn re-enters the suspended
+			// Execute conversation. Plan is skipped, and only for this
+			// round: if the resumed executor self-iterates, round two is an
+			// ordinary planned round again.
+			resuming = false
+			p = in.ResumePlan
+			exec, execSurface, err = ph.Resume(ctx, res.Iterations)
+			if err != nil {
+				return res, fmt.Errorf("turn: resume round %d: %w", round, err)
+			}
+		} else {
+			p, planSurface, err = ph.Plan(ctx, round, notes, res.Iterations)
+			if err != nil {
+				return res, fmt.Errorf("turn: plan round %d: %w", round, err)
+			}
 
-		if p.Decision == PlanSkip {
-			// Nothing was being asked. The turn ends with the planner's
-			// reasoning as its output and nothing reaches the requester.
-			log.Info("turn_skipped", "turn_id", in.TurnID, "reason", p.Reasoning)
-			res.Decision = phase.Skipped
-			res.Artifact = p.Reasoning
-			return res, nil
-		}
+			if p.Decision == PlanSkip {
+				// Nothing was being asked. The turn ends with the planner's
+				// reasoning as its output and nothing reaches the requester.
+				log.Info("turn_skipped", "turn_id", in.TurnID, "reason", p.Reasoning)
+				res.Decision = phase.Skipped
+				res.Artifact = p.Reasoning
+				return res, nil
+			}
 
-		exec, execSurface, err := ph.Execute(ctx, round, p, res.Iterations)
-		if err != nil {
-			return res, fmt.Errorf("turn: execute round %d: %w", round, err)
+			exec, execSurface, err = ph.Execute(ctx, round, p, res.Iterations)
+			if err != nil {
+				return res, fmt.Errorf("turn: execute round %d: %w", round, err)
+			}
 		}
 		if exec.Suspended {
 			// The turn parks here and its completion starts a new one. The
