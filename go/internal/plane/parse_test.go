@@ -677,3 +677,52 @@ func TestWithoutARegistryTheParserStillRoutes(t *testing.T) {
 		t.Fatalf("a removal routed %d notifications with no registry: %+v", len(got), got)
 	}
 }
+
+// A COMPANY WITH NO ENGINE READ CREDENTIAL still routes. The cache has
+// nothing to walk and the subscriber lookup has nothing to ask, so both must
+// degrade to what the payload names. The alternative, found by an e2e run,
+// was a nil dereference on every inbound webhook — which killed the whole
+// fleet-wide inbound consumer rather than one integration.
+func TestRoutingSurvivesAMissingEngineCredential(t *testing.T) {
+	t.Parallel()
+	cache := plane.NewProjectCache(nil, nil)
+	if got := cache.Identifier(t.Context(), "some-project"); got != "" {
+		t.Fatalf("an unwalkable cache answered %q", got)
+	}
+	// What it CAN answer is a mapping a payload taught it.
+	cache.Learn("proj-eng", "ENG")
+	if got := cache.Identifier(t.Context(), "proj-eng"); got != "ENG" {
+		t.Fatalf("a learned mapping answered %q, want ENG", got)
+	}
+
+	p := parser(t, func(o *plane.ParserOptions) {
+		o.Projects = cache
+		o.Subscribers = nil
+	})
+	routed := routeAll(t, p, hook("issue", "created", map[string]any{
+		"id": "issue-1", "project": "proj-eng",
+		"name": "Fix the login redirect", "assignees": []any{},
+	}, func(body map[string]any) {
+		body["activity"] = map[string]any{"actor_id": uidOutsider}
+	}), registry(t))
+
+	if got := recipients(t, registry(t), routed); !slices.Equal(got, []string{"lead"}) {
+		t.Fatalf("recipients = %v, want the project lead", got)
+	}
+}
+
+// A thread update with no subscriber lookup falls back to the payload's
+// assignees rather than reaching nobody — the same degradation, on the path
+// that normally spends a request.
+func TestAThreadUpdateFallsBackToAssigneesWithNoLookup(t *testing.T) {
+	t.Parallel()
+	p := parser(t, func(o *plane.ParserOptions) { o.Subscribers = nil })
+	routed := routeAll(t, p, hook("issue", "updated", map[string]any{
+		"id": "issue-1", "project": "proj-eng", "name": "Fix it",
+		"assignees": []any{uidSWE},
+	}, nil), registry(t))
+
+	if got := recipients(t, registry(t), routed); !slices.Equal(got, []string{"swe"}) {
+		t.Fatalf("recipients = %v, want the payload's assignee", got)
+	}
+}

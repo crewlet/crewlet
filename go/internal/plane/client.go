@@ -285,6 +285,16 @@ func (p *ProjectCache) Identifier(ctx context.Context, projectID string) string 
 	if known {
 		return identifier
 	}
+	if p.client == nil {
+		// NO CREDENTIAL, so there is nothing to walk: this cache can
+		// only ever answer from what [ProjectCache.Learn] recorded off a
+		// payload. Answering "" here rather than reaching for the client
+		// is the difference between the documented no-engine-token
+		// degradation and a panic on every inbound webhook — and the
+		// engine reaches this path deliberately, because a lapsed read
+		// credential must cost enrichment, not the whole tracker.
+		return ""
+	}
 	if !stale {
 		return ""
 	}
@@ -350,6 +360,12 @@ func (p *ProjectCache) IDsFor(ctx context.Context, identifiers []string) []strin
 }
 
 // SubscriberLookup adapts the client to the parser's [Subscribers] seam.
+//
+// A nil Client REPORTS an error rather than dereferencing, for the same
+// reason the cache tolerates one: a company with no engine read credential
+// still routes from what its payloads name, and the parser already treats a
+// failed lookup as "fall back to the assignees". A panic here would turn
+// that documented degradation into a dead inbound consumer.
 type SubscriberLookup struct{ Client *Client }
 
 // Of implements [Subscribers].

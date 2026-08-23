@@ -117,6 +117,11 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// current — and during a rollout the new company is the one being
 	// adopted, so the window that favours it is the right one.
 	e.refreshParties(next)
+	// The TRACKER is rebuilt on the same edge and for the same reason: its
+	// lead map is derived from the org, so a node that kept its boot-time
+	// parser would route the new revision's work items by the old
+	// company's org chart.
+	e.reconcilePlane(next)
 
 	previous := e.Company()
 	e.epoch.current.Store(next)

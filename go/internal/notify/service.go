@@ -217,6 +217,33 @@ func (s *Service) Register(p Parser, prompt Prompt) error {
 	return nil
 }
 
+// Replace swaps the parser and prompt for a source already registered.
+//
+// The APPLY path. A parser is built from the company — which projects exist,
+// who leads them, which instance to read — and an epoch is published rather
+// than mutated, so a node that kept its boot-time parser would route a new
+// revision's events by the old company's org chart. That failure is silent:
+// every event still routes, just to whoever led the project when the process
+// started.
+//
+// Distinct from [Service.Register], which REFUSES a duplicate source, and
+// deliberately: at boot a second parser claiming one source name is two
+// integrations colliding, and swapping one for the other silently would make
+// whichever registered last win. The two callers want opposite answers to
+// the same situation, so they ask different questions.
+func (s *Service) Replace(p Parser, prompt Prompt) error {
+	if p == nil || p.Source() == "" {
+		return fmt.Errorf("notify: a parser must name its source")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parsers[p.Source()] = p
+	if prompt != nil {
+		s.prompts = s.prompts.With(prompt)
+	}
+	return nil
+}
+
 // Start attaches to the inbound topic.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()

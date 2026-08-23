@@ -32,6 +32,12 @@ type notifications struct {
 	service    *notify.Service
 	mattermost *mattermost.Transport
 
+	// plane is the tracker's contribution: a parser and a knowledge
+	// searcher. No lifecycle, because Plane is inbound-only — there is no
+	// connection to lose, so an unreachable instance degrades the reads
+	// that enrich routing and never takes a surface down.
+	plane planeParts
+
 	// off is the driver a company with no chat backend gets, built once
 	// and shared: it holds no state and raises nothing.
 	off *notify.StatusDriver
@@ -127,6 +133,24 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if transport != nil {
 			parsers = append(parsers, transport.Parser())
 			prompts = append(prompts, transport.Prompt())
+		}
+	}
+	if p := c.Config.Integrations.Plane; p != nil && p.Enabled {
+		parts, err := e.startPlane(c, p)
+		if err != nil {
+			// Same posture as the chat surface: the company runs
+			// WITHOUT its tracker rather than not at all. Refusing to
+			// boot over a tracker misconfiguration would take down
+			// every seat's chat and scheduled work with it.
+			log.Error("plane_unavailable", "error", err.Error(),
+				"detail", "the company is running without its tracker")
+		}
+		if parts.parser != nil {
+			e.notify.mu.Lock()
+			e.notify.plane = parts
+			e.notify.mu.Unlock()
+			parsers = append(parsers, parts.parser)
+			prompts = append(prompts, planePrompt())
 		}
 	}
 
