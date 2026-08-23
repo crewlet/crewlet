@@ -32,11 +32,19 @@ type Providers struct {
 	// unpinned seat to different models, and one node would change model
 	// across a restart.
 	//
-	// Populated by UnmarshalYAML and carried in JSON. A document that
-	// carries none — hand-written JSON, or a revision stored before this
-	// existed — falls back to sorted keys, which is arbitrary but stable;
-	// see ProviderOrder.
-	LLMOrder []string `yaml:"-" json:"llm_order,omitempty"`
+	// Normally DERIVED from the document's own key order and not written
+	// by hand — but it is a readable field, because the config read
+	// surface emits it and must accept it back. Go marshals a map with
+	// sorted keys, so a document that made this round trip carries the
+	// authored order here and nowhere else; a reader that refused it would
+	// make GET-edit-PUT reject its own output.
+	//
+	// An explicit value WINS over the document's key order, which is what
+	// makes that round trip lossless and lets an operator pin the order
+	// deliberately. A document carrying neither — hand-written JSON, or a
+	// revision stored before this existed — falls back to sorted keys,
+	// arbitrary but stable; see ProviderOrder.
+	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
 	// Embeddings powers the learning subsystem's vector recall. Nil
 	// disables it — episodes are still written, but nothing searches them
@@ -298,7 +306,7 @@ type LLMProvider struct {
 	// An empty list falls back to the provider's conventional variable
 	// (OPENAI_API_KEY, ANTHROPIC_API_KEY) at construction time, so a
 	// credential already exported in the shell works with no YAML change.
-	APIKeys []string `yaml:"api_keys,omitempty" json:"api_keys,omitempty" desc:"API keys, ${VAR} supported. Several rotate on rate-limit/auth errors."`
+	APIKeys []string `secret:"true" yaml:"api_keys,omitempty" json:"api_keys,omitempty" desc:"API keys, ${VAR} supported. Several rotate on rate-limit/auth errors."`
 
 	// Cooldowns is the TTL policy applied per error class when a key is
 	// marked cooled-down.
@@ -533,13 +541,13 @@ type CLIAgentAuth struct {
 	// Empty falls back to the profile's own token variable. This is the
 	// best headless path where a CLI offers one: no credential files to
 	// sync, no refresh rotation, and it survives an ephemeral container.
-	Token string `yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
 	// `crewlet llm export` — the CLI's credential files as one blob,
 	// restored into an empty credential directory at boot so a fresh
 	// container comes up already logged in.
-	CredentialBundle string `yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
+	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 
 // CLIAgent is the cli-agent block of a providers.llm entry.
@@ -580,7 +588,7 @@ type CLIAgent struct {
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
 	// the CLI needs beyond PATH, locale, TLS and proxy is declared here.
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
 
 	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
 
@@ -676,7 +684,7 @@ var EmbeddingProviderTypes = []EmbeddingProviderType{EmbeddingOpenAI, EmbeddingO
 type EmbeddingProvider struct {
 	Type    EmbeddingProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|openai-compatible" desc:"openai (default) or openai-compatible."`
 	Model   string                `yaml:"model,omitempty" json:"model,omitempty" desc:"Embedding model id."`
-	APIKey  string                `yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"API key or ${VAR} reference."`
+	APIKey  string                `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"API key or ${VAR} reference."`
 	BaseURL string                `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint for an openai-compatible embedding service."`
 
 	// Dimensions is the vector width. It MUST match what the model

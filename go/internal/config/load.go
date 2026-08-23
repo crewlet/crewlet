@@ -89,6 +89,30 @@ func LoadCompany(path string) (*Company, error) {
 
 // ParseCompany decodes and validates Tier B from bytes.
 func ParseCompany(data []byte) (*Company, error) {
+	cfg, err := ParseCompanyDocument(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// ParseCompanyDocument decodes Tier B WITHOUT validating it.
+//
+// The shape is still enforced — an unknown field, a list where a mapping
+// belongs, a malformed value all fail here — and only the whole-document rules
+// are deferred. It exists for the one caller that cannot validate yet: the
+// config write path, where a submitted document may carry redaction masks in
+// place of credentials and has to have them resolved against the previous
+// revision first. Validating before that would reject an operator's document
+// for carrying "__redacted__" in a field they never touched.
+//
+// Everything else uses [ParseCompany]. A caller that skipped validation and
+// forgot to run it later would be a config that fails at the first turn, and
+// that is the worst place to learn it.
+func ParseCompanyDocument(data []byte) (*Company, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrShape, err)
@@ -110,9 +134,15 @@ func ParseCompany(data []byte) (*Company, error) {
 	// because the strict decoder serialises a subtree alone and an alias
 	// inside one pointing at an anchor defined elsewhere would stop
 	// resolving. See llmKeyOrder.
-	cfg.Providers.LLMOrder = llmKeyOrder(&doc)
-	if err := cfg.Validate(); err != nil {
-		return nil, err
+	//
+	// Only when the document did not state one. A document that made a
+	// round trip through the config surface carries the authored order in
+	// llm_order and NOT in its key order, because Go marshals a map with
+	// sorted keys — so deriving unconditionally would silently reorder
+	// every provider chain the moment somebody read a config and sent it
+	// back.
+	if len(cfg.Providers.LLMOrder) == 0 {
+		cfg.Providers.LLMOrder = llmKeyOrder(&doc)
 	}
 	return &cfg, nil
 }

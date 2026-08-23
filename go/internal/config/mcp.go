@@ -58,7 +58,7 @@ type MCPServer struct {
 	// The stdio fields.
 	Command string            `yaml:"command,omitempty" json:"command,omitempty" desc:"Executable to launch (stdio)."`
 	Args    []string          `yaml:"args,omitempty" json:"args,omitempty" desc:"Arguments for the executable (stdio)."`
-	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty" desc:"Environment for the subprocess (stdio); ${VAR} supported."`
+	Env     map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Environment for the subprocess (stdio); ${VAR} supported."`
 
 	// ToolPrefix disambiguates tools whose bare names would collide with
 	// another server's.

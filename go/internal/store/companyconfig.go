@@ -192,9 +192,12 @@ func (c *Configs) one(ctx context.Context, query string, args ...any) (Revision,
 
 // List returns revisions newest first.
 //
-// Ordered by (created_at, revision_id) descending rather than by time alone:
-// an import that writes several revisions in one burst shares a microsecond,
-// and a listing over a non-unique key hands two readers different pages.
+// The tiebreak is the INSERTION order, not the revision id. Time alone is not
+// unique — an import that writes several revisions in one burst shares a
+// microsecond — and a random uuid as the tiebreak is stable without being
+// truthful: it can put the older of two revisions first, and a history read in
+// the wrong order is worse than one read slowly. The implicit rowid is the
+// only monotonic thing this table has, and it is exactly the fact needed.
 func (c *Configs) List(ctx context.Context, limit, offset int) ([]Revision, error) {
 	if limit <= 0 {
 		limit = DefaultRevisionPage
@@ -204,7 +207,7 @@ func (c *Configs) List(ctx context.Context, limit, offset int) ([]Revision, erro
 	}
 	rows, err := c.db.sql.QueryContext(ctx,
 		`SELECT `+revisionColumns+` FROM company_config
-		 ORDER BY created_at DESC, revision_id DESC LIMIT ? OFFSET ?`, limit, offset)
+		 ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("store: list config revisions: %w", err)
 	}

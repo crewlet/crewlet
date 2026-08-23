@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -76,6 +77,10 @@ type Options struct {
 	// Inbound wires the webhook edge. Zero means this process serves no
 	// webhook endpoint — see [Inbound].
 	Inbound Inbound
+
+	// Config serves /config. Nil serves none, which is what a process with
+	// no store genuinely has.
+	Config *configapi.Service
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
@@ -149,6 +154,11 @@ func New(opts Options) *App {
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
 	a.mountWebhooks(mux, opts.Inbound, sources, now)
+	// The config surface. GUARDED in full, reads included: the auth
+	// package makes /config the one prefix never eligible for
+	// allow_anonymous_read, because reading it exposes the whole company
+	// document and writing it changes the company.
+	opts.Config.Routes(mux)
 	a.handler = a.guard.Middleware(mux)
 	return a
 }

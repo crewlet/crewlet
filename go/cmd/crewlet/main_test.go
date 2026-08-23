@@ -228,7 +228,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.ParseFormat("text"), &logged)
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	port := taken.Addr().(*net.TCPAddr).Port
 
 	e := testEngine(t)
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, port), e, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, port), e, nil, nil, logging.Get("test"))
 	if err == nil {
 		surface.stop(context.Background(), logging.Get("test"))
 		t.Fatal("binding a port already in use reported success")
@@ -273,7 +273,7 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}

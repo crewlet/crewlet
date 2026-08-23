@@ -52,7 +52,7 @@ type SandboxProvider struct {
 
 	// APIKey authenticates a remote provider. Empty falls back to that
 	// provider's conventional variable at construction time.
-	APIKey string `yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; ${VAR} supported."`
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; ${VAR} supported."`
 
 	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
 	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`

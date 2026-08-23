@@ -62,6 +62,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"OnlyOneRevisionIsActive", testOnlyOneRevisionIsActive},
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
+		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},
 		{"ApplyStatusIsALastWord", testApplyStatusIsALastWord},
 		{"PeerHealthExcludesTheAskerAndTheStale", testPeerHealthExcludesTheAskerAndTheStale},
 		{"PeerHealthIsPerEpoch", testPeerHealthIsPerEpoch},

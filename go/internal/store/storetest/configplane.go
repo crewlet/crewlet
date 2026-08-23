@@ -326,3 +326,36 @@ func testUnknownApplyStatusIsRefused(t *testing.T, db *store.DB) {
 		t.Fatal("a status outside the closed set was stored")
 	}
 }
+
+func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
+	// Two revisions written in one burst share a microsecond, so the
+	// tiebreak decides what a reader sees first. A random uuid is stable
+	// without being truthful — it can put the older one at the top — and a
+	// history read in the wrong order is worse than one read slowly.
+	configs := db.Configs()
+	var ids []string
+	for i := range 5 {
+		id, _, err := configs.InsertActive(t.Context(), store.Revision{
+			Summary: "burst", CreatedAt: base,
+			Payload: json.RawMessage(`{"n":` + string(rune('0'+i)) + `}`),
+		})
+		if err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+		ids = append(ids, id)
+	}
+	listed, err := configs.List(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(listed) != len(ids) {
+		t.Fatalf("%d rows, want %d", len(listed), len(ids))
+	}
+	for i, revision := range listed {
+		want := ids[len(ids)-1-i]
+		if revision.ID != want {
+			t.Fatalf("position %d is %s, want %s — the listing is not newest-first",
+				i, revision.ID, want)
+		}
+	}
+}

@@ -31,12 +31,8 @@ import (
 // startReconciler seeds the store from the file, converges this node on the
 // pointer, and returns the loop for the caller to run.
 func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
-	seed *config.Company, log *slog.Logger,
+	seed *config.Company, cipher secrets.Cipher, log *slog.Logger,
 ) (*engine.Reconciler, error) {
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		return nil, fmt.Errorf("secrets keyring: %w", err)
-	}
 	db := e.Backends().Store
 	if err := seedCompany(ctx, db, seed, cipher, log); err != nil {
 		return nil, err

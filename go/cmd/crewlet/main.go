@@ -23,11 +23,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -201,6 +203,16 @@ func runEngine(args []string, stderr io.Writer) error {
 		return err
 	}
 
+	// ONE keyring for the process. The reconciler opens revisions with it
+	// and the config surface seals them with it; two ciphers over one
+	// store would mean a revision written by this node is one it cannot
+	// read back.
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		e.Stop(context.WithoutCancel(ctx))
+		return fmt.Errorf("secrets keyring: %w", err)
+	}
+
 	// THE STORE IS AUTHORITATIVE AT RUNTIME; the file is a seed. Both
 	// halves matter: without the seed a first run has nothing to activate
 	// and the node serves a company no peer can see, and without the store
@@ -208,7 +220,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	//
 	// Converged BEFORE Start, so seats are claimed under the epoch this
 	// node will actually serve rather than under the file's and then moved.
-	reconciler, err := startReconciler(ctx, e, boot, company, log)
+	reconciler, err := startReconciler(ctx, e, boot, company, cipher, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -227,7 +239,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	// one store. The API half is what makes the node reachable at all —
 	// every inbound webhook arrives through it — so an engine that ran
 	// without it would hold seats and hear nothing.
-	surface, err := serveAPI(ctx, boot, e, reconciler, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -304,7 +316,7 @@ func companySecrets(e *engine.Engine) webhooks.Secrets {
 }
 
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
-	reconciler *engine.Reconciler, log *slog.Logger,
+	reconciler *engine.Reconciler, cipher secrets.Cipher, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a worker-only node runs no dashboard, no REST
@@ -330,6 +342,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// dedupes through THIS node's store, which is what makes a
 		// delivery that lands on any node of a fleet wake the seat's
 		// owner exactly once.
+		// The config surface, sealing and opening with the SAME keyring
+		// the reconciler applies through — two ciphers for one store
+		// would mean a revision written here is one no node can read.
+		Config: configapi.New(configapi.Options{
+			Store: e.Backends().Store, Cipher: cipher,
+		}),
 		Inbound: api.Inbound{
 			Secrets:    func() webhooks.Secrets { return companySecrets(e) },
 			Publisher:  e.Backends().Queue,

@@ -75,11 +75,60 @@ roles:
 	if got := stored.Providers.ProviderOrder(); !reflect.DeepEqual(got, want) {
 		t.Errorf("order = %v, want the declared order %v", got, want)
 	}
-	// And the YAML reader must still refuse it, which is why the two
-	// readers exist: llm_order is not a setting a person writes.
-	if _, err := config.ParseCompany(payload); err == nil {
-		t.Error("the authored reader accepted the stored form, so its " +
-			"unknown-field strictness has a hole in it")
+
+	// The AUTHORED reader must accept it too, and preserve the same order.
+	// The config read surface emits this document and has to accept it
+	// back: a reader that refused its own output would make GET-edit-PUT
+	// reject every config that has providers, which is all of them.
+	//
+	// And the order has to come from the FIELD rather than the key order,
+	// because Go marshals a map with sorted keys — so the document says
+	// alpha, mike, zulu while the company means zulu, alpha, mike.
+	reread, err := config.ParseCompany(payload)
+	if err != nil {
+		t.Fatalf("the authored reader refused the stored form: %v", err)
+	}
+	if got := reread.Providers.ProviderOrder(); !reflect.DeepEqual(got, want) {
+		t.Errorf("order after the authored reader = %v, want %v — the key "+
+			"order of the serialized form won over the recorded one", got, want)
+	}
+}
+
+func TestAnAuthoredOrderWinsOverTheKeyOrder(t *testing.T) {
+	t.Parallel()
+	// Stating it explicitly is how an operator pins precedence without
+	// re-arranging their document, and it is the same rule the round trip
+	// depends on: the field wins, the key order is the fallback.
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    llm_order: ["mike", "zulu"]
+    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+    mike: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - {name: CEO, handle: ceo, llm: zulu}
+`))
+	if err == nil {
+		t.Fatal("llm_order inside the llm map was accepted; it belongs beside it")
+	}
+
+	cfg, err = config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm_order: ["mike", "zulu"]
+  llm:
+    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+    mike: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - {name: CEO, handle: ceo, llm: zulu}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []string{"mike", "zulu"}
+	if got := cfg.Providers.ProviderOrder(); !reflect.DeepEqual(got, want) {
+		t.Errorf("order = %v, want the stated %v rather than the key order", got, want)
 	}
 }
 

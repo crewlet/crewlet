@@ -128,6 +128,24 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func (c *Company) Validate() error {
 	var p problems
 
+	// An UNRESOLVED REDACTION MASK, first, because it is the one fault here
+	// that comes from this process rather than from the document's author.
+	// A credential still holding the marker means a config read was edited
+	// and sent back, and the mask could not be matched to what it hid — the
+	// caller reshaped a list of keys, so position no longer says which
+	// credential is which. Storing it silently would hand a provider the
+	// literal "__redacted__" as an API key, and the failure would surface
+	// hours later as an authentication error naming nothing about where it
+	// came from.
+	for _, path := range c.UnresolvedMasks() {
+		p.add(path, ErrUnknownValue,
+			"still holds the redaction marker %q — a masked credential could "+
+				"not be matched to the value it hid, which happens when a list "+
+				"of credentials changes length between the read and the write. "+
+				"Write the real value here, or leave the list's shape alone",
+			Redacted)
+	}
+
 	if strings.TrimSpace(c.Name) == "" {
 		p.add("name", ErrMissing, "the company needs a name — it is half of every seat's derived id")
 	}

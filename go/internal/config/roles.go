@@ -93,7 +93,7 @@ type Role struct {
 	// an http one. This is what makes each seat authenticate as a distinct
 	// identity, and the whole reason a shared: false server is launched
 	// once per seat.
-	MCPEnv org.MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Per-seat MCP credentials: env vars (stdio) or headers (http)."`
+	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Per-seat MCP credentials: env vars (stdio) or headers (http)."`
 
 	// Sandbox is the per-seat code-runtime gate. Absent means the seat is
 	// never offered the sandbox tool at all.
@@ -162,7 +162,7 @@ type RoleSandbox struct {
 	// Env is injected into this seat's sandbox run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
 	// variable of its own, and only LLM credentials derive automatically.
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's sandbox run; declare external tokens here."`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's sandbox run; declare external tokens here."`
 
 	// Setup is this seat's own provisioning, applied after the
 	// engine-wide steps.
@@ -239,8 +239,8 @@ type SpaceRef struct {
 // is named again under mcp_env — two consumers, one secret, named twice on
 // purpose so an operator can split them.
 type RoleSlack struct {
-	BotToken      string `yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
-	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
+	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
+	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
 	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel id for this seat."`
 }
 
@@ -281,7 +281,7 @@ type RoleMattermost struct {
 	// BotToken is the bot account's personal access token. A whole-value
 	// ${VAR} is what makes the seat provisionable; a literal marks a
 	// manually managed bot, which the provisioner reports and leaves alone.
-	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot personal access token; one credential covers everything."`
+	BotToken string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot personal access token; one credential covers everything."`
 
 	// Username defaults to the seat handle with the provisioning prefix
 	// applied. Set it only when the account already exists under another
@@ -450,7 +450,7 @@ type Unit struct {
 	// MCPEnv is the tool credentials this unit's DIRECT members share,
 	// with each member's own values winning per VARIABLE — a seat that
 	// overrides one header must not silently drop the token beside it.
-	MCPEnv org.MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct members."`
+	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct members."`
 
 	Integrations UnitIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
 
