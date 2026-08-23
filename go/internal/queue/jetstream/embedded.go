@@ -62,6 +62,19 @@ func (s *Server) Client(ctx context.Context) (*Queue, error) {
 	return newQueueOn(ctx, s.cfg, s.embedded, false)
 }
 
+// Conn returns a NATS connection to this server, for subsystems that ride
+// the same broker without going through the queue contract — the KV
+// coordination backend is the one that matters, and sharing the broker is
+// what makes the single-binary topology one service rather than two.
+//
+// The caller owns the connection and must close it.
+func (s *Server) Conn() (*nats.Conn, error) {
+	if s.embedded == nil {
+		return nil, errors.New("jetstream: server is shut down")
+	}
+	return s.embedded.connect()
+}
+
 // Shutdown stops the broker. Every client of it should be stopped first.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {

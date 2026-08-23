@@ -232,6 +232,11 @@ func (q *Queue) ackWait() time.Duration {
 	return ackWait
 }
 
+// Conn exposes this client's NATS connection, for subsystems that ride the
+// same broker outside the queue contract (the KV coordination backend).
+// The queue keeps ownership: closing it is Stop's job, not the caller's.
+func (q *Queue) Conn() *nats.Conn { return q.nc }
+
 // Backend names this backend for operator display. Nothing may branch on it.
 func (q *Queue) Backend() string {
 	if q.embedded != nil {
