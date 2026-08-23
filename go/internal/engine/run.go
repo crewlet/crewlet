@@ -1,0 +1,310 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/agent/inbox"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+)
+
+// Engine is one process running a company.
+//
+// It owns exactly three things — the epoch, the backends, and the node — and
+// the wiring between them. Everything else it delegates: the guard order is
+// the inbox package's, the turn's rules are the turn package's, the seat math
+// is the placement package's. That is the whole reason this file is short and
+// the Python it replaces was seven and a half thousand lines.
+type Engine struct {
+	company  *Company
+	backends *Backends
+	node     *node.Node
+
+	// ownsBackends says whether Stop closes them. Ownership is a separate
+	// fact from use: a borrowed Backends is still the one this engine
+	// requeues and pauses through, so holding "the ones I use" and "do I
+	// close them" in one nilable field made the park path reach for a nil
+	// queue on exactly the topology — merged API and engine — that shares
+	// one broker.
+	ownsBackends bool
+
+	// dispatch turns one inbox partition into one turn. Held so a test can
+	// substitute its own without standing up a broker.
+	dispatch *Dispatcher
+}
+
+// Options configure an engine.
+type Options struct {
+	Bootstrap *config.Bootstrap
+	Company   *config.Company
+
+	// Backends may be supplied by a caller that already opened them — the
+	// API process and the engine share one broker when they run merged.
+	// Nil opens them from the bootstrap config, and the engine then owns
+	// their lifetime.
+	Backends *Backends
+
+	// Dispatch overrides the default dispatcher.
+	//
+	// Fields left nil on it are FILLED IN from this engine, rather than the
+	// whole dispatcher being replaced or the whole thing being taken as-is.
+	// A test that wants to pin ownership answers supplies Conditions and
+	// still gets the real ledgers; one that wants to observe parks supplies
+	// Park and still gets the real screening.
+	Dispatch *Dispatcher
+
+	// AwaitingSandbox reports whether a seat is parked on a detached coding
+	// run, whose job outlasts any broker ack window. Nil answers no, which
+	// is correct for a build with no sandbox provider wired: a seat that
+	// cannot start a detached run is never waiting on one.
+	AwaitingSandbox func(handle string) bool
+}
+
+// pauseReasonNoTurnEngine is the hold name the no-turn-engine park takes on a
+// seat's inbox.
+//
+// A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
+// two subsystems gating one inbox cannot release each other's hold, which
+// means the pause and the eventual resume must spell it identically. Deriving
+// it from the human-readable reason would make an edit to a log message
+// silently strand every seat that was parked under the old wording.
+const pauseReasonNoTurnEngine = "no_turn_engine"
+
+// New assembles an engine.
+//
+// Config errors surface HERE, before anything is dialled or claimed. A node
+// that boots on a bad config and discovers it at the first turn has already
+// told its peers it owns seats.
+func New(ctx context.Context, opts Options) (*Engine, error) {
+	if opts.Bootstrap == nil {
+		return nil, fmt.Errorf("engine: no bootstrap config")
+	}
+	company, err := NewCompany(opts.Company)
+	if err != nil {
+		return nil, err
+	}
+
+	backends := opts.Backends
+	ownsBackends := false
+	if backends == nil {
+		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company)
+		if err != nil {
+			return nil, err
+		}
+		ownsBackends = true
+	}
+	// Only what this engine OPENED does it close. A caller that supplied
+	// backends keeps their lifetime — the merged API process outlives the
+	// engine's own shutdown and still needs its broker.
+	e := &Engine{company: company, backends: backends, ownsBackends: ownsBackends}
+	fail := func(err error) (*Engine, error) {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
+
+	nodeID, err := config.ResolveNodeID(opts.Bootstrap, nil)
+	if err != nil {
+		return fail(fmt.Errorf("engine: node identity: %w", err))
+	}
+	n, err := node.New(node.Config{
+		Queue: backends.Queue,
+		Coord: backends.Coord,
+		// The node ID is STABLE across restarts; the owner is this
+		// INCARNATION. A restarted process that reused its owner id would
+		// be indistinguishable from the one that died, and would inherit
+		// leases it never renewed.
+		NodeID: nodeID,
+		Owner:  config.NewIncarnation(nodeID),
+		Seats:  company.Seats,
+		Profile: placement.NodeProfile{
+			ID:     nodeID,
+			Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
+			Labels: opts.Bootstrap.Node.Labels,
+		},
+		Turn:     e.dispatchTurn,
+		LeaseTTL: leaseTTL(opts.Bootstrap),
+	})
+	if err != nil {
+		return fail(fmt.Errorf("engine: node: %w", err))
+	}
+	e.node = n
+	e.dispatch = e.buildDispatcher(opts, backends)
+	return e, nil
+}
+
+// buildDispatcher wires the dispatcher ONCE.
+//
+// Once, at construction, and never again — not per delivery. The node runs one
+// consume loop per seat, so every attached seat can be inside Dispatch at the
+// same moment; assigning to the shared dispatcher's fields on the way in is a
+// write to memory a peer goroutine is reading, which is a data race whatever
+// the values happen to be. The fields it would have written are the same on
+// every call, which is exactly what makes the bug survive testing.
+func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
+	d := opts.Dispatch
+	if d == nil {
+		d = &Dispatcher{}
+	}
+	if d.Conditions == nil {
+		d.Conditions = e.conditionsFor(opts.AwaitingSandbox)
+	}
+	if d.Ledgered == nil {
+		d.Ledgered = inbox.Ledgered
+	}
+	if d.Turn == nil {
+		d.Turn = e.runTurn
+	}
+	if d.Park == nil {
+		d.Park = e.park
+	}
+	if d.Pause == nil {
+		d.Pause = e.pause
+	}
+	if d.NoteDeferred == nil {
+		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
+	}
+	// The ledgers are the local store's, and nil-checked rather than
+	// assumed: a caller-supplied Backends may carry no store, and the
+	// dispatcher already documents nil as the single-node case where the
+	// seat lease is the whole mutual exclusion.
+	if backends.Store != nil {
+		if d.Completions == nil {
+			d.Completions = ledgerstore.NewCompletions(backends.Store)
+		}
+		if d.Conversations == nil {
+			d.Conversations = ledgerstore.NewConversations(backends.Store)
+		}
+	}
+	return d
+}
+
+// Start brings the engine up.
+func (e *Engine) Start(ctx context.Context) error {
+	if err := e.node.Start(ctx); err != nil {
+		return fmt.Errorf("engine: start: %w", err)
+	}
+	log.Info("engine_started", "company", e.company.Config.Name,
+		"seats", len(e.company.Seats()))
+	return nil
+}
+
+// Stop drains and shuts down.
+//
+// The DRAIN comes first and is the difference between a restart that resumes
+// cleanly and one that redelivers half-finished turns: it stops claiming, hands
+// back every seat, and waits for in-flight handlers before anything closes.
+func (e *Engine) Stop(ctx context.Context) {
+	e.node.Drain(ctx)
+	if err := e.node.Stop(ctx); err != nil {
+		log.Warn("node_stop_failed", "error", err)
+	}
+	if e.ownsBackends {
+		e.backends.Close(ctx)
+	}
+	log.Info("engine_stopped")
+}
+
+// Company is the epoch this engine is running.
+func (e *Engine) Company() *Company { return e.company }
+
+// Node exposes this process's participation in the fleet, for the operator
+// surfaces that report which seats it holds.
+func (e *Engine) Node() *node.Node { return e.node }
+
+// dispatchTurn is the node's TurnFunc.
+func (e *Engine) dispatchTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
+	return e.dispatch.Dispatch(ctx, handle, evs)
+}
+
+// conditionsFor answers the ownership and posture questions for one seat.
+func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Conditions {
+	return func(handle string) inbox.Conditions {
+		_, owned := e.node.Host().MayStart(handle)
+		return inbox.Conditions{
+			// FRESHNESS, not membership: a renew at t proves exclusivity
+			// through t+ttl, and a membership snapshot can be a full TTL
+			// stale — which is exactly the window this check exists to
+			// close.
+			Owned: owned,
+			// Read off the EPOCH rather than asserted true. NewCompany
+			// refuses a company with no models today, so this cannot be
+			// false yet; stating the actual rule means it stops being
+			// true on its own when the config-apply path can hand a node
+			// an epoch that has none, instead of a constant quietly
+			// outliving the reason for it.
+			TurnEngineReady: e.company.Models != nil,
+			AwaitingSandbox: awaiting != nil && awaiting(handle),
+			AdmitsTriggers:  true,
+		}
+	}
+}
+
+// park requeues a partition onto the seat's own inbox.
+//
+// Republished one at a time, and a failure part way through is reported: the
+// dispatcher acks only on success, so a partial requeue comes back as a NAK
+// and the whole partition is redelivered. Same-id copies left behind by the
+// half that landed are collapsed by the dedupe at the top of the next
+// screening, which is why that stage runs before any parking branch.
+func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) error {
+	subject := topics.AgentInbox(handle)
+	if subject == "" {
+		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	}
+	for _, ev := range evs {
+		if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
+			return fmt.Errorf("engine: requeue %s onto %s: %w", ev.Type, subject, err)
+		}
+	}
+	return nil
+}
+
+// pause stops delivery on a seat's inbox before a park, so the requeued copies
+// buffer on the queue rather than looping straight back.
+func (e *Engine) pause(ctx context.Context, handle, reason string) error {
+	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+	if subject == "" || group == "" {
+		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	}
+	log.Info("seat_inbox_paused", "handle", handle, "reason", reason)
+	return e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
+}
+
+// runTurn is the default turn: build the seat's runner and drive the loop.
+func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+	r, err := e.company.RunnerFor(req.Handle, RunnerInput{
+		Task:         DescribeTrigger(req.Events),
+		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
+	})
+	if err != nil {
+		return turn.Result{}, err
+	}
+	return turn.Run(ctx, r, e.company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+}
+
+// nodeRoles turns the configured role names into a set.
+//
+// An EMPTY list means every role, which is the single-process default and the
+// shape every company starts as. Reading it as "no roles" would produce a node
+// that claims no seats, runs no workers and hears no webhook — a process that
+// starts cleanly and does nothing at all.
+func nodeRoles(names []string) placement.RoleSet {
+	if len(names) == 0 {
+		return placement.DefaultRoles()
+	}
+	roles := make([]placement.NodeRole, 0, len(names))
+	for _, name := range names {
+		roles = append(roles, placement.NodeRole(name))
+	}
+	return placement.Roles(roles...)
+}

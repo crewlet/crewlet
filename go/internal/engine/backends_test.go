@@ -3,9 +3,13 @@ package engine_test
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -13,15 +17,38 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
 	t.Helper()
 	b := config.DefaultBootstrap()
+	// The default store path is relative, so a test that took it would
+	// create a database in the package directory and share it with every
+	// other test in the run. One process owns a store file exclusively.
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	if mutate != nil {
 		mutate(&b)
 	}
 	return &b
+}
+
+// parsedCompany is the Tier B half OpenBackends needs, for the one field it
+// reads: the width of the configured embedding vectors.
+func parsedCompany(t *testing.T, doc string) *config.Company {
+	t.Helper()
+	c, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return c
+}
+
+// openBackends is OpenBackends with the ordinary company, for the cases whose
+// subject is the topology rather than the store.
+func openBackends(t *testing.T, b *config.Bootstrap) (*engine.Backends, error) {
+	t.Helper()
+	return engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 }
 
 func TestTheDefaultTopologyRunsWithNoExternalService(t *testing.T) {
@@ -31,7 +58,7 @@ func TestTheDefaultTopologyRunsWithNoExternalService(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b)
+	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -49,7 +76,7 @@ func TestBothSlotsCloseTogether(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
-	back, err := engine.OpenBackends(t.Context(), b)
+	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -72,7 +99,7 @@ func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
-	back, err := engine.OpenBackends(t.Context(), b)
+	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -107,7 +134,7 @@ func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 		b.Coordination.Type = config.CoordinationLocal
 	})
-	back, err := engine.OpenBackends(t.Context(), b)
+	back, err := openBackends(t, b)
 	if err != nil {
 		t.Fatalf("OpenBackends: %v", err)
 	}
@@ -123,7 +150,7 @@ func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 
 func TestNoBootstrapIsRefused(t *testing.T) {
 	t.Parallel()
-	if _, err := engine.OpenBackends(context.Background(), nil); err == nil {
+	if _, err := engine.OpenBackends(context.Background(), nil, parsedCompany(t, companyDoc)); err == nil {
 		t.Error("a nil bootstrap opened backends")
 	}
 }
@@ -134,7 +161,7 @@ func TestAnUnknownStreamTypeNamesItself(t *testing.T) {
 	// through validation — and an error that does not name the value sends
 	// a reader to read the code instead of their config.
 	b := bootstrap(t, func(b *config.Bootstrap) { b.Stream.Type = "kafka" })
-	_, err := engine.OpenBackends(context.Background(), b)
+	_, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
 	if err == nil {
 		t.Fatal("an unknown stream type opened backends")
 	}
@@ -159,7 +186,7 @@ func TestTheTopologyIsCheckedBeforeTheDial(t *testing.T) {
 		b.Stream.Namespace = "default"
 		b.Coordination.Type = config.CoordinationLocal
 	})
-	_, err := engine.OpenBackends(context.Background(), b)
+	_, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
 	if err == nil {
 		t.Fatal("a Pulsar stream with local coordination opened backends")
 	}
@@ -180,7 +207,7 @@ func TestPulsarWithoutItsCoordinationClusterSaysWhichSideIsMissing(t *testing.T)
 		b.Stream.Namespace = "default"
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
-	back, err := engine.OpenBackends(context.Background(), b)
+	back, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
 	if err == nil {
 		t.Fatal("a Pulsar topology opened with no coordination cluster")
 	}
@@ -208,7 +235,7 @@ func TestAnEmbeddedStreamPersistsAcrossARestart(t *testing.T) {
 	mk := func() *engine.Backends {
 		t.Helper()
 		b := bootstrap(t, func(b *config.Bootstrap) { b.Stream.StoreDir = dir })
-		back, err := engine.OpenBackends(t.Context(), b)
+		back, err := openBackends(t, b)
 		if err != nil {
 			t.Fatalf("OpenBackends: %v", err)
 		}
@@ -271,7 +298,7 @@ func TestPulsarWithLocalCoordinationNamesTheReason(t *testing.T) {
 		b.Stream.Namespace = "default"
 		b.Coordination.Type = config.CoordinationLocal
 	})
-	back, err := engine.OpenBackends(context.Background(), b)
+	back, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
 	if err == nil {
 		t.Fatal("a Pulsar stream with local coordination opened backends")
 	}
@@ -307,3 +334,345 @@ func init() { events.Register[marker]() }
 // Both are stated at their site in backends.go rather than left as apparent
 // coverage. Writing a test that passes without exercising them would be worse
 // than having none.
+
+// --- the store slot -------------------------------------------------------- //
+
+func TestTheStoreOpensWithTheOtherSlots(t *testing.T) {
+	t.Parallel()
+	// A node holding a queue attachment with nowhere to record what a turn
+	// did is a node that works and forgets.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+	if back.Store == nil {
+		t.Fatal("no store")
+	}
+	// Open, and MIGRATED — an opened file with no schema is a store every
+	// ledger write fails against, which is not what "opened" should mean.
+	if _, err := back.Store.SQL().ExecContext(t.Context(),
+		`INSERT INTO turn_completions (agent_handle, work_key, turn_id, completed_at)
+		 VALUES ('ceo', 'wk1', '', 1)`); err != nil {
+		t.Errorf("the store opened without its schema: %v", err)
+	}
+}
+
+func TestTheStoreTakesItsVectorWidthFromTheCompany(t *testing.T) {
+	t.Parallel()
+	// The store is the only thing that knows how wide the packed BLOBs in
+	// its vector columns are, and the model that decides is Tier B. A width
+	// it was never told refuses every write from the right one, and recall
+	// simply stops returning anything.
+	const doc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+  embeddings:
+    type: openai
+    model: text-embedding-3-large
+    api_key: ${K}
+    dimensions: 3072
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, doc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+	if got := back.Store.EmbeddingDim(); got != 3072 {
+		t.Errorf("embedding width = %d, want the configured 3072", got)
+	}
+}
+
+func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
+	t.Parallel()
+	// The counterfactual to the case above, and the one that says the width
+	// is READ rather than guessed. "This company does not remember by
+	// similarity" is a real answer; inventing 1536 for it would let a
+	// vector of that width be written to a company that can produce none.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+	if got := back.Store.EmbeddingDim(); got != 0 {
+		t.Errorf("embedding width = %d, want 0 for a company with no embeddings", got)
+	}
+}
+
+func TestNoCompanyIsRefusedRatherThanDefaulted(t *testing.T) {
+	t.Parallel()
+	// Refused rather than defaulted because the default would be silent:
+	// nothing fails at open, and the failure surfaces later as recall that
+	// returns nothing with no reason in the log.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	_, err := engine.OpenBackends(t.Context(), b, nil)
+	if err == nil {
+		t.Fatal("a nil company opened backends")
+	}
+	if !strings.Contains(err.Error(), "embedding") {
+		t.Errorf("the error does not say what was missing: %v", err)
+	}
+}
+
+// settledGoroutines waits for the goroutine count to stop moving.
+//
+// A count taken immediately after a shutdown is meaningless: the goroutines a
+// server was told to stop are still winding down. This polls until two
+// consecutive readings agree, so what it returns is what stayed.
+func settledGoroutines() int {
+	prev := -1
+	for range 40 {
+		runtime.GC()
+		time.Sleep(25 * time.Millisecond)
+		if n := runtime.NumGoroutine(); n == prev {
+			return n
+		} else {
+			prev = n
+		}
+	}
+	return runtime.NumGoroutine()
+}
+
+func TestAStoreThatCannotOpenTakesTheBrokerDownWithIt(t *testing.T) {
+	// NOT parallel: the observable is a process-wide goroutine count.
+	//
+	// The store is opened LAST, so its failure is the only one with
+	// something to clean up behind it. An embedded server left running
+	// after a failed open is a leak nothing else reports — the process
+	// carries a broker nobody holds a handle to, for its whole life.
+	//
+	// Goroutines are the observable, and the first thing tried was not:
+	// asserting that a second open on the same stream directory succeeds
+	// proves nothing, because two embedded servers share a store directory
+	// without complaint (measured). That test passed with the cleanup
+	// removed, which makes it worse than no test.
+	//
+	// The margin here is not delicate: three failed opens leak about a
+	// hundred goroutines, against a residue of one when they are cleaned
+	// up. The threshold sits far from both.
+	dir := t.TempDir()
+	before := settledGoroutines()
+	for i := range failedOpenAttempts {
+		b := bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(dir, "stream")
+			// A directory is not a database file.
+			b.Store.Path = dir
+		})
+		if _, err := openBackends(t, b); err == nil {
+			t.Fatalf("attempt %d: a store path that is a directory opened backends", i)
+		}
+	}
+	if leaked := settledGoroutines() - before; leaked > leakThreshold {
+		t.Errorf("%d failed opens leaked %d goroutines: the broker was left "+
+			"running behind the store's failure", failedOpenAttempts, leaked)
+	}
+}
+
+const (
+	// failedOpenAttempts is how many times the failure is repeated, so one
+	// leak becomes a multiple of itself and cannot be mistaken for noise.
+	failedOpenAttempts = 3
+
+	// leakThreshold sits between the two measured outcomes — a residue of
+	// one goroutine when the broker is closed, about a hundred when it is
+	// not — rather than at zero, which would make the test fail on any
+	// unrelated background goroutine that happens to still be settling.
+	leakThreshold = 10
+)
+
+func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
+	t.Parallel()
+	// Close order. The queue stops first and waits for in-flight handlers;
+	// the store closes after, because everything writes to it. Closing it
+	// first would turn the tail of a graceful drain into a run of "database
+	// is closed" — the drain would still finish, and would finish having
+	// recorded none of what it drained.
+	//
+	// The assertion is on the FILE, read back after everything is shut, not
+	// on an error variable the handler set. An error captured in one
+	// goroutine and read in another needs a happens-before edge to be worth
+	// anything, and the edge in question — whether Close waits for the
+	// handler — is the very thing under test.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crewlet.db")
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(dir, "stream")
+		b.Store.Path = path
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	if err := back.Queue.Subscribe(t.Context(), "t.close", "g",
+		func(ctx context.Context, _ *events.Event) queue.Result {
+			once.Do(func() { close(entered) })
+			<-release
+			// Written while Close is running, which is the whole point.
+			// The context is detached because cancelling the delivery is
+			// how a shutdown reaches a handler, and a write refused for
+			// that reason would not be evidence about the store.
+			_, _ = back.Store.SQL().ExecContext(context.WithoutCancel(ctx),
+				`INSERT INTO turn_completions (agent_handle, work_key, turn_id, completed_at)
+				 VALUES ('ceo', 'late', '', 1)`)
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if err := back.Queue.Publish(t.Context(), "t.close",
+		&events.Event{ID: uuid.New(), Type: "notification"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler never ran")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		back.Close(context.Background())
+	}()
+	// Let Close get as far as it can with a handler still in flight, then
+	// let the handler finish and write.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close never returned")
+	}
+
+	again, err := store.Open(t.Context(), path, store.Options{})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Close() })
+	var n int
+	if err := again.SQL().QueryRowContext(t.Context(),
+		`SELECT count(*) FROM turn_completions WHERE work_key = 'late'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Error("a handler still in flight when Close began could not record " +
+			"what it drained: the store closed out from under it")
+	}
+}
+
+func TestCloseLeavesTheStoreClosed(t *testing.T) {
+	t.Parallel()
+	// The counterfactual to the ordering above. "Closes last" is satisfied
+	// just as well by "never closes", and a store handle left open holds
+	// the file for the life of the process — which matters because one
+	// process owns it exclusively, so a restart in-process contends with
+	// the corpse of the last one.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	db := back.Store
+	back.Close(t.Context())
+	if err := db.SQL().PingContext(t.Context()); err == nil {
+		t.Error("the store is still open after Close")
+	}
+	if back.Store != nil {
+		t.Error("Close left a handle to a closed store on the Backends")
+	}
+}
+
+func TestTheStoreTakesItsDriverAndBusyTimeoutFromConfig(t *testing.T) {
+	t.Parallel()
+	// Both are Tier A knobs an operator sets and nothing else reports. A
+	// driver silently ignored means running on a different storage engine
+	// than the one configured — which the config's own validator calls a
+	// data-loss shape, not a cosmetic one — and a busy timeout ignored
+	// means statements giving up on lock contention far sooner than asked.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		b.Store.Driver = config.StoreDriverSQLite
+		b.Store.BusyTimeoutSeconds = 11
+		b.Store.MaxOpenConns = 3
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+
+	if got := back.Store.Driver(); got != store.DriverSQLite {
+		t.Errorf("driver = %q, want the configured %q", got, store.DriverSQLite)
+	}
+	var busyMS int
+	if err := back.Store.SQL().QueryRowContext(t.Context(),
+		"PRAGMA busy_timeout").Scan(&busyMS); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if busyMS != 11_000 {
+		t.Errorf("busy_timeout = %dms, want the configured 11000", busyMS)
+	}
+	if got := back.Store.SQL().Stats().MaxOpenConnections; got != 3 {
+		t.Errorf("max open conns = %d, want the configured 3", got)
+	}
+}
+
+func TestAnUnsetDriverAndTimeoutTakeTheStoreDefaults(t *testing.T) {
+	t.Parallel()
+	// The counterfactual. Passing the configured values through is only
+	// half the contract: zero must reach the store as "you choose", not as
+	// a literal zero, which for a busy timeout means every contended
+	// statement failing immediately.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+
+	if got := back.Store.Driver(); got != store.DriverTurso {
+		t.Errorf("driver = %q, want the default %q", got, store.DriverTurso)
+	}
+	var busyMS int
+	if err := back.Store.SQL().QueryRowContext(t.Context(),
+		"PRAGMA busy_timeout").Scan(&busyMS); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if busyMS <= 0 {
+		t.Errorf("busy_timeout = %dms: an unset timeout reached the store as a "+
+			"literal zero, so every contended statement fails at once", busyMS)
+	}
+	// Zero must mean "the store chooses", not "one connection at a time" —
+	// and certainly not database/sql's own unlimited, which on a single
+	// SQLite file is how a dashboard query storm becomes lock contention.
+	if got := back.Store.SQL().Stats().MaxOpenConnections; got <= 0 {
+		t.Errorf("max open conns = %d: an unset bound reached the store as a "+
+			"literal zero", got)
+	}
+}

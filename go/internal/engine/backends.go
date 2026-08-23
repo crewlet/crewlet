@@ -14,9 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Backends are the two infrastructure slots a node runs on.
+// Backends is the infrastructure a node runs on.
 //
 // TWO SLOTS, chosen independently and validated together: the STREAM carries
 // events, and COORDINATION carries seat ownership. The combinations that make
@@ -24,12 +25,25 @@ import (
 // compare-and-set, so it cannot also be the coordination store, and a
 // multi-node fleet cannot coordinate locally.
 //
-// Both are opened here and closed together, because a node holding one without
-// the other is a node that can hear work it may not do, or hold seats it cannot
-// serve.
+// The STORE is not a third slot in that sense — there is nothing to choose, and
+// nothing to validate against the other two. It is this node's own file, a
+// rebuildable index over what the replicated layer already holds, and it is
+// here because its lifetime is the same lifetime: opened before anything can
+// deliver, closed after everything has stopped delivering.
+//
+// All three are opened here and closed together, because a node holding one
+// without the others is a node that can hear work it may not do, hold seats it
+// cannot serve, or run turns it cannot record.
 type Backends struct {
 	Queue queue.EventQueue
 	Coord coord.Backend
+
+	// Store is this node's local materialized index — the third thing a
+	// node runs on, and the one that is not replicated. It is opened here
+	// with the other two because everything that writes to it is driven by
+	// them: a node holding a queue attachment without somewhere to record
+	// what a turn did is a node that works and forgets.
+	Store *store.DB
 
 	// stopServer shuts down an embedded broker this node started. Nil when
 	// the stream is external — a node must never take down a broker it
@@ -68,14 +82,20 @@ type Backends struct {
 //     store it can no longer reach work through, and its seats stay
 //     unclaimable for a full TTL.
 //
-//  3. Shut down the embedded SERVER, if this node started one. Last,
-//     because everything above it is a client of it.
+//  3. Shut down the embedded SERVER, if this node started one. Last of the
+//     three broker steps, because everything above it is a client of it.
 //
 //     Also not covered here, and for a plainer reason: a solo embedded
 //     server runs with DontListen and binds no port at all, so there is no
 //     socket to probe after the fact. A clustered one does bind, but a
 //     single member never reaches JetStream quorum — measured, it waits
 //     the full 60 s and fails — so a one-node probe cannot be stood up.
+//
+//  4. Close the STORE. After everything, because everything writes to it:
+//     the ledgers a turn records into, the event log the queue's own writer
+//     appends to. Closing it first would turn the tail of a graceful drain
+//     into a run of "database is closed" — the drain would still finish,
+//     and would finish having recorded none of what it drained.
 //
 // A node that merely DIALLED an external broker never reaches step 3: it
 // must not take down a broker its peers are using.
@@ -93,9 +113,15 @@ func (b *Backends) Close(ctx context.Context) {
 		b.stopServer()
 		b.stopServer = nil
 	}
+	if b.Store != nil {
+		if err := b.Store.Close(); err != nil {
+			log.Warn("store_close_failed", "error", err)
+		}
+		b.Store = nil
+	}
 }
 
-// OpenBackends builds both slots from Tier A config.
+// OpenBackends builds everything a node runs on.
 //
 // It does NOT re-validate the topology: config.Bootstrap.Validate already
 // refuses the incoherent combinations, and duplicating those rules here would
@@ -103,18 +129,73 @@ func (b *Backends) Close(ctx context.Context) {
 // adds is the construction, and one rule validation cannot express — an
 // embedded-KV coordination store rides the stream's own NATS connection, so the
 // two slots are not independent at runtime even though they are in config.
-func OpenBackends(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
+//
+// It takes the COMPANY as well as the bootstrap, for one field: the width of
+// the vectors the configured embedding model produces. That width is Tier B
+// because the model is, and the store needs it at open time — it is the only
+// thing that knows how wide the packed BLOBs in its vector columns are. Passing
+// it is not optional and a nil company is refused rather than defaulted,
+// because the default would be silent: a store opened at the wrong width
+// refuses every write from the right one, and recall would simply stop
+// returning anything with nothing in the log to say why.
+func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
+	if c == nil {
+		return nil, fmt.Errorf("engine: no company config: the store needs the " +
+			"configured embedding width to open")
+	}
+
+	var out *Backends
+	var err error
 	switch b.Stream.Type {
 	case config.StreamPulsar:
-		return openPulsar(ctx, b)
+		out, err = openPulsar(ctx, b)
 	case config.StreamNATS, config.StreamEmbedded, "":
-		return openNATS(ctx, b)
+		out, err = openNATS(ctx, b)
 	default:
-		return nil, fmt.Errorf("engine: unknown stream type %q", b.Stream.Type)
+		err = fmt.Errorf("engine: unknown stream type %q", b.Stream.Type)
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	// LAST, because it is the only step whose failure has something to
+	// clean up behind it. Opening the file first and then failing to reach
+	// a broker would leave the node's own database open with nobody
+	// holding it — and the store is exclusive to one process, so the next
+	// attempt in the same process would contend with the corpse of this
+	// one.
+	db, err := openStore(ctx, b, c)
+	if err != nil {
+		out.Close(ctx)
+		return nil, err
+	}
+	out.Store = db
+	return out, nil
+}
+
+// openStore opens this node's local database.
+func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
+	opts := store.Options{
+		Driver:       store.Driver(b.Store.Driver),
+		MaxOpenConns: b.Store.MaxOpenConns,
+		BusyTimeout:  time.Duration(b.Store.BusyTimeoutSeconds * float64(time.Second)),
+	}
+	// Nil embeddings means no vector recall is configured, which the store
+	// reads as width 0 — writes carrying a vector are refused, everything
+	// else works. That is the honest shape of "this company does not
+	// remember by similarity", and distinct from a configured width the
+	// store was never told about.
+	if c.Providers.Embeddings != nil {
+		opts.EmbeddingDim = c.Providers.Embeddings.Width()
+	}
+	db, err := store.Open(ctx, b.Store.Path, opts)
+	if err != nil {
+		return nil, fmt.Errorf("engine: store: %w", err)
+	}
+	return db, nil
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the
@@ -161,7 +242,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		out.Close(ctx)
 		return nil, fmt.Errorf("engine: coordination connection: %w", err)
 	}
-	store, err := kv.Open(ctx, conn, kv.Config{
+	leases, err := kv.Open(ctx, conn, kv.Config{
 		TTL:      leaseTTL(b),
 		Replicas: b.Stream.Replicas,
 	})
@@ -170,7 +251,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		out.Close(ctx)
 		return nil, fmt.Errorf("engine: coordination: %w", err)
 	}
-	out.Coord = store
+	out.Coord = leases
 	out.conn = conn
 	return out, nil
 }
