@@ -25,12 +25,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fake is a member that answers or fails on command.
+// fake is a member that answers or fails on command. A real backend names
+// itself on the completion, so this one does too.
 type fake struct {
 	model string
 	err   error
 	text  string
-	calls atomic.Int32
+	// silent models a Provider that fills no model in — a third-party
+	// implementation, or a test double someone else wrote.
+	silent bool
+	calls  atomic.Int32
 }
 
 func (f *fake) Model() string { return f.model }
@@ -40,7 +44,11 @@ func (f *fake) Complete(context.Context, llm.Request) (*llm.Completion, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &llm.Completion{Content: f.text, InputTokens: 1, OutputTokens: 1}, nil
+	out := &llm.Completion{Content: f.text, InputTokens: 1, OutputTokens: 1}
+	if !f.silent {
+		out.Model = f.model
+	}
+	return out, nil
 }
 
 func answering(model, text string) *fake { return &fake{model: model, text: text} }
@@ -105,18 +113,29 @@ func TestTheZeroChainRefusesRatherThanReportingAnEmptyExhaustion(t *testing.T) {
 	}
 }
 
-// Telemetry reads Model() for the call in flight, so a chain that has not yet
-// answered must still name a model rather than an empty string.
-func TestModelBeforeAnyCallIsTheHead(t *testing.T) {
+// Model() is the chain's CONFIGURED identity and must not move: it used to
+// track the last member that answered, which under concurrent use named the
+// wrong model. The per-call fact lives on the completion now.
+func TestModelIsTheConfiguredHeadAndDoesNotMove(t *testing.T) {
 	t.Parallel()
 	c := build(t, Options{},
-		member("primary", answering("head-model", "x")),
+		member("primary", failing("head-model", llm.KindRateLimit)),
 		member("backup", answering("backup-model", "y")))
 	if got := c.Model(); got != "head-model" {
 		t.Fatalf("Model() = %q, want the head's", got)
 	}
 	if got := fmt.Sprint(c.Keys()); got != "[primary backup]" {
 		t.Fatalf("Keys() = %v", got)
+	}
+	out, err := c.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := c.Model(); got != "head-model" {
+		t.Fatalf("Model() = %q after a fallback, want the configured head", got)
+	}
+	if out.Model != "backup-model" {
+		t.Fatalf("Completion.Model = %q, want the model that served", out.Model)
 	}
 }
 
@@ -137,15 +156,30 @@ func TestHeadAnswersAndNothingElseIsCalled(t *testing.T) {
 	if backup.calls.Load() != 0 {
 		t.Fatal("the backup was called even though the head answered")
 	}
-	if got := c.Model(); got != "head-model" {
-		t.Fatalf("Model() = %q", got)
+	if out.Model != "head-model" {
+		t.Fatalf("Completion.Model = %q", out.Model)
 	}
 }
 
-// The contract's reason for Model() being a method: telemetry reads it
-// directly, and a chain reporting its own name instead of the model that
-// answered makes the per-model token breakdown wrong.
-func TestModelReportsTheMemberThatActuallyServed(t *testing.T) {
+// A member that fills nothing in still has to be billable: an empty model on
+// a completion files the call's tokens under no model at all.
+func TestAChainNamesAMemberThatNamedItselfNothing(t *testing.T) {
+	t.Parallel()
+	quiet := &fake{model: "quiet-model", text: "ok", silent: true}
+	c := build(t, Options{}, member("only", quiet))
+	out, err := c.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Model != "quiet-model" {
+		t.Fatalf("Completion.Model = %q, want the member's configured name", out.Model)
+	}
+}
+
+// The per-model token breakdown is built from completions, so the completion
+// is what has to name the member that actually served — and unlike a method on
+// a shared chain, it can.
+func TestTheCompletionNamesTheMemberThatActuallyServed(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []llm.ErrorKind{
 		llm.KindRateLimit, llm.KindAuth, llm.KindServer, llm.KindTimeout,
@@ -164,8 +198,8 @@ func TestModelReportsTheMemberThatActuallyServed(t *testing.T) {
 			if out.Content != "from backup" {
 				t.Fatalf("Content = %q", out.Content)
 			}
-			if got := c.Model(); got != "backup-model" {
-				t.Fatalf("Model() = %q, want the model that answered", got)
+			if out.Model != "backup-model" {
+				t.Fatalf("Completion.Model = %q, want the model that answered", out.Model)
 			}
 		})
 	}
@@ -188,8 +222,8 @@ func TestAnExhaustedPoolFallsThroughWithNoSpecialCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if out.Content != "ok" || c.Model() != "backup-model" {
-		t.Fatalf("Content = %q, Model = %q", out.Content, c.Model())
+	if out.Content != "ok" || out.Model != "backup-model" {
+		t.Fatalf("Content = %q, Model = %q", out.Content, out.Model)
 	}
 }
 
@@ -349,8 +383,14 @@ func TestAChainCanBeAMemberOfAChain(t *testing.T) {
 	if out.Content != "ok" {
 		t.Fatalf("Content = %q", out.Content)
 	}
-	if got := outer.Model(); got != "outer-backup-model" {
-		t.Fatalf("Model() = %q", got)
+	// The completion carries the model that served, through both wrappers;
+	// the outer chain's own name stays its configured head, which is the
+	// inner chain's head.
+	if out.Model != "outer-backup-model" {
+		t.Fatalf("Completion.Model = %q", out.Model)
+	}
+	if got := outer.Model(); got != "inner-head" {
+		t.Fatalf("Model() = %q, want the configured head through both chains", got)
 	}
 
 	// And when everything fails, the innermost classification still reaches
@@ -373,13 +413,16 @@ func TestConcurrentCallsAreSafe(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := c.Complete(context.Background(), llm.Request{}); err != nil {
+			out, err := c.Complete(context.Background(), llm.Request{})
+			if err != nil {
 				t.Error(err)
+				return
 			}
-			// Model() is read from the goroutine that just called
-			// Complete — the race this is guarding.
-			if got := c.Model(); got != "backup-model" {
-				t.Errorf("Model() = %q", got)
+			// THE point of moving this onto the completion: under
+			// concurrency every caller reads its OWN call's model, which
+			// a shared method could not deliver.
+			if out.Model != "backup-model" {
+				t.Errorf("Completion.Model = %q", out.Model)
 			}
 		}()
 	}

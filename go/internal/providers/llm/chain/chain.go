@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -60,19 +59,6 @@ type Fallback struct {
 type Chain struct {
 	members []Member
 
-	// served is the model id of the member that answered most recently.
-	//
-	// An atomic because a chain is shared: telemetry reads Model() from
-	// the goroutine that just called Complete, and a plain field would be
-	// a data race with any concurrent call. It is a REPORT of the last
-	// successful member, not a per-call answer: measured at 21 skewed
-	// reads in 200 with two callers alternating members on ONE chain. A
-	// caller that needs exact per-call attribution builds its own Chain;
-	// they hold pointers to shared backends and cost nothing to make. See
-	// rewrite/questions/providers-chain-model-identity.md, which proposes
-	// putting the serving model on the Completion instead.
-	served atomic.Pointer[string]
-
 	// onFallback is fired once per hand-off. Best effort: telemetry must
 	// never fail a call, so a panicking hook is not this package's problem
 	// but a blocking one is the caller's to avoid.
@@ -103,21 +89,23 @@ func New(members []Member, opts Options) (*Chain, error) {
 		}
 		c.members[i] = m
 	}
-	head := c.members[0].Provider.Model()
-	c.served.Store(&head)
 	return c, nil
 }
 
-// Model is the model id of the member that most recently answered.
+// Model is the chain's CONFIGURED identity: its head member's model, which is
+// the one a call reaches unless something goes wrong.
 //
-// Before anything has answered it is the head member's, so telemetry has a
-// plausible name rather than an empty one: a chain that has not yet been
-// called would otherwise report "" for the model of the call in flight.
+// It deliberately does NOT track which member last answered. It used to, as an
+// atomic, and that was a workaround for a contract that asked a no-argument
+// method to report a per-call fact — under concurrent use it named the wrong
+// model 21 times in 200. [llm.Completion.Model] carries the per-call answer
+// now, so this can be the stable, race-free thing an operator expects from a
+// name.
 func (c *Chain) Model() string {
-	if served := c.served.Load(); served != nil {
-		return *served
+	if len(c.members) == 0 {
+		return ""
 	}
-	return ""
+	return c.members[0].Provider.Model()
 }
 
 // Keys is the chain's configured order, for diagnostics.
@@ -148,10 +136,13 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	for i, m := range c.members {
 		completion, err := m.Provider.Complete(ctx, req)
 		if err == nil {
-			// Record BEFORE returning: the caller reads Model() on the
-			// next line, in this goroutine.
-			model := m.Provider.Model()
-			c.served.Store(&model)
+			if completion.Model == "" {
+				// A member that filled nothing in — a third-party
+				// Provider, a test double — still has to be billable.
+				// An empty model on a completion files this call's
+				// tokens under no model at all.
+				completion.Model = m.Provider.Model()
+			}
 			return completion, nil
 		}
 

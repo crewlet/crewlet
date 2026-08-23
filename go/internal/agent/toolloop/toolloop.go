@@ -351,6 +351,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
 		}
 		if model == "" {
+			// The completion names the model that actually served this
+			// round, which is what the per-model token breakdown is built
+			// from; the provider's own name is its CONFIGURED identity and
+			// only stands in for a backend that filled nothing in.
+			model = completion.Model
+		}
+		if model == "" {
 			model = cfg.Provider.Model()
 		}
 		inTokens += completion.InputTokens

@@ -271,11 +271,11 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 			params.MaxCompletionTokens = param.NewOpt(maxTokens)
 		}
 	} else {
-		temperature := p.temperature
-		if req.Temperature > 0 {
-			temperature = req.Temperature
-		}
-		params.Temperature = param.NewOpt(temperature)
+		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
+		// — a judge asking for a reproducible answer — and it must reach
+		// the wire, while a request that named nothing takes the
+		// provider's configured default.
+		params.Temperature = param.NewOpt(req.TemperatureOr(p.temperature))
 		// max_tokens rather than max_completion_tokens: the compatible
 		// endpoints this backend also serves are years behind the rename.
 		if maxTokens > 0 {
@@ -418,6 +418,10 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 
 	choice := resp.Choices[0]
 	out := &llm.Completion{
+		// The CONFIGURED model id, not the one the response echoes: an
+		// alias resolving to a dated snapshot would re-key the per-model
+		// breakdown the day the alias moves.
+		Model:            p.model,
 		Content:          choice.Message.Content,
 		ReasoningContent: reasoningText(choice.Message.RawJSON()),
 		FinishReason:     choice.FinishReason,

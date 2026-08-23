@@ -122,6 +122,38 @@ func TestALoopEndsWhenTheModelStopsAskingForTools(t *testing.T) {
 	}
 }
 
+// The per-model token breakdown is built from completions, so the loop bills
+// against the model the ANSWER named, and falls back to the provider's
+// configured identity only for a backend that named nothing. Both directions
+// matter: a chain that fell through mid-phase reports the member that served,
+// and a bare backend that fills nothing in still reports something billable.
+func TestTheResultBillsAgainstTheModelTheCompletionNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		first llm.Completion
+		want  string
+	}{
+		{"the completion names one", llm.Completion{Model: "served-model", Content: "done"}, "served-model"},
+		{"the completion names none", llm.Completion{Content: "done"}, "scripted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &scriptedProvider{turns: []llm.Completion{tc.first}}
+			res, err := toolloop.Run(t.Context(), toolloop.Config{
+				Provider: p, Surface: &fakeSurface{}, MaxRounds: 3,
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.Model != tc.want {
+				t.Fatalf("Model = %q, want %q", res.Model, tc.want)
+			}
+		})
+	}
+}
+
 func TestExhaustedRoundsMeansTheModelWasStillAsking(t *testing.T) {
 	t.Parallel()
 	// The distinction matters because the caller may EXTEND the cap. A

@@ -298,11 +298,11 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 		}
 		params.Temperature = param.NewOpt(1.0)
 	} else {
-		temperature := p.temperature
-		if req.Temperature > 0 {
-			temperature = req.Temperature
-		}
-		params.Temperature = param.NewOpt(temperature)
+		// TemperatureOr, not a zero test: an explicit 0.0 is a real request
+		// — a judge asking for a reproducible answer — and it must reach
+		// the wire, while a request that named nothing takes the
+		// provider's configured default.
+		params.Temperature = param.NewOpt(req.TemperatureOr(p.temperature))
 	}
 	params.MaxTokens = maxTokens
 
@@ -518,7 +518,11 @@ func toolChoice(choice string) (sdk.ToolChoiceUnionParam, bool) {
 
 // completion translates the response.
 func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
-	out := &llm.Completion{FinishReason: string(msg.StopReason)}
+	// The CONFIGURED model id, not the one the response echoes. A vendor
+	// alias resolving to a dated snapshot would otherwise re-key the
+	// per-model breakdown the day the alias moves, splitting one model's
+	// spend across two names that nothing in the config mentions.
+	out := &llm.Completion{Model: p.model, FinishReason: string(msg.StopReason)}
 	if out.FinishReason == "" {
 		out.FinishReason = "end_turn"
 	}

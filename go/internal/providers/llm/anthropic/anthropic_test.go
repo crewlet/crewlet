@@ -193,28 +193,44 @@ func TestKeysFallBackToTheConventionalVariable(t *testing.T) {
 // of its own accord. Every one of those is a credential source the pool does
 // not know about — an ambient one would answer every call while the pool
 // rotated keys nothing was using.
+//
+// BOTH rows matter, and only the second one pins the check that prevents this.
+// The SDK's env autoload RETURNS EARLY at ANTHROPIC_API_KEY, so with that
+// variable set the auth-token branch never runs and removing
+// WithoutEnvironmentDefaults changes nothing observable — a mutation proved
+// exactly that. It is the auth-token-only case that reaches the branch, and
+// there the per-request WithAPIKey cannot save us: a bearer token rides a
+// DIFFERENT header, so the request would carry a correct x-api-key and an
+// ambient Authorization, and the server would honour the bearer.
 func TestAmbientEnvironmentDoesNotShadowTheConfiguredKey(t *testing.T) {
-	api, url := serve(t, func(w http.ResponseWriter, _ int) {
-		writeJSON(w, 200, okMessage("hi"))
-	})
-	t.Setenv(KeyEnv, "ambient")
-	t.Setenv("ANTHROPIC_AUTH_TOKEN", "ambient-token")
-	p := newProvider(t, url, func(c *Config) {
-		c.APIKeys = []string{"configured"}
-		c.LookupEnv = nil
-	})
-	if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	seen := api.seen()[0]
-	if seen.apiKey != "configured" {
-		t.Fatalf("wire key = %q, want the configured key", seen.apiKey)
-	}
-	// The auth token travels on its own header, so checking x-api-key alone
-	// would not notice it: the request would carry a correct key AND an
-	// ambient bearer token, and the server would honour the bearer.
-	if seen.authorization != "" {
-		t.Fatalf("Authorization = %q, want no ambient token on the wire", seen.authorization)
+	for _, tc := range []struct{ name, key, token string }{
+		{"both ambient", "ambient", "ambient-token"},
+		{"only an ambient auth token", "", "ambient-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, url := serve(t, func(w http.ResponseWriter, _ int) {
+				writeJSON(w, 200, okMessage("hi"))
+			})
+			// An empty value reads as unset to the SDK's autoload, which
+			// tests `ok && v != ""`.
+			t.Setenv(KeyEnv, tc.key)
+			t.Setenv("ANTHROPIC_AUTH_TOKEN", tc.token)
+			p := newProvider(t, url, func(c *Config) {
+				c.APIKeys = []string{"configured"}
+				c.LookupEnv = nil
+			})
+			if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			seen := api.seen()[0]
+			if seen.apiKey != "configured" {
+				t.Fatalf("wire key = %q, want the configured key", seen.apiKey)
+			}
+			if seen.authorization != "" {
+				t.Fatalf("Authorization = %q, want no ambient credential on the wire",
+					seen.authorization)
+			}
+		})
 	}
 }
 
@@ -913,10 +929,9 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 		wantMaxTokens   float64
 	}{
 		{
-			// llm.Request's zero values cannot be told apart from unset,
-			// and the tool loop sends neither field, so a zero must mean
-			// "the provider's default" or every phase silently runs at
-			// temperature 0.
+			// The tool loop sends neither field on any call it makes, so
+			// "unset" is what the whole engine runs on: a nil temperature
+			// must reach the provider's configured default, not 0.0.
 			name: "request says nothing", request: userTurn("hi"),
 			wantTemperature: DefaultTemperature, wantMaxTokens: DefaultMaxTokens,
 		},
@@ -928,9 +943,19 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 		},
 		{
 			name:            "request overrides the config",
-			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: 0.9, MaxTokens: 77},
+			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0.9), MaxTokens: 77},
 			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
 			wantTemperature: 0.9, wantMaxTokens: 77,
+		},
+		{
+			// The whole reason Temperature is a pointer. A judge asking
+			// for a reproducible answer says 0.0 and MUST get it; a
+			// backend testing `> 0` silently substitutes its default and
+			// the judge is non-deterministic with nothing to show for it.
+			name:            "an explicit zero reaches the wire",
+			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0)},
+			configure:       func(c *Config) { c.Temperature = 0.2 },
+			wantTemperature: 0, wantMaxTokens: DefaultMaxTokens,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -993,6 +1018,32 @@ func TestResponseTranslation(t *testing.T) {
 	}
 	if out.FinishReason != "tool_use" {
 		t.Fatalf("FinishReason = %q", out.FinishReason)
+	}
+	// The per-model token breakdown is built from completions, so every
+	// answer has to name the model that produced it. An empty one files the
+	// call's tokens under no model at all.
+	if out.Model != "claude-test" {
+		t.Fatalf("Model = %q, want the configured model id", out.Model)
+	}
+}
+
+// The CONFIGURED id, not the one the response echoes: a vendor alias resolving
+// to a dated snapshot would re-key the breakdown the day the alias moves,
+// splitting one model's spend across two names the config never mentions.
+func TestTheCompletionNamesTheConfiguredModelNotTheEcho(t *testing.T) {
+	t.Parallel()
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, 200, `{"id":"m","type":"message","role":"assistant",
+			"model":"claude-test-20990101","content":[{"type":"text","text":"x"}],
+			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	})
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Model != "claude-test" {
+		t.Fatalf("Model = %q, want the configured id", out.Model)
 	}
 }
 

@@ -78,6 +78,35 @@ openai-compatible gateways expect.
    against itself, which is exactly the kind of surprise a contract should not
    ship.
 
-I would take (1) unless a phase genuinely needs `temperature: 0`, in which case
-(2) — but that decision belongs with whoever owns the prompt phases, not with
-the backends.
+I would take (1) unless a phase genuinely needs `temperature: 0`.
+
+## Ruled — option 2 for temperature, option 1 for the cap, and implemented
+
+The contract owner ruled that this is the exact class `decisions/000` names — a
+Python keyword default becoming a Go struct zero inverts which mistake is safe
+— and that the two fields should differ, because they differ honestly:
+
+- `Temperature *float64`. Nil means "leave it to the provider". 0.0 is a
+  legitimate value meaning deterministic, so a plain float cannot express
+  unset.
+- `MaxTokens int` stays a plain int with 0 meaning unset, because a request for
+  zero tokens is not a thing anyone means. The asymmetry is documented at the
+  fields rather than smoothed away — uniformity here would be the worse
+  contract.
+
+Implemented with two helpers on the contract, because the safe reading of a
+zero has to be something backends CALL rather than a sentence they each
+re-derive (the same move the coordination contract made with
+`AcquireOptions.EffectiveProtocol`):
+
+- `Request.TemperatureOr(fallback)` — the only way either backend reads the
+  field. The obvious hand-written test, `if req.Temperature != nil &&
+  *req.Temperature > 0`, quietly restores the bug.
+- `llm.Temp(v)` — Go cannot take the address of a constant, and
+  `t := 0.0; req.Temperature = &t` at every call site is how a caller ends up
+  sharing one variable between two requests.
+
+Both directions are pinned on both vendors, against the request body the fake
+endpoint received: a nil temperature sends the provider's configured default
+and NOT 0.0, and an explicit `llm.Temp(0)` sends 0.0 and not the default. They
+are different bugs and only one of them shows up in a happy-path test.

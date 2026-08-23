@@ -639,10 +639,9 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 		wantMaxTokens   any // nil means absent
 	}{
 		{
-			// llm.Request's zero values cannot be told apart from unset,
-			// and the tool loop sends neither field, so a zero must mean
-			// "the provider's default" or every phase silently runs at
-			// temperature 0.
+			// The tool loop sends neither field on any call it makes, so
+			// "unset" is what the whole engine runs on: a nil temperature
+			// must reach the provider's configured default, not 0.0.
 			name: "request says nothing", request: userTurn("hi"),
 			wantTemperature: DefaultTemperature, wantMaxTokens: nil,
 		},
@@ -655,8 +654,18 @@ func TestTemperatureAndMaxTokensDefaultsAndOverrides(t *testing.T) {
 		{
 			name:            "request overrides the config",
 			configure:       func(c *Config) { c.Temperature = 0.2; c.MaxTokens = 512 },
-			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: 0.9, MaxTokens: 77},
+			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0.9), MaxTokens: 77},
 			wantTemperature: 0.9, wantMaxTokens: float64(77),
+		},
+		{
+			// The whole reason Temperature is a pointer. A judge asking
+			// for a reproducible answer says 0.0 and MUST get it; a
+			// backend testing `> 0` silently substitutes its default and
+			// the judge is non-deterministic with nothing to show for it.
+			name:            "an explicit zero reaches the wire",
+			configure:       func(c *Config) { c.Temperature = 0.2 },
+			request:         llm.Request{Messages: userTurn("hi").Messages, Temperature: llm.Temp(0)},
+			wantTemperature: 0, wantMaxTokens: nil,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -817,6 +826,32 @@ func TestToolCallsAreTranslated(t *testing.T) {
 	}
 	if out.FinishReason != "tool_calls" {
 		t.Fatalf("FinishReason = %q", out.FinishReason)
+	}
+	// The per-model token breakdown is built from completions, so every
+	// answer has to name the model that produced it.
+	if out.Model != "gpt-test" {
+		t.Fatalf("Model = %q, want the configured model id", out.Model)
+	}
+}
+
+// The CONFIGURED id, not the one the response echoes: a vendor alias resolving
+// to a dated snapshot would re-key the breakdown the day the alias moves.
+func TestTheCompletionNamesTheConfiguredModelNotTheEcho(t *testing.T) {
+	t.Parallel()
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, 200, `{"id":"c","object":"chat.completion","created":1,
+			"model":"gpt-test-20990101",
+			"choices":[{"index":0,"finish_reason":"stop",
+				"message":{"role":"assistant","content":"x"}}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	})
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(context.Background(), userTurn("hi"))
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Model != "gpt-test" {
+		t.Fatalf("Model = %q, want the configured id", out.Model)
 	}
 }
 

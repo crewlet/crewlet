@@ -75,6 +75,30 @@ tell a skewed attribution from a true one.
    and costs nothing to build, so this is affordable — but it is a rule enforced
    by nothing, and the failure it prevents is invisible.
 
-I would take (1). Until it is decided, the package implements (3) with an atomic
-last-served pointer, so the value is race-free and correct for a chain used by
-one caller at a time, and its doc comment says so and points here.
+I would take (1).
+
+## Ruled — option 1, and implemented
+
+The contract owner agreed the defect is the contract's, not the chain's, and
+ruled for option 1:
+
+- `llm.Completion` gains `Model string`, filled in by whichever backend served
+  the call. That is the field the per-model token breakdown is built from.
+- `Provider.Model()` stays, with its meaning narrowed to the provider's
+  CONFIGURED identity — what the entry is by default, for logs and config
+  display — and its doc now explicitly disclaims the per-call role.
+
+Consequences carried through:
+
+- `chain.Chain.Model()` no longer tracks the last member that answered. The
+  atomic is gone; it returns the head member's model, which is stable and
+  race-free. A chain reporting its own configured name is harmless now that
+  nothing bills against it.
+- The chain fills `Completion.Model` in for a member that left it empty, so a
+  third-party `Provider` still produces a billable answer.
+- Both backends set it to the CONFIGURED model id rather than the one the
+  response echoes. A vendor alias resolving to a dated snapshot would otherwise
+  re-key the breakdown the day the alias moves, splitting one model's spend
+  across two names the config never mentions. Pinned by a test in each backend.
+- `toolloop.Run` reads `completion.Model` first and falls back to
+  `Provider.Model()` only for a backend that named nothing.

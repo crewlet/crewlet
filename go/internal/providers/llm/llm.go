@@ -79,6 +79,19 @@ type ToolCall struct {
 // did. CacheRead and CacheWrite break that total down for cost reporting only
 // — a reader that adds them to InputTokens is double-counting.
 type Completion struct {
+	// Model is the model that served THIS call, and it is the field the
+	// per-model token breakdown is built from.
+	//
+	// It lives on the answer rather than on the Provider because that is
+	// the only place it can be correct. A fallback chain is shared by
+	// concurrent callers, so its Provider.Model() — a method with no
+	// argument naming the call it is about — can only ever report the model
+	// that answered SOMEBODY's call. Measured on one shared chain with two
+	// callers alternating members: 21 reads in 200 named the wrong model.
+	// Every backend fills this in; a chain fills it in for a member that
+	// left it empty.
+	Model string
+
 	Content          string
 	ReasoningContent string
 	ThinkingBlocks   []ThinkingBlock
@@ -97,11 +110,31 @@ func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows: every provider feature added to the Python signature over time
 // became another positional argument at forty call sites.
+//
+// Temperature and MaxTokens spell "unset" DIFFERENTLY, on purpose. Making them
+// symmetrical would be the worse contract, so the reason is at each field.
 type Request struct {
-	Messages    []Message
-	Tools       []ToolDef
-	Temperature float64
-	MaxTokens   int
+	Messages []Message
+	Tools    []ToolDef
+
+	// Temperature is a POINTER because 0.0 is a real request — it is what a
+	// judge or a classifier asks for when it needs a reproducible answer —
+	// and a plain float64 cannot tell that apart from a caller who said
+	// nothing. Nil means "leave it to the provider's configured default".
+	//
+	// This is the case d-000 warns about: a Python keyword default becoming
+	// a Go struct zero inverts which mistake is safe. Python's providers
+	// defaulted to 0.7, so omission was safe there; a plain float here would
+	// have made omission mean 0.0 and run every phase in the engine
+	// deterministic without anyone choosing it. Read it through
+	// [Request.TemperatureOr], never by testing it against zero.
+	Temperature *float64
+
+	// MaxTokens is a plain int, with 0 meaning unset — deliberately not a
+	// pointer like Temperature. Nobody ever means "generate zero tokens", so
+	// the zero has no honest reading to protect and a pointer would buy a
+	// nil check at every call site for nothing.
+	MaxTokens int
 
 	// ToolChoice is "", "auto", "required" or "none". "required" is what
 	// the turn engine's corrective re-prompt sets when a phase must end in
@@ -109,14 +142,40 @@ type Request struct {
 	ToolChoice string
 }
 
-// Provider is a language-model backend.
+// TemperatureOr is the request's temperature, or fallback when it named none.
 //
-// Model is a method rather than a field so a chain wrapper can answer for
-// whichever member actually served the call — telemetry reads it directly, and
-// a chain reporting its own name instead of the model that answered makes the
-// per-model token breakdown wrong.
+// It is a method on the contract rather than a sentence in a doc comment
+// because the safe reading of a zero has to be something backends CALL: the
+// obvious hand-written test, `if req.Temperature != nil && *req.Temperature >
+// 0`, quietly restores the bug this field exists to remove. Same rule the
+// coordination contract settled on for AcquireOptions.EffectiveProtocol.
+func (r Request) TemperatureOr(fallback float64) float64 {
+	if r.Temperature == nil {
+		return fallback
+	}
+	return *r.Temperature
+}
+
+// Temp is a pointer to v, for building a [Request] literal — Go cannot take
+// the address of a constant, and `t := 0.0; req.Temperature = &t` at every
+// call site is how a caller ends up sharing one variable between two requests.
+func Temp(v float64) *float64 { return &v }
+
+// Provider is a language-model backend.
 type Provider interface {
+	// Model is this provider's CONFIGURED identity — what the entry is by
+	// default — for log lines and config display.
+	//
+	// It does NOT answer "which model served that call", and nothing should
+	// bill against it. This method once carried that job and could not do
+	// it: a fallback chain shared by concurrent callers has no per-call
+	// answer a no-argument method can return, so a chain could only honour
+	// it for a sequential caller. [Completion.Model] is the per-call fact,
+	// and the per-model token breakdown is built from completions — which
+	// is what makes a chain reporting its own configured name here harmless
+	// rather than wrong.
 	Model() string
+
 	Complete(ctx context.Context, req Request) (*Completion, error)
 }
 
