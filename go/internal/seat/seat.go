@@ -107,10 +107,22 @@ const (
 	// runs out.
 	SeatLeaseTTL = 45 * time.Second
 
-	// HeartbeatInterval is one third of the TTL — the standard lease ratio,
-	// for the standard reason: it is the largest interval that still leaves
-	// room for two failures.
-	HeartbeatInterval = 15 * time.Second
+	// HeartbeatRatio is how many heartbeats fit in a lease — the standard
+	// lease ratio, for the standard reason: one third is the largest
+	// interval that still leaves room for two failures.
+	//
+	// A RATIO rather than a duration, because the interval has to follow
+	// THIS host's TTL rather than the shipped one. A deployment that
+	// shortened its lease to ten seconds while the interval stayed at
+	// fifteen would renew every seat strictly after it had already
+	// expired: every heartbeat fails, every seat is lost, and the fleet
+	// hands its seats around forever with every node reading healthy.
+	// AcquireBackoff below is tied to the same TTL for the same reason.
+	HeartbeatRatio = 3
+
+	// HeartbeatInterval is the interval for the DEFAULT TTL. A host with a
+	// configured TTL derives its own.
+	HeartbeatInterval = SeatLeaseTTL / HeartbeatRatio
 
 	// SweepInterval is how often placement is re-evaluated.
 	//

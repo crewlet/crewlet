@@ -3,6 +3,7 @@ package seat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -1038,4 +1039,58 @@ func TestASeatLostToAnUnrenewableLeaseIsNotImmediatelyRetaken(t *testing.T) {
 	cut.cut.Store(false)
 	h.Sweep(f.ctx)
 	wantHeld(t, h, "ceo")
+}
+
+func TestTheHeartbeatFollowsTheConfiguredTTL(t *testing.T) {
+	t.Parallel()
+	// The interval has to follow THIS host's lease, not the shipped one.
+	// A deployment that shortened its TTL to ten seconds while the
+	// interval stayed at fifteen would renew every seat strictly after it
+	// had already expired: every heartbeat fails, every seat is lost, and
+	// the fleet hands its seats around forever with every node reading
+	// healthy. AcquireBackoff was already tied to the same TTL for the
+	// same reason; the heartbeat was not.
+	f := newFleet(t)
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want time.Duration
+	}{
+		{"an unset TTL takes the shipped pair", Config{}, HeartbeatInterval},
+		{"a shortened TTL shortens the interval",
+			Config{TTL: 9 * time.Second}, 3 * time.Second},
+		{"a lengthened TTL lengthens it",
+			Config{TTL: 120 * time.Second}, 40 * time.Second},
+		{"an explicit interval wins over the ratio",
+			Config{TTL: 9 * time.Second, HeartbeatInterval: time.Second}, time.Second},
+	} {
+		h := f.newHost("node-"+tc.name, tc.cfg)
+		if h.heartbeat != tc.want {
+			t.Errorf("%s: heartbeat = %v, want %v", tc.name, h.heartbeat, tc.want)
+		}
+	}
+}
+
+func TestTheHeartbeatAlwaysFitsInsideTheLease(t *testing.T) {
+	t.Parallel()
+	// The invariant the ratio exists to keep, stated over a range rather
+	// than at one point: an interval at or above the TTL means a lease
+	// that is always renewed too late, whatever the numbers happen to be.
+	f := newFleet(t)
+	for _, ttl := range []time.Duration{
+		time.Second, 5 * time.Second, 10 * time.Second, 45 * time.Second,
+		90 * time.Second, 10 * time.Minute,
+	} {
+		h := f.newHost(fmt.Sprintf("node-%s", ttl), Config{TTL: ttl})
+		if h.heartbeat >= h.ttl {
+			t.Errorf("ttl %v: heartbeat %v does not fit inside the lease",
+				ttl, h.heartbeat)
+		}
+		// And it must leave room for two misses, which is the whole
+		// justification for the number.
+		if h.heartbeat*HeartbeatRatio > h.ttl {
+			t.Errorf("ttl %v: heartbeat %v leaves no room for two missed renewals",
+				ttl, h.heartbeat)
+		}
+	}
 }

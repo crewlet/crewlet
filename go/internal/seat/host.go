@@ -224,7 +224,7 @@ func New(cfg Config) (*SeatHost, error) {
 		clock:        cfg.Clock,
 		protocol:     orInt(cfg.Protocol, coord.ProtocolVersion),
 		ttl:          ttl,
-		heartbeat:    orDuration(cfg.HeartbeatInterval, HeartbeatInterval),
+		heartbeat:    orDuration(cfg.HeartbeatInterval, ttl/HeartbeatRatio),
 		sweepEvery:   orDuration(cfg.SweepInterval, SweepInterval),
 		claimLimit:   orInt(cfg.ClaimLimit, ClaimLimitPerSweep),
 		releaseLimit: orInt(cfg.ReleaseLimit, ReleaseLimitPerSweep),
