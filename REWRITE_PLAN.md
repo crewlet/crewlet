@@ -73,7 +73,8 @@ Phases are ordered by dependency, not importance. Sizes are relative
 | D11 | **Python extension system + Python API are not ported.** MCP is the primary extension seam (unchanged). In-process hooks, if any, come later via a DECIDE (Starlark/WASM). |
 | D12 | **External integrations remain first-class** behind the existing seams (Transport, KnowledgeSearcher, MentionGrammar, StatusPoster, NotificationPrompt, PromotionPageWriter). Built-in chat/tracker/knowledge surfaces are **post-v1** (§12) and slot in as additional backends behind the same seams. |
 | D13 | **Event store retention becomes explicit** (the stream's MaxAge is the authority; the Turso sweep mirrors it). The current unbounded `crewlet_events` is not carried. |
-| D14 | **Repo layout: `go/` subdirectory on this repository.** The Python tree stays adjacent as the living spec for the whole execution; the executor always has both in one checkout. Extraction to its own repo is a post-v1 decision. |
+| D14 | **Repo layout: `go/` is temporary scaffolding, not a home.** During execution the Go module lives in `go/` so the Python tree stays adjacent as the living specification in one checkout. The terminal state is a **complete replacement**: Phase 9 (§17) moves the Go tree to the repository root and deletes the Python implementation. |
+| D15 | **Clean break from Python deployments.** Breaking changes are accepted wholesale: no data migration, no state export, no compatibility shims with running Python companies. Python-era constants (e.g. the agent-id uuid5 namespace) need not be byte-preserved — what must survive is the *feature* (deterministic seat-id derivation from org + handle, so any node recovers any seat's id with no lookup), not the bytes. |
 
 ## 4. Phase 0 — Workspace, CI, and skeletons (S) [BUILD]
 
@@ -329,8 +330,9 @@ Build items (each: port the suite, then implement):
 **[GATE G4]** Golden-turn suite green: scripted mock-LLM turns (the Python repo's
 mock-provider approach) reproduce Plan→Execute→Review including suspend/resume
 across an engine restart, self_iterate with ledger, sub-agent spawn, A2A round-trip,
-budget refusal, and a hot-reload mid-turn under the pin. Phase-record output is
-field-compatible with the Python engine's (the dashboard consumes it unchanged).
+budget refusal, and a hot-reload mid-turn under the pin. Phase-record output satisfies the
+frozen dashboard wire contract (the dashboard — not the Python engine — is the
+compatibility reference, and consumes it unchanged).
 
 ## 10. Phase 5 — API + dashboard (L)
 
@@ -463,13 +465,20 @@ may duplicate (budget enforcement reads the shared counter and stays correct).
 Singletons stay singletons (the fleet does not parallelize scheduler/curator/waiter).
 A rolling upgrade across a protocol bump has a visible claim-freeze window.
 
-## 17. Migration & validation strategy
+## 17. Phase 9 — Root replacement (the complete-replacement commit) (S)
 
-The Python engine keeps running throughout. Because the contracts are shared, the Go
-engine is validated in stages against real infrastructure: G1–G3 on embedded stack,
-G3b against a real Pulsar (the production estate's shape), G5/G7 as a shadow company
-before any production cutover. Cutover is per-company (one engine per tenant), which
-makes the rollout incremental by construction. Agent identity survives the rewrite:
-ids are `uuid5(AGENT_ID_NAMESPACE, "{org}:{handle}")` — the namespace constant
-`c1ea9c6e-3f5d-4c9c-9e9f-1d2c3b4a5e6f` is frozen forever; carrying per-seat memory
-across (Postgres → stream+Turso) is a one-shot export tool, scoped at cutover time.
+The rewrite ends with replacement, not cohabitation. After G7:
+
+- **[BUILD]** Move the Go tree from `go/` to the repository root; delete the Python
+  implementation (`src/crewlet/`, `tests/`, `pyproject.toml`, the Python CI
+  workflows). Its job as the specification is done; git history preserves it.
+- **[DECIDE d-901]** Release tooling for a Go binary product (e.g. goreleaser:
+  platform matrix, checksums, container images) replacing the PyPI
+  Trusted-Publishing pipeline; rewrite `CONTRIBUTING.md` / `RELEASING.md` for the Go
+  toolchain in the same commit (root process files stay canonical — CLAUDE.md rule).
+- **[BUILD]** Sweep `docs/` for Python-implementation references. The architecture
+  pages (`docs/concepts/`) largely survive with mechanics updated, and each earlier
+  phase already owns its docs section (§2 rule 7), so this is a sweep, not a rewrite.
+- Deployments stand up the Go binary **fresh**. Per D15 there is no data migration,
+  export tool, or compatibility shim from Python deployments — a clean break,
+  accepted and stated in the release notes.
