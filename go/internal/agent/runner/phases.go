@@ -422,3 +422,7 @@ func reviewArtifact(e turn.Execution) string {
 	}
 	return ledger.Elide(e.Text, ledger.ArtifactLimit)
 }
+
+// Caps returns the runner's round budgets, so an assembler can assert on what
+// it actually wired rather than on what it meant to.
+func (r *Runner) Caps() Caps { return r.cfg.Caps }
