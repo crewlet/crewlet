@@ -71,11 +71,19 @@ type node struct {
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
 // wired the way cmd/crewlet wires it. The one stub is the vendor endpoint.
-func start(t *testing.T) *node {
+func start(t *testing.T) *node { return startWith(t, nil) }
+
+// startWith stands a node up over a company document the caller may amend, for
+// the cases whose subject is a config field rather than a turn.
+func startWith(t *testing.T, amend func(doc string) string) *node {
 	t.Helper()
 	model := newScriptedModel(t)
 
-	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
+	doc := fmt.Sprintf(companyDoc, model.url)
+	if amend != nil {
+		doc = amend(doc)
+	}
+	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}

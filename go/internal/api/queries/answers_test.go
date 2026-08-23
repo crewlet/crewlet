@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -498,4 +499,144 @@ func TestTraceAnswersEverythingSharingOne(t *testing.T) {
 			t.Errorf("a row from %q came back", row.TraceID)
 		}
 	}
+}
+
+func TestBudgetsPairTheCapWithTheDurableCounter(t *testing.T) {
+	t.Parallel()
+	// THE CAP AND THE COUNTER GO TOGETHER, and neither is useful alone: a
+	// ceiling with no usage says nothing about how close a company is, and
+	// usage with no ceiling says nothing about whether it will be refused.
+	db := openStore(t)
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+    token_budget: 500
+  - name: Founder
+    kind: human
+    contact: {slack_user_id: U0F}
+token_budget: 10000
+`)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	ceo := organization.AgentSeatByHandle("ceo")
+	id, _ := organization.AgentIDFor(ceo)
+	if _, err := db.Budgets().Charge(t.Context(), id.String(), 120, 10000, 500); err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+
+	r := registryOver(t, queries.Sources{
+		State:   livestate.New(),
+		Company: func() *config.Company { return cfg },
+		Budget:  db.Budgets(),
+	})
+	got := ask(t, r, "budgets", nil)
+
+	if got["durable"] != true {
+		t.Error("durable = false with a readable counter, so every figure " +
+			"below it reads as unmeasured")
+	}
+	orgRow, _ := got["org"].(map[string]any)
+	if orgRow["max_tokens"] != 10000 || orgRow["durable_used"] != 120 {
+		t.Errorf("org = %+v", orgRow)
+	}
+	if orgRow["durable_updated_at"] == "" {
+		t.Error("no charge timestamp, so an operator cannot tell a live " +
+			"counter from a stale one")
+	}
+
+	seats, _ := got["seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("seats = %d, want the one AGENT seat — a human spends "+
+			"nothing and a permanent zero row is noise", len(seats))
+	}
+	seat, _ := seats[0].(map[string]any)
+	if seat["role"] != "CEO" || seat["max_tokens"] != 500 || seat["durable_used"] != 120 {
+		t.Errorf("seat = %+v", seat)
+	}
+}
+
+func TestBudgetsWithNoStoreSayNobodyLooked(t *testing.T) {
+	t.Parallel()
+	// `durable: false` means UNREADABLE, never zero. A company drawn at 0%
+	// of its budget when the truth is that nobody looked is the lie this
+	// field exists to prevent.
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+token_budget: 10000
+`)
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Company: func() *config.Company { return cfg },
+	})
+	got := ask(t, r, "budgets", nil)
+	if got["durable"] != false {
+		t.Error("a node with no counter claimed a durable reading")
+	}
+	// The CAPS are still stated: they are config, and a node without a
+	// store still knows them.
+	orgRow, _ := got["org"].(map[string]any)
+	if orgRow["max_tokens"] != 10000 {
+		t.Errorf("the cap was dropped with the counter: %+v", orgRow)
+	}
+}
+
+func TestALiveMeterIsNullRatherThanZeroWhenAbsent(t *testing.T) {
+	t.Parallel()
+	// The live meter is THIS PROCESS's run and shares a span with neither
+	// the cap nor the durable counter. A zero would be a measurement; the
+	// honest answer for a seat this node has not run is nothing at all.
+	db := openStore(t)
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: p
+`)
+	r := registryOver(t, queries.Sources{
+		State:   livestate.New(),
+		Company: func() *config.Company { return cfg },
+		Budget:  db.Budgets(),
+	})
+	got := ask(t, r, "budgets", nil)
+	seats, _ := got["seats"].([]any)
+	if len(seats) != 1 {
+		t.Fatalf("seats = %d", len(seats))
+	}
+	seat, _ := seats[0].(map[string]any)
+	live, present := seat["live_used"]
+	if !present {
+		t.Fatal("live_used is missing entirely; the client distinguishes " +
+			"null from a number and needs the key")
+	}
+	if live != nil {
+		t.Errorf("live_used = %v for a seat this node has not run, want null", live)
+	}
+}
+
+// parsed builds a company from a YAML fixture.
+func parsed(t *testing.T, doc string) *config.Company {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return cfg
 }

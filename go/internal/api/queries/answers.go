@@ -79,6 +79,13 @@ type Sources struct {
 	Diary    *learning.Diary
 	Episodes *learning.Episodes
 
+	// Budget is the DURABLE token counter — what the engine actually
+	// enforces against, across every node and every restart. Nil answers
+	// the budget surface with `durable: false` rather than zeros: "nobody
+	// looked" and "nothing was spent" are different facts, and only one of
+	// them is a measurement.
+	Budget *store.Budgets
+
 	// Config serves the config family, and every one of those is
 	// operator-gated: reading the document exposes the whole company.
 	Config *configapi.Service
@@ -138,6 +145,12 @@ func Register(r *Registry, s Sources) {
 		r.Register("fleet", s.fleet)
 	}
 	if s.Company != nil {
+		// Gated on the COMPANY, not on the durable counter: the caps are
+		// what the screen is about, and a node with a company and no store
+		// answers "these are the ceilings, and nobody can read the usage"
+		// — which is a real state an operator needs to see, and is not the
+		// same as the question being unavailable here.
+		r.Register("budgets", s.budgets)
 		// Both are projections of the epoch: what the company DECLARES,
 		// which is a different question from what it has done.
 		r.Register("schedules", s.schedules)

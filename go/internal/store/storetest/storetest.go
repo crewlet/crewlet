@@ -70,6 +70,16 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ApplyStatusRejectsAnIncompleteIdentity", testApplyStatusRejectsAnIncompleteIdentity},
 		{"ApplyErrorIsBounded", testApplyErrorIsBounded},
 		{"UnknownApplyStatusIsRefused", testUnknownApplyStatusIsRefused},
+		{"BudgetChargeAccumulates", testBudgetChargeAccumulates},
+		{"BudgetZeroLimitIsUnlimited", testBudgetZeroLimitIsUnlimited},
+		{"BudgetRefusalNamesTheScope", testBudgetRefusalNamesTheScope},
+		{"BudgetSeatRefusalUnwindsTheOrgCharge", testBudgetSeatRefusalUnwindsTheOrgCharge},
+		{"BudgetOversizeChargeIsScreened", testBudgetAnOversizeChargeIsScreenedBeforeTheInsert},
+		{"BudgetChargeIsExclusiveUnderContention", testBudgetChargeIsExclusiveUnderContention},
+		{"BudgetZeroTokensIsNotACharge", testBudgetZeroTokensIsNotACharge},
+		{"BudgetSeatsAreSeparateCounters", testBudgetSeatsAreSeparateCounters},
+		{"BudgetListPutsTheOrgFirst", testBudgetListPutsTheOrgFirst},
+		{"BudgetResetIsScoped", testBudgetResetIsScoped},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

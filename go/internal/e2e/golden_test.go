@@ -532,3 +532,56 @@ func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
 		t.Errorf("a seatless call resolved anyway: %+v", res)
 	}
 }
+
+func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
+	t.Parallel()
+	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
+	// turn passed nil, so a company with `token_budget: 100000` spent
+	// without limit and the number in its config was decoration. Money
+	// leaves the building for every token, so this is the one counter that
+	// fails CLOSED — a charge that cannot be made stops the round rather
+	// than silently un-capping the company.
+	n := startWith(t, func(doc string) string {
+		return doc + "\ntoken_budget: 200\n"
+	})
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+	})
+	n.wake(t, "ceo", "How did the week go?")
+
+	// The scripted model reports 150 tokens on its first call and 130 on
+	// the next, so the cap bites partway through the turn rather than
+	// before it starts — which is the case a pre-flight check would miss.
+	budgets := n.engine.Backends().Store.Budgets()
+	waitFor(t, "the budget to be charged", func() bool {
+		used, err := budgets.Used(t.Context(), store.OrgScope)
+		return err == nil && used > 0
+	})
+	waitFor(t, "the turn to stop", func() bool {
+		used, err := budgets.Used(t.Context(), store.OrgScope)
+		if err != nil {
+			return false
+		}
+		// Settled: no further charge fits under the cap.
+		return used > 0 && used+150 > 200
+	})
+
+	used, err := budgets.Used(t.Context(), store.OrgScope)
+	if err != nil {
+		t.Fatalf("used: %v", err)
+	}
+	if used > 200 {
+		t.Errorf("the company spent %d against a cap of 200", used)
+	}
+	// And the SEAT's counter moved with it: one charge, both scopes.
+	company := n.engine.Company()
+	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
+	seatUsed, err := budgets.Used(t.Context(), store.AgentScope(id.String()))
+	if err != nil {
+		t.Fatalf("seat used: %v", err)
+	}
+	if seatUsed != used {
+		t.Errorf("seat spent %d and the org %d; one charge must move both",
+			seatUsed, used)
+	}
+}

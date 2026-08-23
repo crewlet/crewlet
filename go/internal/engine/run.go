@@ -348,6 +348,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth),
 		Markers:      e.markers(),
 		Latch:        e.onboarded,
+		// Read off the PINNED epoch, so a revision that raises a ceiling
+		// mid-turn cannot move the limit a round is judged against.
+		Budget: e.meterFor(company, req.Handle),
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A

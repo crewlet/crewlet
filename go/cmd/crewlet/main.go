@@ -380,6 +380,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Diary:         learning.NewDiary(e.Backends().Store),
 			Episodes:      learning.NewEpisodes(e.Backends().Store),
 			Config:        configSurface,
+			Budget:        e.Backends().Store.Budgets(),
 			NodeID:        nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
