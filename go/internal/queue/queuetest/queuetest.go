@@ -572,6 +572,45 @@ func (j *journal) awaitLabels(t *testing.T, what string, want ...string) {
 	j.awaitExpecting(t, what, func(seen []string) bool { return equalStrings(seen, want) }, want, true)
 }
 
+// awaitLabelsInAnyOrder waits for exactly these labels, in whatever sequence.
+//
+// For the cases whose subject is WHAT was delivered rather than in what
+// order — chiefly anything involving a redelivery, since [Caps.HeadReplayOnNak]
+// says the backends genuinely differ there and the engine no longer depends
+// on either answer. A case that asserted the sequence anyway would pass on
+// one backend, pass on the other whenever the timing happened to favour it,
+// and fail under load: a flake that reads as a broker bug.
+//
+// The expectation is still passed down, so a timeout can report a delivery
+// that CONTRADICTS rather than merely lags — a missing event and a surplus
+// one are both still failures here.
+func (j *journal) awaitLabelsInAnyOrder(t *testing.T, what string, want ...string) {
+	t.Helper()
+	j.awaitExpecting(t, what, func(seen []string) bool {
+		return sameLabels(seen, want)
+	}, want, true)
+}
+
+// sameLabels compares two label lists as MULTISETS: a duplicate delivery is a
+// difference, because bounded duplication is a fact a case may be asserting
+// about rather than noise to fold away.
+func sameLabels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, label := range a {
+		counts[label]++
+	}
+	for _, label := range b {
+		counts[label]--
+		if counts[label] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // staysAt holds a quiet window open and fails if anything more is delivered.
 // The negative half of the contract — "a paused attachment delivers nothing" —
 // has no completion signal to wait on, so it is asserted over elapsed time.

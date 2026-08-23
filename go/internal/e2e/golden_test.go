@@ -231,8 +231,13 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 	n.wake(t, "ceo", "How did the week go?")
 
+	// THE LAST of the turn's events, not the first. agent_turn_completed
+	// and turn_completed are two publishes on one path, in that order, so
+	// waiting for the earlier one leaves the assertion below racing the
+	// later — which passes on an idle machine and fails under load, the
+	// worst way for a gate to be wrong.
 	waitFor(t, "the turn to complete", func() bool {
-		return slices.Contains(frames.eventTypes(t), "agent_turn_completed")
+		return slices.Contains(frames.eventTypes(t), "turn_completed")
 	})
 	// And the spend rollup for the FINISHED turn. It rides the shared tick
 	// rather than the publish path, so a tick that fires mid-turn produces

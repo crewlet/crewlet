@@ -253,7 +253,19 @@ func (s *suite) runAttachment(t *testing.T) {
 		j := newJournal()
 		subscribe(t, q, "topic.q", "grp", recordingHandler(j))
 		publish(t, q, "topic.q", newEvent("e1"))
-		j.awaitLabels(t, "a new owner to receive on a re-attached seat", "e0", "e1")
+		// IN ANY ORDER. The subject here is that the re-attached seat is
+		// deliverable at all — both events arrive — and the deferred one
+		// is a REDELIVERY, which [Caps.HeadReplayOnNak] says the backends
+		// answer differently: Pulsar replays from the head, JetStream
+		// returns it behind never-delivered events. Asserting the
+		// sequence made this pass on an idle machine and fail under load
+		// on a backend that had already declared the behaviour, which
+		// reads as a broker bug and is not one. Head-replay order is
+		// certified where it belongs, by
+		// nak_returns_the_event_to_the_front_of_the_mailbox, gated on the
+		// capability.
+		j.awaitLabelsInAnyOrder(t, "a new owner to receive on a re-attached seat",
+			"e0", "e1")
 	})
 }
 

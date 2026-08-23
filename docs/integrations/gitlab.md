@@ -239,7 +239,15 @@ Review requests, assignments, and failed pipelines are treated as **pointer even
 
 ## Identity registration
 
-At engine startup (and on every org hot-reload), `register_gitlab_accounts_from_org` resolves each role's GitLab username so webhooks can route to it. For every role with a token in `mcp_env.gitlab`, it calls **`GET {integrations.gitlab.url}/api/v4/user`** with that PAT and registers the returned `(gitlab, username) → agent handle` mapping in the HandleRegistry. This is REST, not an MCP round-trip: the official MCP server has no `whoami` and community servers disagree on its name, whereas `GET /user` is stable core API and needs only the role's own token. Roles whose `${VAR}` credential is unresolved are skipped (no MCP instance was started for them either); if two seats resolve to the same username, the mapping is dropped with a warning rather than misrouting.
+A GitLab webhook names people by **username**, and nothing in the org model says which account a seat holds. Without that mapping every event names a stranger, the routing gate drops every target, and the integration is silently inert — so this is the whole integration, not a detail of it.
+
+At engine startup the engine calls **`GET {integrations.gitlab.url}/api/v4/user`** with each seat's own credential from `mcp_env.gitlab` and registers the returned `(gitlab, username) → agent handle` mapping. The username is **derived from the credential**, never declared beside it: a declaration that disagrees with the token is a misroute nothing can detect, and it would make the engine name a variable the seat's actual tools do not read. This is REST rather than an MCP round-trip because the official MCP server has no `whoami` and community servers disagree on its name, whereas `GET /user` is stable core API and needs only the seat's own token.
+
+The lookups run **concurrently** and are **cached by token**. Identity is a function of the credential and credentials change rarely, so a config revision that touched something else re-registers every seat from the cache with **no requests at all**; a rotated token is a cache miss and costs exactly one, which is correct — it may well be a different account. Boot on a company of thirty seats is therefore one round trip per *distinct* credential, in parallel, not thirty in series.
+
+A seat whose lookup **fails** is left unresolved rather than failing the boot — the instance may be briefly down — and the next apply retries it. What that costs is that seat's inbound routing until then, reported as `gitlab_seat_identity_unresolved`. A seat whose `${VAR}` credential does not resolve is skipped (no MCP instance was started for it either), and if two seats resolve to the same username the second is refused with a warning rather than misrouting.
+
+The credential is read from whichever key the seat's tool stack names it under — `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …` — so the engine still names **no tool-specific variable of its own**; it reads the one the tools already use.
 
 **Human seats** register their `contact.gitlab_username` through the same `CONTACT_FIELD_BY_TRANSPORT` map, so a founder's or teammate's GitLab activity is attributed by name in agent prompts and webhook sender resolution — with no extra plumbing.
 

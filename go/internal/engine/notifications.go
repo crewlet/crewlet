@@ -38,6 +38,13 @@ type notifications struct {
 	// that enrich routing and never takes a surface down.
 	plane planeParts
 
+	// gitlab remembers which account each seat credential authenticates
+	// as. Outside the mutex above because it has its own, and because it
+	// OUTLIVES an epoch: identity is a function of the credential, so a
+	// revision that changed something else must not re-spend a request
+	// per seat to re-learn what it already knows.
+	gitlab gitlabIdentities
+
 	// off is the driver a company with no chat backend gets, built once
 	// and shared: it holds no state and raises nothing.
 	off *notify.StatusDriver
@@ -91,6 +98,14 @@ func (e *Engine) refreshParties(c *Company) {
 	reg := notify.NewRegistry(c.Org)
 	rec := reg.ReconcileHumanContacts(c.Org, config.EnvOnly().LookupOK)
 
+	// The CODE HOST's seat identities are config-derived, so they are
+	// rebuilt from the new company here rather than carried across. Doing
+	// it before the registry is published means no window where a GitLab
+	// webhook resolves to nobody.
+	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
+		e.notify.gitlab.register(reg, c, config.EnvOnly())
+	}
+
 	e.notify.mu.Lock()
 	e.notify.registry = reg
 	transport := e.notify.mattermost
@@ -133,6 +148,19 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if transport != nil {
 			parsers = append(parsers, transport.Parser())
 			prompts = append(prompts, transport.Prompt())
+		}
+	}
+	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
+		parser, err := e.startGitLab(ctx, c, gl)
+		if err != nil {
+			// Same posture as the other two surfaces: the company runs
+			// without its code host rather than not at all.
+			log.Error("gitlab_unavailable", "error", err.Error(),
+				"detail", "the company is running without its code host")
+		}
+		if parser != nil {
+			parsers = append(parsers, parser)
+			prompts = append(prompts, gitlabPrompt())
 		}
 	}
 	if p := c.Config.Integrations.Plane; p != nil && p.Enabled {
