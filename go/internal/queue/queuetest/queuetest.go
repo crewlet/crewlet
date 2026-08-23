@@ -399,12 +399,26 @@ const (
 	// to deliver. Generous on purpose: a timeout here must mean "never
 	// delivered", never "delivered on a loaded CI box a moment late".
 	//
-	// It is also an IMPLICIT CONTRACT on backends, stated here because
-	// nothing else states it: a backend whose delivery latency can exceed
-	// this fails the suite with no hint that a constant is the reason. A
-	// backend that needs longer should say so rather than have this raised
-	// — a queue that takes more than three seconds to hand over an event
-	// already waiting is a finding, not a tuning problem.
+	// MEASURED, and the measurement moved what this paragraph says. Worst
+	// wait observed across a full run: 0.98ms on the in-memory twin, and
+	// 503-509ms on JetStream over five runs. Headroom on a real broker is
+	// therefore about 6x — not the comfortable margin "generous" implies.
+	//
+	// What consumes it is NOT delivery latency. In 5 of 5 runs the slowest
+	// wait was a REDELIVERY case, and redelivery is spaced by backend
+	// POLICY rather than backend health: JetStream ships a 1s nak delay and
+	// its conformance harness cuts that to 25ms so this suite can finish.
+	// At the shipped value three redeliveries would exhaust this budget on
+	// a perfectly healthy broker.
+	//
+	// So the IMPLICIT CONTRACT here is about redelivery SPACING, not
+	// hand-over: a backend must tune its redelivery delay down for the
+	// conformance run. This used to prescribe the opposite — "a backend
+	// that needs longer should say so rather than have this raised" — which
+	// sends a backend author to raise a constant every positive assertion
+	// in the suite pays, when the repair is one constant of their own.
+	// Raising this is the wrong fix for the only pressure ever measured on
+	// it.
 	settleFor = 3 * time.Second
 
 	// quietFor is how long a negative assertion — "this must NOT be
@@ -435,10 +449,19 @@ const (
 	// in-memory twin, where a publish is a mutex operation, and that is the
 	// claim to distrust rather than the number: max_batch_chunks_oversized_
 	// buffers needs FIVE publishes inside one window, which is 10ms each on
-	// a backend where a publish is a network round trip. No backend has
-	// reported a flake there, so the value stands — but it stands on
-	// evidence from the fastest backend, and a case needing more publishes
-	// per window than that should say so rather than assume this covers it.
+	// a backend where a publish is a network round trip. That dependency is
+	// real: the case publishes in a bare loop, unlike the deferral cases,
+	// which go through fillOneBatch's pause/publish/resume and do not race
+	// the window at all.
+	//
+	// The value stands on a NARROWER base than "no backend has reported a
+	// flake" suggests, which is what this used to claim. Ten repeats of the
+	// Batch group on JetStream came back clean, and the twin is the fastest
+	// backend and so the least informative. Pulsar contributes nothing at
+	// all: its TestConformance SKIPS without a live broker, so wherever one
+	// is absent this suite is certifying two backends, not three. A case
+	// needing more publishes per window should say so rather than assume
+	// this covers it.
 	//
 	// The suite never asks for a linger above queue.MaxLingerSeconds, and
 	// must not: backends size their dispatch budget to that ceiling and are
