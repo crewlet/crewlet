@@ -77,8 +77,8 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	// Production timings would make this suite take minutes of pure
 	// waiting: a one-second poll and a one-second redelivery delay. The
 	// behaviours under test are the same at any scale, and the numbers
-	// themselves are pinned separately (see the constants in pulsar.go and
-	// rewrite/questions/pulsar-unmeasured-constants.md).
+	// themselves are pinned separately (the constants in pulsar.go, with
+	// their measurements in rewrite/decisions/104-pulsar-redelivery-economics.md).
 	if cfg.ReceiveWait == 0 {
 		cfg.ReceiveWait = 25 * time.Millisecond
 	}
@@ -90,13 +90,37 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 		// inside the drain rather than one batch later.
 		cfg.NackRedeliveryDelay = 10 * time.Millisecond
 	}
+	if cfg.ReceiverQueueSize == 0 {
+		// A SMALL prefetch, deliberately, and this one shrinks a
+		// production value for a reason worth stating rather than for
+		// speed.
+		//
+		// Pulsar dispatches to a Shared subscription by available
+		// PERMITS: it hands one consumer as many entries as it has room
+		// for before moving to the next. At the production prefetch (64)
+		// a burst of four messages is legitimately taken whole by
+		// whichever member the dispatcher reaches first — each event
+		// still goes to exactly one member, which is all competing
+		// consumers owe. But queuetest's members_of_a_group_compete asks
+		// the stronger question, that the load is SHARED, and that is
+		// only observable when the prefetch is smaller than the burst.
+		//
+		// Two makes it deterministic. The production value is chosen for
+		// an unrelated reason — bounding how much of a seat's mail one
+		// node can hold hostage (see receiverQueueSize) — and the batch
+		// paths still get max(2, 2*max_batch) from prefetchFor, so
+		// coalescing is unaffected.
+		cfg.ReceiverQueueSize = 2
+	}
 	if cfg.AutoDiscoveryPeriod == 0 {
 		// A broadcast subscription only sees a topic once the client's
 		// pattern scan has found it, and the suite publishes to a
 		// brand-new topic immediately after subscribing. In production
 		// this window is a feed-latency tradeoff (see autoDiscoveryPeriod);
-		// here it has to be well inside the suite's settle budget.
-		cfg.AutoDiscoveryPeriod = 250 * time.Millisecond
+		// here it has to fit MANY times inside the suite's settle budget,
+		// because one scan landing a moment before the topic exists costs
+		// a whole period and the case has 3 s in total.
+		cfg.AutoDiscoveryPeriod = 100 * time.Millisecond
 	}
 
 	createNamespace(t, cfg)
@@ -222,7 +246,7 @@ func capabilities() queuetest.Capabilities {
 
 		// FREE DEFERRAL — the property this backend has and JetStream does
 		// not. Measured on Pulsar 4.2.4: a graceful consumer close returns
-		// unacked messages in 9 ms at redeliveryCount 0, where an ack
+		// unacked messages at redeliveryCount 0 where an ack
 		// timeout costs one (the table at the head of
 		// tests/test_queue/test_broker_behavior.py, and
 		// rewrite/decisions/102-jetstream-redelivery.md). So a deferral

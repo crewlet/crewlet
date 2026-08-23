@@ -41,13 +41,15 @@ func (q *Queue) Peer(ctx context.Context) (*Queue, error) {
 	return Open(ctx, q.cfg)
 }
 
-// Backlog reports the events a subscription retains and has NOT DELIVERED —
-// the mail an unowned seat is holding, which is what a successor receives.
+// Backlog reports the events a subscription is holding for a SUCCESSOR — the
+// mail an unowned seat has waiting.
 //
-// Not everything unacked: a message a consumer is currently holding is work
-// in progress, and it joins the backlog when that consumer hands it back —
-// on Pulsar, when it closes. The distinction is the difference between "the
-// mailbox is filling up" and "the seat is busy", and they are opposite facts.
+// Not everything unacked. A message a consumer already holds, and a message
+// the broker is about to send it because it has an outstanding flow permit,
+// are both work in progress; they join the backlog when that consumer hands
+// them back, which on Pulsar means closing. The distinction is the difference
+// between "the mailbox is filling up" and "the seat is busy", and they are
+// opposite facts. See backlogDepth for how the split is read.
 //
 // Read by PEEKING through the admin API rather than by consuming: a
 // throwaway consumer would join the Shared subscription it is inspecting and

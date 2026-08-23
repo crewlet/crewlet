@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -388,51 +389,88 @@ func TestPeekOnAnAbsentSubscriptionReadsEmpty(t *testing.T) {
 	}
 }
 
-// TestBacklogExcludesWhatAConsumerIsAlreadyHolding.
+// TestBacklogIsWhatASuccessorWouldFindWaiting.
 //
-// "Backlog" means the mail an unowned seat is holding — retained and NOT
-// delivered — because that is what a successor receives. A message a consumer
-// already has is work in progress; it becomes backlog when that consumer
-// hands it back, which on Pulsar means closing.
+// "Backlog" means the mail an unowned seat has waiting. Two kinds of message
+// are NOT that, and both must be excluded:
 //
-// Counting the two together is not a cosmetic error. It makes "the mailbox is
-// filling up" and "the seat is busy" the same reading, and it makes a
-// deferral's effect unobservable: the deferred message is in msgBacklog
-// BEFORE the handler ever sees it, so anything waiting on the backlog to
-// learn that a deferral happened is told so immediately and wrongly.
-// Measured against the conformance suite, that turned
-// NegativePaths/a_deferral_spends_no_dead_letter_budget into a 20% flake.
+//   - one a consumer already holds (unackedMessages) — work in progress;
+//   - one the broker is about to send it, because a connected consumer has an
+//     outstanding flow permit covering it — in flight, and nobody else can
+//     have it.
 //
-// A Shared subscription dispatches in order, so the messages a consumer holds
-// are the oldest ones behind the mark-delete point — which is why the skip is
-// a position offset rather than a filter.
-func TestBacklogExcludesWhatAConsumerIsAlreadyHolding(t *testing.T) {
+// Counting either is not a cosmetic error. It makes "the mailbox is filling
+// up" and "the seat is busy" the same reading, and it makes a deferral's
+// effect unobservable: the message is in msgBacklog from the instant the
+// publish is acked — before any handler has seen it — so anything watching
+// the backlog to learn that a deferral happened is told so immediately and
+// wrongly. Measured against the conformance suite, counting them turned
+// NegativePaths/a_deferral_spends_no_dead_letter_budget into a 70% flake.
+//
+// A Shared subscription dispatches in order, so the spoken-for messages are
+// the oldest ones behind the mark-delete point — which is why the skip is a
+// position offset rather than a filter.
+func TestBacklogIsWhatASuccessorWouldFindWaiting(t *testing.T) {
 	t.Parallel()
 	srv := newAdminServer(t)
 	topic, group := aliceInbox()
 	subPath := inboxPath + "/subscription/" + group
-	// Three unacked, of which the consumer is holding the two oldest.
-	srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
-		`{"subscriptions":{"`+group+`":{"msgBacklog":3,"unackedMessages":2}}}`)
-	srv.answer(http.MethodGet, subPath+"/position/1", http.StatusOK, eventJSON(t, "in-flight-0"))
-	srv.answer(http.MethodGet, subPath+"/position/2", http.StatusOK, eventJSON(t, "in-flight-1"))
-	srv.answer(http.MethodGet, subPath+"/position/3", http.StatusOK, eventJSON(t, "waiting"))
-
-	payloads, err := srv.admin(t).PeekBacklog(context.Background(), topic, group)
-	if err != nil {
-		t.Fatalf("PeekBacklog: %v", err)
-	}
-	if got := labelsOf(t, payloads); strings.Join(got, ",") != "waiting" {
-		t.Fatalf("PeekBacklog = %v, want only the undelivered message", got)
+	for position, label := range map[int]string{1: "held-0", 2: "held-1", 3: "in-flight", 4: "waiting"} {
+		srv.answer(http.MethodGet, fmt.Sprintf("%s/position/%d", subPath, position),
+			http.StatusOK, eventJSON(t, label))
 	}
 
-	// Everything in flight and nothing behind it reads as an EMPTY backlog,
-	// which is the case the deferral assertion turns on.
-	srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
-		`{"subscriptions":{"`+group+`":{"msgBacklog":1,"unackedMessages":1}}}`)
-	payloads, err = srv.admin(t).PeekBacklog(context.Background(), topic, group)
-	if err != nil || len(payloads) != 0 {
-		t.Fatalf("PeekBacklog with everything in flight = (%d rows, %v), want (0, nil)", len(payloads), err)
+	for _, tc := range []struct {
+		name  string
+		stats string
+		want  string
+	}{
+		{
+			// Nothing attached: everything retained is waiting.
+			name:  "an unowned seat",
+			stats: `{"msgBacklog":2,"unackedMessages":0,"consumers":[]}`,
+			want:  "held-0,held-1",
+		},
+		{
+			// Two held, one credited to a consumer with a spare permit,
+			// one genuinely waiting behind them.
+			name:  "a working seat with a queue behind it",
+			stats: `{"msgBacklog":4,"unackedMessages":2,"consumers":[{"availablePermits":1}]}`,
+			want:  "waiting",
+		},
+		{
+			// The window that made the deferral case flake: published,
+			// acked by the broker, not yet pushed — and covered by a
+			// permit, so it is on its way to a consumer, not waiting.
+			name:  "published but not yet dispatched",
+			stats: `{"msgBacklog":1,"unackedMessages":0,"consumers":[{"availablePermits":2}]}`,
+			want:  "",
+		},
+		{
+			// A consumer working through a full prefetch has NO spare
+			// permits, so a real backlog behind it is still reported —
+			// the property that stops this exclusion hiding a busy seat.
+			name:  "a saturated consumer",
+			stats: `{"msgBacklog":3,"unackedMessages":2,"consumers":[{"availablePermits":0}]}`,
+			want:  "in-flight",
+		},
+		{
+			// Credit is summed across every member of the group.
+			name:  "several members sharing the subscription",
+			stats: `{"msgBacklog":4,"unackedMessages":0,"consumers":[{"availablePermits":1},{"availablePermits":2}]}`,
+			want:  "waiting",
+		},
+	} {
+		srv.answer(http.MethodGet, inboxPath+"/stats", http.StatusOK,
+			`{"subscriptions":{"`+group+`":`+tc.stats+`}}`)
+		payloads, err := srv.admin(t).PeekBacklog(context.Background(), topic, group)
+		if err != nil {
+			t.Errorf("%s: PeekBacklog: %v", tc.name, err)
+			continue
+		}
+		if got := strings.Join(labelsOf(t, payloads), ","); got != tc.want {
+			t.Errorf("%s: PeekBacklog = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

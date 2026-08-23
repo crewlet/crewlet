@@ -27,14 +27,18 @@
 // manufacture exactly the double-consumer split-brain seat ownership exists
 // to prevent. See admin.go.
 //
-// **A graceful consumer close is the free way to hand work back.** Measured
-// on Pulsar 4.2.4: a clean close returns unacked messages in 9 ms at
-// redeliveryCount 0, while an ack timeout costs one
-// (rewrite/decisions/102-jetstream-redelivery.md, and the table at the head
-// of tests/test_queue/test_broker_behavior.py). So Defer here means what the
-// contract says it means — leave it unacked, stop consuming — and never a
-// NAK. This is the property JetStream does NOT have, and the reason
-// Capabilities.FreeDeferral is a capability rather than a requirement.
+// **A graceful consumer close is the free way to hand work back.** Re-measured
+// on Pulsar 4.0.6 with this client: closing a consumer that holds an unacked
+// message takes 1.8 ms, and a fresh consumer receives it 8.6 ms later still
+// at redeliveryCount 0 — where an ack timeout costs one. (The Python engine's
+// harness measured the same free handoff on 4.2.4 with the C++ client: 9 ms,
+// redeliveryCount 0. See rewrite/decisions/104-pulsar-redelivery-economics.md
+// for the full table, and 102 for the JetStream column it contrasts with.)
+//
+// So Defer here means what the contract says it means — leave it unacked,
+// stop consuming — and never a NAK. This is the property JetStream does NOT
+// have, and the reason Capabilities.FreeDeferral is a capability rather than
+// a requirement.
 //
 // # What this client cannot do, and what changed because of it
 //

@@ -357,7 +357,7 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 //
 // Closing the consumers is also what RETURNS this node's unacked mail: a
 // graceful close hands it to whoever attaches next, in order and at
-// redeliveryCount 0 (measured, 9 ms). A node leaving is therefore free, which
+// redeliveryCount 0 (measured; d-104). A node leaving is therefore free, which
 // is the property a rolling deploy rests on.
 func (q *Queue) Stop(context.Context) error {
 	q.mu.Lock()

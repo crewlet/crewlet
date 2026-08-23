@@ -277,22 +277,38 @@ type subscriptionStats struct {
 		// UnackedMessages is the delivered-but-unacked half of it — the
 		// messages a consumer is currently holding.
 		UnackedMessages int64 `json:"unackedMessages"`
+		// Consumers carries each connected consumer's outstanding flow
+		// credit. A message covered by a permit is already on its way.
+		Consumers []struct {
+			AvailablePermits int64 `json:"availablePermits"`
+		} `json:"consumers"`
 	} `json:"subscriptions"`
 }
 
-// backlogDepth reports how many messages a subscription is holding OUT to
-// consumers and how many it retains behind them, and whether the subscription
-// exists at all.
+// backlogDepth splits a subscription's unacked messages into the ones that
+// are SPOKEN FOR and the ones that are WAITING, and reports whether the
+// subscription exists at all.
 //
-// The split matters. "Backlog" in this codebase means the mail an unowned
-// seat is holding — retained and NOT delivered — because that is what a
-// successor will receive. A message a consumer already has is not that: it is
-// somebody's work in progress, and it becomes backlog only when that consumer
-// hands it back (which on Pulsar means closing). Counting the two together
-// makes "the mail is waiting" indistinguishable from "the mail is being
-// worked", which reads as the mailbox filling up at exactly the moment it is
-// being emptied.
-func (a *restAdmin) backlogDepth(ctx context.Context, subject, group string) (delivered, retained int, exists bool, err error) {
+// "Backlog" in this codebase means the mail an unowned seat is holding — what
+// a successor would find waiting. Two kinds of message are not that:
+//
+//   - one a consumer already HAS (unackedMessages). It is work in progress,
+//     and it becomes backlog when that consumer hands it back — which on
+//     Pulsar means closing.
+//   - one the broker is ABOUT TO SEND, because a connected consumer has an
+//     outstanding flow permit covering it. It is in flight; nobody else can
+//     have it.
+//
+// Counting either as backlog makes "the mailbox is filling up" and "the seat
+// is busy" the same reading, and they are opposite facts. It also makes a
+// deferral unobservable: the message is in msgBacklog from the instant the
+// publish is acked — before any handler has seen it — so anything watching
+// the backlog to learn that a deferral happened is told so immediately and
+// wrongly.
+//
+// A genuinely backlogged seat still reports one: a consumer working through a
+// full prefetch has NO available permits, so everything behind it counts.
+func (a *restAdmin) backlogDepth(ctx context.Context, subject, group string) (spokenFor, waiting int, exists bool, err error) {
 	status, body, err := a.do(ctx, http.MethodGet, a.topicPath(subject)+"/stats", nil)
 	if err != nil {
 		return 0, 0, false, err
@@ -311,8 +327,12 @@ func (a *restAdmin) backlogDepth(ctx context.Context, subject, group string) (de
 	if !ok {
 		return 0, 0, false, nil
 	}
-	delivered = min(max(int(sub.UnackedMessages), 0), int(sub.MsgBacklog))
-	return delivered, int(sub.MsgBacklog) - delivered, true, nil
+	var credit int64
+	for _, c := range sub.Consumers {
+		credit += max(c.AvailablePermits, 0)
+	}
+	spokenFor = min(max(int(sub.UnackedMessages), 0)+int(credit), int(sub.MsgBacklog))
+	return spokenFor, int(sub.MsgBacklog) - spokenFor, true, nil
 }
 
 // PeekBacklog reads a subscription's retained, UNDELIVERED mail without
@@ -325,20 +345,20 @@ func (a *restAdmin) backlogDepth(ctx context.Context, subject, group string) (de
 // Shared subscription it is inspecting and take a share of the seat's live
 // traffic, which is the same hazard EnsureSubscription exists to avoid.
 //
-// The first `delivered` positions are skipped because a Shared subscription
-// dispatches in order, so the messages a consumer is holding are the oldest
-// ones behind the mark-delete point. They are not backlog — see
-// backlogDepth.
+// The leading `spokenFor` positions are skipped because a Shared subscription
+// dispatches in order, so the messages a consumer holds or has been credited
+// for are the oldest ones behind the mark-delete point. They are not backlog
+// — see backlogDepth.
 func (a *restAdmin) PeekBacklog(ctx context.Context, subject, group string) ([][]byte, error) {
 	if err := checkSubject(subject); err != nil {
 		return nil, err
 	}
-	delivered, retained, exists, err := a.backlogDepth(ctx, subject, group)
-	if err != nil || !exists || retained <= 0 {
+	spokenFor, waiting, exists, err := a.backlogDepth(ctx, subject, group)
+	if err != nil || !exists || waiting <= 0 {
 		return nil, err
 	}
-	out := make([][]byte, 0, retained)
-	for position := delivered + 1; position <= delivered+retained; position++ {
+	out := make([][]byte, 0, waiting)
+	for position := spokenFor + 1; position <= spokenFor+waiting; position++ {
 		endpoint := fmt.Sprintf("%s/position/%d", a.subPath(subject, group), position)
 		status, body, err := a.do(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {

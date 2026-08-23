@@ -36,10 +36,12 @@ type attachment struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	// consMu guards cons, which the loop replaces on a recycle and clears
-	// on exit. Read by the loop, and by nothing else — but a race detector
-	// does not know that, and the loop is not the only goroutine that can
-	// observe it during shutdown.
+	// consMu guards cons, which the loop closes when blocked and re-opens
+	// when it is allowed to take work again. opts is the recipe it is
+	// re-opened from, kept because every re-open must produce the SAME
+	// consumer — a re-open that drifted from the original would change a
+	// seat's delivery budget or its dead-letter topic silently, halfway
+	// through the process's life.
 	consMu sync.Mutex
 	cons   pulsar.Consumer
 	opts   pulsar.ConsumerOptions
@@ -75,10 +77,11 @@ type attachment struct {
 //
 // The loop therefore CLOSES the consumer whenever it is blocked and opens a
 // fresh one when it is not. Closing is what returns everything unacked and
-// everything prefetched, in order, at redeliveryCount 0 — measured at 9 ms
-// (rewrite/decisions/102-jetstream-redelivery.md). It is the same mechanism
-// for all four reasons a consumer can be blocked, which is why there is only
-// one of it.
+// everything prefetched, in order, at redeliveryCount 0 — measured at 1.8 ms
+// to close and 8.6 ms to receive it again on a fresh consumer
+// (rewrite/decisions/104-pulsar-redelivery-economics.md). It is the same
+// mechanism for all four reasons a consumer can be blocked, which is why
+// there is only one of it.
 func (a *attachment) blocked() bool {
 	return a.detached.Load() || a.quiesced.Load() || a.paused.Load() || a.q.held(a.key)
 }
@@ -274,7 +277,7 @@ func (q *Queue) consumerOptions(topic, group string, maxBatch int) pulsar.Consum
 // closeConsumer closes and forgets this attachment's consumer.
 //
 // Closing is the free hand-back: unacked messages return to whoever attaches
-// next, in order and at redeliveryCount 0 (measured, 9 ms). That is what
+// next, in order and at redeliveryCount 0 (measured; d-104). That is what
 // makes a seat handoff cost nothing against the delivery budget.
 func (a *attachment) closeConsumer() {
 	a.consMu.Lock()
@@ -290,7 +293,7 @@ func (a *attachment) closeConsumer() {
 //
 // It does not ack, nak or republish — it CLOSES. On Pulsar a graceful close
 // returns every unacked message AND everything sitting in the prefetch to
-// whoever attaches next, in order and at redeliveryCount 0 (measured, 9 ms),
+// whoever attaches next, in order and at redeliveryCount 0 (measured; d-104),
 // so a hand-back costs nothing against the dead-letter budget and reorders
 // nothing. That is why a deferral here is free where JetStream's is a NAK.
 //
