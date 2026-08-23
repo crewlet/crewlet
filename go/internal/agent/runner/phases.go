@@ -455,7 +455,9 @@ func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit too
 		}
 		active = append(active, tool.Name())
 	}
-	surface = tools.NewSurface(ph.String(), snapshot, active)
+	// Bound to the turn, which is what lets a seat-scoped tool know who is
+	// calling it without the seat travelling through the model's arguments.
+	surface = tools.NewSurface(ph.String(), snapshot, active).ForTurn(r.cfg.Turn.Context)
 	return surface, nil
 }
 

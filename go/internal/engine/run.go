@@ -107,6 +107,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// backends keeps their lifetime — the merged API process outlives the
 	// engine's own shutdown and still needs its broker.
 	e := &Engine{backends: backends, ownsBackends: ownsBackends}
+	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
+	// current, and one that found an empty registry would run a seat with
+	// no tools at all — a company that boots cleanly and can do nothing.
+	if err := e.equip(company); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
 	e.epoch.current.Store(company)
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
@@ -326,7 +335,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Task:         DescribeTrigger(req.Events),
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
-		Turn:         tel.runnerTurn(req.WorkKey),
+		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth),
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A

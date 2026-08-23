@@ -14,10 +14,13 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // GATE G5, third leg — "a golden company runs end-to-end with the UI showing
@@ -231,11 +234,18 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	waitFor(t, "the turn to complete", func() bool {
 		return slices.Contains(frames.eventTypes(t), "agent_turn_completed")
 	})
-	// And the spend rollup, which rides the shared tick rather than the
-	// publish path — so it lands AFTER the turn ends, and a capture that
-	// stopped at the turn would leave the push path unexercised.
-	waitFor(t, "the spend rollup", func() bool {
-		return slices.Contains(frames.kinds(t), "tokens")
+	// And the spend rollup for the FINISHED turn. It rides the shared tick
+	// rather than the publish path, so a tick that fires mid-turn produces
+	// a real but partial rollup — waiting for "a tokens frame" would assert
+	// against whichever phases happened to be done, which is a coin flip
+	// (measured: two rows instead of three, one run in three).
+	waitFor(t, "the spend rollup for the whole turn", func() bool {
+		r := frames.lastRollup(t)
+		if r == nil {
+			return false
+		}
+		phases, _ := r["by_phase"].([]any)
+		return len(phases) == 3
 	})
 	cancel()
 
@@ -296,8 +306,8 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Errorf("the rollup reports %v tokens for a turn that ran three "+
 			"phases", totals["total_tokens"])
 	}
-	if phases, _ := rollup["by_phase"].([]any); len(phases) != 3 {
-		t.Errorf("by_phase has %d rows, want one per phase", len(phases))
+	if n, _ := totals["calls"].(float64); n != 3 {
+		t.Errorf("the rollup counted %v calls, want one per phase", totals["calls"])
 	}
 
 	// --- and what the store kept -------------------------------------- //
@@ -435,4 +445,81 @@ func nodeBinary(t *testing.T) string {
 	}
 	t.Skip("node is not installed; the dashboard client replay needs it")
 	return ""
+}
+
+func TestTheSeatCanReachItsBuiltins(t *testing.T) {
+	t.Parallel()
+	// The catalogue a planner is SHOWN, and the surface it can actually
+	// call, are built from the epoch's registry — which NewCompany leaves
+	// empty, because building an epoch must be something `crewlet validate`
+	// can do without a database. So the engine fills it, per epoch, and a
+	// node that forgot would boot a company whose agents have no way to
+	// find a colleague or recall their own work, with nothing failing.
+	n := start(t)
+	company := n.engine.Company()
+	if company == nil {
+		t.Fatal("no epoch")
+	}
+	have := map[string]bool{}
+	for _, name := range company.Tools.Snapshot().Names() {
+		have[name] = true
+	}
+	for _, want := range []string{
+		builtin.LookupColleagueTool, // needs only the turn's org
+		builtin.A2AAskTool,          // needs the channel store and the queue
+		builtin.UseSkillTool,        // needs the skill store
+		builtin.RefineSkillTool,
+		builtin.QueryEpisodesTool,
+		builtin.RefreshMemoryTool,
+		builtin.ReflectAndPersistTool,
+		builtin.MarkOnboardedTool,
+	} {
+		if !have[want] {
+			t.Errorf("%s is not in the epoch's registry, so no seat can call "+
+				"it and no planner is told it exists", want)
+		}
+	}
+}
+
+func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
+	t.Parallel()
+	// The seat comes from the SURFACE the runner built, never from the
+	// model's arguments — which is what stops one agent asking a question,
+	// writing a note or marking an onboarding step as another.
+	n := start(t)
+	company := n.engine.Company()
+	seat := company.Org.AgentSeatByHandle("ceo")
+	if seat == nil {
+		t.Fatal("no ceo seat")
+	}
+	entry, ok := company.Tools.Snapshot().Lookup(builtin.LookupColleagueTool)
+	if !ok {
+		t.Fatal("lookup_colleague is not registered")
+	}
+	seated, ok := entry.Tool.(tools.SeatCallable)
+	if !ok {
+		t.Fatalf("%s is a plain Callable, so it cannot know who called it",
+			builtin.LookupColleagueTool)
+	}
+
+	// With a turn: it resolves against that turn's pinned org.
+	res, err := seated.CallForTurn(t.Context(),
+		&turnctx.Turn{Seat: seat, Org: company.Org},
+		map[string]any{"query": "founder"})
+	if err != nil {
+		t.Fatalf("CallForTurn: %v", err)
+	}
+	if res.Failed || !strings.Contains(res.Output, "founder") {
+		t.Errorf("lookup failed: %+v", res)
+	}
+	// The human seat's entry must say a2a_ask will not reach them —
+	// otherwise an agent opens a channel no turn ever answers and waits.
+	if !strings.Contains(res.Output, builtin.A2AAskTool) {
+		t.Errorf("a human result does not warn about a2a_ask:\n%s", res.Output)
+	}
+
+	// Without one: refused, not guessed at.
+	if res, _ := entry.Tool.Call(t.Context(), map[string]any{"query": "founder"}); !res.Failed {
+		t.Errorf("a seatless call resolved anyway: %+v", res)
+	}
 }

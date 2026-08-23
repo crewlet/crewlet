@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -69,6 +70,15 @@ type Turn struct {
 
 	// Trace is the span context stamped on every event this turn emits.
 	Trace events.TraceContext
+
+	// Context is what the turn IS — the acting seat above all — passed to
+	// every tool that asks for it. See internal/agent/turnctx.
+	//
+	// Here rather than as a second field on Config because the two are one
+	// fact: a runner built for a turn has an identity, and splitting it
+	// across two config fields is two places for them to disagree about
+	// which turn this is.
+	Context *turnctx.Turn
 }
 
 // emitter publishes one turn's phase telemetry.

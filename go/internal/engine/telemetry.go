@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -78,10 +79,20 @@ func (e *Engine) describeTurn(company *Company, req Request) turnTelemetry {
 }
 
 // runnerTurn is the identity handed to the phase runner.
-func (t turnTelemetry) runnerTurn(workKey string) runner.Turn {
+func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int) runner.Turn {
 	return runner.Turn{
 		ID: workKey, AgentID: t.agentID, Trigger: t.trigger,
 		ConversationKey: t.convKey, Trace: t.trace,
+		Context: &turnctx.Turn{
+			ID: workKey,
+			// The seat and the ORG both come off the pinned epoch, so a
+			// colleague lookup mid-turn resolves against the roster this
+			// turn started under rather than one that changed underneath
+			// it (rewrite/decisions/404).
+			Seat:  company.Org.AgentSeatByHandle(t.handle),
+			Org:   company.Org,
+			Depth: depth,
+		},
 	}
 }
 

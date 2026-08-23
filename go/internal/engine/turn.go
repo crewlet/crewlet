@@ -79,6 +79,12 @@ type Request struct {
 	// ConversationKey is the surface-scoped conversation identity, empty
 	// when the trigger has none.
 	ConversationKey string
+
+	// Depth is the delegation depth this turn inherited: zero for a turn a
+	// person or a schedule started, higher for one a colleague asked for.
+	// Carried so a sub-agent spawn or an A2A ask can refuse past the cap
+	// rather than discovering the loop at runtime.
+	Depth int
 }
 
 // Dispatch runs one partition.

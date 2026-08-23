@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -25,9 +26,34 @@ type Surface struct {
 	phase    string
 	universe Snapshot
 
+	// turn is who this surface acts for. Nil outside a turn — a validate
+	// command, a test driving a runner directly — and the seat-scoped
+	// tools refuse rather than guessing, which is the honest answer.
+	turn *turnctx.Turn
+
 	mu     sync.Mutex
 	active []string
 	called []Call
+}
+
+// SeatCallable is a tool that needs to know which seat is calling it.
+//
+// The tools that speak FOR a seat: asking a colleague, marking an onboarding
+// step, loading a skill this agent synthesized, recalling this agent's own
+// episodes. Every one of them is an authorization decision, and every one of
+// them would be forgeable if the seat arrived in the model's arguments.
+//
+// Optional, and checked at the one frame that holds both halves. A plain
+// Callable — every MCP tool, every discovery meta-tool — is unaffected and
+// knows nothing about turns.
+type SeatCallable interface {
+	Callable
+
+	// CallForTurn runs the tool on behalf of a turn. A nil turn means
+	// there is no acting seat, which a seat-scoped tool reports as a
+	// failed Result rather than an error: the model asked for something
+	// reasonable in a context that cannot serve it.
+	CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (Result, error)
 }
 
 var _ toolloop.Surface = (*Surface)(nil)
@@ -54,6 +80,20 @@ func NewSurface(phase string, universe Snapshot, active []string) *Surface {
 	}
 	return s
 }
+
+// ForTurn binds the acting seat and returns the surface, for chaining.
+//
+// Set once, at construction, by the frame that built the surface. Not a
+// constructor parameter only because every existing call site would have to
+// pass nil, which reads as "no seat here" at sites where there simply is not
+// one to pass yet.
+func (s *Surface) ForTurn(t *turnctx.Turn) *Surface {
+	s.turn = t
+	return s
+}
+
+// Turn reports who this surface acts for, or nil.
+func (s *Surface) Turn() *turnctx.Turn { return s.turn }
 
 // Phase names the phase, for telemetry.
 func (s *Surface) Phase() string { return s.phase }
@@ -146,7 +186,7 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return toolloop.ToolResult{Output: msg, Failed: true}, nil
 	}
 
-	res, err := e.Tool.Call(ctx, args)
+	res, err := s.invoke(ctx, e.Tool, args)
 	if err != nil {
 		// The caller's own context ended — the turn is being torn down.
 		// Nothing is reported to the model and nothing is recorded: this
@@ -155,6 +195,26 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	}
 	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
 	return toolloop.ToolResult{Output: res.Output, Failed: res.Failed}, nil
+}
+
+// invoke runs one tool, telling it who is calling when it asks.
+//
+// THE SEAT COMES FROM THE SURFACE, never from the arguments. A tool that acts
+// for a seat — asking a colleague, marking an onboarding step, writing to a
+// diary — must not be able to be pointed at another one by a model that
+// spelled a different handle in its arguments. The surface is built per turn
+// by the runner, which is the frame that knows.
+//
+// An OPTIONAL interface rather than a parameter on Callable, because Callable
+// is the MCP tool contract as well: an MCP server has no notion of a turn, and
+// widening the signature would put a turn-shaped argument on every bridged
+// tool to be ignored. This way the two kinds of tool coexist under one
+// registry, and the one that needs the fact asks for it.
+func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (Result, error) {
+	if seated, ok := tool.(SeatCallable); ok {
+		return seated.CallForTurn(ctx, s.turn, args)
+	}
+	return tool.Call(ctx, args)
 }
 
 func (s *Surface) record(c Call) {
