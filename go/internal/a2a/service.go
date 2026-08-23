@@ -141,7 +141,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 	}
 
 	wake := &events.Event{
-		ID: uuid.New(), Type: "a2a_request", Timestamp: now, Source: ask.Requester,
+		ID: uuid.New(), Type: types.A2ARequestType, Timestamp: now, Source: ask.Requester,
 		Payload: map[string]any{
 			"channel_id": id, "requester": ask.Requester,
 			"content": ask.Brief, "sender_role": ask.SenderRole,
@@ -220,7 +220,7 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	}
 
 	wake := &events.Event{
-		ID: uuid.New(), Type: "a2a_message", Timestamp: now, Source: ans.Sender,
+		ID: uuid.New(), Type: types.A2AMessageType, Timestamp: now, Source: ans.Sender,
 		Payload: map[string]any{
 			"channel_id": ans.ChannelID, "sender": ans.Sender,
 			"content": ans.Content, "sender_role": ans.SenderRole,

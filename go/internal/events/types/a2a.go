@@ -10,6 +10,29 @@ import (
 // the audit trail of that exchange — the delivery itself rides the target
 // seat's durable inbox, never a second in-process path.
 
+// The two WAKE types an A2A exchange puts on a seat's inbox.
+//
+// They are named here, beside the audit events, rather than spelled inline
+// where they are minted, because the completion ledger keys on them: a
+// producer and a consumer that disagree about a type name never raise — the
+// ledger simply records nothing under a name nobody looks up, and every
+// redelivery runs the turn again.
+//
+// They carry no struct because they carry no schema: the wake is a pointer at
+// a channel the recipient reads, and its payload is built by the service that
+// owns that channel. Registering an empty struct for them would put two types
+// in the decoder that nothing ever decodes.
+const (
+	// A2ARequestType wakes the TARGET of an ask.
+	A2ARequestType = "a2a_request"
+
+	// A2AMessageType wakes the REQUESTER with the answer. This hop lands
+	// on a channel that is already closed by design, so the completion
+	// ledger is the only thing standing between a redelivery and a second
+	// turn spent acting on the same answer.
+	A2AMessageType = "a2a_message"
+)
+
 func init() {
 	events.Register[A2AChannelOpened]()
 	events.Register[A2AMessageSent]()
