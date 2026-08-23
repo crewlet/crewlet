@@ -273,6 +273,25 @@ prevents the queue contract from silently encoding JetStream-isms.
 **[GATE G3b]** Conformance + fleet suites green with Pulsar streams + embedded-KV
 coordination (the multi-tenant topology), and the harness table committed.
 
+**Status: the backend is built and the conformance suite passes against a real
+Apache Pulsar 4.0.6** (`go/internal/queue/pulsar`), with a CI job that runs it
+against a service container — the suite skips cleanly without
+`$CREWLET_TEST_PULSAR_URL` rather than faking a broker, so the certification is
+CI's to give. The redelivery economics measured for this broker are
+`decisions/104`, beside JetStream's in `102`.
+
+What the third backend was scheduled to catch, and did:
+
+- **A seat-killing bug in JetStream.** A pause hold landing during a batch's
+  linger window ended the consume loop permanently — the seat stayed attached,
+  kept renewing its lease, and read nothing for the rest of the process's life.
+  Reachable in production: the sandbox busy gate pauses a seat's inbox exactly
+  while a detached run is in flight.
+- **Two conformance cases that asserted the twin's dispatch model** rather than
+  the contract — a deferral case waiting on an observable that is true before
+  the handler has run, and a competing-consumers case requiring both members to
+  share a burst, which Pulsar legitimately does not do.
+
 ## 9. Phase 4 — Engine core: turn engine, providers, MCP, config (XL)
 
 The largest phase. Spec: `src/crewlet/agent/` (turn 2.5k, llm_loop, execute,

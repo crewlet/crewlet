@@ -45,6 +45,55 @@
 // out to encode what the twin happens to do, the case is the defect. Two
 // backends agreeing is not evidence when the suite is what made them agree.
 //
+// # Checks that do not depend on you being careful
+//
+// The section above is doctrine, and doctrine is the part that demonstrably
+// does not work: it was written here first, read by its own author, and this
+// suite then shipped four cases requiring more of a backend than the contract
+// allows. Not for want of care — a blind spot cannot be inspected from inside
+// itself, and a suite's fixtures, constants, helpers and doctrine are written
+// by the same mind as its cases, so they fail together.
+//
+// What actually caught things was mechanical. Every entry below is here
+// because it found something careful reading had already missed, in this
+// package:
+//
+//   - A MUTATION MUST LAND IN THE BRANCH IT IS PROVING. Forcing a TTL to 1ns
+//     to exercise a timing branch produced measurement noise instead; sleeping
+//     before a claim to simulate a slow store consumed none of the TTL,
+//     because the lease only starts when the record is written. Two
+//     "verifications" that reached nothing they claimed to.
+//   - A HARNESS MUST TELL "BUILD FAILED" FROM "CAUGHT". Keying on a non-zero
+//     exit made every non-compiling mutation report as caught; thirty-six
+//     results rested on that until they were re-run three-state.
+//   - A CONTROL SET NEEDS A ROW EXPECTED TO COME BACK CLEAN, for a reason
+//     written down. Without one, a harness biased toward CAUGHT and a suite
+//     that catches everything are indistinguishable. The documented meta gap
+//     is that row, and it re-checks the gap's boundary on every run.
+//   - ANY INVARIANT ABOUT WHERE CODE SITS BELONGS ON THE SYNTAX TREE. A
+//     fixed-window grep under-reports by stopping early; a brace scan
+//     over-reports by running past a closure's end. Both are line-oriented
+//     tools answering a question about scope.
+//   - A GUARD ASSERTING AN ABSENCE MUST ASSERT IT MATCHED ITS SUBJECT. "Found
+//     no violations" and "scanned nothing" are the same green otherwise.
+//   - A DIAGNOSTIC MUST NOT ASSERT A CAUSE IT CANNOT DISTINGUISH. Two helpers
+//     here blamed the suite and the backend respectively on no evidence beyond
+//     a timer firing; both now report the measurement and name what each
+//     reading implies.
+//   - ENUMERATE WHAT THE SUITE SENDS, not only what it asserts. No mutation
+//     can reveal an input that never arrives — both gaps found that way (no
+//     resource name ever needed encoding, no TTL ever exceeded the maximum).
+//   - COMPARING TIMES, ASSERT AN INTERVAL, NEVER AN ORDERING. "Later than"
+//     admits a second reason: a store clamping both deadlines still stamps the
+//     second one later, purely because it happened second. Measured at 487ns
+//     of "later" satisfying an assertion meant to detect five minutes.
+//   - A CHECK-THEN-ACT GUARD DIAGNOSES A RACE; IT CANNOT CLOSE ONE. stillLive
+//     made two failures legible and both still happened, one round trip after
+//     it passed. Legible is worth a great deal and is a different thing.
+//
+// None of these require anyone to be suspicious at the right moment, which is
+// the only property that survives contact with a blind spot.
+//
 // # Before adding a case that says a backend must NOT do something
 //
 // Grep rewrite/decisions/ for the operation first. A recorded degradation is a

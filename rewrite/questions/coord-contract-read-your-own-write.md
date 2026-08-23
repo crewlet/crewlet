@@ -30,6 +30,22 @@ claiming: `ListLive(NodePrefix)` for the fleet size it divides seats by, and
 `FleetProtocolFloor` to tell a gate refusal from a lost race. A lease granted
 but not yet visible makes both of those answer with a fleet that does not exist.
 
+## A second consequence, found the same way
+
+It is not only that reads would go stale — an entire GROUP of cases would pass
+vacuously. The negative-path cases (`a_rejected_renew_leaves_the_lease_
+untouched`, `a_refused_claim_leaves_the_holders_lease_untouched`,
+`a_gate_refused_claim_leaves_the_record_untouched`) prove that a refusal wrote
+NOTHING, and there is no signal to wait on for that — a write that did not
+happen produces no event. They read immediately and compare, which silently
+assumes that a write, had it happened, would already be visible.
+
+On a backend whose reads lag its own completed writes, a real corruption is
+simply not visible yet and all three pass. That is not a wrong answer, it is an
+empty one, and it is indistinguishable from a green. All four assertions read
+back the SAME resource the refused operation acted on, so a per-resource
+guarantee is exactly what makes that group mean anything.
+
 ## The question
 
 Should `Lease` or `Backend` say so — that a granted claim is visible to every

@@ -129,6 +129,7 @@ jobs:
       # subscription by subscribing joins a Shared subscription a peer owns
       # and steals its traffic (measured). A deployment without 8080 reachable
       # is a deployment where seat mailboxes cannot be created at all.
+      #
       # The broker is configured the way a Crewlet deployment MUST be, not the
       # way it ships. Two reapers are on by default and both destroy the
       # invariant seat ownership rests on — a subscription that outlives its
@@ -141,6 +142,7 @@ jobs:
       # forceDeleteNamespaceAllowed is for the suite alone: each queue gets its
       # own namespace (parallel subtests share subject names), and without it
       # the cleanup cannot remove one that still holds topics.
+      #
       # The settings are APPENDED to standalone.conf rather than passed as
       # PULSAR_PREFIX_* env vars: the latter needs the image's
       # apply-config-from-env.py, and a config mechanism this job cannot
