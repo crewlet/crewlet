@@ -639,13 +639,24 @@ func (h *harness) mustBeUnheld(resource string) {
 // read-modify-write backend reaches by validating after the write instead of
 // before it, and every field here is one a refusal must not touch.
 //
-// Resource is compared too, which the first version of this helper omitted
-// while its comment claimed to cover "every field a refusal must not touch".
-// The answer was right — it caught every mutation put to it — and the stated
-// reason was not, which is the pairing that survives any review that checks
-// answers. Found by probing the claim rather than re-reading it, and the first
-// probe was itself vacuous: it extracted zero field names and reported no
-// omission, a measurement of nothing wearing the shape of a clean result.
+// Resource is compared too, which the first version omitted while its comment
+// claimed to cover "every field a refusal must not touch". The answer was
+// right and the stated reason was not — the pairing that survives any review
+// checking answers rather than reasons.
+//
+// Stated precisely, because the counterfactual refused to support the tidier
+// story: this closes a COMPLETENESS gap, not a demonstrated hole. A refusal
+// that corrupts the resource name is caught either way — claim() asserts the
+// lease it is handed names the resource asked for — so no mutation available
+// here goes uncaught without it. It is compared because the comment promises
+// every field and a future field, or a backend whose corruption misses that
+// other assertion, has nothing else standing behind it.
+//
+// Two probes were needed to learn that. The first was vacuous: it extracted
+// zero field names and reported no omission, a measurement of nothing wearing
+// the shape of a clean result. The second found the omission. The third —
+// removing the comparison to check the hole was real — is the one that said
+// it was not.
 //
 // This generalises over the record only as far as it is kept in step with it:
 // a field added to coord.Lease and not added here is a field every negative
