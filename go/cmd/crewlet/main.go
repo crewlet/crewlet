@@ -12,10 +12,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -196,7 +203,20 @@ func runEngine(args []string, stderr io.Writer) error {
 		return err
 	}
 
+	// MERGED: one process is both engine and API, sharing one broker and
+	// one store. The API half is what makes the node reachable at all —
+	// every inbound webhook arrives through it — so an engine that ran
+	// without it would hold seats and hear nothing.
+	surface, err := serveAPI(ctx, boot, e, log)
+	if err != nil {
+		e.Stop(context.WithoutCancel(ctx))
+		return err
+	}
+
 	<-ctx.Done()
+	if surface != nil {
+		surface.stop(context.WithoutCancel(ctx), log)
+	}
 
 	// Detached from the signal context, which is already cancelled — that
 	// is what woke us. The drain waits for in-flight turns, bounded only
@@ -210,4 +230,130 @@ func runEngine(args []string, stderr io.Writer) error {
 	log.Info("engine_draining")
 	e.Stop(context.WithoutCancel(ctx))
 	return nil
+}
+
+// httpSurface is the API half of a merged node.
+type httpSurface struct {
+	app    *api.App
+	server *http.Server
+}
+
+// stop shuts the HTTP surface down before the engine drains.
+//
+// BEFORE, deliberately: the drain waits for in-flight turns, and a listener
+// still accepting webhooks during it would keep minting new ones. Closing the
+// door first is what makes the drain converge.
+func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	shutdown, cancel := context.WithTimeout(ctx, apiShutdownGrace)
+	defer cancel()
+	if err := s.server.Shutdown(shutdown); err != nil {
+		// A listener that would not close is not a reason to skip the
+		// drain: the seats are the expensive thing to strand.
+		log.Warn("api_shutdown_failed", "error", err)
+	}
+	s.app.Stop()
+}
+
+// apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS.
+//
+// Requests, not turns. A REST call is a read against the local store and a
+// webhook is a signature check plus a publish — both are milliseconds — so this
+// only ever covers a client that stopped reading its own response. The turns
+// are the engine's drain to wait for, and that one is bounded by the process
+// supervisor rather than by a constant here.
+const apiShutdownGrace = 5 * time.Second
+
+// serveAPI binds the HTTP surface, or reports that this node serves none.
+func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
+	log *slog.Logger,
+) (*httpSurface, error) {
+	if boot.API.Port == 0 {
+		// A real posture: a worker-only node runs no dashboard, no REST
+		// API and no webhook endpoint. Saying so is the point — an
+		// operator who expected an integration to work should learn it
+		// here rather than from a webhook that never arrives.
+		log.Warn("api_disabled",
+			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
+				"API and no webhook endpoint; every integration is deaf here")
+		return nil, nil
+	}
+
+	app := api.New(api.Options{
+		Bootstrap:    boot,
+		Runtime:      engineRuntime{e},
+		QueueBackend: e.Backends().Queue.Backend(),
+	})
+	// CONFIGURED by construction. The engine only exists because a company
+	// config parsed, validated and built an epoch, so by the time this
+	// runs a company is active — and a node that never said so would be
+	// permanently unready, which takes every working node out of a load
+	// balancer's rotation.
+	//
+	// It is the config plane that will own this once revisions are
+	// activated from the store rather than read from a file: the flag then
+	// tracks whether THIS node applied the current epoch, which is a
+	// question a file cannot ask.
+	app.SetConfigured(true)
+	app.Start(ctx)
+
+	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		app.Stop()
+		return nil, fmt.Errorf("api: bind %s: %w", addr, err)
+	}
+	server := &http.Server{
+		Handler: app,
+		// A read that never completes holds a connection open forever,
+		// and the listener is the one surface an unauthenticated client
+		// can reach.
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
+	}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("api_serve_failed", "error", err)
+		}
+	}()
+
+	log.Info("api_listening", "addr", listener.Addr().String(),
+		"anonymous_read", app.Guard().AnonymousRead(),
+		"tokens", app.Guard().Tokens())
+	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
+		// Stated rather than assumed. The read surface carries LLM
+		// transcripts, diary entries and the whole event stream, and on a
+		// bind anything else can reach that is a decision somebody may
+		// not have made deliberately.
+		log.Warn("api_anonymous_read_on_a_reachable_bind",
+			"host", boot.API.Host,
+			"hint", "reads serve without a token on an address other machines "+
+				"can reach; set api.auth.allow_anonymous_read to false to close them")
+	}
+	return &httpSurface{app: app, server: server}, nil
+}
+
+// apiReadHeaderTimeout bounds how long a client may take to send its request
+// line and headers.
+//
+// Ten seconds is generous for a header on any real network and short enough
+// that a connection opened and left silent — the cheapest denial there is
+// against a listener — costs one slot for ten seconds rather than for ever.
+const apiReadHeaderTimeout = 10 * time.Second
+
+// engineRuntime answers the questions only a co-located engine can.
+type engineRuntime struct{ engine *engine.Engine }
+
+func (r engineRuntime) Snapshot() api.RuntimeState {
+	host := r.engine.Node().Host()
+	return api.RuntimeState{
+		InFlight:     r.engine.Backends().Queue.InFlightCount(),
+		ShuttingDown: host.Draining(),
+		// SERVE, and it is honest rather than optimistic: posture
+		// describes the gap between the epoch this node applied and the
+		// one its peers have, and with revisions read from a file there
+		// is no such gap to be in. It becomes the config plane's answer
+		// when there is a pointer for nodes to lag behind.
+		Posture: "serve",
+		Seats:   host.Held(),
+	}
 }
