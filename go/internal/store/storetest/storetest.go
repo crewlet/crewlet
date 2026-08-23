@@ -56,6 +56,19 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"DeliveryClaimWithoutAKey", testDeliveryClaimWithoutAKey},
 		{"DeliveryPurge", testDeliveryPurge},
 		{"DeliveryRelease", testDeliveryRelease},
+		{"ActivationEpochIsMonotonic", testActivationEpochIsMonotonic},
+		{"ReactivatingTheSameRevisionMovesThePointer", testReactivatingTheSameRevisionMovesThePointer},
+		{"NoActivationIsNotAnError", testNoActivationIsNotAnError},
+		{"OnlyOneRevisionIsActive", testOnlyOneRevisionIsActive},
+		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
+		{"PayloadRoundTrips", testPayloadRoundTrips},
+		{"ApplyStatusIsALastWord", testApplyStatusIsALastWord},
+		{"PeerHealthExcludesTheAskerAndTheStale", testPeerHealthExcludesTheAskerAndTheStale},
+		{"PeerHealthIsPerEpoch", testPeerHealthIsPerEpoch},
+		{"ApplyStatusPurge", testApplyStatusPurge},
+		{"ApplyStatusRejectsAnIncompleteIdentity", testApplyStatusRejectsAnIncompleteIdentity},
+		{"ApplyErrorIsBounded", testApplyErrorIsBounded},
+		{"UnknownApplyStatusIsRefused", testUnknownApplyStatusIsRefused},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
