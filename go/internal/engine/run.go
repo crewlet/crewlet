@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -55,6 +56,12 @@ type Engine struct {
 	sandboxCoordinator *sandbox.Coordinator
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
+
+	// maintenance is the retention sweep for the short-horizon tables. On
+	// the engine for the same reason the sandbox machinery is: it is a
+	// loop this process runs, and rebuilding it on an apply would start a
+	// second one against the same rows.
+	maintenance *maintenance.Worker
 
 	// onboarded remembers which seats this PROCESS has seen onboarded.
 	//
@@ -203,6 +210,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
+	e.startMaintenance(ctx)
 	return e, nil
 }
 
@@ -290,6 +298,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
 	e.stopSandbox()
+	e.stopMaintenance()
 	e.node.Stop(ctx)
 	if e.ownsBackends {
 		e.backends.Close(ctx)

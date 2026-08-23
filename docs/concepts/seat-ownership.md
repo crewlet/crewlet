@@ -224,7 +224,7 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `scheduler` | Evaluates every schedule and fires what is due | The `scheduled_runs` claim already makes a fire at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `skill-clustering` | Synthesises skills from episodes | Reads every agent's episodes and **writes** skills: N nodes produce N sets of near-identical pages and N× the LLM spend |
 | `skill-curator` | Transitions skills active → stale → archived | Publishes a lifecycle event per transition, and races its own optimistic-concurrency guard |
-| `maintenance` | Retention sweeps for `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions` | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+| `maintenance` | Retention sweeps for every short-horizon table — `events`, `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions`, `conversation_sessions`, `a2a_channels` and `config_apply_status` — plus the idle-close of A2A channels no turn ever answered | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
