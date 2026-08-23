@@ -213,6 +213,55 @@ func (s *suite) runBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("an_aged_conversation_dispatches_before_a_fresher_one", func(t *testing.T) {
+		t.Parallel()
+		// Between-partition fairness, asserted against the BACKEND rather
+		// than against the ordering function.
+		//
+		// Receive order alone starves a quiet conversation behind a hot
+		// one under deferral: the quiet conversation's requeued copies
+		// re-enter the topic AFTER whatever arrived during the hot
+		// conversation's turn, so receive-ordered dispatch picks the hot
+		// one on every drain, for ever. Timestamps carry the aging signal
+		// and survive requeue, so the conversation that has waited longest
+		// must go first.
+		//
+		// Every other batch subtest publishes in timestamp order, which
+		// makes oldest-first and receive-order indistinguishable — so this
+		// deliberately puts the two in conflict: the hot conversation
+		// ARRIVES first and the quiet one is OLDER. Measured, a backend
+		// that partitions correctly and dispatches in receive order passes
+		// the whole suite without this case.
+		q := s.start(t)
+		batches := newBatchJournal()
+		subscribeBatch(t, q, "topic.age", "grp", recordingBatchHandler(batches),
+			queue.DefaultBatchOptions())
+
+		now := time.Now().UTC()
+		hot := newConvEvent("hot", "hot")
+		hot.Timestamp = now
+		quiet := newConvEvent("quiet", "quiet")
+		quiet.Timestamp = now.Add(-time.Minute)
+
+		// Held so both land in one batch as two partitions; delivered one
+		// at a time there is no dispatch order to observe.
+		if err := q.PauseTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
+			t.Fatalf("PauseTopic: %v", err)
+		}
+		publish(t, q, "topic.age", hot)
+		publish(t, q, "topic.age", quiet)
+		if err := q.ResumeTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
+			t.Fatalf("ResumeTopic: %v", err)
+		}
+
+		batches.await(t, "the conversation that has waited longest to go first",
+			func(got [][]string) bool {
+				return len(got) == 2 &&
+					equalStrings(got[0], []string{"quiet"}) &&
+					equalStrings(got[1], []string{"hot"})
+			})
+	})
+
 	t.Run("within_a_partition_events_are_ordered_by_timestamp", func(t *testing.T) {
 		t.Parallel()
 		// A conversation must read in its own chronological order no
@@ -377,11 +426,31 @@ func fillOneBatch(t *testing.T, q queue.EventQueue, topic, group string, convs .
 	}
 }
 
-// runOrdering covers the pure policy functions every backend shares. They live
-// in the contract package rather than in a backend precisely so there is one
-// answer to "which conversation goes first"; running them here keeps that
-// answer pinned wherever the suite runs.
-func (s *suite) runOrdering(t *testing.T) {
+// runContractPolicy exercises the pure policy functions in the contract
+// package — NOT any backend's use of them.
+//
+// SCOPE, stated because this group's line in the output sits under
+// TestConformance and a PASS there reads like backend coverage. Every case
+// below calls a function in internal/queue directly, so its result is identical
+// for every backend by construction and it CANNOT certify that a backend calls
+// that function, or calls it correctly. Measured: a backend that partitions
+// correctly but dispatches partitions in receive order passed all six of these
+// while ignoring the aging policy outright.
+//
+// What owns the backend side, by name:
+//   - between-partition aging  -> Batch/an_aged_conversation_dispatches_before_a_fresher_one
+//   - within-partition order   -> Batch/within_a_partition_events_are_ordered_by_timestamp
+//   - partition membership     -> Batch/linger_partitions_by_key_preserving_arrival_order
+//   - the max_batch cap        -> Batch/max_batch_chunks_oversized_buffers
+//
+// The linger ceiling has no backend counterpart: nothing here checks that a
+// backend honours the clamp rather than waiting the unclamped window, because
+// asserting it costs a test that sleeps for a minute.
+//
+// These run inside the conformance suite only because internal/queue has no
+// test binary of its own. When it gets one they belong there, and this group
+// should go rather than be duplicated.
+func (s *suite) runContractPolicy(t *testing.T) {
 	t.Run("effective_linger_clamps_to_ceiling", func(t *testing.T) {
 		t.Parallel()
 		// The ceiling is enforced where the value is consumed:

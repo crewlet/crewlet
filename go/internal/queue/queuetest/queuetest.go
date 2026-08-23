@@ -95,6 +95,16 @@ type Capabilities struct {
 	// attachment paused.
 	PauseHolds func(q queue.EventQueue, topic, group string) []string
 
+	// Quiescing reports whether this client has stopped taking work on a
+	// subscription.
+	//
+	// Distinct from a pause hold and separately observable because the two
+	// are cleared by different things — a hold by the subsystem that took
+	// it, a quiesce by detaching or attaching again — and because a stale
+	// quiesce is invisible from outside until someone attaches, which is
+	// what let one sit unnoticed long enough to strand a seat.
+	Quiescing func(q queue.EventQueue, topic, group string) bool
+
 	// History reports every event published through this backend, for the
 	// one assertion that has to distinguish "not delivered" from "not
 	// accepted".
@@ -111,6 +121,26 @@ type Capabilities struct {
 	// event reaches exactly one member and that the load is shared, which
 	// is the part every broker owes.
 	StrictRoundRobin bool
+
+	// FreeDeferral declares that a deferral costs the message nothing —
+	// it returns unacked with no redelivery accrued, so its dead-letter
+	// budget is whole afterwards.
+	//
+	// A capability rather than a requirement, for the same measured reason
+	// as HeadReplayOnNak and from the same decision. On Pulsar a graceful
+	// close returns unacked messages at redeliveryCount 0, so a seat
+	// handoff is free; on JetStream nothing is released by closing, so
+	// deferral is implemented with Nak() and costs one delivery count —
+	// and MaxDeliver was re-derived from 10 to 25 precisely to absorb
+	// handoffs (rewrite/decisions/102-jetstream-redelivery.md, decisions 1
+	// and 2).
+	//
+	// The invariant every backend still owes is the one the contract
+	// states: a deferral must not cause a HEALTHY event to die. A backend
+	// that spends a count per handoff satisfies it by sizing the budget so
+	// handoffs cannot exhaust it, not by making the handoff free. This flag
+	// only asks a backend that IS free to stay free.
+	FreeDeferral bool
 
 	// HeadReplayOnNak declares that a negatively acknowledged event
 	// returns to the FRONT of the mailbox, ahead of events already queued
@@ -161,11 +191,18 @@ func RunWith(t *testing.T, newQueue func(t *testing.T) queue.EventQueue, caps Ca
 	t.Helper()
 	s := &suite{newQueue: newQueue, caps: caps}
 	t.Run("EventQueue", s.runCore)
+	t.Run("Wire", s.runWire)
 	t.Run("Attachment", s.runAttachment)
 	t.Run("Stream", s.runStream)
 	t.Run("Batch", s.runBatch)
 	t.Run("Fleet", s.runFleet)
-	t.Run("BatchOptionsAndOrdering", s.runOrdering)
+	// A "no" has two halves: the answer and the write that must not
+	// happen. See runNegativePaths.
+	t.Run("NegativePaths", s.runNegativePaths)
+	// Named for what it is: shared contract functions, not backend
+	// behaviour. See runContractPolicy for the scope this group does and
+	// does not cover.
+	t.Run("ContractPolicyFunctions", s.runContractPolicy)
 }
 
 type suite struct {
@@ -194,6 +231,13 @@ const (
 	// settleFor bounds how long a positive assertion waits for a backend
 	// to deliver. Generous on purpose: a timeout here must mean "never
 	// delivered", never "delivered on a loaded CI box a moment late".
+	//
+	// It is also an IMPLICIT CONTRACT on backends, stated here because
+	// nothing else states it: a backend whose delivery latency can exceed
+	// this fails the suite with no hint that a constant is the reason. A
+	// backend that needs longer should say so rather than have this raised
+	// — a queue that takes more than three seconds to hand over an event
+	// already waiting is a finding, not a tuning problem.
 	settleFor = 3 * time.Second
 
 	// quietFor is how long a negative assertion — "this must NOT be
@@ -206,6 +250,12 @@ const (
 	// has to be long enough that several publishes land inside one window
 	// on a loaded machine, and short enough that a test which waits out
 	// several windows stays quick.
+	//
+	// The suite never asks for a linger above queue.MaxLingerSeconds, and
+	// must not: backends size their dispatch budget to that ceiling and are
+	// right to refuse a window they cannot honour rather than silently
+	// clamping it. A case needing a longer window to make something
+	// observable should find another way to observe it.
 	lingerFor = 50 * time.Millisecond
 )
 

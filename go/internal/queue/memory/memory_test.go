@@ -43,6 +43,9 @@ func TestConformance(t *testing.T) {
 			PauseHolds: func(q queue.EventQueue, topic, group string) []string {
 				return q.(*memory.Queue).PauseHolds(topic, group)
 			},
+			Quiescing: func(q queue.EventQueue, topic, group string) bool {
+				return q.(*memory.Queue).Quiescing(topic, group)
+			},
 			History: func(q queue.EventQueue) []*events.Event {
 				return q.(*memory.Queue).History()
 			},
@@ -57,6 +60,9 @@ func TestConformance(t *testing.T) {
 			// depends on it (see rewrite/decisions/102), but the fleet
 			// suite runs against this twin, so the twin must not quietly
 			// stop modelling the broker it was built to model.
+			// A deferral here returns the events untouched: nothing is
+			// acked, nothing is counted. Pulsar's free handoff, modelled.
+			FreeDeferral:              true,
 			HeadReplayOnNak:           true,
 			RejectsPublishBeforeStart: true,
 			// Stop is a client disconnect, not a teardown: the broker and

@@ -41,7 +41,9 @@ package memory
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -351,16 +353,36 @@ func (q *Queue) dropMembersLocked(sub *subscription) int {
 // The event is durable — in every mailbox that will hold it — before the
 // best-effort fan-outs run, so a listener or a stream subscriber can never
 // observe a publish that a subscriber will not.
+//
+// Everything retained or delivered is DECODED FROM THE WIRE, never the
+// publisher's own pointer. That is the single most load-bearing thing about
+// this twin: a broker is a serialization boundary, and a twin that skips it
+// certifies bugs rather than catching them. Three concrete ones it would hide
+// — a payload keeping a Go type it loses in transit (a value payload arrives
+// as a pointer), a JSON number arriving as an int rather than a float64, and
+// one group's handler mutating what another group is about to receive.
 func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) error {
 	if ev == nil {
 		return errors.New("memory: nil event")
 	}
+	// Serialised before the lock, and once: the bytes are what every
+	// consumer decodes from, so a failure here fails the publish exactly as
+	// it would on a real backend rather than half-delivering.
+	wire, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("memory: serialize event %s: %w", ev.Type, err)
+	}
+	var received events.Event
+	if err := json.Unmarshal(wire, &received); err != nil {
+		return fmt.Errorf("memory: deserialize event %s: %w", ev.Type, err)
+	}
+
 	q.broker.mu.Lock()
 	if !q.running {
 		q.broker.mu.Unlock()
 		return ErrNotStarted
 	}
-	q.broker.recordHistoryLocked(ev)
+	q.broker.recordHistoryLocked(&received)
 
 	// Every subscription on this topic gets its own copy — that is what a
 	// consumer GROUP is. Competition happens between the members of one
@@ -368,7 +390,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	var targets []*subscription
 	for _, sub := range q.broker.subs {
 		if sub.topic == topic {
-			sub.mail = append(sub.mail, ev)
+			sub.mail = append(sub.mail, decodeWire(wire, &received))
 			targets = append(targets, sub)
 		}
 	}
@@ -376,11 +398,15 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	streams := slices.Clone(q.broker.streams)
 	q.broker.mu.Unlock()
 
-	logPublished(topic, ev)
+	logPublished(topic, &received)
+	// Listeners see the PUBLISHER'S event, not a decoded copy, because they
+	// are a local hook on the local publish path — the event store's writer
+	// is one — and they run before anything reaches a wire. Real backends
+	// call them the same way.
 	for _, l := range listeners {
 		notifyListener(ctx, l, topic, ev)
 	}
-	dispatchStreams(ctx, streams, topic, ev)
+	dispatchStreams(ctx, streams, topic, wire, &received)
 
 	if len(targets) == 0 {
 		// No durable subscription exists, so there is nothing to retain
@@ -674,7 +700,25 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 	}, nil
 }
 
-func dispatchStreams(ctx context.Context, streams []*streamSub, topic string, ev *events.Event) {
+// decodeWire returns one consumer's own event, decoded from the bytes the
+// publish serialised.
+//
+// The caller has already decoded those same bytes once — that is how it holds
+// `received` — so a failure here is unreachable. Falling back to a clone
+// keeps mail flowing rather than dropping a delivery if it ever stops being
+// unreachable; it is a worse copy (it shares the payload pointer), not no
+// copy. Nothing is logged because this runs under the broker lock.
+func decodeWire(wire []byte, received *events.Event) *events.Event {
+	var out events.Event
+	if err := json.Unmarshal(wire, &out); err != nil {
+		return received.Clone()
+	}
+	return &out
+}
+
+func dispatchStreams(
+	ctx context.Context, streams []*streamSub, topic string, wire []byte, received *events.Event,
+) {
 	for _, s := range streams {
 		// topics.Match, never a private copy: two backends with their own
 		// matchers can disagree about which events a dashboard sees, and a
@@ -683,7 +727,7 @@ func dispatchStreams(ctx context.Context, streams []*streamSub, topic string, ev
 		if !topics.Match(s.pattern, topic) {
 			continue
 		}
-		deliverStream(ctx, s, topic, ev)
+		deliverStream(ctx, s, topic, decodeWire(wire, received))
 	}
 }
 
