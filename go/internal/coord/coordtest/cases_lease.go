@@ -149,6 +149,64 @@ var leaseCases = []testCase{
 		}
 	}},
 
+	{"a_rejected_renew_leaves_the_lease_untouched", func(h *harness) {
+		// Answering "no" is only half of a rejection. A backend that
+		// writes the fresh deadline and THEN checks the predicate
+		// answers correctly and still extends the lease it just
+		// refused — and the caller doing the refusing is a zombie from
+		// the previous tenure, heartbeating on a stale epoch because
+		// nothing has told it to stop. Its renews would then keep the
+		// CURRENT owner's lease alive indefinitely, so when that owner
+		// dies its seats never lapse and no peer can ever claim them.
+		// The seat goes dark permanently, and every sweep reads healthy.
+		first := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
+		h.lapse()
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+		before := h.mustHold("seat:ceo", "node-a")
+
+		if h.renew("seat:ceo", "node-a", first.Epoch, LongTTL) {
+			h.t.Fatal("renew accepted the previous tenure's epoch")
+		}
+		h.requireUnchanged("a renew rejected on a stale epoch", before, h.mustHold("seat:ceo", "node-a"))
+
+		if h.renew("seat:ceo", "node-b", before.Epoch, LongTTL) {
+			h.t.Fatal("renew accepted an owner that never held the lease")
+		}
+		h.requireUnchanged("a renew rejected on the owner", before, h.mustHold("seat:ceo", "node-a"))
+	}},
+
+	{"a_refused_claim_leaves_the_holders_lease_untouched", func(h *harness) {
+		// The same half-rejection, on the path a fleet walks constantly:
+		// every node sweeps for claimable seats on every tick, so in a
+		// healthy company a REFUSED claim is the single most common
+		// thing this store does. A refusal that writes anything is
+		// therefore not a rare corruption but a continuous one.
+		//
+		// Three fields, three different failures. The deadline: peers
+		// refusing each other keep a dead holder's seats alive forever.
+		// The hint: it comes to name the last node that TRIED rather
+		// than the last that HELD, so a restarted node no longer finds
+		// the seats whose children it had warm. The meta: two processes
+		// racing one node id would let the loser's profile overwrite the
+		// winner's, and peers then make placement decisions against
+		// roles and labels no running process has.
+		resource := coord.NodeResource("n1")
+		held := map[string]any{"roles": []any{"seats"}, "labels": map[string]any{"zone": "eu"}}
+		h.claim(resource, coord.AcquireOptions{
+			Owner: "n1:winner", TTL: LongTTL, Preferred: "n1", Ungated: true, Meta: held,
+		})
+		before := h.mustHold(resource, "n1:winner")
+
+		h.refused(resource, coord.AcquireOptions{
+			Owner:     "n1:loser",
+			TTL:       LongTTL / 2,
+			Preferred: "n2",
+			Ungated:   true,
+			Meta:      map[string]any{"roles": []any{"workers"}},
+		})
+		h.requireUnchanged("a claim refused by a live holder", before, h.mustHold(resource, "n1:winner"))
+	}},
+
 	{"renew_of_an_unclaimed_resource_reports_loss", func(h *harness) {
 		if h.renew("seat:ceo", "node-a", 1, LongTTL) {
 			h.t.Fatal("renew invented a lease for a resource nobody ever claimed")

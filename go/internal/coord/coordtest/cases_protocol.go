@@ -88,6 +88,44 @@ var protocolCases = []testCase{
 		}
 	}},
 
+	{"a_gate_refused_claim_leaves_the_record_untouched", func(h *harness) {
+		// The gate's refusal is the one a backend is most likely to
+		// implement as an afterthought — checked in a different place
+		// from the ownership predicate, and easy to reach only after the
+		// record has already been written. During a rolling upgrade the
+		// newer half of the fleet is refused on every sweep, so a gated
+		// refusal that writes would rewrite the OLD node's live records
+		// continuously, for as long as the upgrade takes: the exact
+		// window the gate exists to make safe.
+		//
+		// SCOPE, because the corpus permits one exception and this case
+		// must not be read as forbidding it. The violation here is
+		// already visible when the claim arrives, so a backend sees it
+		// on its check and must write nothing. d-201 §3 records the
+		// other path deliberately: a KV cannot express the gate as a
+		// predicate inside a compare-and-swap, so it does check → claim
+		// → RE-CHECK → release on violation. A violation that appears
+		// between a backend's check and its claim therefore leaves a
+		// touched record — a burned epoch and a tombstone — because the
+		// claim was made and given back rather than never made. That is
+		// a recorded degradation, not a defect, and a concurrent gate
+		// test must assert the claim is surrendered, never that the
+		// record is pristine.
+		old := h.claim("seat:ceo", coord.AcquireOptions{
+			Owner: "old-node:1", TTL: LongTTL, Preferred: "old-node", Protocol: 1,
+		})
+		before := h.mustHold("seat:ceo", "old-node:1")
+
+		h.refused("seat:ceo", coord.AcquireOptions{
+			Owner: "new-node:1", TTL: LongTTL / 2, Preferred: "new-node", Protocol: 2,
+		})
+		h.requireUnchanged("a claim refused by the gate", before, h.mustHold("seat:ceo", "old-node:1"))
+		if floor, any := h.floor(); !any || floor != old.Protocol {
+			h.t.Fatalf("FleetProtocolFloor = (%d, %v) after a gated refusal, want (%d, true)",
+				floor, any, old.Protocol)
+		}
+	}},
+
 	{"the_gate_reads_presence_leases_too", func(h *harness) {
 		// The predicate is over every live lease, presence included: an
 		// old node that has registered itself is an old node, whether or
@@ -168,6 +206,19 @@ var protocolCases = []testCase{
 		// The read-side half, and the fail-closed one: a record written
 		// before the field existed must gate newer claims until it
 		// lapses, exactly as a real v1 hold would.
+		//
+		// READ THE SCOPE BEFORE TRUSTING THIS CASE. Now that a claim
+		// normalises to this build, NOTHING reachable through
+		// coord.Backend can store a protocol of zero — so the suite
+		// cannot plant the record this rule is about, and what follows
+		// checks the shared helper plus the behaviour the rule
+		// reproduces, NOT that this backend calls the helper on its own
+		// decode path. A durable backend reading the field raw passes
+		// here and still lets an ancient record read as current. That
+		// obligation belongs to each durable backend's own tests, where
+		// the record can be written out of band (internal/coord/kv does
+		// it in record.go); an in-memory store has no records that
+		// predate its own process and nothing to check.
 		if got := coord.StoredProtocol(0); got != 1 {
 			h.t.Fatalf("StoredProtocol(0) = %d, want 1", got)
 		}

@@ -41,6 +41,7 @@ package coordtest
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -53,6 +54,16 @@ const (
 	// LongTTL is the TTL for any lease that must stay held for the whole
 	// of a case. It is far longer than any lapse the suite simulates, so
 	// travelling past a ShortTTL lease never disturbs it.
+	//
+	// It is also the MAXIMUM TTL the suite will ever ask a backend for, and
+	// that is a promise, not an observation. A store sizes its retention to
+	// the longest TTL it must honour — the embedded-NATS backend sets its
+	// bucket from this very constant — and a backend that cannot honour a
+	// TTL is right to refuse it rather than silently shorten it, since a
+	// quietly-clamped deadline makes every heartbeat's next-tick arithmetic
+	// wrong. A case that needs a second, distinguishable TTL takes a
+	// FRACTION of this one; asking for a multiple makes a correct backend
+	// fail an unrelated assertion with a confusing error.
 	LongTTL = 5 * time.Minute
 
 	// ShortTTL is the TTL for the lease a case intends to lapse.
@@ -328,6 +339,43 @@ func (h *harness) mustBeUnheld(resource string) {
 	if lease := h.get(resource); lease != nil {
 		h.t.Fatalf("Get(%q): held by %q at epoch %d, expected nothing to hold it",
 			resource, lease.Owner, lease.Epoch)
+	}
+}
+
+// requireUnchanged asserts a record survived an operation the backend refused
+// or rejected exactly as it was.
+//
+// A "no" has two halves and the suite used to check only one. Returning the
+// right answer while writing to the record anyway is the shape a
+// read-modify-write backend reaches by validating after the write instead of
+// before it, and every field here is one a refusal must not touch.
+//
+// This generalises over the record only as far as it is kept in step with it:
+// a field added to coord.Lease and not added here is a field every negative
+// path may quietly write, and nothing fails to say so. Extend it with the
+// struct.
+func (h *harness) requireUnchanged(what string, before, after *coord.Lease) {
+	h.t.Helper()
+	if after == nil {
+		h.t.Fatalf("%s: the record is gone", what)
+		return
+	}
+	switch {
+	case after.Owner != before.Owner:
+		h.t.Fatalf("%s: owner moved %q -> %q", what, before.Owner, after.Owner)
+	case after.Epoch != before.Epoch:
+		h.t.Fatalf("%s: epoch moved %d -> %d", what, before.Epoch, after.Epoch)
+	case !after.ExpiresAt.Equal(before.ExpiresAt):
+		h.t.Fatalf("%s: deadline moved %v -> %v — a refusal must not write the record "+
+			"at all, and the direction it moves is whichever way the refused caller's "+
+			"TTL happened to point",
+			what, before.ExpiresAt, after.ExpiresAt)
+	case after.Preferred != before.Preferred:
+		h.t.Fatalf("%s: placement hint moved %q -> %q", what, before.Preferred, after.Preferred)
+	case after.Protocol != before.Protocol:
+		h.t.Fatalf("%s: protocol moved %d -> %d", what, before.Protocol, after.Protocol)
+	case !reflect.DeepEqual(after.Meta, before.Meta):
+		h.t.Fatalf("%s: meta moved %v -> %v", what, before.Meta, after.Meta)
 	}
 }
 
