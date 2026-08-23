@@ -104,6 +104,23 @@ func TestConformance(t *testing.T) {
 // Pulsar is the twin to track, not JetStream: both this backend and Pulsar
 // deliver a deferral for free, while JetStream spends an attempt on one and
 // budgets 25 to cover handoff. If Pulsar's number moves, this moves with it.
+//
+// SCOPE, measured by counterfactual rather than assumed, because a landing
+// check on this test proves only that the test reads the constant. The one
+// consumer of the default is internal/node's fleet suite, which builds the twin
+// with no options — and instrumenting the redelivery counter shows it reaches a
+// depth of 0 there: the fleet suite never Naks a message, so the budget is
+// unreachable from it (positive control: the same instrument reads 11 on this
+// package's own tests, so the 0 is a real absence and not a dead probe). The
+// correction that came out of that was one full counterfactual run FAILING and
+// reading as proof the value mattered, before four more runs passed and the
+// mechanism showed the branch is never entered at all.
+//
+// So this fix aligned the twin with the backend it models; it did not repair a
+// demonstrated failure, and this test is now the only thing holding the value.
+// That is a weaker claim than "fixed a live bug" and it is the true one — a
+// twin that silently disagrees with its subject is a latent hazard for the day
+// a case does reach the branch, which is reason enough to keep both.
 func TestDefaultDeliveryBudgetMatchesPulsar(t *testing.T) {
 	t.Parallel()
 	const pulsarTotalAttempts = 10
