@@ -74,6 +74,23 @@ const (
 	// closes a channel somebody is about to answer on.
 	ChannelIdleTimeout = time.Hour
 
+	// FollowRetention is how long a chat thread-follow survives with no
+	// activity. updated_at is refreshed on every re-assert — a mention, a
+	// collective address, the seat posting into the thread — so it is a
+	// true last-activity stamp rather than a creation date.
+	//
+	// Ninety days is the point past which a chat thread has stopped being
+	// a live conversation on every backend that ships one: Slack and
+	// Mattermost both surface a quarter-old thread only through search.
+	//
+	// The asymmetry decides the value. Dropping a stale follow costs at
+	// most one missed NON-mention reply, and the very next mention
+	// re-follows through the ordinary path — while keeping every follow
+	// for ever costs unbounded growth on a table read on the hot path of
+	// every inbound chat message. A cheap, self-healing miss beats an
+	// unbounded read.
+	FollowRetention = 90 * 24 * time.Hour
+
 	// ApplyStatusRetention bounds the config plane's per-node rows.
 	//
 	// The odd one out, and the reason it went unswept longest: it is keyed
@@ -105,6 +122,7 @@ func StoreJobs(db *store.DB) []Job {
 		Purge("webhook_deliveries", DeliveryRetention, db.DeliveryLog().Purge),
 		Purge("rate_limits", RateLimitRetention, db.RateLimits().Purge),
 		Purge("config_apply_status", ApplyStatusRetention, db.ControlPlane().Purge),
+		Purge("chat_thread_follows", FollowRetention, db.ThreadFollows().Purge),
 	}
 }
 

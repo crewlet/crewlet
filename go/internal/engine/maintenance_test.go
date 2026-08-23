@@ -36,6 +36,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	want := []string{
 		"a2a_channels",
 		"a2a_channels_idle",
+		"chat_thread_follows",
 		"config_apply_status",
 		"conversation_sessions",
 		"events",
@@ -64,6 +65,7 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"conversation_sessions": maintenance.ConversationRetention,
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
+		"chat_thread_follows":   maintenance.FollowRetention,
 		"config_apply_status":   maintenance.ApplyStatusRetention,
 	} {
 		if horizon <= maintenance.Interval {
