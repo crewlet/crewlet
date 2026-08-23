@@ -293,16 +293,63 @@ func TestAnUnguardedRouteReachesTheHandlerWithNoOperator(t *testing.T) {
 	}
 }
 
-func TestAValidTokenOnAnUnguardedRouteIsNotAttributed(t *testing.T) {
+func TestAValidTokenIsAttributedEvenWhereItIsNotRequired(t *testing.T) {
 	t.Parallel()
-	// The guard short-circuits before it looks at the header. That is
-	// fine, and worth pinning: a surface that wants attribution on an
-	// exempt route has to ask for it, rather than assuming the middleware
-	// did.
+	// Attribution and authorization are different questions. A route that
+	// does not REQUIRE a token can still be told who presented one, which
+	// is what lets an operator-only query be answered on a surface the
+	// anonymous-read posture lets through.
+	//
+	// Resolving only on guarded routes made that unreachable: the query
+	// arrived with a valid token, no operator attached, and came back
+	// unauthorized to a caller holding the right credential.
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
-	_, seen := serve(t, g, "GET", "/health", "Bearer secret")
+
+	// An unguarded route under an open read posture.
+	if _, seen := serve(t, g, "GET", "/events", "Bearer secret"); seen != "founder" {
+		t.Errorf("operator = %q on an unguarded read, want founder", seen)
+	}
+	// And an exempt one.
+	if _, seen := serve(t, g, "GET", "/health", "Bearer secret"); seen != "founder" {
+		t.Errorf("operator = %q on an exempt route, want founder", seen)
+	}
+}
+
+func TestNobodyIsReportedAsAbsentRatherThanAsAnEmptyName(t *testing.T) {
+	t.Parallel()
+	// OperatorFrom answers (id, ok), and the two halves have to agree. A
+	// failed resolution attached as an empty NAME reads as ok=true with no
+	// id — so a caller that checks ok, which is the whole point of
+	// returning it, is told somebody is there.
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+
+	var present bool
+	handler := g.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, present = auth.OperatorFrom(r.Context())
+	}))
+	req := httptest.NewRequest("GET", "/events", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if present {
+		t.Error("a rejected credential was attached as an operator")
+	}
+}
+
+func TestAWrongTokenIsNotAttributedOnAnUnguardedRoute(t *testing.T) {
+	t.Parallel()
+	// The counterfactual, and the half that matters: resolving the
+	// credential everywhere must not mean accepting it everywhere. A
+	// route that does not require a token still serves — that is what
+	// unguarded means — but the caller is nobody.
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+	res, seen := serve(t, g, "GET", "/events", "Bearer wrong")
+
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("status = %d: a bad token closed an unguarded read", res.StatusCode)
+	}
 	if seen != "" {
-		t.Errorf("operator = %q on an unguarded route", seen)
+		t.Errorf("operator = %q, want nobody", seen)
 	}
 }
 

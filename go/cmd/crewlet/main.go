@@ -23,6 +23,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -282,6 +283,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Bootstrap:    boot,
 		Runtime:      engineRuntime{e},
 		QueueBackend: e.Backends().Queue.Backend(),
+		// The read surface answers from this node's OWN store. A
+		// question it has no source for comes back unknown rather than
+		// empty, which is the difference between "this node has no
+		// event log" and "the company has done nothing".
+		Sources: queries.Sources{Events: e.Backends().Store.Events()},
 	})
 	// CONFIGURED by construction. The engine only exists because a company
 	// config parsed, validated and built an epoch, so by the time this

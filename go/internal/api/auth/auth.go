@@ -272,12 +272,24 @@ func WithOperator(ctx context.Context, operatorID string) context.Context {
 func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+
+		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and the
+		// credential is resolved for both. A route that does not REQUIRE
+		// a token can still be told who presented one — which is what
+		// lets an operator-only query be answered on a surface the
+		// anonymous-read posture lets through. Skipping the resolution
+		// on an unguarded route made that unreachable: the query arrived
+		// with a valid token, no operator attached, and came back
+		// unauthorized to a caller holding the right credential.
+		operatorID, authenticated := g.Bearer(r)
+		if authenticated {
+			r = r.WithContext(WithOperator(r.Context(), operatorID))
+		}
 		if !g.Requires(path, r.Method) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		operatorID, ok := g.Bearer(r)
-		if !ok {
+		if !authenticated {
 			log.Warn("api_auth_failed",
 				"route", path,
 				"reason", "missing_or_invalid_bearer",
@@ -291,7 +303,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		log.Debug("api_auth_ok", "operator_id", operatorID, "route", path)
-		next.ServeHTTP(w, r.WithContext(WithOperator(r.Context(), operatorID)))
+		next.ServeHTTP(w, r)
 	})
 }
 

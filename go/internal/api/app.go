@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"sync/atomic"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/static"
@@ -27,6 +30,9 @@ type App struct {
 	nodeID       string
 	startedAt    string
 	queueBackend string
+
+	// queries is the read surface both transports answer from.
+	queries *queries.Registry
 
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
@@ -49,10 +55,11 @@ type Options struct {
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
-	// Query answers the socket's request/response channel. Nil answers
-	// every query as unknown, which is what a process with no query
-	// surface honestly is.
-	Query stream.Query
+	// Sources are what the read surface answers from. A source left nil
+	// makes its questions UNREGISTERED rather than failing — the honest
+	// answer for a node that does not have that surface at all, and
+	// distinct from an empty one.
+	Sources queries.Sources
 
 	// QueueBackend names the broker, for the health body.
 	QueueBackend string
@@ -105,10 +112,24 @@ func New(opts Options) *App {
 	}
 	files := newAssets(tree)
 
+	// ONE registry, and both transports go through it. Two surfaces
+	// answering one question from two implementations is how they end up
+	// disagreeing with nobody noticing.
+	sources := opts.Sources
+	if sources.Health == nil {
+		sources.Health = func() any { return a.health() }
+	}
+	if sources.State == nil {
+		sources.State = state
+	}
+	a.queries = queries.NewRegistry()
+	queries.Register(a.queries, sources)
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
-	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, opts.Query))
+	mux.Handle("GET /query/{what}", http.HandlerFunc(a.serveQuery))
+	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, a.answer))
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -181,4 +202,64 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(raw)
+}
+
+// Queries exposes the read surface, for a caller that wants to know what this
+// node can answer.
+func (a *App) Queries() *queries.Registry { return a.queries }
+
+// answer bridges the registry to the socket's error codes.
+//
+// The codes are the wire protocol's and the errors are the surface's, so the
+// mapping lives at exactly one boundary — here. A query surface that returned
+// wire codes would be a domain package encoding a transport's vocabulary, and
+// a transport that classified errors itself would be a second place for the
+// two to disagree about what "unauthorized" means.
+func (a *App) answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
+	data, err := a.queries.Answer(ctx, what, params, operatorID)
+	switch {
+	case err == nil:
+		return data, nil
+	case errors.Is(err, queries.ErrUnknown):
+		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
+	case errors.Is(err, queries.ErrUnauthorized):
+		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+	default:
+		return nil, err
+	}
+}
+
+// serveQuery answers a question over HTTP.
+//
+// The SAME registry the socket uses, reached with the same name — so a
+// dashboard in degraded mode (no socket) and one with a socket are looking at
+// one implementation, not two that agree today.
+func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
+	what := r.PathValue("what")
+	operatorID, _ := auth.OperatorFrom(r.Context())
+
+	// Params come from the query string, read through the same accessors a
+	// socket frame's JSON object goes through — which is what stops a
+	// filter being honoured on one transport and ignored on the other.
+	data, err := a.queries.AnswerWith(r.Context(), what,
+		queries.FromQuery(r.URL.Query()), operatorID)
+	if err == nil {
+		writeJSON(w, http.StatusOK, data)
+		return
+	}
+	switch {
+	case errors.Is(err, queries.ErrUnknown):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
+	case errors.Is(err, queries.ErrUnauthorized):
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
+	case errors.Is(err, queries.ErrBadParams):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeQueryFailed})
+	default:
+		// The reason reaches the LOG, not the caller: it can carry a
+		// database path or a driver's own message, and this route is
+		// reachable under the anonymous read posture.
+		log.Warn("api_query_failed", "what", what, "error", err)
+		writeJSON(w, http.StatusInternalServerError,
+			map[string]string{"error": stream.CodeQueryFailed})
+	}
 }
