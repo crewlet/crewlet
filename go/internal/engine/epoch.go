@@ -89,6 +89,26 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 				"node's tools; the previous epoch is still current")
 		return configplane.StatusError, fmt.Errorf("engine: apply: %w", err)
 	}
+	// The sandbox MANAGER is swapped, and only the manager: the coordinator
+	// and the waiter hold this process's busy set and poll loop, so
+	// rebuilding them would forget which seats are mid-run and start a
+	// second loop against the same rows. A revision whose provider block is
+	// broken is refused here rather than published — the alternative serves
+	// a company whose sandbox-enabled seats plan around a box that will
+	// never be minted.
+	if e.sandboxCoordinator != nil {
+		manager, err := buildSandbox(next.Config)
+		if err != nil {
+			log.WarnContext(ctx, "config_apply_failed", "error", err,
+				"detail", "the revision's providers.sandbox could not be built; "+
+					"the previous epoch is still current")
+			return configplane.StatusError, fmt.Errorf("engine: apply: %w", err)
+		}
+		if manager != nil {
+			e.sandboxCoordinator.SetManager(manager)
+		}
+	}
+
 	previous := e.Company()
 	e.epoch.current.Store(next)
 

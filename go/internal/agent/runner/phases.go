@@ -226,6 +226,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 	res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling, iteration: round,
+		allowSuspend: true,
 	})
 	if err != nil {
 		return turn.Execution{}, turn.Surface{}, err
@@ -381,6 +382,12 @@ type phaseRun struct {
 	// spent is what the pre-suspend rounds already cost, so a resumed
 	// phase's record is the turn's total rather than only its second half.
 	spent toolloop.Result
+
+	// allowSuspend permits a tool to stop this loop with its call
+	// unanswered. ONLY EXECUTE sets it: a phase that never persists a
+	// partial conversation cannot resume one, so a suspend elsewhere would
+	// silently abandon a turn.
+	allowSuspend bool
 }
 
 func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error) {
@@ -437,6 +444,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
+			AllowSuspend: in.allowSuspend,
 			// A phase that has SUBMITTED is finished. Without this the
 			// loop asks again, the model submits again, and the phase
 			// spends its whole round budget re-deciding — measured at

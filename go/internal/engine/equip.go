@@ -34,7 +34,7 @@ func (e *Engine) equip(c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
-	deps := builtin.Deps{A2A: e.a2aFor(c)}
+	deps := builtin.Deps{A2A: e.a2aFor(c), Sandbox: e.sandboxLauncher()}
 	if db := e.backends.Store; db != nil {
 		skills := learning.NewSkills(db)
 		deps.Skills = skills
@@ -47,6 +47,20 @@ func (e *Engine) equip(c *Company) error {
 		return err
 	}
 	return nil
+}
+
+// sandboxLauncher is the run_sandbox tool's seam, or nil where no seat can run
+// code.
+//
+// Nil OMITS the tool rather than registering a broken one: a model shown a
+// tool that always fails learns to distrust the whole catalogue and burns a
+// round finding out each time — and a seat that planned around a box it will
+// never get delivers nothing while looking like it tried.
+func (e *Engine) sandboxLauncher() builtin.SandboxLauncher {
+	if e.sandboxCoordinator == nil || e.sandboxPending == nil {
+		return nil
+	}
+	return &launcher{engine: e}
 }
 
 // a2aFor builds the agent-to-agent service for one epoch, or nil.

@@ -61,7 +61,12 @@ func NewCompany(c *config.Company) (*Company, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	models, err := buildProviders(c)
+	// THE TIER B RESOLVER. Its chain is the one seam a secret store plugs
+	// into: today it is the process environment, and a store source goes in
+	// front of it without any other call site changing. Built per epoch
+	// rather than held, because a resolver caches what it has seen and a
+	// long-lived one would keep serving a value the operator has rotated.
+	models, err := buildProviders(c, config.EnvOnly())
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +153,7 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 			Rounds:  te.OnboardingMaxToolRounds,
 			Ceiling: te.OnboardingMaxToolRoundsCeiling,
 		},
+		Resume: in.Resume,
 	})
 }
 
@@ -178,6 +184,10 @@ type RunnerInput struct {
 	// process has already seen marked.
 	Markers runner.Markers
 	Latch   *runner.Latch
+
+	// Resume makes this runner's turn a RE-ENTRY into a suspended Execute
+	// conversation rather than a fresh turn. Nil is the ordinary case.
+	Resume *runner.Resume
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.

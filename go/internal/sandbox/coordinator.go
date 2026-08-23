@@ -151,6 +151,11 @@ func (c *Coordinator) SetManager(m *Manager) {
 	c.manager = m
 }
 
+// Manager is the coordinator's current manager, for a caller that needs to
+// mint a box: the manager is swapped on an apply, so a caller holding its own
+// reference would provision against a provider the company has replaced.
+func (c *Coordinator) Manager() *Manager { return c.mgr() }
+
 func (c *Coordinator) mgr() *Manager {
 	c.mu.Lock()
 	defer c.mu.Unlock()

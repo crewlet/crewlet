@@ -59,6 +59,22 @@ type Config struct {
 	// Turn runs a seat's turn. Required.
 	Turn TurnFunc
 
+	// SeatReady runs as this node takes a seat, BEFORE its mailbox is
+	// attached, and a failure refuses the seat.
+	//
+	// Before, because of the ordering OnAcquire exists to enforce: whatever
+	// the first turn will need must be ready before the first event can
+	// arrive. A seat mid-detached-run is the case that makes it matter —
+	// its runs have to be recovered and its mail parked before anything
+	// can deliver, or the first message starts a second turn beside a
+	// coding job that is still going.
+	SeatReady func(ctx context.Context, handle string, lease coord.Lease) error
+
+	// SeatDone runs after the mailbox is detached. It never fails a
+	// release: the seat is already gone from this node, and its durable
+	// state belongs to the store rather than to this process.
+	SeatDone func(ctx context.Context, handle string)
+
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
 
@@ -129,6 +145,18 @@ func New(cfg Config) (*Node, error) {
 // Host exposes the seat host, for callers that need to inspect ownership or
 // drive a sweep directly.
 func (n *Node) Host() *seat.SeatHost { return n.host }
+
+// ID is the STABLE node identity, the same across restarts. It is the
+// stickiness hint a duty claim carries, so a restarted node tends to get its
+// own duties back.
+func (n *Node) ID() string { return n.cfg.NodeID }
+
+// Owner is this process INCARNATION, which is what a lease is held under.
+//
+// Distinct from ID, and the distinction is load-bearing: two processes sharing
+// an owner string would both believe they hold the same duty at the same
+// epoch, which is the one way a fleet singleton becomes two.
+func (n *Node) Owner() string { return n.cfg.Owner }
 
 // Start begins claiming seats and consuming their mail.
 func (n *Node) Start(ctx context.Context) error {
@@ -240,6 +268,15 @@ func (n *Node) OnAcquire(ctx context.Context, handle string, lease coord.Lease) 
 		return fmt.Errorf("node: seat %q has no inbox subject", handle)
 	}
 
+	if n.cfg.SeatReady != nil {
+		if err := n.cfg.SeatReady(ctx, handle, lease); err != nil {
+			// The seat is REFUSED rather than attached anyway: a seat
+			// whose in-flight runs could not be recovered would take new
+			// work beside a coding job nothing is tracking.
+			return fmt.Errorf("node: preparing seat %q: %w", handle, err)
+		}
+	}
+
 	opts := n.cfg.BatchOptions
 	if opts == nil {
 		opts = queue.DefaultBatchOptions()
@@ -297,6 +334,9 @@ func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reas
 	n.mu.Lock()
 	delete(n.attached, handle)
 	n.mu.Unlock()
+	if n.cfg.SeatDone != nil {
+		n.cfg.SeatDone(ctx, handle)
+	}
 	n.log.Info("seat_detached", "handle", handle, "reason", reason.String())
 	return nil
 }

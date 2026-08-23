@@ -146,6 +146,16 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		inner, shellQuote(paths.Result()), shellQuote(paths.Err()),
 		shellQuote(paths.ExitCode()), shellQuote(paths.Done()))
 
+	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
+	// installed through nvm, asdf or a similar version manager, whose PATH
+	// entries exist only in a profile a login shell sources. A plain `sh -c`
+	// finds no CLI at all in exactly the images operators build.
+	//
+	// It also means the box's PATH inside the wrapper is the PROFILE's, not
+	// the environment the engine handed the process — which is why the shim
+	// directory is prepended INSIDE the script (see withShimPath) rather
+	// than exported around it: an assignment made outside would be replaced
+	// by the profile before the agent ever ran.
 	pid, err := box.StartBackground(ctx, "sh -lc "+shellQuote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("codingagent: starting %s: %w", r.cli.Name(), err)

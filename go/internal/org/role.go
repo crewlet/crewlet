@@ -361,9 +361,14 @@ type RoleSandbox struct {
 	CodingAgent string `yaml:"coding_agent,omitempty" json:"coding_agent,omitempty"`
 
 	// PauseTTLSeconds bounds how long a sandbox blocked on a clarification
-	// stays paused before it is reaped and re-seeded. Negative means the
-	// provider default; zero means never pause.
-	PauseTTLSeconds float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty"`
+	// stays paused before it is reaped and re-seeded.
+	//
+	// A POINTER, because there are three states and a float64 has two:
+	// UNSET inherits the provider default, an explicit 0 means never pause.
+	// A plain number would read an unset field as "never pause", so every
+	// seat that said nothing would lose its checkout the moment a coding
+	// agent asked a question.
+	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty"`
 
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 

@@ -80,6 +80,17 @@ func DutyTTL(tick time.Duration) time.Duration {
 // the per-tick claim is one store round trip and the holder stays the holder
 // while it keeps ticking.
 func ClaimDuty(backend coord.Backend, owner, nodeID string, tick time.Duration) DutyFunc {
+	return ClaimNamedDuty(backend, DutyName, owner, nodeID, DutyTTL(tick))
+}
+
+// ClaimNamedDuty is [ClaimDuty] for any fleet singleton.
+//
+// The scheduler is not the only one: the sandbox waiter polls every active run
+// in the company rather than only this node's seats, so N nodes running it
+// unclaimed means N reconnects per box per tick and N racing pause reapers.
+// Both want exactly this arrangement, and a second copy of it is how the two
+// come to disagree about what a duty record means.
+func ClaimNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.Duration) DutyFunc {
 	if backend == nil {
 		// No coordination store is the single-node case, which always holds
 		// the duty. Returning nil rather than a function that always says
@@ -88,8 +99,7 @@ func ClaimDuty(backend coord.Backend, owner, nodeID string, tick time.Duration) 
 		// make a single node report itself as one.
 		return nil
 	}
-	ttl := DutyTTL(tick)
-	resource := coord.WorkerResource(DutyName)
+	resource := coord.WorkerResource(duty)
 	return func(ctx context.Context) (bool, error) {
 		lease, err := backend.TryAcquire(ctx, resource, coord.AcquireOptions{
 			Owner:     owner,

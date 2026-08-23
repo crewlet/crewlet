@@ -32,7 +32,7 @@ import (
 // order an operator wrote and no answer at all over a Go map — two seats booted
 // from one config would land on different models, and one seat would change
 // model across a restart. config.Company.ProviderOrder is what preserves it.
-func buildProviders(c *config.Company) (*phase.Registry, error) {
+func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	entries := make([]phase.Entry, 0, len(order))
 	for _, key := range order {
@@ -44,7 +44,7 @@ func buildProviders(c *config.Company) (*phase.Registry, error) {
 			// using it would fall back to another model with nothing said.
 			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, err := buildProvider(key, spec)
+		p, err := buildProvider(key, spec, r)
 		if err != nil {
 			return nil, err
 		}
@@ -59,8 +59,15 @@ func buildProviders(c *config.Company) (*phase.Registry, error) {
 // back a clean 401, which names the provider and the vendor — far easier to
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
-func buildProvider(key string, spec config.LLMProvider) (llm.Provider, error) {
+func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {
 	timeout := time.Duration(spec.TimeoutSeconds * float64(time.Second))
+	// RESOLVED HERE, at the moment the provider is built, which is the only
+	// place a key value ever exists in this process. Tier B stores its
+	// references verbatim — that is what keeps an exported revision free of
+	// resolved secrets — so a backend handed spec.APIKeys directly would
+	// send the literal "${ANTHROPIC_API_KEY}" as its credential and get a
+	// 401 that names the vendor rather than the misconfiguration.
+	keys := spec.ResolvedKeys(r)
 	// Through the accessors, not the raw fields: those apply the bounds and
 	// the defaults, and reading the fields directly would send a zero
 	// cooldown for every provider that did not configure one.
@@ -72,13 +79,13 @@ func buildProvider(key string, spec config.LLMProvider) (llm.Provider, error) {
 	switch spec.Type {
 	case config.LLMAnthropic:
 		return anthropic.New(anthropic.Config{
-			Model: spec.Model, APIKeys: spec.APIKeys, BaseURL: spec.BaseURL,
+			Model: spec.Model, APIKeys: keys, BaseURL: spec.BaseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ThinkingBudget: spec.ReasoningBudgetTokens,
 		})
 	case config.LLMOpenAI, config.LLMOpenAICompatible:
 		return openai.New(openai.Config{
-			Model: spec.Model, APIKeys: spec.APIKeys, BaseURL: spec.BaseURL,
+			Model: spec.Model, APIKeys: keys, BaseURL: spec.BaseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
 		})

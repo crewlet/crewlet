@@ -148,8 +148,22 @@ type RoleSandbox struct {
 	CodingAgent CodingAgent `yaml:"coding_agent,omitempty" json:"coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Override the provider default for this seat."`
 
 	// PauseTTLSeconds bounds how long this seat's blocked sandbox stays
-	// paused. Negative means the provider default; 0 means never pause.
-	PauseTTLSeconds float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" desc:"Paused-box TTL; negative = provider default, 0 = never pause."`
+	// paused. UNSET inherits the provider default; an explicit 0 means
+	// never pause — tear the box down as soon as the run blocks, and
+	// re-seed from the pushed branch when the answer arrives.
+	//
+	// A POINTER, because those are three states and a float64 has only
+	// two: an unset field's zero value would read as "never pause", so
+	// every seat that said nothing would silently lose its checkout the
+	// moment a coding agent asked a question.
+	//
+	// A NEGATIVE VALUE ALSO MEANS INHERIT, and is accepted rather than
+	// refused: -1 is how the field's earlier form spelled it, and a
+	// company document that says so is asking for exactly what leaving it
+	// out now asks for. Refusing it would fail a config over a spelling.
+	// It is never "no expiry" — an unbounded pause is the leak this knob
+	// exists to prevent.
+	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" desc:"Paused-box TTL. Unset (or negative) = provider default; 0 = never pause."`
 
 	// MCP scopes which of the seat's MCP servers the coding agent gets.
 	//

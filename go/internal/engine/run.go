@@ -10,10 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -42,6 +44,16 @@ type Engine struct {
 	// dispatch turns one inbox partition into one turn. Held so a test can
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
+
+	// sandbox is this node's code-work machinery: the coordinator holding
+	// the busy set, the waiter polling detached runs, and the durable row
+	// store behind both. On the ENGINE rather than on an epoch, because
+	// they are facts about this process — rebuilding them on an apply would
+	// forget which seats are mid-run and start a second poll loop against
+	// the same rows.
+	sandboxCoordinator *sandbox.Coordinator
+	sandboxWaiter      *sandbox.Waiter
+	sandboxPending     sandbox.PendingStore
 
 	// onboarded remembers which seats this PROCESS has seen onboarded.
 	//
@@ -117,22 +129,27 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// backends keeps their lifetime — the merged API process outlives the
 	// engine's own shutdown and still needs its broker.
 	e := &Engine{backends: backends, ownsBackends: ownsBackends, onboarded: runner.NewLatch()}
-	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
-	// current, and one that found an empty registry would run a seat with
-	// no tools at all — a company that boots cleanly and can do nothing.
-	if err := e.equip(company); err != nil {
-		if ownsBackends {
-			backends.Close(ctx)
-		}
-		return nil, err
-	}
-	e.epoch.current.Store(company)
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
 			backends.Close(ctx)
 		}
 		return nil, err
 	}
+	// BEFORE equip, because equip registers run_sandbox and only a node
+	// with a coordinator can offer it: a tool whose dependency is absent is
+	// OMITTED rather than registered-and-broken, so an engine that equipped
+	// first would build a code-enabled company whose seats have no code
+	// tool and plan around one anyway.
+	if err := e.buildSandboxRuntime(company); err != nil {
+		return fail(fmt.Errorf("engine: sandbox: %w", err))
+	}
+	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
+	// current, and one that found an empty registry would run a seat with
+	// no tools at all — a company that boots cleanly and can do nothing.
+	if err := e.equip(company); err != nil {
+		return fail(err)
+	}
+	e.epoch.current.Store(company)
 
 	nodeID, err := config.ResolveNodeID(opts.Bootstrap, nil)
 	if err != nil {
@@ -159,7 +176,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
 			Labels: opts.Bootstrap.Node.Labels,
 		},
-		Turn:     e.Dispatch,
+		Turn: e.Dispatch,
+		// Before the mailbox opens and after it closes — see node.Config.
+		// A seat mid-detached-run must have its runs recovered and its mail
+		// parked before anything can deliver to it.
+		SeatReady: func(ctx context.Context, handle string, lease coord.Lease) error {
+			return e.prepareSeat(ctx, handle, lease.Epoch, lease.Owner)
+		},
+		SeatDone: e.releaseSeat,
 		LeaseTTL: leaseTTL(opts.Bootstrap),
 	})
 	if err != nil {
@@ -167,6 +191,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
+	// LAST, because its fleet-singleton duty is claimed under the node's
+	// own incarnation.
+	if err := e.startSandboxWaiter(ctx); err != nil {
+		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
+	}
 	return e, nil
 }
 
@@ -184,7 +213,11 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		d = &Dispatcher{}
 	}
 	if d.Conditions == nil {
-		d.Conditions = e.conditionsFor(opts.AwaitingSandbox)
+		awaiting := opts.AwaitingSandbox
+		if awaiting == nil && e.sandboxCoordinator != nil {
+			awaiting = e.sandboxCoordinator.AwaitingSandbox
+		}
+		d.Conditions = e.conditionsFor(awaiting)
 	}
 	if d.Ledgered == nil {
 		d.Ledgered = inbox.Ledgered
@@ -246,6 +279,10 @@ func (e *Engine) Start(ctx context.Context) error {
 // back every seat, and waits for in-flight handlers before anything closes.
 func (e *Engine) Stop(ctx context.Context) {
 	e.node.Drain(ctx)
+	// After the drain: the waiter's keepalive is what stops a running box
+	// being reaped, so stopping it first would start the orphan clock on
+	// every in-flight run while turns are still finishing.
+	e.stopSandbox()
 	e.node.Stop(ctx)
 	if e.ownsBackends {
 		e.backends.Close(ctx)
@@ -378,6 +415,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	}
 
 	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+	// The moment the turn returns, and before its frame unwinds: the runner
+	// holds the suspended conversation only until then, and a row without
+	// one is a detached run nothing can ever resume.
+	if res.Suspended {
+		e.persistSuspension(ctx, r, req.WorkKey)
+	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this

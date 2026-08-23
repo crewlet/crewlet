@@ -225,3 +225,36 @@ func truncate(s string, n int) string {
 	}
 	return s[:cut] + "…"
 }
+
+// describeResume is describeTurn for a re-entry.
+//
+// The trace comes from the SUSPENDED TURN's row rather than from the event
+// that woke this one, so the resumed phases join the span the original wake
+// started. The completion event that triggered the resume already carries that
+// trace, but a clarification ANSWER does not — it is an ordinary inbound on
+// the conversation, and taking its trace would file the second half of a turn
+// under a different root from its first half.
+func (e *Engine) describeResume(company *Company, in resumeInput) turnTelemetry {
+	t := turnTelemetry{
+		handle:    in.Run.AgentHandle,
+		convKey:   in.Run.ConversationKey,
+		startedAt: time.Now().UTC(),
+		role:      in.Run.Role,
+		agentID:   in.Run.AgentID,
+		trace: events.TraceContext{
+			TraceID: in.Run.TraceID, ParentSpanID: in.Run.SpanID,
+		},
+	}
+	if in.Trigger != nil {
+		t.trigger = types.DescribeTrigger(in.Trigger)
+	}
+	// Re-derived from the org when the row predates a rename, so a resumed
+	// turn is still attributed to a seat that exists.
+	if role := company.Org.AgentSeatByHandle(in.Run.AgentHandle); role != nil {
+		t.role = role.Name
+		if id, ok := company.Org.AgentIDFor(role); ok {
+			t.agentID = id.String()
+		}
+	}
+	return t
+}

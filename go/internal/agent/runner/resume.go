@@ -67,6 +67,9 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.E
 		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling,
 		iteration: state.Round,
 		seed:      state.Answer(answer),
+		// A resumed Execute can suspend AGAIN: the executor may call
+		// run_sandbox a second time to continue in the same box.
+		allowSuspend: true,
 		spent: toolloop.Result{
 			InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
 		},
