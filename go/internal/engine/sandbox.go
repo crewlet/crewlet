@@ -352,6 +352,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	}
 
 	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
+	servers := sandboxMCP(company, seat, gate)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		CodingAgent: string(gate.CodingAgent),
 		PauseTTL:    pauseTTL(gate),
@@ -367,11 +368,48 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			TurnID: t.ID, AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
 			Depth: t.Depth, Chain: t.Chain,
 		},
-		Brief:    brief,
-		Setup:    setup,
-		Spec:     spec,
-		ReuseBox: reuse,
+		Brief:      brief,
+		Setup:      setup,
+		Spec:       spec,
+		MCPServers: servers,
+		ReuseBox:   reuse,
 	})
+}
+
+// sandboxMCP renders the seat's SCOPED coding-agent MCP surface.
+//
+// Only the servers role.sandbox.mcp.servers names — never the seat's whole MCP
+// surface by default. A coding agent inside a box reaches whatever it is given
+// with no per-tool control left, so what it is given is the decision, and it
+// is made here rather than inherited.
+//
+// The credentials are the seat's OWN, inherited down the org chart at build
+// time, so a seat gets the tokens it is entitled to and no others.
+func sandboxMCP(c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]map[string]any {
+	if len(gate.MCP.Servers) == 0 {
+		return nil
+	}
+	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
+	for _, s := range c.Config.MCPServers {
+		servers = append(servers, sandbox.MCPServer{
+			Name: s.Name, Transport: string(s.Transport),
+			Command: s.Command, Args: s.Args, Env: s.Env,
+			URL: s.URL, Headers: s.Headers,
+		})
+	}
+	// RESOLVED HERE, like the run env and for the same reason: an in-box
+	// server has to authenticate, and Tier B stores its references
+	// verbatim.
+	credentials := make(map[string]map[string]string, len(seat.MCPEnv))
+	for name, values := range seat.MCPEnv {
+		resolved, missing := config.EnvOnly().Map("mcp_env."+name, values)
+		if len(missing) > 0 {
+			log.Warn("sandbox_mcp_env_unresolved", "seat", seat.Handle(), "server", name,
+				"hint", "the in-box MCP server will not authenticate")
+		}
+		credentials[name] = resolved
+	}
+	return sandbox.RenderMCP(servers, gate.MCP.Servers, credentials)
 }
 
 // pauseTTL reads the seat's override, distinguishing "inherit" from "never".
