@@ -117,6 +117,41 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		s.assertUntouched(t, q, topic, neighbour, before, "deleting an absent subscription")
 	})
 
+	t.Run("a_hold_does_not_resurrect_a_deleted_subscription", func(t *testing.T) {
+		t.Parallel()
+		// DeleteSubscription exists so a decommissioned role's inbox cannot
+		// accumulate undeliverable events for ever. A gate arriving after the
+		// decommission — a sandbox hold or a config shed racing it — must not
+		// undo that.
+		//
+		// Found by building the full verb matrix at the DELETED lifecycle
+		// point rather than probing the verb that looked suspicious: six verbs
+		// left the subscription deleted and one recreated it, which is not the
+		// one that would have been guessed. Measured on the twin, where
+		// PauseTopic minted the subscription and every event published to that
+		// topic was then retained for a role that no longer existed.
+		backlog := s.needBacklog(t)
+		q := s.start(t)
+		const topic, group = "seat.decommissioned", "grp"
+
+		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+			t.Fatalf("EnsureSubscription: %v", err)
+		}
+		if deleted, err := q.DeleteSubscription(ctx, topic, group); err != nil || !deleted {
+			t.Fatalf("DeleteSubscription = (%v, %v), want (true, nil)", deleted, err)
+		}
+
+		if err := q.PauseTopic(ctx, topic, group, "sandbox"); err != nil {
+			// Refusing a hold on a pair it does not know is a fine answer.
+			t.Skipf("backend refuses a hold on an unknown pair: %v", err)
+		}
+		publish(t, q, topic, newEvent("after-decommission"))
+
+		if got := backlog(q, topic, group); len(got) != 0 {
+			t.Fatalf("a hold resurrected a deleted subscription; it retained %v", labelsOf(got))
+		}
+	})
+
 	t.Run("a_deferral_spends_no_dead_letter_budget", func(t *testing.T) {
 		t.Parallel()
 		// A seat whose lease moved is not a failed handler. If a deferral

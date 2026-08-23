@@ -778,13 +778,27 @@ func (q *Queue) PauseDelivery(context.Context) error {
 
 // PauseTopic takes one reason's hold on this client's attachment.
 //
-// The subscription is created if absent, so a gate taken before anything
-// attaches still retains the mail it is gating rather than dropping it.
+// It does NOT create the subscription, and used to. A hold is process-local
+// state about one attachment; on a real broker it gates local dispatch and
+// creates nothing remote, so a twin that minted a subscription here was
+// modelling something no backend does — and being kinder than the broker is
+// this file's cardinal sin, because the twin certifies what it models.
+//
+// It also had a consequence with real blast radius. DeleteSubscription exists
+// so a decommissioned role's inbox cannot accumulate undeliverable events for
+// ever; measured, a stray PauseTopic afterwards — a sandbox gate or a config
+// shed racing the decommission — RESURRECTED the subscription, which then
+// retained every event published to that topic for a role that no longer
+// existed. Exactly the accumulation the verb exists to prevent.
+//
+// The old reason (a gate taken before anything attaches should still retain the
+// mail it gates) was answering a question the contract already answers the
+// other way: publishing to a topic with no subscription drops the event, and
+// EnsureSubscription is how a caller asks for retention.
 func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
-	q.broker.ensureLocked(topic, group)
 	held, ok := q.pauses[key]
 	if !ok {
 		held = map[string]struct{}{}

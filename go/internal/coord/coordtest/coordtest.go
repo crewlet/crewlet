@@ -63,9 +63,17 @@
 //     before a claim to simulate a slow store consumed none of the TTL,
 //     because the lease only starts when the record is written. Two
 //     "verifications" that reached nothing they claimed to.
-//   - A HARNESS MUST TELL "BUILD FAILED" FROM "CAUGHT". Keying on a non-zero
-//     exit made every non-compiling mutation report as caught; thirty-six
-//     results rested on that until they were re-run three-state.
+//   - A HARNESS MUST TELL "BUILD FAILED" FROM "CAUGHT", and both from "DID NOT
+//     LAND". Keying on a non-zero exit made every non-compiling mutation
+//     report as caught; thirty-six results rested on that until they were
+//     re-run three-state. The fourth state is the dangerous one: a patch whose
+//     anchor no longer matches leaves the file untouched, so an unmodified
+//     tree passes and the harness calls it a HOLE. Three were reported that
+//     way here — two guards living in a shared helper, and one whose
+//     signature contains a close paren inside its return type, breaking the
+//     pattern. A false green is a missed catch; a false finding sends someone
+//     to change working code. Compare a marker count before and after, and
+//     report a patch that did not apply as its own verdict.
 //   - A CONTROL SET NEEDS A ROW EXPECTED TO COME BACK CLEAN, for a reason
 //     written down. Without one, a harness biased toward CAUGHT and a suite
 //     that catches everything are indistinguishable. The documented meta gap
@@ -80,6 +88,19 @@
 //     here blamed the suite and the backend respectively on no evidence beyond
 //     a timer firing; both now report the measurement and name what each
 //     reading implies.
+//   - A WRAPPER'S VERDICT IS NOT THE BACKEND'S VERDICT. Faulty short-circuits
+//     ABOVE the backend, so the tri-state cases exercise the wrapper and never
+//     reach a backend's own handling of an unreachable store — full coverage
+//     in the contract suite, near-zero coverage of the code implementing it,
+//     and the number looks perfect. Measured: five of eight verbs in the twin
+//     could lose their context guard with nothing failing.
+//   - ENUMERATE THE LIFECYCLE POINTS AT WHICH EACH VERB IS SENT, which is a
+//     different axis from what it is sent. This suite sent nine awkward
+//     resource names and never sent a Release at the one moment that mattered
+//     — a lease that had lapsed and was never re-claimed — where the two
+//     backends had answered differently for as long as both existed. Build
+//     the whole verb-by-state matrix; the verb you would suspect is chosen
+//     from inside the blind spot.
 //   - ENUMERATE WHAT THE SUITE SENDS, not only what it asserts. No mutation
 //     can reveal an input that never arrives — both gaps found that way (no
 //     resource name ever needed encoding, no TTL ever exceeded the maximum).
