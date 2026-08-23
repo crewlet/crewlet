@@ -57,6 +57,26 @@
 // It has already cost that twice in the sibling queue suite. The grep costs
 // about fifteen seconds.
 //
+// And a gap in a suite comes in two kinds, which need different hunting:
+//
+//   - An OBSERVATION gap applies the stimulus and cannot see the result. A
+//     mutation reveals it, so it belongs in a control set — the meta codec is
+//     one, and it sits in the mutation set with CLEAN as its expected verdict
+//     so the gap cannot silently close or widen.
+//   - A STIMULUS gap never sends the input at all. No mutation can reveal it,
+//     because nothing a backend does changes an answer the suite never asks
+//     for; the only way to find one is to read what the cases SEND. Both of
+//     this suite's were found that way — no resource name ever needed
+//     encoding, and no TTL ever exceeded the advertised maximum.
+//
+// A stimulus gap is closeable when the effect reaches a value the API REPORTS:
+// a silently clamped TTL is invisible in behaviour for five minutes but shows
+// up immediately in the ExpiresAt of two claims. It stays open when the only
+// observable is elapsed time, because then telling the two apart costs the
+// wait. Assert the difference between two reported values, never the ordering
+// of two timestamps — see expires_at_is_a_utc_deadline_on_the_stores_clock for
+// why ordering admits a second reason.
+//
 // The same applies to what a case QUIETLY assumes. Every meta payload here is
 // JSON-shaped, which is why none of them could see that a value's Go type does
 // not survive a real backend's round trip; that gap is stated at the meta

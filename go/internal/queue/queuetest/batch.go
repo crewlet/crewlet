@@ -34,6 +34,31 @@ func (s *suite) runBatch(t *testing.T) {
 		batches.awaitSizes(t, "one batch per publish", 1, 1)
 	})
 
+	t.Run("a_negative_linger_behaves_as_no_linger", func(t *testing.T) {
+		t.Parallel()
+		// The linger clamp has two halves and exactly one is reachable from
+		// here. The CEILING (60s) is not: this suite may never depend on a
+		// window above it, so no behaviour above it is observable, and unlike
+		// a lease deadline a linger has no reported value to compare — the
+		// only observable is elapsed time, so probing it would cost a test
+		// that sleeps for a minute. That half stays a documented gap.
+		//
+		// The FLOOR is reachable and costs nothing: a negative window must
+		// behave as no window at all. A backend handing a negative duration
+		// straight to a broker API is entitled to nothing in particular from
+		// it, which is exactly why the contract clamps and why a backend that
+		// forwards the raw value should be caught here rather than in
+		// production.
+		q := s.start(t)
+		batches := newBatchJournal()
+		subscribeBatch(t, q, "t.neg", "g", recordingBatchHandler(batches),
+			queue.NewBatchOptions(-5, 20))
+
+		publish(t, q, "t.neg", newConvEvent("a", "c1"))
+		batches.await(t, "delivery under a negative linger",
+			func(got [][]string) bool { return len(got) == 1 && equalStrings(got[0], []string{"a"}) })
+	})
+
 	t.Run("linger_coalesces_same_key_events_into_one_batch", func(t *testing.T) {
 		t.Parallel()
 		// The property inbox batching exists for: events that queued

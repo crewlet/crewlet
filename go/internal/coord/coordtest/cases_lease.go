@@ -398,10 +398,18 @@ var leaseCases = []testCase{
 					l.Resource, l.ExpiresAt.Location())
 			}
 		}
-		if !long.ExpiresAt.After(short.ExpiresAt) {
-			h.t.Fatalf("a %v TTL did not outlast a %v one: %v vs %v",
-				LongTTL, ShortTTL, long.ExpiresAt, short.ExpiresAt)
-		}
+		// An INTERVAL, never an ordering. "The longer TTL's deadline is
+		// later" is obviously right and admits a second reason: a store
+		// that clamps both claims to one ceiling still stamps the second
+		// a few hundred nanoseconds after the first, purely because it
+		// happened second. That is not a hypothetical — the sibling case
+		// below this one shipped with exactly that assertion and a
+		// clamping mutation passed it at 487ns of "later". A gap that
+		// must be minutes is asserted in minutes.
+		//
+		// This subsumes the ordering check rather than supplementing it:
+		// a deadline that went backwards yields a negative gap and fails
+		// here too, so there is no weaker form left for anyone to copy.
 		if got := long.ExpiresAt.Sub(short.ExpiresAt); got < LongTTL-ShortTTL-time.Minute {
 			h.t.Fatalf("deadlines %v apart for TTLs %v apart — the TTL is not reaching the record",
 				got, LongTTL-ShortTTL)
