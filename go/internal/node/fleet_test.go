@@ -381,15 +381,18 @@ func TestFleet(t *testing.T) {
 				// consumer stays up — and freshness, not the consumer,
 				// is what has to stop it working.
 				//
-				// TWO defences answer this, and they are redundant on
-				// purpose: OnAdmission quiesces the mailbox so no
-				// delivery arrives, and MayStart refuses the turn if one
-				// does anyway — the second covering the window before
-				// the first has been applied. Measured: removing EITHER
-				// leaves this case green, removing BOTH fails it with
-				// node-a working the seat. So a reader who deletes one
-				// and sees green has not found dead code, they have
-				// spent the margin.
+				// TWO defences answer this: OnAdmission quiesces the
+				// mailbox so no delivery arrives, and MayStart refuses
+				// the turn if one does anyway. This case is timed to sit
+				// squarely in the window where the first is what has to
+				// hold — the work is published once node-a has stopped
+				// admitting but before its lease has lapsed — because
+				// that window can be entered deterministically, while
+				// the later one (attached, lease genuinely gone, drop
+				// not yet noticed) is a race between node-a's heartbeat
+				// and node-b's sweep that either can win. MayStart's own
+				// behaviour is pinned in the seat package, on a fake
+				// clock that can hold a window open exactly.
 				f := newFleet(t, sub, "ceo")
 				cut := &partitionable{Backend: f.backend}
 				f.backend = cut
@@ -399,23 +402,29 @@ func TestFleet(t *testing.T) {
 					return len(a.Attached()) == 1
 				})
 				f.ensureMailboxes()
-
-				cut.isolate("node-a:1")
 				b := f.start("node-b")
-				eventually(t, "node-b to take over the lapsed seat", func() bool {
-					return len(b.Attached()) == 1
-				})
 
-				// node-a is still attached. If attachment were what
-				// gated a turn, both nodes would now be consuming one
-				// seat — the split brain every other guarantee rests on
-				// not happening.
+				// From here node-a cannot prove it still owns the seat.
+				// It KEEPS it — an unreachable store is not evidence of
+				// anything — so what has to stop it working is
+				// admission, not ownership.
+				cut.isolate("node-a:1")
+				eventually(t, "node-a to stop admitting work", func() bool {
+					_, ok := a.Host().MayStart("ceo")
+					return !ok
+				})
 				if len(a.Attached()) != 1 {
 					t.Fatalf("node-a detached itself (attached=%v) — the case this "+
 						"asserts about no longer arises", a.Attached())
 				}
 
+				// Published into a mailbox node-a is still consuming. If
+				// attachment were what gated a turn, node-a would take
+				// it right now.
 				f.send("ceo", "w-after-loss")
+				eventually(t, "node-b to take over the lapsed seat", func() bool {
+					return len(b.Attached()) == 1
+				})
 				eventually(t, "the successor to run the work", func() bool {
 					return len(f.workSeen("ceo")) >= 1
 				})
