@@ -1,0 +1,419 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/agent/extension"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+var log = logging.Get("agent.runner")
+
+// Caps are the per-phase round budgets and their extension ceilings.
+type Caps struct {
+	PlanRounds     int
+	ExecuteRounds  int
+	ReviewRounds   int
+	PlanCeiling    int
+	ExecuteCeiling int
+	ExtensionStep  int
+	ExtensionOn    bool
+}
+
+// Config is everything a runner needs that does not change between rounds.
+type Config struct {
+	Seat     prompts.Seat
+	Registry *tools.Registry
+	Models   *phase.Registry
+	Caps     Caps
+
+	// Judge decides round-cap extensions. Nil means every exhaustion goes
+	// straight to the rescue path.
+	Judge extension.Judge
+
+	// Budget is the shared token counter a turn charges. Nil disables the
+	// per-round charge, which is the embedded single-node case where no
+	// counter is shared with anyone.
+	Budget toolloop.BudgetMeter
+
+	// Task is the ask, and Conversation is the prior-turns block. Both are
+	// fixed for the turn.
+	Task         string
+	Conversation string
+
+	// AlwaysOn are tools Execute has whatever the plan named.
+	AlwaysOn []string
+
+	// SkipNames are the meta-tools the ledger filters out.
+	SkipNames []string
+}
+
+// Runner implements [turn.Phases] against real models and real tools.
+type Runner struct {
+	cfg Config
+}
+
+var _ turn.Phases = (*Runner)(nil)
+
+// New builds a runner.
+func New(cfg Config) (*Runner, error) {
+	switch {
+	case cfg.Registry == nil:
+		return nil, fmt.Errorf("runner: no tool registry")
+	case cfg.Models == nil:
+		return nil, fmt.Errorf("runner: no provider registry")
+	}
+	return &Runner{cfg: cfg}, nil
+}
+
+// Plan runs the planning pass.
+//
+// The planner is given the META-TOOLS and the slim catalogue, not the whole of
+// every MCP server: a real server publishes dozens of tools and a planner
+// shown all of them plans against a wall of text. Discovery is a tool call,
+// which also keeps the prompt prefix stable while a server's catalogue changes
+// underneath.
+func (r *Runner) Plan(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Plan, turn.Surface, error) {
+	snapshot := r.cfg.Registry.Snapshot()
+	submit := &submitted[planPayload]{
+		name: SubmitPlanTool, desc: submitPlanDescription, schema: planSchema, decode: decodePlan,
+	}
+	surface, err := r.surfaceWith(phase.Plan, snapshot, submit, r.planActive(snapshot))
+	if err != nil {
+		return turn.Plan{}, turn.Surface{}, err
+	}
+
+	system := prompts.BuildPlan(r.cfg.Seat, prompts.PlanInput{
+		ToolCatalogue:  r.cfg.Registry.Catalogue(),
+		AvailableTools: snapshot.Names(),
+	})
+	user := prompts.BuildPhaseUserMessage(prompts.UserMessage{
+		TaskDescription:     r.taskFor(notes),
+		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
+		ConversationHistory: r.cfg.Conversation,
+	})
+
+	res, err := r.runPhase(ctx, phase.Plan, surface, system, user,
+		r.cfg.Caps.PlanRounds, r.cfg.Caps.PlanCeiling, round)
+	if err != nil {
+		return turn.Plan{}, turn.Surface{}, err
+	}
+
+	payload, submitted := submit.Value()
+	if !submitted {
+		// THE RESCUE PATH. A planner that ran out of rounds, or simply
+		// stopped, has produced reasoning and no decision. Discarding the
+		// turn wastes everything it did; inventing a full plan puts words
+		// in its mouth. A `direct` plan with its own text as the reasoning
+		// is the honest middle: Execute improvises against the full
+		// surface, and the engine's forced-Review net still catches a
+		// non-delivery.
+		log.Warn("plan_never_submitted", "round", round, "rounds_used", res.Rounds)
+		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
+	}
+
+	return turn.Plan{
+		Decision:        turn.PlanDecision(payload.Decision),
+		Reasoning:       payload.Reasoning,
+		Summary:         payload.Summary(),
+		ToolsNeeded:     payload.ToolsNeeded,
+		SuccessCriteria: payload.SuccessCriteria,
+		Calls:           calls(surface),
+	}, describe(surface), nil
+}
+
+// Execute runs the plan.
+//
+// Its surface is what the plan NAMED plus the always-on set — not the whole
+// catalogue — because a plan that named its delivery tool should be executing
+// it, not re-deciding. A `direct` plan is the exception: it committed to one
+// shot against everything, so it gets everything.
+func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []ledger.Iteration) (turn.Execution, turn.Surface, error) {
+	snapshot := r.cfg.Registry.Snapshot()
+	active := r.executeActive(snapshot, p)
+	surface, err := r.surfaceWith(phase.Execute, snapshot, nil, active)
+	if err != nil {
+		return turn.Execution{}, turn.Surface{}, err
+	}
+
+	_, phantom := phase.ResolvePlanned(p.ToolsNeeded, snapshot.Names())
+	system := prompts.BuildExecute(r.cfg.Seat, prompts.ExecuteInput{
+		PlanSummary:    p.Summary,
+		AvailableTools: surface.Active(),
+		ToolCatalogue:  r.cfg.Registry.Catalogue(),
+		// Named explicitly, because a planner that guessed an MCP tool's
+		// name wrong and is not told so assumes the tool exists, fails to
+		// call it, and settles for a text reply that delivers nothing.
+		PhantomTools: phantom,
+	})
+	user := prompts.BuildPhaseUserMessage(prompts.UserMessage{
+		TaskDescription:     r.cfg.Task,
+		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
+		ConversationHistory: r.cfg.Conversation,
+	})
+
+	res, err := r.runPhase(ctx, phase.Execute, surface, system, user,
+		r.cfg.Caps.ExecuteRounds, r.cfg.Caps.ExecuteCeiling, round)
+	if err != nil {
+		return turn.Execution{}, turn.Surface{}, err
+	}
+
+	return turn.Execution{
+		Text:            res.Text,
+		Calls:           calls(surface),
+		MissingTools:    missingTools(surface, snapshot),
+		ExhaustedRounds: res.Exhausted,
+		Suspended:       res.Suspended,
+	}, describe(surface), nil
+}
+
+// Review judges the round.
+//
+// It is given the tool LOGS as evidence and told the narration is not. A
+// reviewer shown only what Execute said about itself grades the prose.
+func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Execution, history []ledger.Iteration) (turn.Review, error) {
+	snapshot := r.cfg.Registry.Snapshot()
+	submit := &submitted[reviewPayload]{
+		name: SubmitReviewTool, desc: submitReviewDescription, schema: reviewSchema, decode: decodeReview,
+	}
+	surface, err := r.surfaceWith(phase.Review, snapshot, submit, nil)
+	if err != nil {
+		return turn.Review{}, err
+	}
+
+	// VERBATIM. Review's evidence log takes the zero FormatOptions: the
+	// budgets belong to the cross-round ledger, and a reviewer judging an
+	// elided log is judging a summary and calling it evidence.
+	system := prompts.BuildReview(r.cfg.Seat, prompts.ReviewInput{
+		PlanSummary:       p.Summary,
+		ExecuteSummary:    reviewArtifact(e),
+		PlanToolLog:       ledger.FormatCalls(p.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
+		ExecuteToolLog:    ledger.FormatCalls(e.Calls, ledger.FormatOptions{Skip: r.cfg.SkipNames}),
+		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
+	})
+
+	res, err := r.runPhase(ctx, phase.Review, surface, system, r.cfg.Task,
+		r.cfg.Caps.ReviewRounds, 0, round)
+	if err != nil {
+		return turn.Review{}, err
+	}
+
+	payload, submitted := submit.Value()
+	if !submitted {
+		// A reviewer that never decided must not silently pass the turn.
+		// Defaulting to `done` here is the difference between "the work
+		// was judged good" and "nothing judged it", and those look
+		// identical downstream. Loop back instead — the delivery gate and
+		// the stall guard bound how long that can go on.
+		log.Warn("review_never_submitted", "round", round, "rounds_used", res.Rounds)
+		return turn.Review{
+			Decision: phase.SelfIterate,
+			Notes: "The review phase produced no decision. Re-check the plan's " +
+				"success criteria against what Execute actually did, and call " +
+				SubmitReviewTool + ".",
+		}, nil
+	}
+	return turn.Review{
+		Decision:      phase.Decision(payload.Decision),
+		Notes:         payload.Notes,
+		CompletedWork: payload.CompletedWork,
+		FinalArtifact: payload.FinalArtifact,
+	}, nil
+}
+
+// runPhase drives one phase's loop, extending it when the judge allows.
+//
+// The extension loop lives here rather than in the extension package because
+// only the caller knows what FINISHING looks like for its phase — Plan exits
+// through its submission tool, Execute by returning text with no calls — and a
+// generic loop would have to be told, which is the same thing said twice.
+func (r *Runner) runPhase(ctx context.Context, ph phase.Phase, surface *tools.Surface,
+	system, user string, rounds, ceiling, iteration int,
+) (phaseResult, error) {
+	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	// A chain even for one member. The wrapper is a pass-through there, and
+	// uniform behaviour is worth more than the allocation: a one-member seat
+	// and a three-member one then fail, log and report identically.
+	provider, err := chain.New(members, chain.Options{})
+	if err != nil {
+		return phaseResult{}, fmt.Errorf("runner: %s: %w", ph, err)
+	}
+
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: system},
+		{Role: llm.RoleUser, Content: user},
+	}
+	policy := extension.Policy{
+		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
+	}
+
+	var out phaseResult
+	budget := rounds
+	for {
+		res, err := toolloop.Run(ctx, toolloop.Config{
+			Provider: provider, Messages: messages, Surface: surface,
+			MaxRounds: budget, Budget: r.cfg.Budget,
+		})
+		if err != nil {
+			return phaseResult{}, fmt.Errorf("runner: %s: %w", ph, err)
+		}
+		out.Rounds += res.RoundsUsed
+		out.Text = res.Text
+		out.Suspended = res.Suspended
+		out.Exhausted = res.ExhaustedRounds
+		messages = res.Messages
+
+		if res.Suspended || !res.ExhaustedRounds {
+			return out, nil
+		}
+		granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, extension.Request{
+			Phase: ph, Task: r.cfg.Task, Calls: calls(surface),
+			LastText: res.Text, RoundsUsed: out.Rounds,
+		})
+		if granted <= 0 {
+			log.Info("phase_not_extended", "phase", ph, "iteration", iteration,
+				"rounds_used", out.Rounds, "reason", decision.Reason)
+			return out, nil
+		}
+		log.Info("phase_extended", "phase", ph, "iteration", iteration,
+			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
+		messages = append(messages, llm.Message{
+			Role:    llm.RoleUser,
+			Content: extension.Nudge(ph, granted, decision.Reason),
+		})
+		budget = granted
+	}
+}
+
+type phaseResult struct {
+	Text      string
+	Rounds    int
+	Exhausted bool
+	Suspended bool
+}
+
+// surfaceWith builds a phase surface, registering the phase's submission tool
+// on a PRIVATE copy of the snapshot.
+//
+// Private because the tool is per-phase state: two phases of one turn each get
+// their own, and registering into the shared registry would make one phase's
+// submission visible to the next.
+func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit tools.Callable, active []string) (*tools.Surface, error) {
+	if submit != nil {
+		var err error
+		snapshot, err = snapshot.With(tools.Entry{Tool: submit, Origin: tools.OriginBuiltin})
+		if err != nil {
+			return nil, fmt.Errorf("runner: %s: %w", ph, err)
+		}
+		active = append([]string{submit.Name()}, active...)
+	}
+	return tools.NewSurface(ph.String(), snapshot, active), nil
+}
+
+// planActive is what the planner is offered: its submission tool plus the
+// first-party tools. MCP tools are reachable through discovery.
+func (r *Runner) planActive(snapshot tools.Snapshot) []string {
+	var out []string
+	for _, e := range snapshot.Entries() {
+		if _, fromMCP := e.FromMCP(); !fromMCP {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// executeActive is what the plan named plus the always-on set — or everything,
+// for a `direct` plan that committed to one shot.
+//
+// No filtering and no dedupe. [tools.Surface.Activate] is the gate: it admits
+// nothing the snapshot resolves and is idempotent, so a name the planner
+// guessed wrong is dropped there and a repeat costs nothing. Filtering here as
+// well was written, mutated away, and nothing noticed — two guards for one
+// property, with the doc comment attached to the one that was not doing the
+// work.
+//
+// Dropping a phantom rather than refusing it is deliberate: the planner
+// guessed at an MCP surface it could not see, the delivery gate already
+// reports that, and failing the phase would turn a recoverable mis-guess into
+// a lost turn.
+func (r *Runner) executeActive(snapshot tools.Snapshot, p turn.Plan) []string {
+	if p.Decision == turn.PlanDirect {
+		return snapshot.Names()
+	}
+	return append(slices.Clone(p.ToolsNeeded), r.cfg.AlwaysOn...)
+}
+
+// taskFor prefixes the reviewer's correction to the ask.
+//
+// PREFIXED to the user message rather than appended to the task description
+// itself: the task text also feeds knowledge search, the sandbox brief and the
+// episode record, all of which want the requester's actual ask and not the
+// engine's running commentary on it.
+func (r *Runner) taskFor(notes string) string {
+	if strings.TrimSpace(notes) == "" {
+		return r.cfg.Task
+	}
+	return r.cfg.Task + "\n\nThe previous round was reviewed. What to do differently:\n" + notes
+}
+
+// calls converts a surface's record into ledger calls.
+func calls(s *tools.Surface) []ledger.Call {
+	recorded := s.Calls()
+	out := make([]ledger.Call, 0, len(recorded))
+	for _, c := range recorded {
+		out = append(out, ledger.Call{Name: c.Name, Args: c.Args, Result: c.Output, Failed: c.Failed})
+	}
+	return out
+}
+
+// describe renders the surface the delivery gate judges against.
+func describe(s *tools.Surface) turn.Surface {
+	u := s.Universe()
+	return turn.Surface{Catalogue: u.Names(), MCPTools: u.MCPNames(), KnownReads: u.KnownReads()}
+}
+
+// missingTools are names the phase called that the surface did not have.
+//
+// Membership in the snapshot is the single source of truth. Matching on the
+// failure TEXT instead would flag a false positive the moment a legitimate
+// tool's own output began with the same words.
+func missingTools(s *tools.Surface, snapshot tools.Snapshot) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range s.CalledNames() {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if _, ok := snapshot.Lookup(name); !ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// reviewArtifact bounds the draft handed to the reviewer.
+//
+// The same budget the cross-round ledger gives an artifact, because it is the
+// same content answering the same question: enough to judge, and enough for
+// the next round to extend rather than rewrite.
+func reviewArtifact(e turn.Execution) string {
+	if e.Text == "" {
+		return "(empty)"
+	}
+	return ledger.Elide(e.Text, ledger.ArtifactLimit)
+}
