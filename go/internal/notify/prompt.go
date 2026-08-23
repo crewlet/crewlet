@@ -4,6 +4,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Prompt is everything the spine needs to know about ONE vendor.
@@ -105,6 +107,16 @@ type Parties interface {
 type Party struct {
 	Handle string
 	Name   string
+
+	// AgentID is the seat's derived runtime id, and the ZERO VALUE is
+	// meaningful twice over: a human seat never has one, and neither does
+	// a party the registry could not derive one for. Both mean "not
+	// addressable as an agent", which is the only thing a caller does with
+	// it — so the two need not be told apart here.
+	//
+	// Derived rather than looked up (a UUIDv5 over org name and handle),
+	// which is what lets one node address a seat another node is running.
+	AgentID uuid.UUID
 
 	// Human marks a seat that is addressable and never spawned. It changes
 	// what a prompt TELLS the agent: a human replies on the external
