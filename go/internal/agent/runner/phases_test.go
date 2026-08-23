@@ -90,10 +90,16 @@ func text(s string) llm.Completion { return llm.Completion{Content: s} }
 type stubTool struct {
 	name string
 	out  string
+	desc string
 }
 
-func (s stubTool) Name() string               { return s.name }
-func (s stubTool) Description() string        { return s.name + " does a thing" }
+func (s stubTool) Name() string { return s.name }
+func (s stubTool) Description() string {
+	if s.desc != "" {
+		return s.desc
+	}
+	return s.name + " does a thing"
+}
 func (s stubTool) Parameters() map[string]any { return nil }
 func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: s.out}, nil
@@ -125,8 +131,20 @@ func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry
 		tools.MCPOrigin("slack"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := reg.RegisterWith(stubTool{name: "slack_history", out: "history"},
-		tools.MCPOrigin("slack"), tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
+	// A MULTI-LINE description, because a real MCP server publishes
+	// paragraphs and a listing is a list: an entry that spilled onto a
+	// second line would break the one-tool-per-line shape a model reads it
+	// as.
+	if err := reg.RegisterWith(stubTool{
+		name: "slack_history", out: "history",
+		desc: "Read a channel's history.\n\nAccepts a cursor for paging, and\nreturns up to 200 messages.",
+	}, tools.MCPOrigin("slack"), tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// A SECOND server, so "list one server's tools" is distinguishable from
+	// "list every MCP tool". With one server the filter is unobservable.
+	if err := reg.RegisterWith(stubTool{name: "jira_create", out: "created"},
+		tools.MCPOrigin("jira"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -276,8 +294,12 @@ func TestExecuteGetsWhatThePlanNamedPlusTheAlwaysOnSet(t *testing.T) {
 	}
 	offered := toolNames(prov.requestsFor("execute")[0].Tools)
 	slices.Sort(offered)
-	if !slices.Equal(offered, []string{"reflect", "slack_post"}) {
-		t.Errorf("offered %v, want the plan's tool plus the always-on set", offered)
+	// The discovery pair is always present: a phase that cannot discover a
+	// tool cannot recover from a planner that guessed a name wrong, and the
+	// delivery gate's own correction tells it to use exactly these two.
+	want := []string{"activate_tool", "list_mcp_server_tools", "reflect", "slack_post"}
+	if !slices.Equal(offered, want) {
+		t.Errorf("offered %v, want the plan's tool, the always-on set and discovery", offered)
 	}
 }
 

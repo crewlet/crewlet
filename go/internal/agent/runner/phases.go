@@ -326,7 +326,24 @@ func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit too
 		}
 		active = append([]string{submit.Name()}, active...)
 	}
-	return tools.NewSurface(ph.String(), snapshot, active), nil
+
+	// The discovery pair reaches its surface through a closure, because
+	// there is a real cycle here: activate must mutate the same Surface the
+	// loop reads its tool definitions from, so the tools cannot exist
+	// before the surface — and the surface cannot resolve them until they
+	// are in its snapshot. The closure is read at call time, by which point
+	// the surface exists.
+	var surface *tools.Surface
+	for _, tool := range discoveryTools(func() *tools.Surface { return surface }) {
+		var err error
+		snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
+		if err != nil {
+			return nil, fmt.Errorf("runner: %s: %w", ph, err)
+		}
+		active = append(active, tool.Name())
+	}
+	surface = tools.NewSurface(ph.String(), snapshot, active)
+	return surface, nil
 }
 
 // planActive is what the planner is offered: its submission tool plus the
