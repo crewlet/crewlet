@@ -122,6 +122,37 @@ for (const want of ["plan", "execute", "review"]) {
   }
 }
 
+// The spend rollup. store.js takes it two ways and both have to work: a
+// snapshot is accepted only `if (snap.tokens && snap.tokens.totals)`, and a
+// push is stored as-is for views/spend.js to read `.since_days` off. A list of
+// raw records passes neither, and the Spend room renders blank with the
+// numbers sitting in memory the whole time.
+if (state.tokens === null) {
+  problems.push(
+    "no spend rollup: every `tokens` frame was rejected, so the Spend room " +
+      "has nothing to draw",
+  );
+} else {
+  if (!state.tokens.totals) {
+    problems.push(
+      "the spend rollup has no `totals`: applySnapshot requires it, so a " +
+        "reconnecting tab would drop the rollup it was just sent",
+    );
+  }
+  if (!state.tokens.since_days) {
+    problems.push(
+      "the spend rollup has no `since_days`: the view prints it beside the " +
+        "numbers and renders a 0-day window without it",
+    );
+  }
+  if (!Array.isArray(state.tokens.by_phase)) {
+    problems.push(
+      "`by_phase` is not an array: views/spend.js reads `.length` off it and " +
+        "throws, taking the whole room down",
+    );
+  }
+}
+
 if (flags.includes("--print")) {
   console.log(JSON.stringify({
     agents: state.agents,

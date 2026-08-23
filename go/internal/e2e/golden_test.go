@@ -139,6 +139,22 @@ func (c *capture) seatStates(t *testing.T) map[string][]string {
 	return out
 }
 
+// lastRollup returns the most recent `tokens` frame's payload, or nil.
+func (c *capture) lastRollup(t *testing.T) map[string]any {
+	t.Helper()
+	var out map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string         `json:"kind"`
+			Data map[string]any `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) == nil && env.Kind == "tokens" {
+			out = env.Data
+		}
+	}
+	return out
+}
+
 // eventTypes reports the type of every `event` frame, in order.
 func (c *capture) eventTypes(t *testing.T) []string {
 	t.Helper()
@@ -215,6 +231,12 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	waitFor(t, "the turn to complete", func() bool {
 		return slices.Contains(frames.eventTypes(t), "agent_turn_completed")
 	})
+	// And the spend rollup, which rides the shared tick rather than the
+	// publish path — so it lands AFTER the turn ends, and a capture that
+	// stopped at the turn would leave the push path unexercised.
+	waitFor(t, "the spend rollup", func() bool {
+		return slices.Contains(frames.kinds(t), "tokens")
+	})
 	cancel()
 
 	// --- what the model was actually asked ---------------------------- //
@@ -262,6 +284,20 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	}
 	if model, _ := calls[len(calls)-1]["model"].(string); model != "claude-golden" {
 		t.Errorf("the live call names model %q, not the one that served it", model)
+	}
+
+	// --- and what the turn cost ---------------------------------------- //
+	rollup := frames.lastRollup(t)
+	if rollup == nil {
+		t.Fatal("no spend rollup reached the dashboard")
+	}
+	totals, _ := rollup["totals"].(map[string]any)
+	if n, _ := totals["total_tokens"].(float64); n <= 0 {
+		t.Errorf("the rollup reports %v tokens for a turn that ran three "+
+			"phases", totals["total_tokens"])
+	}
+	if phases, _ := rollup["by_phase"].([]any); len(phases) != 3 {
+		t.Errorf("by_phase has %d rows, want one per phase", len(phases))
 	}
 
 	// --- and what the store kept -------------------------------------- //

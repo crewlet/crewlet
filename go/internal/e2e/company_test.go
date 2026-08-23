@@ -50,6 +50,11 @@ turn_engine:
   plan_max_tool_rounds: 3
 `
 
+// tickInterval is the shared tick's cadence here. Short enough that the spend
+// rollup lands inside a test, long enough not to drown the capture in health
+// frames.
+const tickInterval = 25 * time.Millisecond
+
 // node is a running merged node: engine and API in one process, exactly as
 // `crewlet run` assembles them.
 type node struct {
@@ -88,7 +93,16 @@ func start(t *testing.T) *node {
 	app := api.New(api.Options{
 		Bootstrap:    &boot,
 		QueueBackend: e.Backends().Queue.Backend(),
-		Sources:      queries.Sources{Events: e.Backends().Store.Events()},
+		Sources: queries.Sources{
+			Events:  e.Backends().Store.Events(),
+			Company: func() *config.Company { return cfg },
+		},
+		// The shared tick, sped up. It owns the spend rollup — deliberately,
+		// so aggregating never runs on the engine's own goroutine mid-turn —
+		// and at the production five seconds a test whose turn finishes in
+		// 300ms would never see one, and would then "pass" on the snapshot
+		// alone while the push path went unexercised.
+		HealthInterval: tickInterval,
 	})
 	app.SetConfigured(true)
 	app.Start(t.Context())

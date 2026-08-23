@@ -13,8 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 var log = logging.Get("api.queries")
@@ -175,12 +177,83 @@ func (s Sources) agent(_ context.Context, p Params) (any, error) {
 }
 
 // tokens answers the live spend window.
-func (s Sources) tokens(_ context.Context, _ Params) (any, error) {
-	records := s.State.SpendRecords()
-	return map[string]any{
-		"window_hours": int(livestate.LiveSpendWindow / time.Hour),
-		"records":      records,
-	}, nil
+// tokens answers the spend breakdown.
+//
+// TWO SOURCES, one aggregation. The live projection holds the records for its
+// own window and answers instantly; any other window is a scan of the event
+// store. Both are folded by internal/tokens, so the number a reader sees when
+// they change the window is comparable with the one they were looking at — a
+// second implementation for the second source is precisely how those two came
+// to disagree before.
+//
+// The live window is the default because it is what the dashboard opens on: a
+// page load that scanned the store would put a query on the critical path of
+// every tab, for an answer already in memory.
+func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
+	opts := tokens.Options{
+		Handles:     s.RoleHandles(),
+		AgentRole:   p.String("agent_role"),
+		RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
+	}
+	live := livestate.LiveSpendWindowDays()
+	days := p.Int("since_days", live)
+
+	// The live window, unfiltered, is the one the projection can answer.
+	if days == live && opts.AgentRole == "" {
+		opts.SinceDays = live
+		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
+	}
+	if s.Events == nil {
+		// No event store: the honest answer for a window this node cannot
+		// see is an EMPTY rollup labelled with the window asked for, not
+		// the live one relabelled — which would put a week's heading over
+		// an hour's numbers.
+		opts.SinceDays = days
+		return tokens.Aggregate(nil, opts), nil
+	}
+	records, err := s.Events.PhaseTokens(ctx, store.PhaseTokenQuery{
+		SinceDays: days, AgentRole: opts.AgentRole,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Reported as the store CLAMPED it, not as asked: a request for a year
+	// answered over thirty days and labelled a year is a lie about the
+	// numbers beside it.
+	opts.SinceDays = Clamp(days, store.DefaultPhaseTokenDays, store.MaxPhaseTokenDays)
+	return tokens.Aggregate(records, opts), nil
+}
+
+// RoleHandles maps each seat's role name to its handle, for the per-agent
+// rollup's cross-links. Empty when this node has no company — a standalone API
+// links to nothing rather than guessing a handle.
+//
+// Exported because the live stream needs the same map for the rollup it
+// pushes: two derivations of "which handle is this role" is how a pushed row
+// and a queried one come to link to different pages.
+func (s Sources) RoleHandles() map[string]string {
+	out := map[string]string{}
+	if s.Company == nil {
+		return out
+	}
+	company := s.Company()
+	if company == nil {
+		return out
+	}
+	for _, role := range company.Roles {
+		if role.Name == "" {
+			continue
+		}
+		// The SAME derivation the org uses, not a re-spelling of it: a
+		// handle that differs from the seat's real one is a cross-link
+		// to a page that does not exist.
+		handle := role.Handle
+		if handle == "" {
+			handle = org.Slugify(role.Name)
+		}
+		out[role.Name] = handle
+	}
+	return out
 }
 
 // stream answers the engine's health.

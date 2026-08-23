@@ -39,6 +39,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 var log = logging.Get("api.livestate")
@@ -215,7 +217,7 @@ type LiveState struct {
 	// aggregation has exactly one implementation instead of the three it
 	// had — the endpoint's, a re-implementation in the browser, and
 	// whatever a reconnect left behind.
-	spend []SpendRecord
+	spend []tokens.Record
 
 	budget OrgBudget
 

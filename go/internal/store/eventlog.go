@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // ErrNotFound reports that a row a caller named by id does not exist.
@@ -428,4 +430,152 @@ func truncate(recs []EventRecord, limit int) []EventRecord {
 		return recs[:limit]
 	}
 	return recs
+}
+
+// PhaseTokenQuery selects the phase records a spend breakdown aggregates.
+type PhaseTokenQuery struct {
+	// SinceDays is the window, in whole days back from now. Zero or less
+	// takes DefaultPhaseTokenDays.
+	SinceDays int
+
+	// AgentRole restricts the rollup to one seat. Empty is the whole org.
+	AgentRole string
+}
+
+const (
+	// DefaultPhaseTokenDays is the window a caller that named none gets.
+	//
+	// A week: long enough to cover "what did last sprint cost", short
+	// enough that the scan stays inside the index's recent pages. The
+	// dashboard's own default matches it, so an unparameterised REST call
+	// and an unparameterised socket query answer the same question.
+	DefaultPhaseTokenDays = 7
+
+	// MaxPhaseTokenDays bounds what a caller may ask for.
+	//
+	// Thirty days, matching the retention this table is swept on: asking
+	// for more cannot return more, and accepting the request would make a
+	// scan of the whole table look like a supported query.
+	MaxPhaseTokenDays = 30
+
+	// phaseTokenLimit bounds the rows one rollup folds.
+	//
+	// A busy org emits three phase completions per turn; at a thousand
+	// turns a day a 30-day window is ninety thousand rows, and folding
+	// them is a second of CPU and a hundred megabytes on a request a
+	// dashboard makes on every window change. Twenty thousand covers a
+	// week of heavy use, and the rows are taken NEWEST FIRST so the cap
+	// truncates the far end of the window rather than the recent end a
+	// reader is actually looking at.
+	phaseTokenLimit = 20000
+)
+
+const phaseTokenSQL = `
+SELECT event_time, event_id, agent_id, agent_role, payload
+FROM crewlet_events
+WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+
+// PhaseTokens returns the per-phase spend records inside a window.
+//
+// The rows the dashboard's spend breakdown is folded from — see
+// internal/tokens, which does the folding for BOTH this and the live window,
+// so a rollup over seven days and a rollup over the live one cannot disagree
+// about what a phase costs.
+//
+// The token counts come out of the PAYLOAD rather than from columns of their
+// own. That is deliberate: they are five numbers on one event type, and
+// promoting them would mean a migration and five more columns that are NULL on
+// every other row in the table. The filterable dimensions — the ones a query
+// selects ON — are the promoted ones.
+func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
+	days := q.SinceDays
+	switch {
+	case days <= 0:
+		days = DefaultPhaseTokenDays
+	case days > MaxPhaseTokenDays:
+		days = MaxPhaseTokenDays
+	}
+	since := now().Add(-time.Duration(days) * 24 * time.Hour)
+
+	sql := phaseTokenSQL
+	args := []any{EncodeTime(since)}
+	if q.AgentRole != "" {
+		sql += " AND agent_role = ?"
+		args = append(args, q.AgentRole)
+	}
+	// Newest first, so the cap drops the far end of the window.
+	sql += " ORDER BY event_time DESC, event_id DESC LIMIT ?"
+	args = append(args, phaseTokenLimit)
+
+	rows, err := l.db.sql.QueryContext(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: phase tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []tokens.Record
+	for rows.Next() {
+		var (
+			at             int64
+			id, aid, arole string
+			payload        string
+		)
+		if err := rows.Scan(&at, &id, &aid, &arole, &payload); err != nil {
+			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
+		}
+		rec := tokens.Record{
+			EventID: id, AgentID: aid, AgentRole: arole,
+			// RFC3339Nano, because the rollup's watermark and its
+			// per-turn bounds are LEXICOGRAPHIC comparisons over this
+			// string — the same encoding the live window carries, or the
+			// two orderings would disagree about which record is newer.
+			Timestamp: DecodeTime(at).Format(time.RFC3339Nano),
+		}
+		var body map[string]any
+		if json.Unmarshal([]byte(payload), &body) == nil {
+			rec.Phase = payloadString(body, "phase")
+			rec.HostPhase = payloadString(body, "host_phase")
+			rec.Worker = payloadString(body, "worker")
+			rec.Model = payloadString(body, "model")
+			if rec.Model == "" {
+				rec.Model = payloadString(body, "provider_key")
+			}
+			rec.TurnID = payloadString(body, "turn_id")
+			rec.Iteration = payloadInt(body, "iteration")
+			rec.InputTokens = payloadInt(body, "input_tokens")
+			rec.OutputTokens = payloadInt(body, "output_tokens")
+			rec.TotalTokens = payloadInt(body, "total_tokens")
+		}
+		// A row whose payload would not decode still counts as a call
+		// with zero tokens rather than being dropped: the call happened,
+		// and losing it understates the spend it is there to report.
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: phase tokens: %w", err)
+	}
+	return out, nil
+}
+
+func payloadString(body map[string]any, key string) string {
+	s, _ := body[key].(string)
+	return s
+}
+
+// payloadInt reads a number out of a decoded payload.
+//
+// JSON has one number type and encoding/json decodes it as float64, so a
+// straight int assertion fails on every value — including the ones that were
+// written as ints. Both branches are needed because a payload can also arrive
+// through a path that kept the Go type.
+func payloadInt(body map[string]any, key string) int {
+	switch v := body[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
 }

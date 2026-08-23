@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 func openStore(t *testing.T) *store.DB {
@@ -58,6 +59,17 @@ func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 	r := queries.NewRegistry()
 	queries.Register(r, s)
 	return r
+}
+
+// askRaw returns the answer as it came back, for the surfaces that answer with
+// a typed value rather than a map.
+func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]any) any {
+	t.Helper()
+	got, err := r.Answer(t.Context(), what, params, "")
+	if err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	return got
 }
 
 func ask(t *testing.T, r *queries.Registry, what string, params map[string]any) map[string]any {
@@ -166,15 +178,120 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
-	got := ask(t, r, "tokens", nil)
-	records, _ := got["records"].([]livestate.SpendRecord)
-	if len(records) != 1 || records[0].TotalTokens != 12 {
-		t.Errorf("records = %+v", records)
+	// THE ROLLUP, not the records. store.js reads `.totals` off this and
+	// the spend view reads `.since_days`; a list of raw records fails the
+	// first check and is discarded, which left the whole Spend room blank
+	// with the numbers sitting in memory the entire time.
+	got := askRaw(t, r, "tokens", nil).(tokens.Rollup)
+	if got.Totals.TotalTokens != 12 || got.Totals.Calls != 1 {
+		t.Errorf("totals = %+v", got.Totals)
 	}
-	// The window is reported, not assumed: the rollup beside it on screen
-	// covers a different one, and a reader has to be able to tell.
-	if got["window_hours"] != 24 {
-		t.Errorf("window = %v", got["window_hours"])
+	if len(got.ByPhase) != 1 || got.ByPhase[0].Phase != "plan" {
+		t.Errorf("by_phase = %+v", got.ByPhase)
+	}
+	// The window is reported, not assumed: a reader comparing this against
+	// a different window on the same screen has to be able to tell them
+	// apart, and a number with the wrong label is worse than no label.
+	if got.SinceDays != livestate.LiveSpendWindowDays() {
+		t.Errorf("since_days = %d, want the live window", got.SinceDays)
+	}
+	// The high-water mark the client folds live events onto. Without it an
+	// event that is both in this baseline and redelivered on the stream is
+	// counted twice.
+	if got.AggregatedThrough != "2026-06-14T12:00:00Z" {
+		t.Errorf("aggregated_through = %q", got.AggregatedThrough)
+	}
+}
+
+func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
+	t.Parallel()
+	// The live projection can only answer for its own window. Any other one
+	// is a scan — folded by the SAME aggregator, so the number a reader
+	// sees when they change the window is comparable with the one they
+	// were looking at.
+	db := openStore(t)
+	log := db.Events()
+	write := func(id, role, phase string, total int) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"role": role, "phase": phase, "model": "m-1", "turn_id": "tn-1",
+			"input_tokens": total / 2, "output_tokens": total / 2,
+			"total_tokens": total,
+		})
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: "agent_phase_completed", Time: time.Now().UTC().Add(-time.Hour),
+			Category: "system", Actor: role, Summary: "phase",
+			Tags: map[string]string{"agent_role": role}, Payload: payload,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	write("s1", "Lead", "plan", 10)
+	write("s2", "Lead", "execute", 20)
+	write("s3", "Coder", "plan", 6)
+
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := askRaw(t, r, "tokens", map[string]any{"since_days": 3}).(tokens.Rollup)
+
+	if got.Totals.TotalTokens != 36 || got.Totals.Calls != 3 {
+		t.Errorf("totals = %+v", got.Totals)
+	}
+	if got.SinceDays != 3 {
+		t.Errorf("since_days = %d, want the window asked for", got.SinceDays)
+	}
+	// Biggest first, and every dimension present.
+	if len(got.ByPhase) != 2 || got.ByPhase[0].Phase != "execute" {
+		t.Errorf("by_phase = %+v, want execute first", got.ByPhase)
+	}
+	if len(got.ByAgent) != 2 || got.ByAgent[0].Role != "Lead" {
+		t.Errorf("by_agent = %+v", got.ByAgent)
+	}
+	if len(got.ByTurn) != 1 || got.ByTurn[0].TurnID != "tn-1" {
+		t.Errorf("by_turn = %+v", got.ByTurn)
+	}
+}
+
+func TestOneRoleCanBeAskedForAlone(t *testing.T) {
+	t.Parallel()
+	// A per-seat window is a store read even when it IS the live window:
+	// the projection holds the whole org, and filtering it here would be a
+	// second implementation of the store's own filter.
+	db := openStore(t)
+	log := db.Events()
+	for _, seat := range []struct{ id, role string }{{"a", "Lead"}, {"b", "Coder"}} {
+		payload, _ := json.Marshal(map[string]any{
+			"role": seat.role, "phase": "plan", "total_tokens": 5,
+		})
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: seat.id, Type: "agent_phase_completed", Time: time.Now().UTC(),
+			Category: "system", Tags: map[string]string{"agent_role": seat.role},
+			Payload: payload,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := askRaw(t, r, "tokens", map[string]any{"agent_role": "Lead"}).(tokens.Rollup)
+
+	if got.Totals.Calls != 1 || got.AgentRole != "Lead" {
+		t.Errorf("rollup = %+v", got)
+	}
+}
+
+func TestANodeWithNoEventStoreLabelsTheWindowItWasAsked(t *testing.T) {
+	t.Parallel()
+	// An empty rollup labelled with the window ASKED for, not the live one
+	// relabelled: a week's heading over an hour's numbers is a lie about
+	// what a reader is looking at.
+	r := registryOver(t, queries.Sources{State: livestate.New()})
+	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
+	if got.SinceDays != 14 || got.Totals.Calls != 0 {
+		t.Errorf("rollup = %+v", got)
+	}
+	// Never nil: the client does `d.by_phase.length`, so a null throws in
+	// the browser rather than rendering an empty table.
+	if got.ByPhase == nil || got.ByAgent == nil || got.ByTurn == nil {
+		t.Error("an empty rollup carries nil slices, which marshal to null")
 	}
 }
 

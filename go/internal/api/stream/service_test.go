@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 func newService(t *testing.T, opts stream.Options) (*stream.Service, *stream.Client) {
@@ -151,11 +152,53 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 		t.Errorf("kinds = %v, want a budget push", kinds)
 	}
 
+}
+
+func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
+	t.Parallel()
+	// The rollup is MARKED here and folded by the shared tick. Aggregating
+	// on Ingest would run inside the caller's publish — which on a merged
+	// node is the engine's own goroutine, mid-turn, between a model's
+	// answer and its tools — so a busy company would pay one aggregation
+	// per phase instead of one every tick.
+	s, c := newService(t, stream.Options{HealthInterval: 10 * time.Millisecond})
 	s.Ingest(envelope("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "plan", "total_tokens": 10,
+		"role": "Lead", "phase": "plan", "model": "m-1",
+		"input_tokens": 6, "output_tokens": 4, "total_tokens": 10,
 	}))
-	if kinds := kindsOf(c); !contains(kinds, stream.KindTokens) {
-		t.Errorf("kinds = %v, want a tokens push", kinds)
+	if kinds := kindsOf(c); contains(kinds, stream.KindTokens) {
+		t.Fatalf("the rollup was folded on the publish path: %v", kinds)
+	}
+
+	s.StartHealthTicks(t.Context())
+	var rollup *tokens.Rollup
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && rollup == nil {
+		for _, env := range drain(c) {
+			if env.Kind == stream.KindTokens {
+				got, ok := env.Data.(tokens.Rollup)
+				if !ok {
+					t.Fatalf("tokens data is %T, not the rollup the client "+
+						"reads; store.js takes `.totals` off it and the spend "+
+						"view takes `.since_days`", env.Data)
+				}
+				rollup = &got
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if rollup == nil {
+		t.Fatal("no tokens push ever arrived")
+	}
+	if rollup.Totals.TotalTokens != 10 || rollup.Totals.Calls != 1 {
+		t.Errorf("totals = %+v, want the one folded phase", rollup.Totals)
+	}
+	if len(rollup.ByPhase) != 1 || rollup.ByPhase[0].Phase != "plan" {
+		t.Errorf("by_phase = %+v", rollup.ByPhase)
+	}
+	if rollup.SinceDays < 1 {
+		t.Errorf("since_days = %d; the client prints this beside the numbers",
+			rollup.SinceDays)
 	}
 }
 

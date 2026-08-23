@@ -5,9 +5,11 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // HealthInterval is how often the shared tick broadcasts.
@@ -55,8 +57,17 @@ type Service struct {
 	// and must not invent one.
 	health HealthFunc
 
+	// handles maps a role to its agent handle, for the per-agent rollup's
+	// cross-links. Nil leaves them blank, which is what a standalone API
+	// with no org honestly has.
+	handles HandleFunc
+
 	now      func() time.Time
 	interval time.Duration
+
+	// tokensDirty means a phase completed since the last rollup went out.
+	// Set on the publish path and cleared on the tick — see flushTokens.
+	tokensDirty atomic.Bool
 
 	mu      sync.Mutex
 	ticking bool
@@ -64,9 +75,17 @@ type Service struct {
 	done    chan struct{}
 }
 
+// HandleFunc answers the role-to-handle map the per-agent rollup links with.
+type HandleFunc func() map[string]string
+
 // Options configure a service.
 type Options struct {
 	Health HealthFunc
+
+	// Handles supplies the role-to-handle map. Nil leaves each row's
+	// handle blank rather than guessing one — a wrong link is worse than
+	// no link.
+	Handles HandleFunc
 
 	// Now is injectable so a test can pin the timestamps envelopes carry.
 	Now func() time.Time
@@ -87,6 +106,7 @@ func NewService(state *livestate.LiveState, opts Options) *Service {
 		hub:      NewHub(),
 		state:    state,
 		health:   opts.Health,
+		handles:  opts.Handles,
 		now:      opts.Now,
 		interval: opts.HealthInterval,
 	}
@@ -136,7 +156,12 @@ func (s *Service) Ingest(env livestate.Envelope) {
 		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
 	}
 	if change.Tokens {
-		s.hub.Broadcast(Push(KindTokens, s.state.SpendRecords(), now))
+		// MARKED, NOT SENT. Aggregating here would run inside the
+		// caller's publish — which on a merged node is the engine's own
+		// goroutine, mid-turn, between a model's answer and its tools.
+		// The shared tick owns the fold, so a busy company's rollup costs
+		// one aggregation every five seconds rather than one per phase.
+		s.tokensDirty.Store(true)
 	}
 	if change.Budget {
 		s.hub.Broadcast(Push(KindBudget, s.state.Budget(), now))
@@ -155,7 +180,7 @@ func (s *Service) Snapshot() map[string]any {
 		"agents":    s.state.MergeAgents(nil),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
 		"sandboxes": s.state.ActiveSandboxes(),
-		"tokens":    s.state.SpendRecords(),
+		"tokens":    s.TokenRollup(),
 		"budget":    s.state.Budget(),
 	}
 }
@@ -204,9 +229,43 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.hub.Broadcast(Push(KindHealth, s.currentHealth(), s.now()))
+				s.flushTokens()
 			}
 		}
 	}()
+}
+
+// flushTokens sends the spend rollup if a phase completed since the last one.
+//
+// The flag is cleared only AFTER the fold, so an aggregation that panicked
+// would not consume the burst it failed on and leave the rollup stale until
+// the next phase completed.
+func (s *Service) flushTokens() {
+	if !s.tokensDirty.Load() {
+		return
+	}
+	rollup := s.TokenRollup()
+	s.tokensDirty.Store(false)
+	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
+}
+
+// TokenRollup folds the live window into the breakdown the dashboard renders.
+//
+// Exported because the snapshot needs the same answer: a client that connected
+// mid-window and one that has been receiving pushes must hold the same rollup,
+// and two constructions of it is how they come to differ.
+func (s *Service) TokenRollup() tokens.Rollup {
+	handles := map[string]string{}
+	if s.handles != nil {
+		handles = s.handles()
+	}
+	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
+		Handles: handles,
+		// The window this rollup actually covers, reported rather than
+		// assumed: the client prints it beside the numbers, and a figure
+		// labelled with the wrong window is worse than an unlabelled one.
+		SinceDays: livestate.LiveSpendWindowDays(),
+	})
 }
 
 // Stop ends the health tick and disconnects every client.

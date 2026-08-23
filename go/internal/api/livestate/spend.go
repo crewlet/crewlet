@@ -1,32 +1,18 @@
 package livestate
 
-import "time"
+import (
+	"time"
 
-// SpendRecord is one completed phase's token spend, in the shape the shared
-// aggregator consumes.
+	"github.com/crewlet/crewlet/internal/tokens"
+)
+
+// The projection HOLDS records and never folds them.
 //
-// RECORDS are held rather than a folded rollup, so the aggregation has exactly
-// one implementation instead of the three it had — the REST endpoint's, a
-// re-implementation in the browser, and whatever a reconnect left behind.
-type SpendRecord struct {
-	EventID   string `json:"event_id"`
-	Timestamp string `json:"timestamp"`
-
-	AgentID   string `json:"agent_id"`
-	AgentRole string `json:"agent_role"`
-
-	Phase     string `json:"phase"`
-	HostPhase string `json:"host_phase"`
-	Worker    string `json:"worker"`
-	Model     string `json:"model"`
-
-	TurnID    string `json:"turn_id"`
-	Iteration int    `json:"iteration"`
-
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
-}
+// The aggregation lives in internal/tokens, which both this and the event
+// store hand records to, so the live rollup and the queried one have one
+// implementation. It had three once — the REST endpoint's, a
+// re-implementation in the browser, and whatever a reconnect left behind —
+// and a refresh routinely disagreed with the page it replaced.
 
 // foldSpend records one completed phase's spend, reporting whether it counted.
 //
@@ -40,7 +26,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		}
 		s.countedPhases.put(env.ID, struct{}{})
 	}
-	s.spend = append(s.spend, SpendRecord{
+	s.spend = append(s.spend, tokens.Record{
 		EventID:      env.ID,
 		Timestamp:    env.Timestamp,
 		AgentID:      str(payload, "agent_id"),
@@ -76,7 +62,7 @@ func (s *LiveState) pruneSpend(nowISO string) {
 		// than the cap in a day. Truncating the OLDEST is what makes a
 		// rollup past the cap cover slightly less than a window rather
 		// than report a wrong total.
-		s.spend = append(make([]SpendRecord, 0, spendRecordLimit),
+		s.spend = append(make([]tokens.Record, 0, spendRecordLimit),
 			s.spend[len(s.spend)-spendRecordLimit:]...)
 	}
 	now := newStamp(nowISO)
@@ -90,7 +76,7 @@ func (s *LiveState) pruneSpend(nowISO string) {
 	// sandbox sweep keeps an undateable entry: it cannot be aged out on
 	// time, and dropping it on that basis would be arbitrary. The count
 	// cap above is what bounds those.
-	aged := func(record SpendRecord) bool {
+	aged := func(record tokens.Record) bool {
 		ts := newStamp(record.Timestamp)
 		return ts.valid && ts.before(cutoff)
 	}
@@ -104,7 +90,7 @@ func (s *LiveState) pruneSpend(nowISO string) {
 	if !stale {
 		return
 	}
-	kept := make([]SpendRecord, 0, len(s.spend))
+	kept := make([]tokens.Record, 0, len(s.spend))
 	for _, record := range s.spend {
 		if !aged(record) {
 			kept = append(kept, record)
@@ -114,12 +100,22 @@ func (s *LiveState) pruneSpend(nowISO string) {
 }
 
 // SpendRecords returns the records inside the live window.
-//
-// The aggregation itself lives with the REST endpoint that already implements
-// it, so the live rollup and the queried one cannot disagree — the projection's
-// job is to hold the records, not to fold them.
-func (s *LiveState) SpendRecords() []SpendRecord {
+func (s *LiveState) SpendRecords() []tokens.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]SpendRecord(nil), s.spend...)
+	return append([]tokens.Record(nil), s.spend...)
+}
+
+// LiveSpendWindowDays is the live window expressed the way the dashboard
+// labels it.
+//
+// At LEAST one, because the window is measured in hours and a sub-day one
+// would round to zero — and "spend over the last 0 days" is a label that makes
+// a real number look like a bug.
+func LiveSpendWindowDays() int {
+	days := int(LiveSpendWindow / (24 * time.Hour))
+	if days < 1 {
+		return 1
+	}
+	return days
 }

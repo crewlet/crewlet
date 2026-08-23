@@ -113,7 +113,12 @@ func New(opts Options) *App {
 		queueBackend: opts.QueueBackend,
 	}
 	a.stream = stream.NewService(state, stream.Options{
-		Health:         a.streamHealth,
+		Health: a.streamHealth,
+		// Read through the SOURCES rather than captured, for the same
+		// reason every other read here is: a config apply replaces the
+		// company, and a map captured at boot would keep cross-linking a
+		// renamed seat to the handle it used to have.
+		Handles:        opts.Sources.RoleHandles,
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
