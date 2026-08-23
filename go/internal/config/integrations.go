@@ -547,11 +547,52 @@ type Plane struct {
 	// learn from payloads.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Engine read credential; empty degrades routing."`
 
+	// SkillsProject is the engine-managed project holding tool-skill
+	// pages. Its content is MACHINERY rather than knowledge, and it is
+	// excluded twice over: its webhooks route to nobody (there is no
+	// recipient by design, and without the exclusion every skill edit
+	// falls through to lead routing as an undeliverable notification), and
+	// its pages never surface in a knowledge search (a planner shown a
+	// tool-skill page would follow an instruction meant for a different
+	// phase of a different turn).
+	//
+	// Absent takes [DefaultSkillsProject]. There is no "off", and none is
+	// needed: a company that publishes no tool skills has no project by
+	// that identifier, so both exclusions match nothing and cost nothing.
+	// The one case that needs this field is a company whose skills live
+	// somewhere other than the reserved default.
+	SkillsProject string `yaml:"skills_project,omitempty" json:"skills_project,omitempty" desc:"Project holding tool-skill pages; excluded from routing and knowledge search. Default TS."`
+
 	Provisioning *PlaneProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
 }
 
 // APIBase is the REST base derived from URL.
 func (p *Plane) APIBase() string { return strings.TrimRight(p.URL, "/") + "/api/v1" }
+
+// DefaultSkillsProject is the identifier a tool-skills project has unless
+// the operator names another.
+//
+// "TS" is the convention the publishing CLI writes into and the docs name, so
+// a company that follows the guide works with nothing configured. The cost is
+// that a company using TS as an ordinary work project has it silently
+// excluded from knowledge search — which is why the field exists: set it to
+// something else, or to "" to turn the exclusions off entirely.
+const DefaultSkillsProject = "TS"
+
+// SkillsProjectKey is the tool-skills project, normalised.
+//
+// UPPER, because every identifier comparison in the integration is
+// case-insensitive and a config written in lower case must not silently mean
+// a different project from the same word written in upper.
+func (p *Plane) SkillsProjectKey() string {
+	if p == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(p.SkillsProject); trimmed != "" {
+		return strings.ToUpper(trimmed)
+	}
+	return DefaultSkillsProject
+}
 
 // PlaneProvisioning is the provisioning CLI's inputs.
 type PlaneProvisioning struct {
