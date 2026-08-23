@@ -103,8 +103,62 @@ jobs:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
       # Embedded NATS runs in-process, so the JetStream conformance and
-      # fleet suites need no service container. Pulsar is a testcontainer
-      # and is opted into by build tag so a laptop run stays fast.
+      # fleet suites need no service container. Pulsar needs a real broker
+      # and gets its own job below.
       - run: go test ./... -race -count=1 -tags=integration
         env:
           CREWLET_INTEGRATION: "1"
+
+  pulsar:
+    name: pulsar conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      # Started here rather than in a `services:` block, which cannot do it:
+      # the apachepulsar/pulsar image has no entrypoint that starts a broker
+      # (its CMD is a shell), and `services:` accepts `options` but no
+      # command, so there is nowhere to say `bin/pulsar standalone`.
+      #
+      # The suite needs an ADMIN endpoint as well as the broker port:
+      # subscription lifecycle runs over admin REST, because creating a
+      # subscription by subscribing joins a Shared subscription a peer owns
+      # and steals its traffic (measured). A deployment without 8080 reachable
+      # is a deployment where seat mailboxes cannot be created at all.
+      - name: start pulsar
+        working-directory: .
+        run: |
+          docker run -d --name pulsar \
+            -p 6650:6650 -p 8080:8080 \
+            apachepulsar/pulsar:4.0.6 \
+            bin/pulsar standalone --no-functions-worker --no-stream-storage
+
+      - name: wait for pulsar
+        working-directory: .
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8080/admin/v2/clusters >/dev/null; then
+              echo "broker ready after ~$((i * 2))s"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::pulsar did not become ready"; docker logs pulsar | tail -80; exit 1
+
+      # The conformance suite SKIPS without this variable, and skipping is not
+      # passing — this job is the only place the Pulsar backend is actually
+      # certified. The timeout is generous because every subtest provisions
+      # its own namespace on a cold standalone broker.
+      - name: conformance
+        run: go test ./internal/queue/pulsar/... -race -count=1 -timeout 25m
+        env:
+          CREWLET_TEST_PULSAR_URL: pulsar://localhost:6650
+          CREWLET_TEST_PULSAR_ADMIN_URL: http://localhost:8080
+
+      - name: broker logs
+        if: failure()
+        working-directory: .
+        run: docker logs pulsar | tail -200
