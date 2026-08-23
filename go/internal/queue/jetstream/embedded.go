@@ -245,6 +245,19 @@ func joinURLs(urls []string) string {
 	return out
 }
 
+// Dial opens a NATS connection to an external server with this package's own
+// reconnect policy.
+//
+// Exported for the one caller outside the queue: on a Pulsar topology the
+// coordination KV lives on a NATS estate of its own, and it needs the same
+// reconnect-forever behaviour for the same reason. Reimplementing the option
+// list there would give two places to disagree about how long a node survives
+// a broker blip — and the whole point of that policy is that it keeps its
+// seats through one.
+//
+// The caller owns the connection and must close it.
+func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }
+
 func dial(cfg Config) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.Name("crewlet"),

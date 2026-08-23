@@ -2,6 +2,8 @@ package engine_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -195,11 +197,14 @@ func TestTheTopologyIsCheckedBeforeTheDial(t *testing.T) {
 	}
 }
 
-func TestPulsarWithoutItsCoordinationClusterSaysWhichSideIsMissing(t *testing.T) {
+func TestPulsarWithoutItsCoordinationEstateSaysWhichSideIsMissing(t *testing.T) {
 	t.Parallel()
-	// Pulsar has no compare-and-set, so it cannot hold leases itself. An
-	// operator whose Pulsar config is correct should learn that this BUILD
-	// is incomplete, not that their config is wrong.
+	// Pulsar has no compare-and-set, so its leases live on a NATS estate
+	// named separately. An empty block is refused rather than read as
+	// "embed one with defaults": those are the same value, and the second
+	// reading gives every node in a fleet its own private in-memory lease
+	// table — so every node claims every seat, with nothing anywhere
+	// reporting a problem.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.Type = config.StreamPulsar
 		b.Stream.URL = "pulsar://127.0.0.1:6650"
@@ -207,17 +212,47 @@ func TestPulsarWithoutItsCoordinationClusterSaysWhichSideIsMissing(t *testing.T)
 		b.Stream.Namespace = "default"
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
-	back, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
+	_, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc))
 	if err == nil {
-		t.Fatal("a Pulsar topology opened with no coordination cluster")
+		t.Fatal("a Pulsar topology opened with no coordination estate")
 	}
-	if back != nil {
-		t.Error("a failed open returned backends, which would carry a nil Coord")
+	if !strings.Contains(err.Error(), "coordination.nats") {
+		t.Errorf("the error does not name the missing block: %v", err)
 	}
-	// The BUILD is what is incomplete, not the config. An operator whose
-	// Pulsar block is correct must not be sent to re-read it.
-	if !strings.Contains(err.Error(), "does not start yet") {
-		t.Errorf("the failure blames the config rather than the build: %v", err)
+}
+
+func TestTheCoordinationEstateIsOpenedBeforeThePulsarDial(t *testing.T) {
+	// NOT parallel: the observable is a process-wide goroutine count.
+	//
+	// A node that reached its broker and then found it had nowhere to keep
+	// leases would sit attached to topics it must not take work from, and
+	// the operator would read a lease error while looking at a healthy
+	// broker. So the estate comes up first — which makes it the thing that
+	// must be torn down when the Pulsar dial fails.
+	dir := t.TempDir()
+	before := settledGoroutines()
+	for i := range failedOpenAttempts {
+		b := bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.Type = config.StreamPulsar
+			// A stream configuration the Pulsar client refuses
+			// SYNCHRONOUSLY. An unreachable broker would not do: the
+			// client connects lazily, so a dial at a dead port
+			// succeeds here and fails at the first attach.
+			b.Stream.URL = "http://127.0.0.1:6650"
+			b.Stream.Tenant = "acme"
+			b.Stream.Namespace = "default"
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+			b.Coordination.NATS.StoreDir = filepath.Join(dir, "coord")
+		})
+		if _, err := engine.OpenBackends(context.Background(), b,
+			parsedCompany(t, companyDoc)); err == nil {
+			t.Fatalf("attempt %d: an invalid Pulsar stream opened backends", i)
+		}
+	}
+	if leaked := settledGoroutines() - before; leaked > leakThreshold {
+		t.Errorf("%d failed Pulsar opens leaked %d goroutines: the coordination "+
+			"estate was left running behind the stream's failure",
+			failedOpenAttempts, leaked)
 	}
 }
 
@@ -674,5 +709,156 @@ func TestAnUnsetDriverAndTimeoutTakeTheStoreDefaults(t *testing.T) {
 	if got := back.Store.SQL().Stats().MaxOpenConnections; got <= 0 {
 		t.Errorf("max open conns = %d: an unset bound reached the store as a "+
 			"literal zero", got)
+	}
+}
+
+func TestAPulsarTopologyGetsARealLeaseStore(t *testing.T) {
+	t.Parallel()
+	// The whole point of the coordination estate: a Pulsar deployment can
+	// hold seats. Before this existed every Pulsar topology was refused
+	// outright, so the slot shipped and could not be run.
+	//
+	// The broker is never reached — the Pulsar client connects lazily, so
+	// what is under test here is the assembly and the lease store, not the
+	// stream. A live-broker case belongs to the conformance suite, which
+	// has one.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.Type = config.StreamPulsar
+		b.Stream.URL = "pulsar://127.0.0.1:6650"
+		b.Stream.Tenant = "acme"
+		b.Stream.Namespace = "default"
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+		b.Coordination.NATS.StoreDir = filepath.Join(t.TempDir(), "coord")
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+
+	if back.Queue == nil || back.Coord == nil || back.Store == nil {
+		t.Fatalf("backends = %+v, want every slot", back)
+	}
+	lease, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if lease == nil {
+		t.Fatal("the coordination estate refused a first acquire")
+	}
+	// EXCLUSIVE, which is the property Pulsar cannot supply and this
+	// estate exists to add.
+	if got, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+		coord.AcquireOptions{Owner: "owner-2", TTL: 30 * time.Second}); err != nil {
+		t.Fatalf("second Acquire: %v", err)
+	} else if got != nil {
+		t.Error("two owners held one seat on a Pulsar topology")
+	}
+}
+
+func TestAnEstateWithNoURLIsEmbeddedEvenWithNoStoreDirectory(t *testing.T) {
+	t.Parallel()
+	// The absence of a URL is what makes an estate embedded, not the
+	// presence of a store directory: an in-memory member names neither,
+	// and reading it the other way round sends the node off to dial a NATS
+	// server nobody configured.
+	//
+	// In-memory is a real shape. It loses every lease on a restart, which
+	// is survivable — leases are TTL-bounded and re-claimed — and means a
+	// restart sheds this node's seats rather than resuming them.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.Type = config.StreamPulsar
+		b.Stream.URL = "pulsar://127.0.0.1:6650"
+		b.Stream.Tenant = "acme"
+		b.Stream.Namespace = "default"
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+		// No URL and no store directory: an embedded member holding its
+		// leases in memory. Replicas is what keeps the block non-zero,
+		// which validation requires so that "embed with defaults" and
+		// "nothing was said" stay distinguishable.
+		b.Coordination.NATS.Replicas = 1
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+
+	if _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second}); err != nil {
+		t.Errorf("an in-memory coordination estate could not hold a lease: %v", err)
+	}
+}
+
+func TestAnEstateWithAStoreDirectoryWritesToIt(t *testing.T) {
+	t.Parallel()
+	// The counterfactual to the in-memory case above, and the half that
+	// says store_dir is read at all: an estate that quietly ran in memory
+	// would pass every assertion about holding a lease, and lose every one
+	// of them on a restart.
+	dir := filepath.Join(t.TempDir(), "coord")
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.Type = config.StreamPulsar
+		b.Stream.URL = "pulsar://127.0.0.1:6650"
+		b.Stream.Tenant = "acme"
+		b.Stream.Namespace = "default"
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+		b.Coordination.NATS.StoreDir = dir
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+
+	if _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
+		coord.AcquireOptions{Owner: "owner-1", TTL: 30 * time.Second}); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("the configured store directory was never created: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error("the coordination estate wrote nothing to its store directory: " +
+			"it is running in memory, and every lease is lost on a restart")
+	}
+}
+
+func TestAnUnopenableCoordinationEstateIsReportedAndLeavesNothingBehind(t *testing.T) {
+	// NOT parallel: the observable is a process-wide goroutine count.
+	//
+	// The other half of the Pulsar assembly. The embedded member starts
+	// before its KV bucket is opened, so a failure between the two has a
+	// running server to clean up — one a node would otherwise carry for
+	// the life of the process with no handle to it.
+	//
+	// The failure is injected with an already-cancelled context rather
+	// than a broken store directory. Both reach the same branch, and the
+	// broken directory takes thirty seconds per attempt to get there:
+	// StartServer accepts it and the wait happens inside the KV open,
+	// which is a timeout, not a refusal.
+	dir := t.TempDir()
+	before := settledGoroutines()
+	for i := range failedOpenAttempts {
+		b := bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.Type = config.StreamPulsar
+			b.Stream.URL = "pulsar://127.0.0.1:6650"
+			b.Stream.Tenant = "acme"
+			b.Stream.Namespace = "default"
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+			b.Coordination.NATS.StoreDir = filepath.Join(dir, fmt.Sprint("coord", i))
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := engine.OpenBackends(ctx, b,
+			parsedCompany(t, companyDoc)); err == nil {
+			t.Fatalf("attempt %d: an unopenable coordination estate opened backends", i)
+		}
+	}
+	if leaked := settledGoroutines() - before; leaked > leakThreshold {
+		t.Errorf("%d failed coordination opens leaked %d goroutines",
+			failedOpenAttempts, leaked)
 	}
 }

@@ -90,6 +90,45 @@ func TestBootstrapTopologyRules(t *testing.T) {
 			path: "stream.replicas",
 			want: "needs peers",
 		},
+		{
+			// The gap that made every Pulsar topology unrunnable: the
+			// slot was chosen and there was nowhere for it to live.
+			name: "pulsar with nowhere to keep its leases",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
+			path: "coordination.nats",
+			want: "leases need a NATS estate",
+		},
+		{
+			// Read by nobody. On a NATS stream the coordination store
+			// rides the stream's own connection, deliberately.
+			name: "a coordination estate on a stream that already carries one",
+			yaml: "coordination:\n  type: embedded-kv\n  nats:\n    url: nats://elsewhere:4222\n",
+			path: "coordination.nats",
+			want: "already carries coordination",
+		},
+		{
+			name: "a coordination estate with local coordination",
+			yaml: "coordination:\n  type: local\n  nats:\n    url: nats://elsewhere:4222\n",
+			path: "coordination.nats",
+			want: "keeps leases on a NATS estate",
+		},
+		{
+			// Two different statements about where the leases live.
+			name: "a coordination estate that is both dialled and embedded",
+			yaml: "coordination:\n  type: embedded-kv\n  nats:\n    url: nats://elsewhere:4222\n    store_dir: /tmp/coord\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
+			path: "coordination.nats.store_dir",
+			want: "stores nothing locally",
+		},
+		{
+			// The quorum check used to read stream.cluster.peers, which
+			// on a Pulsar topology describes a cluster that does not
+			// hold the leases — so a two-member lease cluster counted as
+			// one node and passed.
+			name: "a two-member lease cluster on a pulsar stream",
+			yaml: "coordination:\n  type: embedded-kv\n  nats:\n    cluster:\n      name: coord\n      peers: [nats://b:6222]\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
+			path: "coordination.nats.cluster.peers",
+			want: "no coordination quorum",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +147,13 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 	for _, doc := range []string{
 		"",
 		"coordination:\n  type: local\n",
+		// A Pulsar topology, which could not run at all until the
+		// coordination estate existed: the slot was validated, documented
+		// and refused at open. Both shapes of estate load.
+		"coordination:\n  type: embedded-kv\n  nats:\n    store_dir: /var/lib/crewlet/coord\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
+		"coordination:\n  type: embedded-kv\n  nats:\n    url: nats://coord:4222\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
+		// Three lease members, which is the fleet shape.
+		"coordination:\n  type: embedded-kv\n  nats:\n    store_dir: /var/lib/crewlet/coord\n    replicas: 3\n    cluster:\n      name: coord\n      peers: [nats://b:6222, nats://c:6222]\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
 		"coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
 		"stream:\n  type: nats\n  url: nats://localhost:4222\ncoordination:\n  type: embedded-kv\n",
 	} {
