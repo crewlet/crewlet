@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -206,5 +207,52 @@ func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
 	case <-delivered:
 		t.Error("a refused publish still reached a handler")
 	default:
+	}
+}
+
+// TestHistoryTrimKeepsTheNewestEntries covers WithMaxHistory and the trim
+// branch, a third twin-only path the portable suite cannot reach: History is a
+// memory-only inspection, and the measured high-water mark of the buffer across
+// a full conformance run is 5 against a default ceiling of 10000, so the branch
+// never executes there. Before this, no test in internal/queue referred to
+// WithMaxHistory or the trim at all.
+//
+// Two observables again, and the second is the load-bearing one. A trim that
+// keeps the WRONG END satisfies the length assertion perfectly while making the
+// buffer useless — history exists to answer "what just happened", so dropping
+// the newest entries inverts its only purpose and a size check cannot see it.
+func TestHistoryTrimKeepsTheNewestEntries(t *testing.T) {
+	t.Parallel()
+	const ceiling = 3
+	q := memory.New(memory.WithMaxHistory(ceiling))
+	if err := q.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	for _, label := range []string{"e1", "e2", "e3", "e4", "e5"} {
+		if err := q.Publish(context.Background(), "topic", &events.Event{
+			ID:        uuid.New(),
+			Type:      label,
+			Timestamp: time.Now().UTC(),
+			Source:    "memory_test",
+		}); err != nil {
+			t.Fatalf("Publish %s: %v", label, err)
+		}
+	}
+
+	got := q.History()
+	if len(got) != ceiling {
+		t.Fatalf("history holds %d events, want the ceiling of %d", len(got), ceiling)
+	}
+	var types []string
+	for _, ev := range got {
+		types = append(types, ev.Type)
+	}
+	want := []string{"e3", "e4", "e5"}
+	if !slices.Equal(types, want) {
+		t.Errorf("history kept %v, want the NEWEST %d (%v); a trim that drops the newest "+
+			"entries satisfies the size check while inverting what the buffer is for",
+			types, ceiling, want)
 	}
 }
