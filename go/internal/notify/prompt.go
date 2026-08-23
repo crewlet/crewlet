@@ -52,6 +52,20 @@ type Prompt interface {
 	// event is then never merged with anything.
 	ConversationKey(metadata map[string]string, subject string) string
 
+	// WakesActor reports whether an event type reaches the party who
+	// caused it, overriding the self-action rule.
+	//
+	// True for an event reporting the OUTCOME of the actor's own action —
+	// a pipeline that failed names the person who pushed as its actor, and
+	// they are the one who has to fix it. False for an event the actor
+	// already knows about, which is nearly everything: their own comment,
+	// their own assignment, their own edit.
+	//
+	// Only the vendor can say which of its event types are which, so it is
+	// asked here rather than pattern-matched on the name centrally. See
+	// [WakesActor] for what happens to a source with no registered prompt.
+	WakesActor(eventType string) bool
+
 	// DigestBody is the per-source supersede rule for one constituent of a
 	// merged trigger.
 	//

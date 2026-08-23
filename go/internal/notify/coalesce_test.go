@@ -19,6 +19,10 @@ type tracker struct{}
 func (tracker) Source() string                                  { return "tracker" }
 func (tracker) Build(n notify.Inbound, _ notify.Parties) string { return n.Body }
 func (tracker) RequiresRecon(notify.Inbound) bool               { return true }
+
+// A pipeline result reports the outcome of the actor's OWN push, so it
+// reaches them; everything else this vendor emits, they already know about.
+func (tracker) WakesActor(eventType string) bool { return eventType == "pipeline_failed" }
 func (tracker) ConversationKey(m map[string]string, _ string) string {
 	return m["issue_id"]
 }

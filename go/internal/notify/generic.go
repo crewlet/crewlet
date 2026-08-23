@@ -33,6 +33,11 @@ func (Generic) RequiresRecon(Inbound) bool { return false }
 
 func (Generic) ConversationKey(map[string]string, string) string { return "" }
 
+// WakesActor is false for an unrecognised source: an event type nobody has
+// classified that turns out to loop takes the company down with it, while
+// one that goes unheard costs a single notification.
+func (Generic) WakesActor(string) bool { return false }
+
 func (Generic) DigestBody(_, body string) string { return body }
 
 // Build renders the notification and then tells the seat how to decide whether
