@@ -138,10 +138,28 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 	// the invariants everything below relies on are only guaranteed if this
 	// checks them. An epoch assembled from an invalid config is a company
 	// that boots and then fails at its first turn.
+	// A company-level rule, deliberately: an empty name is ALSO caught
+	// building the organization, so it proves nothing about this check. A
+	// negative token budget is refused by Company.Validate alone — found by
+	// mutation, where removing the validation still failed the empty-name
+	// case and looked fine.
 	handbuilt := config.DefaultCompany()
-	handbuilt.Name = "" // every company needs a name
+	handbuilt.Name = "Acme"
+	handbuilt.TokenBudget = -1
+	handbuilt.Providers.LLM = map[string]config.LLMProvider{
+		"a": {Type: config.LLMAnthropic, Model: "m", APIKeys: []string{"k"}},
+	}
+	handbuilt.Roles = []config.Role{{Name: "CEO", Handle: "ceo"}}
 	if _, err := engine.NewCompany(&handbuilt); err == nil {
 		t.Error("an invalid hand-built config produced an epoch")
+	}
+
+	// The counterfactual: the same config with a legal budget builds.
+	// Without it this passes for a constructor that refuses everything
+	// hand-built.
+	handbuilt.TokenBudget = 0
+	if _, err := engine.NewCompany(&handbuilt); err != nil {
+		t.Errorf("a valid hand-built config was refused: %v", err)
 	}
 }
 
