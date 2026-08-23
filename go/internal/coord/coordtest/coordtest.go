@@ -15,6 +15,36 @@
 // process holds this node id's presence lease" at an operator while it
 // quietly stopped refreshing its own presence.
 //
+// # Bringing up a new backend: if a case fails, suspect the case
+//
+// Not politeness — the base rate. Every time this suite has disagreed with a
+// backend that was not the twin, the suite has been wrong more often than the
+// backend, and each instance below cost its author an investigation before
+// anyone thought to doubt the assertion:
+//
+//   - It required a DEFINITE answer from a contended claim. A compare-and-swap
+//     store under a stampede loses every swap inside its retry budget and
+//     honestly cannot say whether a peer won or a record lapsed underneath it.
+//     Unknown is the contract's third answer, available at any moment; the
+//     suite was demanding the twin's single-mutex behaviour from everyone.
+//   - It read an omitted Protocol as the OLDEST version, ported from a Python
+//     keyword default of 1. Go's struct zero inverts that risk, and the
+//     contract now says an omitted protocol claims at THIS build.
+//   - It asserted a gate-refused claim leaves the record pristine. d-201 §3
+//     permits a KV to touch it — check → claim → re-check → release means the
+//     claim was made and given back.
+//   - It asked for a TTL longer than LongTTL. A store sizes its retention to
+//     the suite's advertised maximum and is RIGHT to refuse a TTL it cannot
+//     honour rather than silently clamp it.
+//   - It kept every meta payload JSON-shaped and called that a courtesy, which
+//     is why no case could see that a value's Go type does not survive a real
+//     round trip.
+//
+// So before concluding a backend is at fault: grep rewrite/decisions/ for the
+// operation, and read rewrite/questions/coord-contract-*.md. If the case turns
+// out to encode what the twin happens to do, the case is the defect. Two
+// backends agreeing is not evidence when the suite is what made them agree.
+//
 // # Before adding a case that says a backend must NOT do something
 //
 // Grep rewrite/decisions/ for the operation first. A recorded degradation is a
