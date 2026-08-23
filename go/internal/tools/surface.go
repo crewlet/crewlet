@@ -1,0 +1,199 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"maps"
+	"slices"
+	"sync"
+
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+)
+
+// Surface is the set of tools ONE phase may call, and the thing the tool loop
+// drives.
+//
+// It is a live view, not a fixed list: activating a tool mid-phase adds to it,
+// and the loop re-reads ToolDefs at the top of every round so the addition is
+// visible on the NEXT provider call rather than the one after.
+//
+// The snapshot it resolves against is fixed, though. A server restarting
+// mid-turn must not change what a phase is judged against between the call and
+// the delivery gate.
+type Surface struct {
+	phase    string
+	universe Snapshot
+
+	mu     sync.Mutex
+	active []string
+	called []Call
+}
+
+var _ toolloop.Surface = (*Surface)(nil)
+
+// Call is one invocation the surface ran, recorded for the ledger and the
+// delivery gate.
+type Call struct {
+	Name   string
+	Args   map[string]any
+	Output string
+	Failed bool
+}
+
+// NewSurface builds a phase surface over a snapshot.
+//
+// active names the tools offered to the model up front. Everything else in the
+// snapshot is REACHABLE but not offered — that is what discovery is for, and
+// it is why a planner is not handed the whole of a large MCP server's
+// catalogue in its prompt.
+func NewSurface(phase string, universe Snapshot, active []string) *Surface {
+	s := &Surface{phase: phase, universe: universe}
+	for _, name := range active {
+		s.Activate(name)
+	}
+	return s
+}
+
+// Phase names the phase, for telemetry.
+func (s *Surface) Phase() string { return s.phase }
+
+// Activate adds a tool to what the model is offered, reporting whether it
+// resolved.
+//
+// It is the only writer of the active list, and it admits nothing the universe
+// does not resolve. That invariant is what lets ToolDefs render without a miss
+// check — see there.
+//
+// Idempotent: a model that activates the same tool twice has not made an
+// error worth reporting, and a duplicate in the offered list is a duplicate in
+// the request the vendor rejects.
+func (s *Surface) Activate(name string) bool {
+	if _, ok := s.universe.Lookup(name); !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if slices.Contains(s.active, name) {
+		return true
+	}
+	s.active = append(s.active, name)
+	return true
+}
+
+// Active returns the currently offered names, in activation order.
+func (s *Surface) Active() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.active)
+}
+
+// ToolDefs renders what the model is offered this round.
+func (s *Surface) ToolDefs() []llm.ToolDef {
+	s.mu.Lock()
+	active := slices.Clone(s.active)
+	s.mu.Unlock()
+
+	defs := make([]llm.ToolDef, 0, len(active))
+	for _, name := range active {
+		// No miss check. Activate is the ONLY writer of active and it
+		// admits nothing the universe does not resolve, and the universe
+		// is a frozen snapshot — so a name here always resolves.
+		//
+		// The check was written, mutated away, and nothing noticed. It was
+		// guarding against a server restarting mid-phase, which this
+		// surface is deliberately immune to: it resolves against the
+		// snapshot, not the live registry. Keeping it would have implied a
+		// hazard that the snapshot already removes.
+		e, _ := s.universe.Lookup(name)
+		defs = append(defs, llm.ToolDef{
+			Name:        e.Name(),
+			Description: e.Tool.Description(),
+			Parameters:  paramsOrEmpty(e.Tool.Parameters()),
+		})
+	}
+	return defs
+}
+
+// Execute runs one call.
+//
+// A tool the model asked for but that is not on this surface comes back as an
+// ordinary FAILED result, not a Go error: the model asked for something it
+// cannot have, which is a thing to tell it about, and an error here would tear
+// down a turn over a hallucinated name.
+func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	// Arguments arrive already decoded — the provider layer owns that,
+	// including keeping large integer ids exact.
+	args := call.Arguments
+	if args == nil {
+		args = map[string]any{}
+	}
+
+	s.mu.Lock()
+	offered := slices.Contains(s.active, call.Name)
+	s.mu.Unlock()
+	e, known := s.universe.Lookup(call.Name)
+	if !known || !offered {
+		// The two readings are DIFFERENT and the model can act on the
+		// difference: a name that exists but was not offered is something
+		// to activate, a name that does not exist is something to stop
+		// trying.
+		msg := fmt.Sprintf("Unknown tool: %s", call.Name)
+		if known {
+			msg = fmt.Sprintf("Tool %s is not active on this surface — activate it first.", call.Name)
+		}
+		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true})
+		return toolloop.ToolResult{Output: msg, Failed: true}, nil
+	}
+
+	res, err := e.Tool.Call(ctx, args)
+	if err != nil {
+		// The caller's own context ended — the turn is being torn down.
+		// Nothing is reported to the model and nothing is recorded: this
+		// call did not happen as far as the ledger is concerned.
+		return toolloop.ToolResult{}, err
+	}
+	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
+	return toolloop.ToolResult{Output: res.Output, Failed: res.Failed}, nil
+}
+
+func (s *Surface) record(c Call) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.called = append(s.called, c)
+}
+
+// Calls returns what this surface ran, in order.
+func (s *Surface) Calls() []Call {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.called)
+}
+
+// CalledNames returns the names this surface ran, in order, with repeats.
+func (s *Surface) CalledNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.called))
+	for _, c := range s.called {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+// Universe is the snapshot this surface resolves against — the full
+// catalogue, not just what is offered. The delivery gate reads it, because a
+// tool discovered and called mid-phase is still a real delivery.
+func (s *Surface) Universe() Snapshot { return s.universe }
+
+// paramsOrEmpty guarantees a non-nil schema object.
+//
+// A nil parameters map marshals to `null`, which vendors reject as an invalid
+// tool schema — so one zero-argument tool fails the whole request rather than
+// just itself.
+func paramsOrEmpty(p map[string]any) map[string]any {
+	if len(p) == 0 {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	return maps.Clone(p)
+}
