@@ -49,6 +49,13 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"RetentionSweep", testRetention},
 		{"RecordSkipsUntrackedTypes", testRecordUntracked},
 		{"NullUnconstrainedWorkKey", testWorkKeyNull},
+		{"DeliveryClaimIsFirstWins", testDeliveryClaimIsFirstWins},
+		{"DeliveryClaimIsPerSource", testDeliveryClaimIsPerSource},
+		{"DeliveryClaimExpires", testDeliveryClaimExpires},
+		{"DeliveryClaimRefreshesTheStamp", testDeliveryClaimRefreshesTheStamp},
+		{"DeliveryClaimWithoutAKey", testDeliveryClaimWithoutAKey},
+		{"DeliveryPurge", testDeliveryPurge},
+		{"DeliveryRelease", testDeliveryRelease},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

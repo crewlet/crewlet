@@ -57,6 +57,8 @@ func catalogue() []events.Payload {
 		// turn.go
 		ExecuteMissingTool{}, PhaseToolActivated{}, ToolSkillGuardBlocked{},
 		PromptSize{}, TurnGuardBreach{},
+		// webhook.go
+		RawWebhook{},
 	}
 }
 
@@ -99,6 +101,7 @@ var wireTypes = []string{
 	"plan_prefetch_summary",
 	"prompt.size",
 	"provider_fallback",
+	"raw_webhook",
 	"reflection_completed",
 	"relevant_knowledge_refetched",
 	"role_updated",
@@ -537,6 +540,11 @@ func (f *filler) fill(v reflect.Value, name string) {
 		v.SetString(name + "-" + strconv.Itoa(f.next()))
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		v.SetInt(int64(f.next()))
+	case reflect.Uint8:
+		// Only reached as the element of a []byte, which JSON carries as
+		// base64. Filling it like any other field is what makes the round
+		// trip prove the tag rather than prove that two empty slices match.
+		v.SetUint(uint64(f.next()))
 	case reflect.Float32, reflect.Float64:
 		v.SetFloat(float64(f.next()) + 0.5)
 	case reflect.Bool:

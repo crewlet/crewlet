@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -265,6 +266,20 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 const apiShutdownGrace = 5 * time.Second
 
 // serveAPI binds the HTTP surface, or reports that this node serves none.
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret —
+// a failure that looks exactly like an attack and resolves only on restart.
+func companySecrets(e *engine.Engine) webhooks.Secrets {
+	company := e.Company()
+	if company == nil {
+		return webhooks.Secrets{}
+	}
+	return webhooks.SecretsOf(company.Config, company.Org)
+}
+
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	log *slog.Logger,
 ) (*httpSurface, error) {
@@ -288,6 +303,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// empty, which is the difference between "this node has no
 		// event log" and "the company has done nothing".
 		Sources: queries.Sources{Events: e.Backends().Store.Events()},
+		// The inbound edge. It republishes onto THIS node's queue and
+		// dedupes through THIS node's store, which is what makes a
+		// delivery that lands on any node of a fleet wake the seat's
+		// owner exactly once.
+		Inbound: api.Inbound{
+			Secrets:    func() webhooks.Secrets { return companySecrets(e) },
+			Publisher:  e.Backends().Queue,
+			Deliveries: e.Backends().Store.DeliveryLog(),
+		},
 	})
 	// CONFIGURED by construction. The engine only exists because a company
 	// config parsed, validated and built an epoch, so by the time this

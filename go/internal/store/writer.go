@@ -17,7 +17,7 @@ import (
 // clicked, because its events reached the live stream and never the store.
 // Every event type the engine publishes belongs here.
 //
-// The two deliberate absences:
+// The three deliberate absences:
 //
 //   - agent_turn_progress fires once per LLM round as a live-only signal;
 //     the matching agent_phase_completed is its durable record.
@@ -26,6 +26,11 @@ import (
 //     let a dashboard hydrate a dead process's counters and render them as
 //     the current ones — a number that is not merely stale but describes a
 //     different run.
+//   - raw_webhook is the API's inbound edge waking a transport. The edge has
+//     ALREADY written the delivery's row itself, carrying the provider's exact
+//     bytes under category "webhook" — so admitting the queue envelope too
+//     would store every inbound delivery twice, once as what arrived and once
+//     as what was forwarded.
 var eventCategory = map[string]string{
 	"org_started":      "lifecycle",
 	"org_stopped":      "lifecycle",

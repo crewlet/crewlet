@@ -14,7 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -69,6 +72,10 @@ type Options struct {
 
 	// HealthInterval overrides the shared tick's cadence.
 	HealthInterval time.Duration
+
+	// Inbound wires the webhook edge. Zero means this process serves no
+	// webhook endpoint — see [Inbound].
+	Inbound Inbound
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
@@ -138,8 +145,59 @@ func New(opts Options) *App {
 	mux.Handle("GET /dashboard", http.HandlerFunc(files.serveIndex))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(files.serveFavicon))
 	mux.Handle("GET /static/", http.HandlerFunc(files.serveStatic))
+	// The inbound edge. Exempt from the guard by prefix (see the auth
+	// package) because each route authenticates by provider credential,
+	// which is why every one of them verifies before it does anything.
+	a.mountWebhooks(mux, opts.Inbound, sources, now)
 	a.handler = a.guard.Middleware(mux)
 	return a
+}
+
+// Inbound is what the webhook edge needs that only the surrounding process
+// has: somewhere to republish a delivery, the epoch's verification material,
+// and the cross-process dedupe.
+//
+// The rest of what the edge needs — the event log, the live stream, whether a
+// revision is active, the clock — comes from the app itself, so those cannot be
+// wired differently here than they are everywhere else on this node.
+//
+// A nil Publisher turns the edge OFF, and it is the one field that decides it:
+// the edge exists exactly when there is a queue to republish onto, because
+// recording a delivery that never reaches an agent is worse than not accepting
+// it.
+type Inbound struct {
+	Secrets    func() webhooks.Secrets
+	Publisher  queue.Publisher
+	Deliveries *store.Deliveries
+
+	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
+	// published JWKS.
+	Keys webhooks.KeySource
+}
+
+// mountWebhooks registers the inbound edge, or says why it did not.
+//
+// Silence is the failure mode here: an operator whose integration never fires
+// has no way to tell a misconfigured provider from a node that never had the
+// endpoint, and the webhook is the only surface where "nothing happened" is
+// the normal appearance of both.
+func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sources, now func() time.Time) {
+	if in.Publisher == nil {
+		log.Warn("webhooks_disabled",
+			"hint", "this process has no event queue, so it serves no webhook "+
+				"endpoint and every integration pointed at it will 404")
+		return
+	}
+	webhooks.New(webhooks.Options{
+		Secrets:    in.Secrets,
+		Publisher:  in.Publisher,
+		Deliveries: in.Deliveries,
+		Keys:       in.Keys,
+		Events:     sources.Events,
+		Stream:     a.stream,
+		Configured: a.Configured,
+		Now:        now,
+	}).Routes(mux)
 }
 
 func nodeIDOf(b *config.Bootstrap) string {
