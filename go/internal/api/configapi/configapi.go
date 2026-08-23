@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -107,21 +108,15 @@ func (s *Service) Routes(mux *http.ServeMux) {
 // deployment before its first import has no configuration, and reporting that
 // as a failure would make a working new install look broken.
 func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
-	revision, found, err := s.configs.Active(r.Context())
-	if err != nil {
-		s.fail(w, "read the active revision", err)
-		return
-	}
-	if !found {
+	company, err := s.Document(r.Context())
+	switch {
+	case errors.Is(err, ErrNoActiveRevision):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
-		return
+	case err != nil:
+		s.fail(w, "read the active revision", err)
+	default:
+		s.writeDocument(w, r, company)
 	}
-	company, err := s.open(revision)
-	if err != nil {
-		s.fail(w, "open the active revision", err)
-		return
-	}
-	s.writeDocument(w, r, company.Redact())
 }
 
 // writeDocument answers in the format the caller asked for.
@@ -154,14 +149,10 @@ func (s *Service) listRevisions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	revisions, err := s.configs.List(r.Context(), limit, offset)
+	out, err := s.Revisions(r.Context(), limit, offset)
 	if err != nil {
 		s.fail(w, "list revisions", err)
 		return
-	}
-	out := make([]map[string]any, 0, len(revisions))
-	for _, revision := range revisions {
-		out = append(out, meta(revision))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -190,49 +181,28 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 // put both the old and the new secret in one response — which is strictly
 // worse than the read this surface already refuses to serve.
 func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
-	target, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
-	if !ok {
-		return
-	}
-	against := r.URL.Query().Get("against")
-	if against == "" {
-		against = "active"
-	}
-
-	var base store.Revision
-	if against == "active" {
-		active, found, err := s.configs.Active(r.Context())
-		if err != nil {
-			s.fail(w, "read the active revision", err)
-			return
-		}
-		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
-			return
-		}
-		base = active
-	} else if base, ok = s.lookup(w, r, against, "against_not_found"); !ok {
-		return
-	}
-
-	from, err := s.open(base)
-	if err != nil {
-		s.fail(w, "open revision", err)
-		return
-	}
-	to, err := s.open(target)
-	if err != nil {
-		s.fail(w, "open revision", err)
-		return
-	}
-	changes, err := Changes(from.Redact(), to.Redact())
-	if err != nil {
+	body, err := s.Diff(r.Context(), r.PathValue("id"), r.URL.Query().Get("against"))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, body)
+	case errors.Is(err, ErrNoActiveRevision):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+	case errors.Is(err, store.ErrNoRevision):
+		// WHICH side is missing. "The revision you asked about" and "the
+		// one you asked to compare it with" are different mistakes, and a
+		// single not_found makes the caller check both.
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err, r)})
+	default:
 		s.fail(w, "diff revisions", err)
-		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"from": base.ID, "to": target.ID, "changes": changes,
-	})
+}
+
+// missingSide names which half of a diff could not be found.
+func missingSide(err error, r *http.Request) string {
+	if strings.Contains(err.Error(), r.PathValue("id")) {
+		return "not_found"
+	}
+	return "against_not_found"
 }
 
 // --- writes ----------------------------------------------------------------

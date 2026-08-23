@@ -3,6 +3,7 @@ package ledgerstore
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -146,6 +147,39 @@ func (m *MemoryConversations) History(_ context.Context, handle, conversation st
 		// and an empty non-nil slice reads the same, but only nil says
 		// "there is nothing here" to a reader comparing against nil.
 		return nil, nil
+	}
+	return out, nil
+}
+
+func (m *MemoryConversations) Threads(_ context.Context, handle string, limit int) ([]Thread, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Thread
+	for key, rows := range m.rows {
+		owner, conversation, found := strings.Cut(key, "\x00")
+		if !found || owner != handle || len(rows) == 0 {
+			continue
+		}
+		thread := Thread{Key: conversation, Entries: len(rows)}
+		for _, r := range rows {
+			if r.at.After(thread.LastAt) {
+				thread.LastAt = r.at
+			}
+		}
+		out = append(out, thread)
+	}
+	// Newest activity first, then by key. The tiebreak is not decoration:
+	// a map walk has no order, so without it this twin hands two readers
+	// different pages for the same data — which is precisely the kind of
+	// divergence a memory twin exists to NOT have against the real store.
+	slices.SortFunc(out, func(a, b Thread) int {
+		if !a.LastAt.Equal(b.LastAt) {
+			return b.LastAt.Compare(a.LastAt)
+		}
+		return strings.Compare(a.Key, b.Key)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

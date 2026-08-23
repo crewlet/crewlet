@@ -567,3 +567,94 @@ func TestAStoredEmptyKeyStillNeverMatches(t *testing.T) {
 		t.Error("a stored empty key read as worked")
 	}
 }
+
+// Threads is the OPERATOR's read of the same ledger a turn uses, and both
+// implementations have to answer it identically — a memory twin that ordered
+// differently would let a fleet test pass on the twin and fail on the store.
+
+func TestThreadsListsWhatASeatIsCarrying(t *testing.T) {
+	t.Parallel()
+	for name, s := range conversationImpls(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			write := func(conversation, reply string, at time.Time) {
+				t.Helper()
+				if err := s.Append(ctx, "ceo", conversation,
+					ledger.Session{Reply: reply, At: at.Format(time.RFC3339)}, reply, at, 0); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			write("thread-a", "one", base)
+			write("thread-a", "two", base.Add(time.Minute))
+			write("thread-b", "three", base.Add(time.Hour))
+			// Another seat's conversation, which must not appear.
+			if err := s.Append(ctx, "cto", "thread-c",
+				ledger.Session{Reply: "theirs"}, "theirs", base, 0); err != nil {
+				t.Fatal(err)
+			}
+
+			threads, err := s.Threads(ctx, "ceo", 0)
+			if err != nil {
+				t.Fatalf("Threads: %v", err)
+			}
+			if len(threads) != 2 {
+				t.Fatalf("%d threads, want the two this seat holds: %+v", len(threads), threads)
+			}
+			// Newest activity first: a reader scanning a seat's threads is
+			// looking for the one that moved most recently.
+			if threads[0].Key != "thread-b" || threads[1].Key != "thread-a" {
+				t.Fatalf("order = %s, %s — want newest activity first",
+					threads[0].Key, threads[1].Key)
+			}
+			if threads[1].Entries != 2 {
+				t.Errorf("thread-a holds %d entries, want 2", threads[1].Entries)
+			}
+			if !threads[1].LastAt.Equal(base.Add(time.Minute)) {
+				t.Errorf("thread-a last at %v, want the newest entry's stamp", threads[1].LastAt)
+			}
+		})
+	}
+}
+
+func TestThreadsIsBounded(t *testing.T) {
+	t.Parallel()
+	for name, s := range conversationImpls(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for i := range 10 {
+				key := "thread-" + string(rune('a'+i))
+				if err := s.Append(ctx, "ceo", key, ledger.Session{Reply: key}, key,
+					base.Add(time.Duration(i)*time.Minute), 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			threads, err := s.Threads(ctx, "ceo", 3)
+			if err != nil {
+				t.Fatalf("Threads: %v", err)
+			}
+			if len(threads) != 3 {
+				t.Fatalf("%d threads, want the limit of 3", len(threads))
+			}
+			// The limit keeps the RECENT ones. Keeping the oldest would be
+			// the opposite of what a reader opening a seat wants.
+			if threads[0].Key != "thread-j" {
+				t.Errorf("first = %s, want the most recent", threads[0].Key)
+			}
+		})
+	}
+}
+
+func TestASeatWithNoConversationsListsNothing(t *testing.T) {
+	t.Parallel()
+	for name, s := range conversationImpls(t) {
+		t.Run(name, func(t *testing.T) {
+			threads, err := s.Threads(context.Background(), "nobody", 0)
+			if err != nil {
+				t.Fatalf("Threads: %v", err)
+			}
+			if len(threads) != 0 {
+				t.Errorf("threads = %+v, want none", threads)
+			}
+		})
+	}
+}

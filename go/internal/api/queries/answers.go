@@ -6,9 +6,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
+
+var log = logging.Get("api.queries")
 
 // Page sizes. Two numbers per listing, and both are load-bearing: the default
 // is what a dashboard gets when it names none, and the ceiling is what stops
@@ -40,6 +49,61 @@ type Sources struct {
 	// reader of the protocol has to know which direction a frame was
 	// travelling to know what it means.
 	Health func() any
+
+	// Company reads the CURRENT epoch, for the questions answered from
+	// configuration rather than from a store. A function, not a value: an
+	// apply replaces the epoch, and an answer bound to the one this
+	// process booted on would describe a company that is no longer running.
+	Company func() *config.Company
+
+	// Coord is the lease table — the fleet's one shared answer to "which
+	// node holds what". Nil leaves the fleet question unregistered, which
+	// is honest for a process with no coordination backend.
+	Coord coord.Backend
+
+	// Plane is the control plane, for the config columns of the fleet view.
+	Plane *store.ConfigPlane
+
+	// Runs is the schedule dispatch ledger. Nil still answers the
+	// schedules question — the configured schedules are a projection of
+	// the org — with an empty history, because "no ledger" and "nothing
+	// has fired" are told apart by the answer's own shape.
+	Runs ScheduleRuns
+
+	// Conversations is what each seat already said in each thread it works.
+	Conversations ledgerstore.Conversations
+
+	// Diary and Episodes are a seat's memory.
+	Diary    *learning.Diary
+	Episodes *learning.Episodes
+
+	// Config serves the config family, and every one of those is
+	// operator-gated: reading the document exposes the whole company.
+	Config *configapi.Service
+
+	// NodeID names this node in the fleet answer, so a reader can tell
+	// which row is the one they are talking to.
+	NodeID string
+
+	// Now is injectable so a test can pin the lease countdowns and the
+	// next-run projection.
+	Now func() time.Time
+}
+
+// ScheduleRuns is the dispatch history a schedules answer reads.
+//
+// Declared here rather than imported so this package depends on the shape and
+// not on the ledger. Satisfied by the SQL ledger and its memory twin alike.
+type ScheduleRuns interface {
+	Recent(ctx context.Context, limit int) ([]schedule.Run, error)
+}
+
+// clock reads the injected time, or the wall clock.
+func (s Sources) clock() time.Time {
+	if s.Now == nil {
+		return time.Now().UTC()
+	}
+	return s.Now()
 }
 
 // ErrUnavailable is a question this process cannot answer because the thing it
@@ -67,6 +131,30 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Health != nil {
 		r.Register("stream", s.stream)
+	}
+	if s.Coord != nil {
+		r.Register("fleet", s.fleet)
+	}
+	if s.Company != nil {
+		// Both are projections of the epoch: what the company DECLARES,
+		// which is a different question from what it has done.
+		r.Register("schedules", s.schedules)
+		r.Register("integrations", s.integrations)
+	}
+	if s.Conversations != nil {
+		r.Register("conversations", s.conversations)
+	}
+	if s.Diary != nil || s.Episodes != nil {
+		r.Register("agent_memory", s.agentMemory)
+	}
+	if s.Config != nil {
+		// OPERATOR-ONLY, all three. Reading the config document exposes
+		// the whole company — its org chart, which integrations are
+		// wired, and every ${VAR} reference by name — which is what makes
+		// /config the one prefix never eligible for anonymous read.
+		r.RegisterOperator("config", s.configDocument)
+		r.RegisterOperator("config_audit", s.configAudit)
+		r.RegisterOperator("config_diff", s.configDiff)
 	}
 }
 

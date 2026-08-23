@@ -507,6 +507,10 @@ func (failingConversations) History(context.Context, string, string, int) ([]led
 	return nil, errors.New("store down")
 }
 
+func (failingConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
+	return nil, errors.New("store down")
+}
+
 func (failingConversations) Purge(context.Context, time.Time) (int64, error) {
 	return 0, errors.New("store down")
 }

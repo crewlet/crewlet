@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -28,7 +29,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/version"
 )
@@ -307,6 +310,14 @@ const apiShutdownGrace = 5 * time.Second
 // Not captured once: a config reload replaces the epoch, and a receiver holding
 // the old one would keep rejecting deliveries signed with a rotated secret —
 // a failure that looks exactly like an attack and resolves only on restart.
+// companyConfig is the engine's CURRENT company document, or nil.
+func companyConfig(e *engine.Engine) *config.Company {
+	if company := e.Company(); company != nil {
+		return company.Config
+	}
+	return nil
+}
+
 func companySecrets(e *engine.Engine) webhooks.Secrets {
 	company := e.Company()
 	if company == nil {
@@ -329,6 +340,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, nil
 	}
 
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		return nil, fmt.Errorf("api: node identity: %w", err)
+	}
+	// ONE config surface, shared by the REST routes and the socket
+	// queries. Sealing and opening with the SAME keyring the reconciler
+	// applies through: two ciphers over one store would mean a revision
+	// written here is one no node can read.
+	configSurface := configapi.New(configapi.Options{
+		Store: e.Backends().Store, Cipher: cipher,
+	})
+
 	app := api.New(api.Options{
 		Bootstrap:    boot,
 		Runtime:      engineRuntime{engine: e, reconciler: reconciler},
@@ -337,17 +360,27 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// question it has no source for comes back unknown rather than
 		// empty, which is the difference between "this node has no
 		// event log" and "the company has done nothing".
-		Sources: queries.Sources{Events: e.Backends().Store.Events()},
+		Sources: queries.Sources{
+			Events: e.Backends().Store.Events(),
+			// Read through the ENGINE's epoch rather than a captured
+			// company: an apply replaces it, and a screen bound to the
+			// one this process booted on would describe a company that
+			// is no longer running.
+			Company:       func() *config.Company { return companyConfig(e) },
+			Coord:         e.Backends().Coord,
+			Plane:         e.Backends().Store.ControlPlane(),
+			Runs:          sqlledger.New(e.Backends().Store.SQL()),
+			Conversations: ledgerstore.NewConversations(e.Backends().Store),
+			Diary:         learning.NewDiary(e.Backends().Store),
+			Episodes:      learning.NewEpisodes(e.Backends().Store),
+			Config:        configSurface,
+			NodeID:        nodeID,
+		},
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through THIS node's store, which is what makes a
 		// delivery that lands on any node of a fleet wake the seat's
 		// owner exactly once.
-		// The config surface, sealing and opening with the SAME keyring
-		// the reconciler applies through — two ciphers for one store
-		// would mean a revision written here is one no node can read.
-		Config: configapi.New(configapi.Options{
-			Store: e.Backends().Store, Cipher: cipher,
-		}),
+		Config: configSurface,
 		Inbound: api.Inbound{
 			Secrets:    func() webhooks.Secrets { return companySecrets(e) },
 			Publisher:  e.Backends().Queue,

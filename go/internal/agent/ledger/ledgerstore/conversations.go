@@ -33,8 +33,36 @@ type Conversations interface {
 	// database outage as a silent seat.
 	History(ctx context.Context, handle, conversation string, limit int) ([]ledger.Session, error)
 
+	// Threads lists the conversations this seat has entries in, newest
+	// activity first.
+	//
+	// The OPERATOR's view of the same ledger a turn reads. It answers
+	// "which threads is this seat carrying context for", which History
+	// cannot: History needs a conversation key, and the key is exactly
+	// what somebody looking at a seat does not have.
+	//
+	// RAISES like History, and for the same reason: an unreadable ledger
+	// and a seat that has said nothing are opposite facts.
+	Threads(ctx context.Context, handle string, limit int) ([]Thread, error)
+
 	// Purge deletes entries older than cutoff.
 	Purge(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// Thread is one conversation a seat holds entries for.
+type Thread struct {
+	// Key is the surface-scoped conversation identity — a thread, an
+	// issue, a channel. Opaque here; the notification layer owns its
+	// grammar.
+	Key string
+
+	// Entries is how many turns this seat has recorded in it.
+	Entries int
+
+	// LastAt is the newest entry's stamp, which is what the listing is
+	// ordered by: a reader scanning a seat's threads is looking for the
+	// one that moved most recently.
+	LastAt time.Time
 }
 
 // SQLConversations is the durable conversation ledger.
@@ -124,6 +152,44 @@ func (s *SQLConversations) History(ctx context.Context, handle, conversation str
 	// limiting would have kept the oldest — the opposite of what a
 	// follow-up turn needs.
 	slices.Reverse(out)
+	return out, nil
+}
+
+// Threads lists the conversations this seat holds entries in.
+//
+// Aggregated in SQL rather than by reading every entry: a chat DM keys on the
+// whole CHANNEL, so one conversation can hold the trim limit's worth of
+// entries and a seat can hold many conversations. Counting them in Go would
+// move the entire ledger through the process to render a list of keys.
+func (s *SQLConversations) Threads(ctx context.Context, handle string, limit int) ([]Thread, error) {
+	query := `SELECT conversation_key, COUNT(*), MAX(created_at)
+	          FROM conversation_sessions WHERE agent_handle = ?
+	          GROUP BY conversation_key
+	          ORDER BY MAX(created_at) DESC, conversation_key`
+	args := []any{handle}
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := s.db.SQL().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ledgerstore: list conversations for %s: %w", handle, err)
+	}
+	defer rows.Close()
+
+	var out []Thread
+	for rows.Next() {
+		var thread Thread
+		var micros int64
+		if err := rows.Scan(&thread.Key, &thread.Entries, &micros); err != nil {
+			return nil, fmt.Errorf("ledgerstore: scan conversations for %s: %w", handle, err)
+		}
+		thread.LastAt = store.DecodeTime(micros)
+		out = append(out, thread)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ledgerstore: list conversations for %s: %w", handle, err)
+	}
 	return out, nil
 }
 
