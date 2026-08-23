@@ -98,7 +98,7 @@ func (s *suite) runBatch(t *testing.T) {
 		attempts := newJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
 			func(_ context.Context, evs []*events.Event) queue.Result {
-				conv := convKey(evs[0])
+				conv := firstConv(t, evs)
 				attempts.record(conv)
 				if conv == "c1" {
 					return queue.Nak(errors.New("boom"))
@@ -346,7 +346,7 @@ func (s *suite) runBatch(t *testing.T) {
 		seen := newJournal()
 		if err := q.SubscribeBatch(ctx, "topic.b", "grp",
 			func(_ context.Context, evs []*events.Event) queue.Result {
-				seen.record(convKey(evs[0]))
+				seen.record(firstConv(t, evs))
 				return queue.Defer("seat is not owned here")
 			}, convKey, queue.DefaultBatchOptions()); err != nil {
 			t.Fatalf("SubscribeBatch: %v", err)
@@ -381,7 +381,7 @@ func (s *suite) runBatch(t *testing.T) {
 		var grown bool
 		if err := q.SubscribeBatch(ctx, "topic.c", "grp",
 			func(hctx context.Context, evs []*events.Event) queue.Result {
-				seen.record(convKey(evs[0]))
+				seen.record(firstConv(t, evs))
 				// Grow the tail under the loop, exactly as a concurrent
 				// producer would — ONCE.
 				//

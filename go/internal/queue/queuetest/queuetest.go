@@ -518,6 +518,25 @@ func canonicalJSON(t *testing.T, v any) string {
 	return string(raw)
 }
 
+// firstConv reads the conversation key of a delivered batch, reporting an empty
+// one instead of panicking on it.
+//
+// evs is what the BACKEND returned, and on the healthy path it is never empty —
+// so an unguarded evs[0] only fires on the day a backend is actually broken,
+// which is the one day the output matters. A panic on a dispatch goroutine ends
+// the whole test binary, so the suite's answer to a broken backend would be to
+// destroy its own diagnosis: one unrelated case reported, then a stack trace,
+// and nothing naming the real defect. t.Errorf rather than Fatalf, because this
+// does not run on the test goroutine.
+func firstConv(t *testing.T, evs []*events.Event) string {
+	t.Helper()
+	if len(evs) == 0 {
+		t.Errorf("backend delivered an EMPTY batch; every partition holds at least one event")
+		return ""
+	}
+	return convKey(evs[0])
+}
+
 func labelOf(ev *events.Event) string {
 	if ev == nil {
 		return ""

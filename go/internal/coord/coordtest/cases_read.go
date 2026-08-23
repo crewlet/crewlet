@@ -191,21 +191,28 @@ var readCases = []testCase{
 
 	// --- meta: what the holder IS --------------------------------------
 	//
-	// The payloads below stay JSON-native — strings, and slices and maps of
-	// them — and that is a KNOWN GAP, not a courtesy. Meta is the one field
-	// that crosses a wire (d-201 §2: the ownership key carries it as JSON),
-	// so a value's Go TYPE need not survive a round trip: measured, an int
-	// written to the embedded-NATS backend reads back as a float64 and a
-	// []string as a []any. Every payload here is already in the shape JSON
-	// decoding produces, so these cases cannot tell a backend that encodes
-	// from one that hands the caller its own map straight back.
+	// Meta is the one field that crosses a wire — d-201 §2 records the
+	// ownership key carrying it as JSON — so the suite separates the two
+	// properties it could assert about a round trip and requires exactly
+	// one of them.
 	//
-	// What that would certify, if left unsaid: a caller writing
-	// meta["n"].(int) passing every memory-backed test in the tree and
-	// panicking against the store the company is actually deployed on. The
-	// twin closes it from its own side by encoding at the door, and
-	// placement.rolesFromMeta reads both shapes deliberately — but nothing
-	// HERE requires either, so a third backend may still diverge. See
+	// The VALUE must survive: meta_values_survive_the_round_trip writes a
+	// number, a bool, a []string and a nested map and compares canonical
+	// JSON. A codec that drops what it cannot encode fails it, because a
+	// peer reads this payload to decide whether a node may run a seat.
+	//
+	// The TYPE need not: measured, an int comes back float64 from the
+	// embedded-NATS store and int from one that keeps Go types, and both
+	// are correct — coord.go promises only map[string]any. Requiring one
+	// shape would write a codec choice into the contract, so the case is
+	// mutation-checked in BOTH directions: it fails a lossy codec AND
+	// passes a Go-native one, which is what stops it from becoming a type
+	// requirement wearing a value requirement's name.
+	//
+	// The remaining payloads below are pre-shaped and cannot see either
+	// property on their own; the one case above is what covers them. The
+	// open question — whether the contract should SAY the type is JSON's,
+	// or say callers may not depend on it — is
 	// rewrite/questions/coord-contract-meta-wire-shape.md.
 
 	{"meta_values_survive_the_round_trip", func(h *harness) {
@@ -336,6 +343,19 @@ var readCases = []testCase{
 		lease := h.claim(resource, coord.AcquireOptions{
 			Owner: "n1:a", TTL: LongTTL, Ungated: true, Meta: payload,
 		})
+
+		// Checked before writing to it, because a suite must never panic
+		// on what a backend hands back. A backend whose codec drops the
+		// payload returns a nil map here, and "assignment to entry in
+		// nil map" takes the whole test BINARY down — aborting every
+		// other case, including the ones whose failure names the actual
+		// defect. Measured: a lossy-codec mutation produced exactly that,
+		// and the case that would have diagnosed it never ran.
+		if lease.Meta == nil {
+			h.t.Fatalf("claim returned no meta at all for the payload %v — a backend that "+
+				"drops what a holder advertises leaves peers deciding placement against "+
+				"a profile the node never published", payload)
+		}
 
 		payload["roles"] = []any{"nothing"}
 		payload["injected"] = "yes"

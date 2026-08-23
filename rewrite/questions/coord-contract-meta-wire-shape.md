@@ -54,9 +54,31 @@ Should `coordtest` REQUIRE wire shapes of every backend — a case that writes a
 
 The gap is measured, not argued: deleting the twin's encoding — reverting it to
 handing the caller's own map straight back — **passes the entire contract
-suite**, every case, under `-race`. Nothing in `coordtest` can currently tell
-the two behaviours apart, so a backend that preserves Go types is certified
-today.
+suite**, every case, under `-race`. Nothing in `coordtest` can tell the two
+behaviours apart, so a backend that preserves Go types is certified today.
+
+### Narrowed since first filing
+
+The suite now separates the two properties and requires the one the contract
+does back. `meta_values_survive_the_round_trip` writes a number, a bool, a
+`[]string` and a nested map and compares **canonical JSON**, under which
+`int(3)` and `float64(3)` are one value and `[]string{"a"}` and `[]any{"a"}`
+are one list. Mutation-checked in both directions, which is the part that keeps
+it honest:
+
+| mutation | outcome | caught by |
+|---|---|---|
+| codec drops every non-string value | fails | 5 cases, incl. the new one |
+| codec drops ONE number | fails | **only** the new one |
+| Go-native codec (types preserved) | passes | — by design |
+
+The middle row is the hole that existed before: every other meta fixture is
+pre-shaped, so none of them writes a number, so none could see a codec that
+loses one. The bottom row is what stops the case from being a type requirement
+wearing a value requirement's name.
+
+So what remains open is only the TYPE question below — value survival is no
+longer at risk either way.
 
 - **For.** Both current backends already behave that way, the deployed one
   cannot do otherwise, and without it a third backend may hand back Go-native
@@ -71,3 +93,20 @@ so the next reader is not misled by their passing. If the answer is "yes",
 `Lease.Meta` should say meta is JSON-shaped and the case is easy to add. If it
 is "no", the contract should say that a caller may not depend on the Go type of
 a meta value, because today nothing tells it either way.
+
+**The recommendation here is "no".** Which is worth reading beside the queue
+suite's write-up of the identical measurement on `Event.Payload`
+(`queue-contract-free-form-payload-types.md`), because the two land differently
+and the difference is structural rather than a disagreement.
+
+An event has a TYPED path: a registered payload decodes into this build's
+struct, so a `Count int` is an `int` on both sides of the wire. That makes "if
+the type matters, register it" a real answer there — the free-form bag can stay
+untyped precisely because a caller who needs a type has somewhere to go.
+
+`Meta` has no such path. It is free-form by construction: node presence carries
+whatever roles and labels a build advertises, and there is no registered shape
+to promote it to. So a caller who needs an `int` back has nowhere to be sent,
+and the only honest instruction is the negative one — do not type-assert a meta
+value; read it the way `placement.rolesFromMeta` does, accepting either shape.
+Saying so in `Lease.Meta` costs a sentence and removes the trap for good.

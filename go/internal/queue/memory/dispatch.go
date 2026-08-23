@@ -204,7 +204,14 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 			"batch_handler_failed",
 			[]any{
 				"topic", sub.topic, "group", sub.group,
-				"batch_key", part.Key, "event_type", evs[0].Type,
+				// firstType, not evs[0].Type: this is a LOG FIELD, and
+				// indexing here happens outside the recover that contains
+				// a handler panic, so an empty partition would take the
+				// process down to decorate a log line. PartitionByKey
+				// cannot produce one today — which is exactly why the
+				// index looked safe, and why it would only ever fire on a
+				// day something upstream was already wrong.
+				"batch_key", part.Key, "event_type", firstType(evs),
 				"event_count", len(evs),
 			},
 		)
@@ -435,6 +442,15 @@ func (b *Broker) flushWindow(sub *subscription, m *consumer, w *lingerWindow) {
 // --- small helpers --------------------------------------------------------
 
 func sameEvent(ev *events.Event) *events.Event { return ev }
+
+// firstType names a batch for a log line, tolerating a batch with nothing in
+// it. Diagnostics must not be able to fail louder than what they describe.
+func firstType(evs []*events.Event) string {
+	if len(evs) == 0 || evs[0] == nil {
+		return ""
+	}
+	return evs[0].Type
+}
 
 func deferralReason(res queue.Result) string {
 	if res.Reason == "" {
