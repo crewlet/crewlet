@@ -371,7 +371,7 @@ screen answers *why did this wake anyone*, not just *what arrived*:
 
 | Source | What the layout names |
 | --- | --- |
-| GitLab | `object_kind`.`action`; the actor (`user.username`, or the flattened `user_username` a push hook sends instead of a user object); `project.path_with_namespace`; the MR, issue, pipeline or branch the event hangs off — a sibling key on a `note` or `pipeline` hook, `object_attributes` on the others; `state` and the MR's source → target branches; the `changes.{assignees,reviewers}` `previous → current` diff `parse_gitlab_webhook` routes on; `object_attributes.url` |
+| GitLab | `object_kind`.`action`; the actor (`user.username`, or the flattened `user_username` a push hook sends instead of a user object); `project.path_with_namespace`; the MR, issue, pipeline or branch the event hangs off — a sibling key on a `note` or `pipeline` hook, `object_attributes` on the others; `state` and the MR's source → target branches; the `changes.{assignees,reviewers}` `previous → current` diff the parser routes on; `object_attributes.url` |
 | Plane | `event`.`action`; `activity.actor` (a bare UUID or an expanded user); `workspace_slug`; the project identifier; the work item as `{identifier}-{sequence_id}`, or the page; `activity.field` with `old_value → new_value`; `data.assignees`; the `<mention-component>` ids a comment carries |
 
 Two of those are load-bearing for an operator reading a failure.

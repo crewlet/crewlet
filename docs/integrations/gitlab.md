@@ -201,7 +201,7 @@ GitLab **does not auto-retry** failed webhook deliveries (and auto-disables a ho
 
 ### Event routing
 
-`parse_gitlab_webhook` turns a payload into a **list** of per-recipient notifications (one comment can @-mention several agents; one update can add several assignees/reviewers). Each notification targets exactly one GitLab username via `metadata.gitlab_username`, resolved to an agent or human seat through the HandleRegistry, and carries `project`, `mr_iid`/`issue_iid`, `url`, and an `event_type` of `"{object_kind}.{action}"`.
+The parser turns a payload into a **list** of per-recipient notifications (one comment can @-mention several agents; one update can add several assignees/reviewers). Each names exactly one GitLab username, which the inbound service resolves to an agent or human seat, and carries `project`, `mr_iid`/`issue_iid`, `url`, `actor_external_id` (who caused the event) and an `event_type` of `"{object_kind}.{action}"`. The MR or issue is the **conversation** — `nimbus/api!42`, `nimbus/api#42` — project-qualified because an iid is unique only within its project, and that reference is the same string the prompt prints and the coalescer keys on.
 
 Routing mirrors GitLab's own notification semantics, in **two layers**:
 
@@ -213,10 +213,12 @@ Routing mirrors GitLab's own notification semantics, in **two layers**:
 | `issue` | On `update`: newly-added assignees (diff of `changes.assignees`) + newly-added description `@mentions` (diff of `changes.description`). On open/reopen: assignees + description mentions. On `close`: **participants** (a human closing an agent's issue must reach the agent), assignees as fallback | `issue.assigned`, `issue.mention`, `issue.close` |
 | `merge_request` | On `update`: newly-added reviewers (`changes.reviewers`), assignees (`changes.assignees`), and description mentions. On `approval`/`approved`/`unapproval`/`unapproved`/`merge`/`close`: **participants**, assignees as fallback. On open: reviewers + assignees + description mentions. On reopen: same, plus a participants fan-out (the whole thread wakes) | `merge_request.review_requested`, `merge_request.assigned`, `merge_request.mention`, `merge_request.{approval,approved,unapproval,unapproved,merge,close,reopen}` |
 | `note` (comment) | Every **@-mentioned** registered username (directed), then **participants** (thread activity), noteable assignees as fallback | `note.mention`, `note.comment` |
-| `pipeline` | Only when `object_attributes.status == failed`: the actor who triggered it (the owner who needs to fix the build; self-suppression is off for this one) | `pipeline.failed` |
+| `pipeline` | Only when `object_attributes.status == failed`: the actor who triggered it — the owner who needs to fix the build, and the one event in the whole engine allowed past the self-action rule | `pipeline.failed` |
 | `emoji` | Parsed but **not** routed (no reliable target on award events) | — |
 
-The comment author is always excluded from fan-out, and each recipient gets **one** notification per event — the first, highest-signal reason wins (a mentioned participant pings as a mention, not as thread activity).
+Each recipient gets **one** notification per event — the first, highest-signal reason wins, so a mentioned participant pings as a mention rather than as thread activity.
+
+The event's **actor** is not filtered by the parser. It is stamped under the one metadata key every integration writes, and the [self-action rule](../concepts/agent-runtime.md) suppresses it centrally — which is what lets the rule resolve an actor across identity namespaces (an agent's bot id and its member id are one seat) and lets `pipeline.failed` state its exception once, in the prompt, instead of as a flag each parser has to remember to set.
 
 Mentions stay explicitly extracted rather than inferred from participation, for two reasons: a mention is a *directed ask* and gets a tailored prompt (participation can't distinguish "this note pings you" from "you once commented"), and GitLab materialises new mentions into the participants list via a background job, so the lookup can race the webhook — text extraction can't. GitLab sends **raw markdown with no parsed mention array**, so the parser extracts word-boundary `@username` tokens from note bodies *and* issue/MR descriptions (on `update`, only mentions *added* by the edit count — re-saving a description doesn't re-notify, matching GitLab's own semantics).
 
@@ -224,16 +226,18 @@ Both mention and participant fan-out are **intersected with the registered GitLa
 
 ### Notification prompts
 
-GitLab webhooks use `GitLabNotificationPrompt` (`src/crewlet/notifications/notification_prompts/gitlab.py`), which gives tailored, actionable prompts to the events that name a thing to act on:
+The prompt dispatches on the **routing reason**, not the event type, because one merge-request event reaches a reviewer, an assignee and a watcher and asks each of them for something different:
 
 | `event_type` | Prompt behaviour |
 |---|---|
-| `merge_request.review_requested` | Actionable — read the diff, approve or leave review comments, notify the requester |
-| `merge_request.assigned` / `issue.assigned` | Actionable — read the MR/issue, do the work (code changes via the sandbox), report back |
-| `note.mention`, `issue.mention`, `merge_request.mention` | Actionable — evaluate whether you were actually asked to do something, then respond on the same thread |
-| Everything else (approvals, non-mention comments, MR merge/close, participant thread activity) | Generic fallback — evaluate relevance and skip if not actionable |
+| `merge_request.review_requested` | Read the **diff**, not the description; approve or comment on the diff; tell the requester where the conversation started. Declining is a reply, not silence — a review request is a direct ask |
+| `merge_request.assigned` / `issue.assigned` | Read the item in full, do the work (an issue's code changes go through the sandbox, which opens an MR under the agent's own identity), report back |
+| `note.mention`, `issue.mention`, `merge_request.mention` | Evaluate whether you were actually asked to do something, then respond on the same thread |
+| `issue.close` | **Stop.** An agent that keeps working a closed issue is spending budget on a deliverable nobody will take; say what was already done, and raise a disagreement on the issue rather than reopening it |
+| `pipeline.failed` | Read the **job log** — the status says nothing about the cause. The prompt states plainly that the agent is being told about its own action deliberately, or a seat that has learned "I am not notified of what I did" reads its own name as a routing mistake |
+| Everything else (approvals, non-mention comments, merges, participant thread activity, and any reason a later release adds) | You are informed because you take part in this thread — which is a reason to be informed, not a request to act |
 
-Review requests, assignments, and failed pipelines are treated as **pointer events** (`requires_recon`) — they name a diff / thread / job log to fetch before the agent has the real context, so the Plan-phase relevance prefetches skip their aux-LLM call.
+Review requests, assignments, and failed pipelines are **pointer events**: they name a diff, a thread or a job log to fetch before the agent has real context, so the Plan-phase relevance prefetches skip their aux-LLM call rather than filtering against a pointer. A comment is not one — its body *is* what was said.
 
 ---
 
@@ -249,7 +253,7 @@ A seat whose lookup **fails** is left unresolved rather than failing the boot �
 
 The credential is read from whichever key the seat's tool stack names it under — `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …` — so the engine still names **no tool-specific variable of its own**; it reads the one the tools already use.
 
-**Human seats** register their `contact.gitlab_username` through the same `CONTACT_FIELD_BY_TRANSPORT` map, so a founder's or teammate's GitLab activity is attributed by name in agent prompts and webhook sender resolution — with no extra plumbing.
+**Human seats** register their `contact.gitlab_username` through the same contact reconciliation every backend's human identities use, so a founder's or teammate's GitLab activity is attributed by name in agent prompts and webhook sender resolution — with no extra plumbing. A human's identities are declared rather than resolved against the instance, so that pass needs no credential and no network.
 
 ---
 
