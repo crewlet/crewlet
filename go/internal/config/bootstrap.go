@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"regexp"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Bootstrap is Tier A — ops-owned, on disk, restart-only.
@@ -924,3 +926,36 @@ func (s *Secrets) validate(path string) error {
 
 // Enabled reports whether secret encryption is configured at all.
 func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
+
+// Cipher builds the sealing cipher this Tier A configures, or nil when secret
+// encryption is disabled.
+//
+// NIL IS A POSTURE, not a failure: a deployment with no keyring stores its
+// company config in plaintext, which is the documented opt-out and the state
+// every deployment starts in. What must fail is a keyring that is configured
+// and unusable — key material that is not 32 bytes of base64 is an operator
+// error, and booting past it would seal the next revision under a key nobody
+// can reproduce.
+//
+// ${VAR} references in the material are already resolved: Tier A expands its
+// document before decoding, because the values it carries are needed the
+// instant the process starts.
+func (s *Secrets) Cipher() (secrets.Cipher, error) {
+	if !s.Enabled() {
+		return nil, nil
+	}
+	ring := secrets.Keyring{
+		ActiveID: s.ActiveKeyID,
+		Keys:     make(map[string][]byte, len(s.Keys)),
+	}
+	for _, key := range s.Keys {
+		material, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key.Material))
+		if err != nil {
+			// The ID reaches the message and the material never does.
+			return nil, fault(at("secrets.keys", key.ID), ErrShape,
+				"key material must be base64 (generate one with `crewlet secrets keygen`)")
+		}
+		ring.Keys[key.ID] = material
+	}
+	return secrets.NewCipher(ring)
+}

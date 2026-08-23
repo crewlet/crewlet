@@ -82,7 +82,9 @@ Usage:
 
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
-  -company  Tier B, the COMPANY: its org, providers and integrations (default %q)
+  -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
+            A seed: it is imported into the store when the store does not
+            already hold it, and a running node serves the store.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath)
 }
 
@@ -90,13 +92,15 @@ Config:
 // node's broker address and store path are an operator's; the org chart and
 // the model behind each seat are the company's.
 //
-// Tier B is read from a FILE here, which is not where it will finally live: a
-// company config is versioned in the store and activated by epoch, and the
-// engine is meant to read the active revision rather than a path. That needs
-// the config plane — revisions, the activation pointer, per-node apply status
-// — which is a separate piece of work. Until it lands, the file IS the active
-// revision, and -company becomes the import path rather than the run path when
-// it does.
+// Tier A is read from its file on every boot and never from anywhere else —
+// it is what tells the process where its store and broker are, so it cannot
+// come from them.
+//
+// Tier B is different: -company names a SEED. A running node serves the
+// revision the activation pointer names, and the file is imported into the
+// store when the store does not already hold it (see reconcile.go). That is
+// what makes a PUT /config on one node reach every other, and what makes an
+// operator's edit to the file still take effect.
 const (
 	defaultBootstrapPath = "crewlet.yaml"
 	defaultCompanyPath   = "company.yaml"
@@ -196,6 +200,20 @@ func runEngine(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+
+	// THE STORE IS AUTHORITATIVE AT RUNTIME; the file is a seed. Both
+	// halves matter: without the seed a first run has nothing to activate
+	// and the node serves a company no peer can see, and without the store
+	// a PUT /config on one node would be invisible to every other.
+	//
+	// Converged BEFORE Start, so seats are claimed under the epoch this
+	// node will actually serve rather than under the file's and then moved.
+	reconciler, err := startReconciler(ctx, e, boot, company, log)
+	if err != nil {
+		e.Stop(context.WithoutCancel(ctx))
+		return err
+	}
+
 	if err := e.Start(ctx); err != nil {
 		// Everything the engine opened comes down with it. Returning
 		// without this leaves a broker, a store and a set of held seat
@@ -209,11 +227,16 @@ func runEngine(args []string, stderr io.Writer) error {
 	// one store. The API half is what makes the node reachable at all —
 	// every inbound webhook arrives through it — so an engine that ran
 	// without it would hold seats and hear nothing.
-	surface, err := serveAPI(ctx, boot, e, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
 	}
+
+	// The poll loop, started only once the node is serving: a reconcile
+	// that landed mid-boot would apply an epoch to a node that has not
+	// claimed anything yet, which is work with nowhere to go.
+	go reconciler.Run(ctx)
 
 	<-ctx.Done()
 	if surface != nil {
@@ -281,7 +304,7 @@ func companySecrets(e *engine.Engine) webhooks.Secrets {
 }
 
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
-	log *slog.Logger,
+	reconciler *engine.Reconciler, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a worker-only node runs no dashboard, no REST
@@ -296,7 +319,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 
 	app := api.New(api.Options{
 		Bootstrap:    boot,
-		Runtime:      engineRuntime{e},
+		Runtime:      engineRuntime{engine: e, reconciler: reconciler},
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than
@@ -319,10 +342,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// permanently unready, which takes every working node out of a load
 	// balancer's rotation.
 	//
-	// It is the config plane that will own this once revisions are
-	// activated from the store rather than read from a file: the flag then
-	// tracks whether THIS node applied the current epoch, which is a
-	// question a file cannot ask.
+	// It stays true for the life of the process: an apply that FAILS
+	// leaves the node serving the previous epoch, which is a configured
+	// node. What a failed apply changes is the POSTURE, and /ready reads
+	// that — the two answer different questions, and collapsing them would
+	// take a correctly-serving node out of rotation for being behind.
 	app.SetConfigured(true)
 	app.Start(ctx)
 
@@ -371,19 +395,27 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 const apiReadHeaderTimeout = 10 * time.Second
 
 // engineRuntime answers the questions only a co-located engine can.
-type engineRuntime struct{ engine *engine.Engine }
+type engineRuntime struct {
+	engine     *engine.Engine
+	reconciler *engine.Reconciler
+}
 
 func (r engineRuntime) Snapshot() api.RuntimeState {
 	host := r.engine.Node().Host()
-	return api.RuntimeState{
+	state := api.RuntimeState{
 		InFlight:     r.engine.Backends().Queue.InFlightCount(),
 		ShuttingDown: host.Draining(),
-		// SERVE, and it is honest rather than optimistic: posture
-		// describes the gap between the epoch this node applied and the
-		// one its peers have, and with revisions read from a file there
-		// is no such gap to be in. It becomes the config plane's answer
-		// when there is a pointer for nodes to lag behind.
-		Posture: "serve",
-		Seats:   host.Held(),
+		Seats:        host.Held(),
 	}
+	if r.reconciler != nil {
+		// Read live, on every probe, rather than cached: a cached
+		// posture is a node that reports healthy through the whole
+		// window in which it stopped being so — and this is the ONLY
+		// place an operator can see why a node left rotation, since
+		// /ready answers a bare 503 either way and "draining" and
+		// "cannot apply epoch 41" call for opposite responses.
+		state.Posture = string(r.reconciler.Posture(context.Background()))
+		state.AppliedEpoch = r.reconciler.Applied()
+	}
+	return state
 }

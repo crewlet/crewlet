@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -397,6 +398,22 @@ func (h *SeatHost) Held() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Sorted(maps.Keys(h.held))
+}
+
+// CompanySeats is the seat set this host currently sees, sorted by handle.
+//
+// Distinct from [SeatHost.Held], and the distinction is the first thing to
+// check when a node is claiming nothing: Held answers what this node WON, and
+// this answers whether the seat is in the company at all. A node reading a
+// stale seat set — bound to the epoch it booted on rather than the one it is
+// serving — looks identical to a node losing every race, and only these two
+// together tell them apart.
+func (h *SeatHost) CompanySeats() []placement.Seat {
+	out := slices.Clone(h.seats())
+	slices.SortFunc(out, func(a, b placement.Seat) int {
+		return strings.Compare(a.Handle, b.Handle)
+	})
+	return out
 }
 
 // Unproven is the seats still leased because their teardown could not be

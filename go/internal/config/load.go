@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -110,6 +111,44 @@ func ParseCompany(data []byte) (*Company, error) {
 	// inside one pointing at an anchor defined elsewhere would stop
 	// resolving. See llmKeyOrder.
 	cfg.Providers.LLMOrder = llmKeyOrder(&doc)
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// DecodeCompany reads Tier B from its STORED form.
+//
+// The stored form is JSON produced by marshalling a parsed [Company], not a
+// document a person wrote — which makes it a different reader from
+// [ParseCompany] in two ways that both matter.
+//
+// It carries fields the AUTHORED form does not. providers.llm_order is the
+// declaration order of a Go map, recoverable only while the YAML document
+// exists; it is written into the stored form precisely so a node booting from
+// a revision resolves an unpinned seat to the same model the authoring node
+// did. Reading the stored form through the YAML parser would reject it as an
+// unknown setting.
+//
+// And it is LENIENT about fields it does not know, where ParseCompany fails
+// closed on them. The two are answering different questions: a typo in a file
+// a person wrote is a mistake to catch at the door, while an unrecognised key
+// in a stored revision is a peer running a newer build — and rejecting that
+// makes a mixed-version fleet an outage in the older direction. Strictness
+// lives at the import, which is where a person's document arrives.
+//
+// ${VAR} references stay VERBATIM here as everywhere else: they are resolved
+// where a provider, transport or MCP server is constructed, which is what
+// makes re-activating an unchanged revision pick up a rotated credential.
+func DecodeCompany(payload []byte) (*Company, error) {
+	// Onto the DEFAULTS, not onto a zero value. A field the payload omits
+	// must land on the same default the authored path gives it, or the
+	// same company behaves differently depending on which door it came in
+	// through.
+	cfg := DefaultCompany()
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrShape, err)
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

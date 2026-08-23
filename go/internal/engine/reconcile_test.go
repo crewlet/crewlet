@@ -1,0 +1,582 @@
+package engine_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// pinnedNow is the clock the reconcile tests run on. Pinned because the
+// freshness window that decides whether a peer's status is evidence is
+// measured against it, and a suite on the real clock would assert about that
+// window by sleeping through it.
+var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
+
+// brokenRevision is well-formed JSON that cannot be built: a seat naming a
+// provider the document does not configure. The provider block is non-empty
+// deliberately — a company with no models at all is a supported authoring
+// state, so an empty one would exercise a different refusal.
+var brokenRevision = json.RawMessage(`{"name":"Acme",
+  "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
+  "roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`)
+
+// A second company, differing from companyDoc in the one way a reconcile has
+// to be visible through: its seat set.
+const grownCompanyDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+  - name: CTO
+    handle: cto
+    llm: zulu
+  - name: Designer
+    handle: designer
+    llm: zulu
+`
+
+// plane is one engine, one store, and the reconciler between them.
+type plane struct {
+	engine  *engine.Engine
+	store   *store.DB
+	recon   *engine.Reconciler
+	applies []applied
+}
+
+type applied struct {
+	epoch  int64
+	status configplane.ApplyStatus
+}
+
+func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
+	t.Helper()
+	e := newEngine(t, engine.Options{})
+	p := &plane{engine: e, store: e.Backends().Store}
+
+	options := engine.ReconcilerOptions{
+		Store:  p.store,
+		NodeID: "node-a",
+		Now:    func() time.Time { return pinnedNow },
+	}
+	options.OnApply = func(epoch int64, status configplane.ApplyStatus) {
+		p.applies = append(p.applies, applied{epoch, status})
+	}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	r, err := e.NewReconciler(options)
+	if err != nil {
+		t.Fatalf("NewReconciler: %v", err)
+	}
+	p.recon = r
+	return p
+}
+
+// activate writes a revision and points the fleet at it, returning its epoch.
+func (p *plane) activate(t *testing.T, doc string) int64 {
+	t.Helper()
+	document := yamlToJSON(t, doc)
+	_, epoch, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Source: "test", CreatedBy: "operator", Summary: "revision",
+		Payload: document, CreatedAt: pinnedNow,
+	})
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	return epoch
+}
+
+// yamlToJSON stores a company the way an import does: parse the authored
+// document once, and store its JSON form, which is what the payload column
+// holds and what every node reads from then on.
+func yamlToJSON(t *testing.T, doc string) json.RawMessage {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return raw
+}
+
+func (p *plane) seats(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, s := range p.engine.Company().Seats() {
+		out = append(out, s.Handle)
+	}
+	return out
+}
+
+func (p *plane) fleetRow(t *testing.T) store.NodeApply {
+	t.Helper()
+	rows, err := p.store.ControlPlane().Fleet(t.Context())
+	if err != nil {
+		t.Fatalf("fleet: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%d rows in the fleet view, want this node's one", len(rows))
+	}
+	return rows[0]
+}
+
+func TestANodeWithNoActivationAppliesNothing(t *testing.T) {
+	t.Parallel()
+	// A fresh deployment sits here until the first import. Not an error and
+	// not a state to report: a node that recorded "error" for a company
+	// nobody has configured would look broken on the operator's first look
+	// at the fleet view.
+	p := newPlane(t)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if p.recon.Applied() != 0 {
+		t.Errorf("applied epoch = %d, want 0", p.recon.Applied())
+	}
+	rows, err := p.store.ControlPlane().Fleet(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a node with nothing to apply reported %+v", rows)
+	}
+}
+
+func TestANewRevisionReplacesTheEpoch(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	before := p.engine.Company()
+	epoch := p.activate(t, grownCompanyDoc)
+
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if p.recon.Applied() != epoch {
+		t.Fatalf("applied = %d, want %d", p.recon.Applied(), epoch)
+	}
+	// PUBLISHED, not mutated: the previous epoch is still intact, which is
+	// what makes rollback a re-publish rather than an un-apply.
+	if p.engine.Company() == before {
+		t.Fatal("the epoch was mutated in place")
+	}
+	if got := len(before.Seats()); got != 2 {
+		t.Errorf("the previous epoch changed under the apply: %d seats", got)
+	}
+	if got := p.seats(t); len(got) != 3 || got[0] != "ceo" {
+		t.Errorf("seats = %v, want the three the new revision names", got)
+	}
+}
+
+func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
+	t.Parallel()
+	// Reading the pointer says where the fleet should be; this row says
+	// where THIS node actually is. Only the two together tell "behind
+	// because propagation takes a moment" from "behind because I cannot
+	// apply this".
+	p := newPlane(t)
+	epoch := p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	row := p.fleetRow(t)
+	if row.NodeID != "node-a" || row.Epoch != epoch {
+		t.Fatalf("row = %+v, want node-a on epoch %d", row, epoch)
+	}
+	if row.Status != configplane.StatusOK {
+		t.Errorf("status = %q, want ok", row.Status)
+	}
+	if row.Error != "" {
+		t.Errorf("a clean apply recorded an error: %q", row.Error)
+	}
+	if len(p.applies) != 1 || p.applies[0].status != configplane.StatusOK {
+		t.Errorf("observers saw %+v", p.applies)
+	}
+}
+
+func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
+	t.Parallel()
+	// THE credential-rotation gesture. The payload is identical and the
+	// point is that its ${VAR} references now resolve differently, so a
+	// no-op check on the payload would rebuild nothing on exactly the
+	// operation an operator performs to make it rebuild.
+	p := newPlane(t)
+	first := p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	afterFirst := p.engine.Company()
+
+	active, found, err := p.store.Configs().Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active: found=%v err=%v", found, err)
+	}
+	second, err := p.store.Configs().Activate(t.Context(), active.ID, pinnedNow)
+	if err != nil {
+		t.Fatalf("re-activate: %v", err)
+	}
+	if second <= first {
+		t.Fatalf("the pointer did not move: %d then %d", first, second)
+	}
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if p.recon.Applied() != second {
+		t.Fatalf("applied = %d, want the re-activation's epoch %d", p.recon.Applied(), second)
+	}
+	if p.engine.Company() == afterFirst {
+		t.Fatal("re-activation reused the previous epoch, so nothing re-resolved")
+	}
+}
+
+func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
+	t.Parallel()
+	// The tick runs every 15 seconds for the life of the node. Rebuilding
+	// the epoch on each one would restart every subsystem an apply touches,
+	// four times a minute, forever.
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+	for range 4 {
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(p.applies) != 1 {
+		t.Fatalf("%d applies for one activation, want 1", len(p.applies))
+	}
+}
+
+func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
+	t.Parallel()
+	// error, not degraded: the build touches nothing, so this node still
+	// serves the PRIOR epoch correctly. That is a legitimate
+	// degraded-but-correct state and safe to route work to, which is
+	// exactly what the distinction is for.
+	p := newPlane(t)
+	before := p.engine.Company()
+	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Summary: "broken", CreatedAt: pinnedNow,
+		// A seat naming a provider the document does not configure:
+		// well-formed JSON, and refused at build. The provider block is
+		// non-empty on purpose — a company with NO models is a
+		// documented authoring state, so an empty one would be a
+		// different fault from the one under test.
+		Payload: brokenRevision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := p.recon.Tick(t.Context())
+	if err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	if p.engine.Company() != before {
+		t.Fatal("a refused revision still replaced the epoch")
+	}
+	if p.recon.Applied() != 0 {
+		t.Errorf("applied = %d, want 0 — nothing was applied", p.recon.Applied())
+	}
+	row := p.fleetRow(t)
+	if row.Status != configplane.StatusError {
+		t.Errorf("status = %q, want error", row.Status)
+	}
+	if !strings.Contains(row.Error, "nonexistent") {
+		t.Errorf("the recorded reason does not name the fault: %q", row.Error)
+	}
+}
+
+func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
+	t.Parallel()
+	// A fleet where every node quietly ignores an unreadable pointer
+	// converges on nothing while reporting convergence.
+	p := newPlane(t)
+	if _, err := p.store.ControlPlane().RecordActivation(t.Context(),
+		"00000000-0000-0000-0000-000000000000", "ghost", pinnedNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a pointer naming nothing applied cleanly")
+	}
+	if row := p.fleetRow(t); row.Status != configplane.StatusError {
+		t.Errorf("status = %q, want error", row.Status)
+	}
+}
+
+func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
+	t.Parallel()
+	// Per epoch, not per node lifetime — so re-activating a FIXED revision
+	// resets the budget and the runbook's fix actually works. Without the
+	// bound a bad revision has this node rebuilding its subsystems every
+	// fifteen seconds until somebody notices.
+	p := newPlane(t)
+	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Summary: "broken", CreatedAt: pinnedNow,
+		Payload: brokenRevision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		_ = p.recon.Tick(t.Context())
+	}
+	if len(p.applies) != configplane.MaxApplyAttempts {
+		t.Fatalf("%d attempts at one bad epoch, want %d",
+			len(p.applies), configplane.MaxApplyAttempts)
+	}
+
+	// The fix: activate a revision that works. The budget resets because
+	// the target moved.
+	p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("the fixed revision was refused: %v", err)
+	}
+	if got := p.seats(t); len(got) != 3 {
+		t.Errorf("seats = %v, want the fixed revision's three", got)
+	}
+}
+
+func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
+	t.Parallel()
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": testKey(t)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secrets.Seal(cipher, yamlToJSON(t, grownCompanyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without the keyring: an ERROR, never an empty company. Booting onto
+	// nothing reads on every surface as an operator who configured nothing,
+	// where the actual fault is a deployment that lost its root of trust.
+	blind := newPlane(t)
+	if _, _, err := blind.store.Configs().InsertActive(t.Context(), store.Revision{
+		Summary: "sealed", Payload: sealed, CreatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = blind.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrSealedWithoutKey) {
+		t.Fatalf("err = %v, want the sealed-without-key error", err)
+	}
+
+	// With it: applied.
+	keyed := newPlane(t, func(o *engine.ReconcilerOptions) { o.Cipher = cipher })
+	if _, _, err := keyed.store.Configs().InsertActive(t.Context(), store.Revision{
+		Summary: "sealed", Payload: sealed, CreatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := keyed.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("a sealed revision with its keyring: %v", err)
+	}
+	if got := keyed.seats(t); len(got) != 3 {
+		t.Errorf("seats = %v, want the sealed revision's three", got)
+	}
+}
+
+func testKey(t *testing.T) []byte {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func TestAReconcilerNeedsAStoreAndAnIdentity(t *testing.T) {
+	t.Parallel()
+	// The apply-status table upserts on node id, so an empty one makes
+	// every node that forgot it share a row — and the fleet view shows one
+	// anonymous entry where a dozen nodes should be.
+	e := newEngine(t, engine.Options{})
+	if _, err := e.NewReconciler(engine.ReconcilerOptions{NodeID: "n"}); !errors.Is(err, engine.ErrNoStore) {
+		t.Errorf("err = %v, want ErrNoStore", err)
+	}
+	if _, err := e.NewReconciler(engine.ReconcilerOptions{Store: e.Backends().Store}); err == nil {
+		t.Error("a reconciler with no node id was built")
+	}
+}
+
+// --- posture ---------------------------------------------------------------
+
+func TestACurrentNodeServes(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Errorf("posture = %q, want serve", got)
+	}
+}
+
+func TestAnUnconfiguredNodeIsNotDiverged(t *testing.T) {
+	t.Parallel()
+	// No activation at all means nothing to converge on. Reporting a
+	// posture other than serve would take every node of a brand-new
+	// deployment out of rotation before its first import.
+	p := newPlane(t)
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Errorf("posture = %q, want serve", got)
+	}
+}
+
+func TestOrdinaryPropagationLagIsNotDivergence(t *testing.T) {
+	t.Parallel()
+	// EVERY successful rollout produces lag: the first node to apply
+	// advances the pointer and every peer is behind until it polls.
+	// Shedding on that makes the fastest node the cause of a fleet-wide
+	// outage, and the faster it is the longer the outage.
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+	// The pointer has moved and this node has not ticked.
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
+		t.Errorf("posture = %q, want wait", got)
+	}
+}
+
+func TestAConfirmedLaggardShedsOnlyWhenAPeerHasTheEpoch(t *testing.T) {
+	t.Parallel()
+	// Shedding exists to move work to a healthy peer. With no healthy peer
+	// it is not shedding, it is stopping — so the same lag reads as
+	// isolated, and the node keeps serving what it has.
+	p := newPlane(t)
+	// The node tries and fails, which is what makes its lag CONFIRMED
+	// rather than ordinary propagation — a distinction the posture rule
+	// rests on, because every successful rollout produces lag.
+	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Summary: "broken", CreatedAt: pinnedNow, Payload: brokenRevision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = p.recon.Tick(t.Context())
+
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureIsolated {
+		t.Errorf("posture = %q, want isolated — nobody applied this epoch", got)
+	}
+
+	// A peer reports the epoch applied cleanly, recently.
+	target, _, err := p.store.ControlPlane().Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.ControlPlane().RecordApply(t.Context(), store.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: configplane.StatusOK,
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureShed {
+		t.Errorf("posture = %q, want shed — a healthy peer has the epoch", got)
+	}
+}
+
+func TestAStalePeerIsNotEvidence(t *testing.T) {
+	t.Parallel()
+	// A node that was scaled in, redeployed or crashed leaves its `ok`
+	// behind forever. Counting that ghost makes a diverged survivor shed
+	// its seats to a node that no longer exists — the company goes dark
+	// exactly where it should have gone degraded and raised an alarm.
+	p := newPlane(t)
+	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Summary: "broken", CreatedAt: pinnedNow,
+		Payload: brokenRevision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = p.recon.Tick(t.Context())
+	target, _, err := p.store.ControlPlane().Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.ControlPlane().RecordApply(t.Context(), store.NodeApply{
+		NodeID: "ghost", Epoch: target.Epoch, Status: configplane.StatusOK,
+		UpdatedAt: pinnedNow.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureIsolated {
+		t.Errorf("posture = %q, want isolated — the only healthy peer is a ghost row", got)
+	}
+}
+
+func TestAnUnreadableControlPlaneKeepsTheNodeServing(t *testing.T) {
+	t.Parallel()
+	// The safe answer to "am I behind?" is the one that keeps a working
+	// company working: the alternative takes every node out of rotation on
+	// a database blip.
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Errorf("posture = %q, want serve", got)
+	}
+}
+
+func TestTheLoopStopsWithItsContext(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); p.recon.Run(ctx) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reconcile loop outlived its context")
+	}
+}
+
+func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
+	t.Parallel()
+	// The seat set the HOST reads must follow the epoch, not the company
+	// this engine booted on. A method value captured at construction keeps
+	// claiming seats a deleted role no longer has and never claims a new
+	// one — and the failure is invisible, because a node reading a stale
+	// seat set looks exactly like a node losing every race.
+	p := newPlane(t)
+	host := p.engine.Node().Host()
+	if got := len(host.CompanySeats()); got != 2 {
+		t.Fatalf("the host starts with %d seats, want the boot company's 2", got)
+	}
+	p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var handles []string
+	for _, seat := range host.CompanySeats() {
+		handles = append(handles, seat.Handle)
+	}
+	if len(handles) != 3 {
+		t.Fatalf("the host sees %v, want the new epoch's three seats", handles)
+	}
+	if !slices.Equal(handles, []string{"ceo", "cto", "designer"}) {
+		t.Errorf("seats = %v, want the new epoch's three, sorted", handles)
+	}
+}

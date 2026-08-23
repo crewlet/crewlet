@@ -24,7 +24,9 @@ import (
 // is the placement package's. That is the whole reason this file is short and
 // the Python it replaces was seven and a half thousand lines.
 type Engine struct {
-	company  *Company
+	// epoch is the company this engine is running, replaced whole by an
+	// apply and never mutated. See epoch.go.
+	epoch    epoch
 	backends *Backends
 	node     *node.Node
 
@@ -104,7 +106,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// Only what this engine OPENED does it close. A caller that supplied
 	// backends keeps their lifetime — the merged API process outlives the
 	// engine's own shutdown and still needs its broker.
-	e := &Engine{company: company, backends: backends, ownsBackends: ownsBackends}
+	e := &Engine{backends: backends, ownsBackends: ownsBackends}
+	e.epoch.current.Store(company)
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
 			backends.Close(ctx)
@@ -125,7 +128,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// leases it never renewed.
 		NodeID: nodeID,
 		Owner:  config.NewIncarnation(nodeID),
-		Seats:  company.Seats,
+		// Read FRESH through the epoch, never bound to the company this
+		// engine started on: an apply replaces the seat set, and a
+		// method value captured here would keep claiming seats a
+		// deleted role no longer has and never claim a new one. The
+		// host's own doc asks for exactly this and the binding did the
+		// opposite.
+		Seats: func() []placement.Seat { return e.Company().Seats() },
 		Profile: placement.NodeProfile{
 			ID:     nodeID,
 			Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
@@ -205,8 +214,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
-	log.Info("engine_started", "company", e.company.Config.Name,
-		"seats", len(e.company.Seats()))
+	company := e.Company()
+	log.Info("engine_started", "company", company.Config.Name,
+		"seats", len(company.Seats()))
 	return nil
 }
 
@@ -223,9 +233,6 @@ func (e *Engine) Stop(ctx context.Context) {
 	}
 	log.Info("engine_stopped")
 }
-
-// Company is the epoch this engine is running.
-func (e *Engine) Company() *Company { return e.company }
 
 // Node exposes this process's participation in the fleet, for the operator
 // surfaces that report which seats it holds.
@@ -266,7 +273,7 @@ func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Co
 			// true on its own when the config-apply path can hand a node
 			// an epoch that has none, instead of a constant quietly
 			// outliving the reason for it.
-			TurnEngineReady: e.company.Models != nil,
+			TurnEngineReady: e.Company().Models != nil,
 			AwaitingSandbox: awaiting != nil && awaiting(handle),
 			AdmitsTriggers:  true,
 		}
@@ -306,14 +313,19 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
 func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
-	r, err := e.company.RunnerFor(req.Handle, RunnerInput{
+	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
+	// that built its runner from one revision and took its round caps from
+	// the next is running a company that never existed — the exact failure
+	// publishing-instead-of-mutating exists to remove (d-404).
+	company := e.Company()
+	r, err := company.RunnerFor(req.Handle, RunnerInput{
 		Task:         DescribeTrigger(req.Events),
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 	})
 	if err != nil {
 		return turn.Result{}, err
 	}
-	return turn.Run(ctx, r, e.company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+	return turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
 }
 
 // nodeRoles turns the configured role names into a set.
