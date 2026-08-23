@@ -348,3 +348,12 @@ func TestAnUnnamedNodeTakesTheDefault(t *testing.T) {
 		t.Errorf("node = %v, want the default", body["node"])
 	}
 }
+
+// closedPosture is Tier A with reads guarded, for the cases that check what
+// stays reachable anyway.
+func closedPosture() config.Bootstrap {
+	b := config.DefaultBootstrap()
+	b.API.Auth.AllowAnonymousRead = false
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	return b
+}

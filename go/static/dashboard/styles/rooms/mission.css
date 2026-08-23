@@ -1,0 +1,209 @@
+/* Mission Control.
+ *
+ * Panels take their surface from the shared recipe in components.css —
+ * this file holds only what is specific to these two rooms. No colour is
+ * defined here: every value is a token from tokens.css.
+ */
+
+/* The attention queue leads the page, so it gets the one piece of chrome
+   that says "read this first": a hairline in the CAUTION hue along its
+   top edge. Deliberately not the brand gradient — that lights the
+   topbar's edge on every room, so repeating it here would say "chrome"
+   where this panel needs to say "look". */
+.att-panel {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  margin-bottom: var(--space-5);
+  position: relative;
+  overflow: hidden;
+}
+.att-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--amber) 70%, transparent),
+    transparent 70%
+  );
+}
+/* A queue with nothing in it keeps its panel: an answer that disappears
+   when it is "nothing" teaches the reader to check whether the panel is
+   there rather than to read it. */
+.att-panel .sec {
+  margin-bottom: 0;
+}
+
+
+/* ---- The engine band ----
+   One row of short clauses. Every value is three-valued: a precondition
+   that is absent renders as an em dash, never as a zero, because "this
+   page cannot see the engine" and "the engine is doing nothing" are
+   opposite facts that a 0 would merge. */
+.ms-line {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+}
+.ms-clause {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ms-clause-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-muted);
+}
+.ms-clause-value {
+  font-size: var(--text-md);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+/* `wait` is ordinary rollout propagation and gets NO tone — every
+   successful rollout produces it, so painting it would make the fastest
+   node in the fleet look like the broken one. */
+.ms-clause.tone-ok .ms-clause-value {
+  color: var(--green-ink);
+}
+.ms-clause.tone-warn .ms-clause-value {
+  color: var(--amber-ink);
+}
+.ms-clause.tone-bad .ms-clause-value {
+  color: var(--red-ink);
+}
+.ms-on {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.ms-none {
+  color: var(--text-dim);
+}
+
+/* Sits directly under the queue's section head, which inside the
+   attention panel carries no bottom margin of its own — so this supplies
+   the whole gap on both sides rather than pulling itself up into one. */
+.ms-age {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.ms-note {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* ---- Stuck ---- */
+
+.ms-stuck-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 4fr) auto;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+}
+.ms-stuck-row:last-child {
+  border-bottom: 0;
+}
+.ms-stuck-row.tone-warn {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+.ms-stuck-row.tone-bad {
+  box-shadow: inset 3px 0 0 var(--red);
+}
+.ms-stuck-who {
+  font-weight: 600;
+  color: var(--heading);
+}
+.ms-stuck-what {
+  color: var(--text-secondary);
+}
+.ms-stuck-when {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ---- The record ----
+   ONE company-wide track, not one row per seat. The per-seat grid cost
+   ~280px and scaled with headcount to deliver two integers the sentence
+   under it already prints in words. */
+.ms-record {
+  padding: var(--space-4) var(--space-5);
+}
+/* Sixty minutes as sixty cells. The cells are CAPPED rather than left to
+   fill: `flex: 1` over a 1500px room gives each minute a 24px block, and
+   sixty blocks with gaps between them reads as a row of boxes, not as a
+   track — the shape has to say "time" before the colours say anything. */
+.ms-track {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 22px;
+  /* 60 cells at their 13px cap, plus 59 2px gaps. Capping the CONTAINER
+     as well as the cell is what keeps the axis beneath aligned to the
+     track at every width: both fill the same box, so they shrink
+     together. */
+  max-width: 898px;
+}
+.ms-cell {
+  flex: 1 1 0;
+  min-width: 2px;
+  max-width: 13px;
+  border-radius: 2px;
+  background: var(--bg-inset);
+}
+.ms-cell.is-on {
+  background: color-mix(in srgb, var(--accent) calc(var(--level) * 100%), var(--bg-inset));
+}
+.ms-cell.is-failed {
+  background: var(--red);
+}
+/* Not quiet — UNKNOWN. Past the retention edge the feed has no record,
+   and drawing that as an empty minute makes a busy company look asleep. */
+.ms-cell.is-unknown {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--bg-inset) 0 2px,
+    transparent 2px 4px
+  );
+}
+/* Which end is now. Without it the track is sixty anonymous cells: the
+   reader can see that something failed and not when. */
+.ms-axis {
+  display: flex;
+  justify-content: space-between;
+  max-width: 898px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.ms-record-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.ms-broke {
+  color: var(--red-ink);
+}
+.ms-blind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-dim);
+}

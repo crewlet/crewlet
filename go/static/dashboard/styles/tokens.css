@@ -1,0 +1,427 @@
+/*
+ * Design tokens — the crewlet.io panel language, applied to the dashboard.
+ *
+ * Every colour, space, and type step in the dashboard is defined here and
+ * nowhere else. A theme is just a different set of values in this file; no
+ * component branches on the theme, and no component stylesheet contains a
+ * hex value.
+ *
+ * ---------------------------------------------------------------------------
+ * The material
+ * ---------------------------------------------------------------------------
+ * The ground is a cool blue-black and every division on it — panel fill,
+ * hairline, inset highlight, text — is a different ALPHA or lightness of one
+ * cool blue-white. That single material is what makes a dense operational
+ * surface read as one object rather than as a stack of grey boxes, and it is
+ * the rule to keep: a new surface is another step of the ramp, never a new
+ * colour.
+ *
+ * The temperature is the identity. A cool ground puts the warm half of the
+ * categorical set — amber, orange, brown, red — in opposition to the surface
+ * rather than in sympathy with it, so a status mark separates from its own
+ * background before hue is even considered. The brand violet is the accent
+ * because it IS the mark's colour (#7c56ff), which is what keeps the logo
+ * belonging to the page rather than sitting on it.
+ *
+ * The ground is deliberately NOT pure black. An operator reads this page for
+ * hours, and #000 behind near-white text is the specific combination that
+ * produces halation — the smear around small bright glyphs that anyone with
+ * astigmatism sees, and the pupil oscillation that makes a long session
+ * tiring for everyone else. Lifting the ground to #0a0c12 costs nothing
+ * visually (it still reads as black), keeps the drop-shadow-is-invisible
+ * property the elevation model depends on, and lets the text ramp sit in a
+ * comfort band instead of at the top of the contrast range.
+ *
+ * ---------------------------------------------------------------------------
+ * Contrast is a BAND, not a floor
+ * ---------------------------------------------------------------------------
+ * Accessibility guidance sets minimums, and a palette tuned only against
+ * minimums drifts to the top of the range where it is legible and unpleasant.
+ * The previous palette did exactly that in both directions at once: body text
+ * sat at 19.25:1 (halation) while `--text-dim` sat at 2.67:1 — below the 3:1
+ * floor it needed.
+ *
+ * Every step is placed at a measured target against the WORST SURFACE it can
+ * land on. That distinction is the whole of it. Because the dark panel fill
+ * is an alpha, panels nest; a row inside one can be hovered or selected, and
+ * a code block cuts an inset into it — eight distinct composites carrying the
+ * same tokens, spanning a point and a half of contrast. A ramp anchored to
+ * the panel is therefore anchored to neither end, and a browser audit across
+ * ten rooms found sixteen elements rendering under 4.5:1 while every token in
+ * this file "passed". The ranges below are what each step covers across all
+ * eight, so the low end is a guarantee rather than an average:
+ *
+ *   body text      10.2 – 14.0   comfortable for sustained reading
+ *   headings       11.5 – 15.8   larger glyphs tolerate (and want) more
+ *   secondary       7.4 – 10.2
+ *   muted           5.8 –  8.0
+ *   dim             4.7 –  6.5   still a TEXT step — see below
+ *   hue ink         5.3 –  7.3   labels that carry a hue
+ *   hue mark        3.3 –  7.0   fills, bars, dots (3:1 floor for non-text)
+ *
+ * The high end of the body and heading rows is a ceiling, not a score.
+ * Near-white at 19:1 on near-black blooms, and a dense page of it is the
+ * thing that makes eyes hurt after an hour — so the top step stops just
+ * under the halation line rather than going as bright as it can.
+ *
+ * The dimmest step clears the TEXT floor because in this design there is no
+ * non-text use of it. An audit of the rendered page found `--text-dim`
+ * carrying 10px labels in ten places — a clock, "last 24h", "no live meter" —
+ * and marking nothing anywhere. A step specced as a non-text mark and used as
+ * type everywhere is a text step measured against the wrong floor.
+ *
+ * ---------------------------------------------------------------------------
+ * Categorical hues
+ * ---------------------------------------------------------------------------
+ * The hue FAMILIES (angle) come from the site's brand tokens and survive a
+ * re-facing of the surface: green still means task, and only lightness is
+ * re-placed for the ground it is painted on. Chroma is
+ * capped at 13.5 (OKLab ×100) because highly saturated light-on-dark type is
+ * what "vibrates", and lightness is re-stepped per theme. Two families are
+ * carried above that cap on purpose and only because a measurement forced
+ * it: `--red` at 15.8 (below) and `--pink` at 14.5, which is the least
+ * rotation and chroma that lets the dimmest mark clear the non-text floor on
+ * a selected row while still holding ΔE 15 against purple.
+ *
+ * Each family ships two steps:
+ *   --<hue>       the MARK step  — bars, dots, stack segments, heat fills
+ *   --<hue>-ink   the TEXT step  — badge labels, links, tinted type
+ * Soft fills are derived at the use site with `color-mix(… 10%, transparent)`.
+ *
+ * The mark steps do NOT all sit at one contrast, and that is load-bearing.
+ * Two orders render these edge to edge — the phase order (`PHASE_ORDER` in
+ * state.js) and the event-category order (`EVENT_CATEGORIES`) — so adjacent
+ * families have to separate by lightness as well as by hue. Placing every
+ * mark at one comfortable contrast collapses pink against purple to ΔE 12.5
+ * (gate 15) and 8.0 for protanopia (gate 8), because at equal lightness they
+ * are only a hue rotation apart. The tiers below are the assignment that
+ * clears every gate in BOTH themes with ≥18% margin while keeping the set
+ * inside the comfort band.
+ *
+ * The gates, measured by tests/test_dashboard/js/palette.test.mjs against
+ * this file on every run — not by hand, and not once:
+ *   - normal-vision separation, worst adjacent pair  ≥ 15
+ *   - protan / deutan separation, worst adjacent pair ≥ 8
+ *   - mark contrast, worst of eight surfaces          ≥ 3:1
+ *   - ink contrast, worst of eight surfaces           ≥ 4.5:1
+ *   - every neutral text step, worst of eight         ≥ 4.5:1
+ *   - body text inside its comfort band              10:1 … 15:1
+ *   - headings under the halation ceiling, BEST of eight ≤ 16.5:1
+ *
+ * `--red` is a reserved STATUS hue (failed / error / destructive) and is not
+ * part of the categorical set — an ops dashboard needs red to keep meaning
+ * "this broke".
+ */
+
+:root {
+  /* ---- Typography ----
+   * The site's stack: Inter for text, Inter Tight for display, JetBrains
+   * Mono for anything that is a code or a number that can change.
+   * index.html requests all three with `display=swap`, and every slot
+   * below names a full system fallback, because the dashboard is served
+   * by the engine itself and may be running somewhere that cannot reach
+   * a font CDN at all — such a page must render instantly in the
+   * fallback rather than block on a request that will never answer.
+   * The negative tracking below is what carries the brand's voice, and it
+   * applies to whichever face actually resolves. */
+  --font-sans: "Inter", "Inter var", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-display: "Inter Tight", "Inter", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  /* Tracking. The site's signature: text is set slightly tight, display
+   * tighter still, and micro-labels are opened right up. */
+  --track-body: -0.011em;
+  --track-display: -0.024em;
+  --track-label: 0.12em;
+
+  /* ---- Type ramp ----
+   * Font sizes were literals scattered across ~3,000 lines of component
+   * CSS, at half-pixel precision and in eleven distinct values, which made
+   * "make this readable" a sweep rather than an edit. */
+  --text-2xs: 10px; /* micro-labels: table headers, eyebrows, badges */
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-base: 14px; /* body */
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 21px;
+  --text-2xl: 27px;
+  --text-3xl: 38px; /* the overview's headline figure */
+
+  /* ---- Density ----
+   * The spacing ramp is scaled by one number, so an operator who wants
+   * more rows on screen gets them without a second stylesheet. Set
+   * `data-density="compact"` on <html>. */
+  --density: 1;
+
+  /* ---- Spacing ---- */
+  --space-1: calc(4px * var(--density));
+  --space-2: calc(8px * var(--density));
+  --space-3: calc(12px * var(--density));
+  --space-4: calc(16px * var(--density));
+  --space-5: calc(20px * var(--density));
+  --space-6: calc(26px * var(--density));
+  --space-7: calc(34px * var(--density));
+  --space-8: calc(48px * var(--density));
+
+  /* ---- Tint ----
+   * How strongly a hue is softened when it becomes a FILL that carries
+   * its own ink — a badge, a chip, a count. One value, because these are
+   * one object: the sites using it had drifted to 10, 11, 12, 14, 15 and
+   * 16% with nothing choosing between them, and the 15% one rendered its
+   * ink at 3.8:1.
+   *
+   * 14% is the measured ceiling minus a margin. A tint composites the
+   * mark INTO the ground the ink then has to clear, and the direction
+   * flips per theme — on dark it lifts the ground toward the ink, on
+   * light it pulls it down toward it — so the binding case is always
+   * light. At 14% the worst pairing in either theme (--red-ink on a red
+   * tint over the sidebar) still reads 4.92:1; at 18% it drops under
+   * 4.7. Theme-independent on purpose: one measurement covers both, so a
+   * second value would be a knob with nothing behind it. */
+  --tint: 14%;
+
+  /* ---- Geometry ---- */
+  --radius: 14px; /* panels */
+  --radius-sm: 9px; /* nested blocks inside a panel */
+  --radius-ctl: 11px; /* buttons + glass controls */
+  --radius-lg: 18px;
+  --radius-pill: 100px; /* the site's pill convention */
+  --sidebar-w: 250px;
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snappy: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur: 0.15s;
+  --dur-slow: 0.2s;
+
+  /* ---- Brand ----
+   * Used as LIGHT, never as a fill: a hairline along a top edge, the packet
+   * travelling a live turn rail. The seven-stop version is the full mark;
+   * the ramp is its three-stop cousin for anything that has to carry the
+   * brand across a few pixels of height. */
+  --brand-gradient: linear-gradient(
+    90deg,
+    #ff6b9d 0%,
+    #ffa14a 20%,
+    #ffe24a 40%,
+    #7ee081 58%,
+    #5fd0ff 74%,
+    #b18cff 88%,
+    #ff7ae0 100%
+  );
+  --brand-ramp: linear-gradient(90deg, #5fd0ff 0%, #b18cff 55%, #ff7ae0 100%);
+
+  /* ---- Z layers ---- */
+  --z-header: 20;
+  /* Above the mobile off-canvas sidebar (60), below a toast: a toast
+     acknowledging an action must never be hidden by a popover. The command
+     palette sits above both — it is modal, and it takes the keyboard. */
+  --z-pop: 70;
+  --z-toast: 80;
+  --z-modal: 90;
+}
+
+[data-density="compact"] {
+  --density: 0.8;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-sm: 12px;
+}
+
+/* ---- Dark (default) ---- */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces. The ground is a cool blue-black, and every division on it is
+     a different ALPHA of one cool blue-white: panel fill, hairline, inset
+     highlight. That single material is what makes a dense operational
+     surface read as one object rather than as a stack of grey boxes, and
+     it is the rule to keep — a new surface is another step of this ramp,
+     never a new colour.
+
+     Because the fill is an alpha rather than a lighter step, panels nested
+     inside panels accumulate depth on their own, with no second token. */
+  --bg: #0e0a20;
+  --bg-sidebar: #0a0719;
+  --bg-card: rgba(176, 152, 255, 0.075);
+  --bg-card-2: rgba(176, 152, 255, 0.12);
+  --bg-hover: rgba(176, 152, 255, 0.08);
+  --bg-active: rgba(176, 152, 255, 0.135);
+  /* Recessed surfaces go DARKER than the ground, not lighter — a code
+     block on a translucent panel has to read as a hole cut in it. */
+  --bg-inset: rgba(0, 0, 0, 0.42);
+
+  /* Borders — the cool hairline ramp. On this ground these do all the
+     separation work, which is why the panel recipe needs no drop shadow. */
+  --border-subtle: rgba(176, 152, 255, 0.1);
+  --border: rgba(176, 152, 255, 0.17);
+  --border-strong: rgba(176, 152, 255, 0.28);
+
+  /* Text — the same cool hue the surfaces are built from, at a tiny
+     chroma, so type belongs to the material instead of sitting on it as
+     a neutral grey.
+
+     Every step is placed against the WORST surface it can land on, not
+     against the panel. Panels are alphas, so they nest; a row inside one
+     can be hovered or selected, and a code block cuts an inset into it.
+     That is eight composites carrying these five tokens across a point
+     and a half of contrast, and the panel is nowhere near the darkest of
+     them. Anchoring there is what let a "4.6:1" ramp render at 3.6:1 on a
+     selected row. The numbers are the RANGE each step covers over every
+     surface in the design, so the low end is the guarantee: nothing this
+     file defines is ever painted under 4.7:1.
+
+     The high end is a ceiling, not a score. Near-white at 19:1 on
+     near-black blooms, and reading a dense page of it is the thing that
+     makes eyes hurt — so the top step stops at 15.8, under the halation
+     line, rather than going as bright as it can. */
+  --text: #dddae9; /* 10.0 – 14.5 */
+  --text-secondary: #bdbac9; /* 7.3 – 10.6 */
+  --text-muted: #a8a5b4; /* 5.8 – 8.4 */
+  --text-dim: #9794a2; /* 4.7 – 6.8 */
+  --heading: #e8e4f4; /* 11.2 – 16.3 */
+  --on-accent: #0e0a20; /* 7.2:1 on the accent fill */
+
+  /* Accent — the brand violet (#7c56ff, the mark's own colour), pitched
+     paler and less saturated than any categorical hue so an interactive
+     affordance never reads as a phase. It is a FILL; its readable partner
+     is --accent-ink. */
+  --accent: #c5c1fe;
+  --accent-hover: #d4d2ff;
+  --accent-soft: rgba(197, 193, 254, 0.16);
+  --accent-ink: #bdb9f6;
+
+  /* Glass (topbar, icon buttons, segmented controls) — the same cool
+     blue-white as the material rather than a white wash, so chrome
+     belongs to the surface it floats over. Always with a backdrop blur. */
+  --glass: rgba(176, 152, 255, 0.08);
+  --glass-hover: rgba(176, 152, 255, 0.14);
+
+  /* Keyboard focus. Its own token: it has to clear every surface AND stay
+     unmistakable against every hue it might land on, so it can be neither
+     the accent nor a data hue. This sits at 175° — the largest empty gap
+     on the wheel, between green at 140° and cyan at 230° — which puts it
+     ΔE 15.3 from the nearest categorical in both themes and never under
+     6:1 on any surface. */
+  --focus: #5bcaaf;
+
+  /* Elevation.
+   *
+   * A drop shadow is invisible on a near-black ground, so a panel is lifted
+   * by LIGHT instead: a one-pixel cool highlight along its top edge, the way
+   * a physical panel catches the light above it. The dramatic drop shadow is
+   * kept for chrome that genuinely floats over content. */
+  --panel-shadow: inset 0 1px 0 rgba(176, 152, 255, 0.08);
+  --card-shadow: 0 24px 60px rgba(0, 0, 0, 0.75), 0 2px 10px rgba(0, 0, 0, 0.5);
+  --lift-shadow: inset 0 1px 0 rgba(176, 152, 255, 0.13),
+    0 10px 30px rgba(0, 0, 0, 0.6);
+  /* The primary button's own lift. Its own step because a control that
+     leaves the surface is not a panel settling onto it. */
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.35);
+
+  /* Categorical hues — mark step / text step.
+     Mark tiers, on the worst surface: pink 3.3 · green/blue/amber/cyan/
+     orange/brown 3.5 · purple 4.5 (the assignment that separates every
+     adjacent pair in both orders, in both themes). */
+  --green: #528e38;
+  --green-ink: #7ab861;
+  --blue: #537ed1;
+  --blue-ink: #7aa8fe;
+  --amber: #a97602;
+  --amber-ink: #d89e35;
+  --purple: #9486e3;
+  --purple-ink: #ac9ffe;
+  --cyan: #3786b6;
+  --cyan-ink: #63b1e2;
+  --orange: #c26730;
+  --orange-ink: #f0915b;
+  --pink: #c05786;
+  --pink-ink: #f485b4;
+  --brown: #b1703e;
+  --brown-ink: #de9a67;
+
+  /* Reserved status hue, carried a tier above the categorical marks and at
+     a higher chroma than the cap: it has to stay legible as "this broke"
+     while sitting in a list beside them, and it is used sparingly — rails,
+     badges, dots — never as body copy, which is where a saturated colour
+     would tire the eye. */
+  --red: #eb6c6d;
+  --red-ink: #ff8987;
+}
+
+/* ---- Light ---- */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* The cool counterpart: paper with a blue cast rather than a warm one,
+     so the two themes are one material at two lightnesses. Panels are NOT
+     pure white — a full-white panel on a tinted ground is the light
+     theme's version of the halation problem, and a page of them is what
+     makes a bright room feel brighter. */
+  --bg: #eeeaf8;
+  --bg-sidebar: #e6e1f3;
+  --bg-card: #fdfcff;
+  --bg-card-2: #f5f1fc;
+  --bg-hover: rgba(44, 26, 92, 0.045);
+  --bg-active: rgba(44, 26, 92, 0.08);
+  --bg-inset: rgba(44, 26, 92, 0.05);
+
+  --border-subtle: rgba(44, 26, 92, 0.07);
+  --border: rgba(44, 26, 92, 0.13);
+  --border-strong: rgba(44, 26, 92, 0.22);
+
+  /* The same ramp, solved against this theme's own worst surface. Light
+     has the narrower spread — its panels are opaque, so nesting one inside
+     another changes nothing — but the recessed chrome and a selected row
+     still cost a point, which is exactly what put six of these steps under
+     4.5:1 when they were anchored to the panel. */
+  --text: #282530; /* 10.0 – 13.9 */
+  --text-secondary: #3f3b48; /* 7.3 – 10.2 */
+  --text-muted: #4e4a57; /* 5.8 – 8.1 */
+  --text-dim: #5c5864; /* 4.7 – 6.5 */
+  --heading: #201d28; /* 11.2 – 15.6 */
+  --on-accent: #ffffff; /* 6.3:1 on the accent fill */
+
+  --accent: #342d5f;
+  --accent-hover: #2b2354;
+  --accent-soft: rgba(52, 45, 95, 0.12);
+  --accent-ink: #3a3466;
+
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-hover: rgba(255, 255, 255, 0.92);
+
+  --focus: #005545;
+
+  --panel-shadow: 0 1px 2px rgba(44, 26, 92, 0.05);
+  --card-shadow: 0 18px 44px rgba(44, 26, 92, 0.16),
+    0 2px 8px rgba(44, 26, 92, 0.08);
+  --lift-shadow: 0 8px 22px rgba(44, 26, 92, 0.12);
+  --btn-shadow: 0 1px 2px rgba(44, 26, 92, 0.05),
+    0 2px 4px rgba(44, 26, 92, 0.05), 0 4px 8px rgba(44, 26, 92, 0.05);
+
+  --green: #3f7b23;
+  --green-ink: #225600;
+  --blue: #416bbc;
+  --blue-ink: #204795;
+  --amber: #916503;
+  --amber-ink: #654500;
+  --purple: #5f4fa6;
+  --purple-ink: #4d3b90;
+  --cyan: #2073a2;
+  --cyan-ink: #015076;
+  --orange: #ad5418;
+  --orange-ink: #7e3600;
+  --pink: #b54d7c;
+  --pink-ink: #872255;
+  --brown: #9d5e2b;
+  --brown-ink: #763c00;
+
+  --red: #a72d35;
+  --red-ink: #8f1122;
+}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/static"
 )
 
 // App is the HTTP surface: the dashboard, the live socket and the REST routes.
@@ -60,6 +62,12 @@ type Options struct {
 
 	// HealthInterval overrides the shared tick's cadence.
 	HealthInterval time.Duration
+
+	// Assets overrides the embedded dashboard tree. Nil serves the one
+	// compiled into the binary, which is what every deployment does; a
+	// test supplies its own to assert about serving rather than about the
+	// dashboard's current contents.
+	Assets fs.FS
 }
 
 // New assembles the app.
@@ -91,10 +99,24 @@ func New(opts Options) *App {
 		HealthInterval: opts.HealthInterval,
 	})
 
+	tree := opts.Assets
+	if tree == nil {
+		tree = static.FS()
+	}
+	files := newAssets(tree)
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
 	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, opts.Query))
+	// The dashboard shell and its assets. All four paths are exempt from
+	// the guard: the page that prompts for a token cannot itself require
+	// one, and it ships no data — every byte it renders comes from an
+	// authenticated fetch.
+	mux.Handle("GET /{$}", http.RedirectHandler("/dashboard", http.StatusFound))
+	mux.Handle("GET /dashboard", http.HandlerFunc(files.serveIndex))
+	mux.Handle("GET /favicon.ico", http.HandlerFunc(files.serveFavicon))
+	mux.Handle("GET /static/", http.HandlerFunc(files.serveStatic))
 	a.handler = a.guard.Middleware(mux)
 	return a
 }

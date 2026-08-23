@@ -1,0 +1,1150 @@
+/* View-specific styles: tokens, org, tools, LLM history, memory, config.
+ *
+ * Panels themselves (`.card`, `.list`, `.stat`, `.tool-card`, `.turn`,
+ * `.mem-card`) get their fill / border / radius / elevation from the shared
+ * panel recipe in components.css.  Only their internals live here.
+ */
+
+/* ---- Tokens view ---- */
+/* Segmented control, built from the site's glass chip. */
+.tok-window {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  margin-bottom: 18px;
+}
+.tok-window button {
+  padding: 4px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text-muted);
+  transition: all var(--dur) var(--ease-snappy);
+}
+.tok-window button:hover {
+  color: var(--text);
+}
+.tok-window button.active {
+  background: var(--bg-card-2);
+  color: var(--text);
+  box-shadow: var(--panel-shadow);
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+@media (max-width: 720px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.stat {
+  padding: 15px 17px;
+}
+.stat-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+.stat-value {
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 6px;
+  letter-spacing: -0.035em;
+  color: var(--heading);
+}
+.stat-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Stacked proportion bar. Segments carry a 2px surface gap so adjacent hues
+   never touch, and the legend below direct-labels every segment. */
+.phase-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+.phase-bar i {
+  height: 100%;
+  border-radius: 2px;
+}
+.phase-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.phase-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+.phase-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.phase-legend .pct {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.phase-tag {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, currentColor 11%, transparent);
+}
+.heat {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  border-radius: 6px;
+}
+
+.tok-section {
+  margin-top: 30px;
+}
+.tok-section .sec {
+  margin-bottom: 10px;
+}
+
+/* ---- Tools view ---- */
+.tool-group {
+  margin-bottom: 20px;
+}
+.tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.source-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.source-badge.builtin {
+  color: var(--green-ink);
+  border-color: color-mix(in srgb, var(--green) 26%, transparent);
+  background: color-mix(in srgb, var(--green) var(--tint), transparent);
+}
+.source-badge.mcp-slack {
+  color: var(--purple-ink);
+  border-color: color-mix(in srgb, var(--purple) 26%, transparent);
+  background: color-mix(in srgb, var(--purple) var(--tint), transparent);
+}
+.source-badge.mcp-atlassian {
+  color: var(--blue-ink);
+  border-color: color-mix(in srgb, var(--blue) 26%, transparent);
+  background: color-mix(in srgb, var(--blue) var(--tint), transparent);
+}
+.source-badge.mcp-plane {
+  /* Orange, not green: green is the builtin badge above, and a
+     disambiguation badge must not read as "builtin". */
+  color: var(--orange-ink);
+  border-color: color-mix(in srgb, var(--orange) 26%, transparent);
+  background: color-mix(in srgb, var(--orange) var(--tint), transparent);
+}
+.source-badge.mcp {
+  color: var(--cyan-ink);
+  border-color: color-mix(in srgb, var(--cyan) 26%, transparent);
+  background: color-mix(in srgb, var(--cyan) var(--tint), transparent);
+}
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.tool-card {
+  padding: 15px 17px;
+}
+.tool-card-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--heading);
+}
+.tool-card-name .ic {
+  color: var(--text-dim);
+}
+.tool-card-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 7px;
+  line-height: 1.6;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+.chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.chip.sandbox {
+  color: var(--purple-ink);
+  background: color-mix(in srgb, var(--purple) var(--tint), transparent);
+  border-color: color-mix(in srgb, var(--purple) 26%, transparent);
+}
+
+/* A compact integration chip, for cards and directory rows. */
+.int-badge.sm {
+  font-size: 10px;
+  letter-spacing: 0;
+  padding: 1px 6px 1px 5px;
+  gap: 3px;
+  margin-right: 0;
+}
+.int-badge.sm .ic {
+  width: 11px;
+  height: 11px;
+}
+
+/* ---- LLM history (agent detail) ---- */
+.turn {
+  margin-bottom: 10px;
+}
+.turn.live {
+  border-color: color-mix(in srgb, var(--amber) 34%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 16%, transparent),
+    var(--panel-shadow);
+}
+/* Onboarding is one-time setup, not a task turn — render it muted with a
+   subtle left accent so it reads as a distinct, secondary group. */
+.turn.onboarding {
+  background: color-mix(in srgb, var(--green) 4%, var(--bg-card));
+  border-left: 2px solid color-mix(in srgb, var(--green) 40%, var(--border));
+}
+.turn-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  cursor: pointer;
+}
+.turn-head:hover {
+  background: var(--bg-hover);
+}
+.turn.open .turn-head .chevron {
+  transform: rotate(90deg);
+}
+.turn-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.turn-pills {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.ph-pill {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.turn-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg-inset);
+  padding: 6px;
+}
+.turn.open .turn-body {
+  display: block;
+}
+.llm-row {
+  border: 1px solid var(--border);
+  /* Phase-coloured accent so plan / execute / review rows are identifiable
+     at a glance — even collapsed, and especially when several are expanded
+     at once. --phase-color is set per-row in agent.js from PHASE_COLOR
+     (state.js); it falls back to a neutral border when unset. */
+  border-left: 3px solid
+    color-mix(in srgb, var(--phase-color, var(--border-strong)) 55%, var(--border));
+  border-radius: var(--radius-sm);
+  margin: 6px;
+  background: var(--bg-card);
+  transition: border-color var(--dur) var(--ease-snappy);
+}
+.llm-row.open {
+  border-color: color-mix(in srgb, var(--phase-color, var(--border)) 28%, var(--border));
+  border-left-color: var(--phase-color, var(--border-strong));
+}
+.llm-row-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.llm-row-head:hover {
+  background: var(--bg-hover);
+}
+/* When expanded, tint the head + body so the whole section reads as one
+   coloured block — the strongest cue when multiple sections are open. */
+.llm-row.open > .llm-row-head {
+  background: color-mix(in srgb, var(--phase-color, transparent) 7%, transparent);
+}
+.llm-row.open > .llm-row-head:hover {
+  background: color-mix(in srgb, var(--phase-color, transparent) 13%, var(--bg-hover));
+}
+.llm-row.open .llm-row-head .chevron {
+  transform: rotate(90deg);
+}
+.llm-model {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.llm-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.llm-row-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 12px;
+}
+.llm-row.open .llm-row-body {
+  display: block;
+  border-top-color: color-mix(in srgb, var(--phase-color, var(--border)) 22%, var(--border));
+  background: color-mix(in srgb, var(--phase-color, transparent) 4%, transparent);
+}
+/* The standalone per-phase detail card mirrors the row's phase accent.
+   It also carries its own padding: the shared panel recipe grants a
+   surface, never spacing, so every card states its own — and this one
+   never did, which left the stat grid, the source chip and the prompt
+   blocks all sitting flush against the border. More generous than the
+   inline `.llm-row-body` (12px) because this is a full-page reading
+   surface rather than a section expanded inside a list; it matches its
+   sibling `.event-detail` so the two detail pages agree. */
+.card.llm-detail {
+  border-left: 3px solid var(--phase-color, var(--border-strong));
+  padding: 18px 20px 20px;
+}
+.block-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  margin: 16px 0 7px;
+}
+.block-label:first-child {
+  margin-top: 0;
+}
+
+/* Source: the event that triggered the turn / LLM invocation. */
+.trigger-src {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all var(--dur) var(--ease-snappy);
+}
+.trigger-src.clickable {
+  cursor: pointer;
+}
+.trigger-src.clickable:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.trigger-src .trigger-type {
+  font-weight: 600;
+  color: var(--text);
+}
+.trigger-src .trigger-actor {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.trigger-src .trigger-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.trigger-src .trigger-when {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* Compact variant lives inline in the turn header. */
+.trigger-src.compact {
+  padding: 2px 8px;
+  border-radius: 6px;
+  gap: 5px;
+  font-size: 11px;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent-ink);
+}
+.trigger-src.compact .trigger-type {
+  color: var(--accent-ink);
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trigger-src.compact .trigger-actor {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Integration-branded source: tint the icon + accents with the
+   integration's colour so Slack / Jira / … read distinctly. */
+.trigger-src.integration .ic {
+  color: var(--int-color, var(--accent-ink));
+}
+.trigger-src.integration.clickable:hover {
+  border-color: color-mix(in srgb, var(--int-color, var(--accent)) 55%, transparent);
+}
+.trigger-src.compact.integration {
+  background: color-mix(in srgb, var(--int-color, var(--accent)) 11%, transparent);
+  border-color: color-mix(in srgb, var(--int-color, var(--accent)) 28%, transparent);
+  color: var(--int-color, var(--accent-ink));
+}
+.trigger-src.compact.integration .trigger-type {
+  color: var(--int-color, var(--accent-ink));
+}
+
+/* Branded integration badge (icon + label) — activity rows + detail. */
+.int-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 2px 8px 2px 6px;
+  margin-right: 8px;
+  border-radius: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: var(--int-color, var(--text-secondary));
+  background: color-mix(in srgb, var(--int-color, var(--text-muted)) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--int-color, var(--text-muted)) 26%, transparent);
+}
+.int-badge .ic {
+  color: var(--int-color, var(--text-secondary));
+}
+.int-badge.lg {
+  font-size: 13px;
+  padding: 4px 11px 4px 9px;
+  gap: 6px;
+}
+
+/* Notification detail: branded header + per-message constituents. */
+.notif-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.notif-head .int-badge {
+  margin-right: 0;
+}
+.notif-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.notif-msg {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  background: var(--bg-inset);
+}
+.notif-msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+pre.code {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  color: var(--text-secondary);
+}
+.msg-block {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin-bottom: 8px;
+  background: var(--bg-card);
+}
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+.msg-head:hover {
+  background: var(--bg-hover);
+}
+.msg-block.open .msg-head .chevron {
+  transform: rotate(90deg);
+}
+.msg-role {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  flex-shrink: 0;
+}
+.msg-role.system {
+  color: var(--purple-ink);
+}
+.msg-role.user {
+  color: var(--cyan-ink);
+}
+.msg-role.assistant {
+  color: var(--green-ink);
+}
+.msg-role.tool {
+  color: var(--amber-ink);
+}
+.msg-size {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.msg-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Once open the full body is shown, so the preview line is redundant. */
+.msg-block.open .msg-preview {
+  display: none;
+}
+.msg-pre {
+  display: none;
+}
+.msg-block.open .msg-pre {
+  display: block;
+}
+/* Override pre.code's all-around border/radius: the body sits inside the
+   already-rounded, clipped .msg-block, so keep only a top divider. Cap the
+   height so an expanded multi-thousand-char prompt scrolls in place instead
+   of pushing the response off-screen (matches the payload caps elsewhere). */
+pre.code.msg-pre {
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  max-height: 460px;
+  overflow: auto;
+}
+.think {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 8px 0;
+  background: color-mix(in srgb, var(--purple) 5%, transparent);
+}
+.think-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--purple-ink);
+  font-weight: 500;
+}
+.think.open .think-head .chevron {
+  transform: rotate(90deg);
+}
+.think-body {
+  display: none;
+  padding: 0 12px 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.think.open .think-body {
+  display: block;
+}
+.think-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  padding: 6px 11px;
+  border-top: 1px solid var(--border);
+}
+
+/* Response text + inline tool-call badges. */
+.resp-para {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+  margin-bottom: 8px;
+}
+.tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 2px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background var(--dur);
+}
+.tool-badge:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.tool-badge .ic {
+  width: 11px;
+  height: 11px;
+}
+.tool-badge i.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.tool-detail {
+  display: none;
+  margin: 4px 0 8px;
+  padding: 4px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+.tool-detail.open {
+  display: block;
+}
+
+/* ---- Coding-agent phase (sandbox Execute output) ---- */
+.ca-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--purple) var(--tint), transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 26%, transparent);
+  color: var(--purple-ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+.ca-banner-sub {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.ca-findings {
+  margin-bottom: 10px;
+}
+/* Findings report markdown */
+.md .md-h {
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--heading);
+  margin: 16px 0 6px;
+  line-height: 1.3;
+}
+.md .md-h:first-child {
+  margin-top: 0;
+}
+.md .md-h1 {
+  font-size: 18px;
+}
+.md .md-h2 {
+  font-size: 16px;
+}
+.md .md-h3 {
+  font-size: 14px;
+}
+.md .md-h4,
+.md .md-h5,
+.md .md-h6 {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.md .md-p {
+  line-height: 1.7;
+  margin: 6px 0;
+  word-break: break-word;
+}
+.md .md-ul,
+.md .md-ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.md .md-ul li,
+.md .md-ol li {
+  margin: 3px 0;
+  line-height: 1.65;
+}
+.md .md-quote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.md .md-hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+.md code {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.md pre.md-code {
+  margin: 8px 0;
+}
+.md a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12.5px;
+  display: block;
+  overflow-x: auto;
+}
+.md .md-table th,
+.md .md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+.md .md-table th {
+  background: var(--bg-card-2);
+  font-weight: 600;
+}
+/* Activity transcript (collapsible, native <details>) */
+.ca-activity {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+.ca-activity > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  list-style: none;
+  user-select: none;
+}
+.ca-activity > summary::-webkit-details-marker {
+  display: none;
+}
+.ca-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.ca-activity-body {
+  padding: 6px 11px 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ca-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.ca-step .ca-tool {
+  color: var(--accent-ink);
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+.ca-step.err .ca-tool {
+  color: var(--red-ink);
+}
+.ca-cmd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+.ca-err {
+  color: var(--red-ink);
+  font-size: 11.5px;
+}
+.ca-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.ca-error {
+  margin-top: 10px;
+}
+.ca-error .code {
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  color: var(--red-ink);
+}
+
+/* ---- Memory (agent detail) ---- */
+.mem-card {
+  margin-bottom: 10px;
+}
+.mem-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+.mem-head:hover {
+  background: var(--bg-hover);
+}
+.mem-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+}
+.mem-title {
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--heading);
+}
+.mem-card.open .mem-head .chevron {
+  transform: rotate(90deg);
+}
+.mem-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg-inset);
+}
+.mem-card.open .mem-body {
+  display: block;
+}
+.mem-entry {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.mem-entry:last-child {
+  border-bottom: none;
+}
+.mem-entry.expired {
+  opacity: 0.55;
+}
+.mem-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+  align-items: center;
+}
+.mem-entry-content {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Readable, clamped memory/summary text. */
+.mem-text {
+  position: relative;
+  overflow: hidden;
+  max-width: 82ch;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+.mem-text.clamped:not(.expanded) {
+  max-height: 7.4em;
+}
+.mem-text.clamped:not(.expanded)::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2.6em;
+  background: linear-gradient(transparent, var(--bg-inset));
+  pointer-events: none;
+}
+/* The conversation ledger's tool-call lines. Monospace and scrolling
+   in their own box rather than wrapping: each line is
+   `- tool(args) → outcome`, and a wrapped one stops looking like one
+   call. Horizontal scroll is confined here so the page body never
+   scrolls sideways. */
+.mem-pre {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  max-width: 82ch;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.mem-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+.mem-text code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-card-2);
+  border: 1px solid var(--border);
+  padding: 0 4px;
+  border-radius: 5px;
+}
+.mem-more {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+.mem-more:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mem-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  margin: 10px 0 3px;
+}
+
+/* ---- Schedules ---- */
+.code-cron {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--amber-ink);
+  background: color-mix(in srgb, var(--amber) var(--tint), transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 24%, transparent);
+  padding: 1px 7px;
+  border-radius: 5px;
+}
+
+/* ---- Config ---- */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.banner.warn {
+  background: color-mix(in srgb, var(--amber) 10%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
+  color: var(--amber-ink);
+}
+.banner.err {
+  background: color-mix(in srgb, var(--red) 10%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+  color: var(--red-ink);
+}
+/* ---- Toast ---- */
+.toast-wrap {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.toast {
+  padding: 11px 16px;
+  border-radius: var(--radius-ctl);
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--card-shadow);
+  font-size: 13px;
+  animation: fade-up var(--dur-slow) var(--ease);
+}
+.toast.ok {
+  border-color: color-mix(in srgb, var(--green) 34%, transparent);
+}
+.toast.err {
+  border-color: color-mix(in srgb, var(--red) 34%, transparent);
+}
+
+/* ---- Key-value grid (detail views) ---- */
+.kv {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 2px 16px;
+  font-size: 13px;
+}
+.kv dt {
+  color: var(--text-muted);
+  padding: 6px 0;
+}
+.kv dd {
+  margin: 0;
+  padding: 6px 0;
+  min-width: 0;
+  word-break: break-word;
+}
+
+
+/* =====================================================================
+   Traces and history
+   =====================================================================
+   A trace is a turn's whole story — the notification that woke the
+   agent, each phase, the tools, the task completion — and it is reached
+   from a row, never from the nav: a trace view with no trace to show
+   would be exactly the placeholder screen the design rules forbid.
+   ===================================================================== */
+.trace-link {
+  cursor: pointer;
+  color: var(--accent-ink);
+  transition: color var(--dur);
+}
+.trace-link:hover {
+  color: var(--text);
+}
+.trace-head-card {
+  padding: 16px 18px;
+  margin-bottom: 4px;
+}
+.trace-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.trace-id-full {
+  font-size: 13px;
+  color: var(--text);
+}
+.trace-head-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ok-ink {
+  color: var(--green-ink);
+}
+.trace-truncated {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--amber-ink);
+}
+/* Indent by span depth. A node whose parent is missing renders at the
+   root rather than vanishing — a trace can legitimately be truncated. */
+.trace-list .trace-child {
+  padding-left: calc(14px + var(--depth, 0) * 18px);
+}
+

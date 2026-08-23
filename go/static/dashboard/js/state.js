@@ -1,0 +1,349 @@
+// Agent-state, phase, and colour logic shared across views.
+
+import { parseUTC } from "./format.js";
+import { icon } from "./icons.js";
+
+// Phase ordering + colours (CSS custom-property names).
+export const PHASE_ORDER = {
+  onboarding: 0,
+  plan: 1,
+  execute: 2,
+  review: 3,
+  auxiliary: 4,
+  subagent: 5,
+  judge: 6,
+  turn: 99,
+};
+
+// Phase → hue family. The assignment is not arbitrary: it is the one that
+// keeps every pair the UI renders side by side separable, on both themes,
+// for normal and red-green colour vision — the phase bar stacks these in
+// PHASE_ORDER, so neighbours in that order are what has to hold apart. See
+// the categorical-hue note at the top of styles/tokens.css for the measured
+// separations. Each family ships a mark step (fills, bars, dots) and an ink
+// step (text) so a phase label always clears contrast.
+const PHASE_HUE = {
+  onboarding: "green",
+  plan: "blue",
+  execute: "amber",
+  review: "purple",
+  auxiliary: "orange",
+  subagent: "orange",
+  judge: "cyan",
+};
+
+export const PHASE_COLOR = Object.fromEntries(
+  Object.entries(PHASE_HUE).map(([phase, hue]) => [phase, `var(--${hue})`]),
+);
+
+// The mark step — bar segments, legend swatches, row accents.
+export function phaseColor(phase) {
+  return PHASE_COLOR[phase] || "var(--text-muted)";
+}
+
+// The text step — phase pills and any label set in the phase's colour.
+export function phaseInk(phase) {
+  const hue = PHASE_HUE[phase];
+  return hue ? `var(--${hue}-ink)` : "var(--text-muted)";
+}
+
+// ---------------------------------------------------------------------
+// A seat's colour is its STATE. It is never its identity.
+// ---------------------------------------------------------------------
+// Seats used to be coloured by `PALETTE[hash(name) % 8]` — a hash of the
+// role name over the same eight families the design system assigns to
+// PHASES and to EVENT CATEGORIES. So one amber meant "the execute phase",
+// "the decision category" and "the Analyst" at once, and a seat called
+// Engineer drew orange next to a red rail that meant something entirely
+// different. Reported as "the colouring of the agents is weird", and it
+// was: two meanings were sharing one palette, and one of them was noise.
+// A hash of a name carries no information — rename the seat and its
+// colour changes, which is the proof that it never meant anything.
+//
+// Identity is carried by the ICON and the NAME, which are stable and
+// legible. Colour is spent on the one thing worth spending it on: what
+// the seat is doing. Four tones, and `quiet` is deliberately not a hue —
+// an idle seat drew a tinted, glowing tile that read as activity ("when
+// agent is idle it has this blob lighting which feels like it is
+// working"), and the fix for that is not a duller hue, it is none.
+
+/** @typedef {"working"|"needs"|"broken"|"quiet"} SeatTone */
+
+/**
+ * What a seat's chrome should be tinted by, from its live state.
+ *
+ * `needs` and `broken` are separate on purpose: a seat parked on a
+ * question and a seat that fell over both stopped, and only one of them
+ * is a failure. The design system reserves red for failure.
+ */
+export function seatTone(agent, sandboxes) {
+  if (!agent) return "quiet";
+  const role = agent.role || agent.name;
+  const sandbox = (sandboxes || []).find((s) => s.role === role);
+  if (sandbox && sandbox.status === "awaiting_input") return "needs";
+  if (agent.last_error) return "broken";
+  const state = effectiveAgentState(agent, sandboxes);
+  if (state === "afk") return "broken";
+  if (state === "working" || state === "awaiting_sandbox") return "working";
+  return "quiet";
+}
+
+// Map a role name to a representative icon.
+export function roleIcon(name) {
+  const n = String(name || "").toLowerCase();
+  if (/ceo|chief|founder|president|owner/.test(n)) return "crown";
+  if (/cto|vp|head|director|lead|manager/.test(n)) return "crown";
+  if (/eng|dev|architect|programmer|coder|sre|ops/.test(n)) return "code";
+  if (/design|ux|ui|brand/.test(n)) return "diamond";
+  if (/market|growth|sales|comm|globe/.test(n)) return "globe";
+  if (/product|pm|analyst|research/.test(n)) return "clipboard";
+  return "user";
+}
+
+export function stateBadgeClass(state) {
+  switch (state) {
+    case "working":
+    case "awaiting_sandbox":
+      return "live";
+    case "idle":
+      return "done";
+    case "afk":
+      return "afk";
+    case "failed":
+      return "failed";
+    default:
+      return "pending";
+  }
+}
+
+// An agent with an in-flight detached sandbox run is still busy ("awaiting
+// sandbox"), even though its kick-off turn already emitted TaskCompleted
+// (which the projection reads as idle). Derive the displayed state from the
+// live active-sandboxes set at render time so it's correct on both the
+// initial snapshot and live SandboxRun* events.
+export function effectiveAgentState(agent, sandboxes) {
+  const role = agent.role || agent.name;
+  if (role && (sandboxes || []).some((s) => s.role === role)) {
+    return "awaiting_sandbox";
+  }
+  return agent.state || "offline";
+}
+
+export function stateLabel(state) {
+  // "sandbox", not "awaiting sandbox": the badge shares a seat card's
+  // top row with the seat's name, and the longer phrase pushed the name
+  // into an ellipsis on every card carrying it. The status line
+  // underneath says what it is waiting for, and which coding agent.
+  return state === "awaiting_sandbox" ? "sandbox" : state || "offline";
+}
+
+// A human, slightly-wry quip explaining WHY an agent is AFK, keyed on the
+// engine-detected failure cause.  The generic fallback is the safety net.
+export function afkQuip(reason) {
+  const quips = {
+    llm_unavailable: "🧠 brain unplugged — the LLM provider is unreachable",
+    stall: "😴 stalled — no forward progress, gave up the turn",
+    max_iter: "🔁 hit the round cap before finishing",
+    unhandled_exception: "💥 tripped over an unhandled error mid-turn",
+    budget_exhausted: "💸 out of token budget for now",
+    depth_cap: "🪜 delegation went too deep and stopped",
+    scheduled_timeout: "⏰ scheduled turn ran past its time cap",
+  };
+  return quips[reason] || "☕ stepped out for coffee (engine-detected pause)";
+}
+
+// What this seat is doing, in a sentence — the line under a name on an
+// agent card. Derived from live state only: an agent with no in-flight work
+// says so rather than being given something plausible to be doing.
+const PHASE_DOING = {
+  onboarding: "reading the team's onboarding docs",
+  plan: "planning the task",
+  execute: "carrying out the plan",
+  review: "reviewing its own work",
+};
+
+export function statusLine(seat, { sandbox = null, human = false } = {}) {
+  if (human) return seat.availability || "human teammate — not run by the engine";
+  if (sandbox) {
+    return sandbox.status === "awaiting_input"
+      ? "waiting on an answer to keep coding"
+      : `writing code in a sandbox (${sandbox.coding_agent || "coding agent"})`;
+  }
+  const state = seat.state || "offline";
+  if (state === "afk") return afkQuip(seat.afk_reason);
+  if (state === "working") {
+    return PHASE_DOING[seat.current_phase] || "working on a task";
+  }
+  if (state === "terminated") return "terminated";
+  if (state === "offline") return "not running";
+  return "idle — nothing in the inbox";
+}
+
+// ---------------------------------------------------------------------
+// Staleness
+// ---------------------------------------------------------------------
+// A live row's pips animate, which sells motion — so a turn that has been
+// on round 3 for eleven minutes looked exactly like one that started two
+// seconds ago, and "is anything stuck?" was unanswerable on a page whose
+// whole job is to answer it.
+
+// A round that has not produced an update in this long is suspicious: it
+// is either a genuinely long tool call (a sandbox launch, a slow MCP
+// server) or a hang. Two minutes clears every builtin tool and the
+// engine's own LLM call latency with room to spare.
+export const STALE_MS = 120_000;
+// And this long means it is not coming back on its own — long past any
+// provider timeout, so the row says so in red and stops animating.
+export const STALLED_MS = 600_000;
+
+/**
+ * How stale a live thing is: `""`, `"stale"`, or `"stalled"`.
+ *
+ * `at` is an ISO timestamp of the last sign of life.
+ */
+export function staleness(at, now = Date.now()) {
+  const d = parseUTC(at);
+  if (!d) return "";
+  const age = now - d.getTime();
+  if (age >= STALLED_MS) return "stalled";
+  if (age >= STALE_MS) return "stale";
+  return "";
+}
+
+// Integration surfaces a seat can act on, read from the MCP servers wired to
+// it (its own `mcp_env` plus every ancestor unit's, which it inherits).
+export function seatIntegrations(mcpEnvChain) {
+  const seen = [];
+  for (const env of mcpEnvChain) {
+    for (const server of Object.keys(env || {})) {
+      const key = String(server).toLowerCase();
+      if (!seen.includes(key)) seen.push(key);
+    }
+  }
+  return seen;
+}
+
+// A human seat's `contact` fields, and the integration each one identifies
+// them on. Human seats hold no MCP credentials — they are reachable, not
+// runnable — so this is what the same chip row shows for them.
+export const CONTACT_FIELDS = [
+  ["slack_user_id", "slack"],
+  ["mattermost_user_id", "mattermost"],
+  ["atlassian_account_id", "jira"],
+  ["github_login", "github"],
+  ["gitlab_username", "gitlab"],
+  ["plane_user_id", "plane"],
+];
+
+export function contactIntegrations(contact) {
+  return CONTACT_FIELDS.filter(([field]) => contact && contact[field]).map(([, key]) => key);
+}
+
+// " · plan #2" suffix on a working badge.
+export function phaseSuffix(a) {
+  if (a.state !== "working" || !a.current_phase) return "";
+  const iter = a.current_iteration ? ` #${a.current_iteration}` : "";
+  return ` · ${a.current_phase}${iter}`;
+}
+
+/**
+ * A seat's tile: its icon, tinted by what it is DOING.
+ *
+ * `tone` defaults to quiet, so a caller with no state to hand renders an
+ * untinted tile rather than inventing one — the honest answer when the
+ * page does not know.
+ */
+export function avatarFor(role, tone = "quiet") {
+  return `<span class="avatar tone-${tone}">${icon(roleIcon(role))}</span>`;
+}
+
+// Event category → hue family.
+//
+// This lived only in the `.cat-*` rules in components.css, which meant the
+// assignment the design system makes claims about could not be read — or
+// checked — from the code that renders it. It is here for the same reason
+// PHASE_HUE is: these are the second of the two orders that render edge to
+// edge, so the categorical-hue gates are measured against this map.
+//
+// `system` is deliberately absent: it takes the neutral ink rather than a
+// hue family, which is what keeps a run of ordinary events quiet.
+export const CATEGORY_HUE = {
+  lifecycle: "blue",
+  task: "green",
+  communication: "purple",
+  decision: "amber",
+  knowledge: "pink",
+  learning: "purple",
+  a2a: "orange",
+  notification: "cyan",
+  webhook: "brown",
+};
+
+// The text step for a category label.
+export function categoryInk(key) {
+  const hue = CATEGORY_HUE[key];
+  return hue ? `var(--${hue}-ink)` : "var(--text-muted)";
+}
+
+// Event categories → label + accent class (matches the server-side map).
+export const EVENT_CATEGORIES = [
+  { key: "lifecycle", label: "Lifecycle" },
+  { key: "task", label: "Task" },
+  { key: "communication", label: "Comms" },
+  { key: "decision", label: "Decision" },
+  { key: "knowledge", label: "Knowledge" },
+  { key: "learning", label: "Learning" },
+  { key: "a2a", label: "A2A" },
+  { key: "notification", label: "Notify" },
+  { key: "webhook", label: "Webhook" },
+  { key: "system", label: "System" },
+];
+
+export function catClass(category) {
+  return "cat-" + (category || "system");
+}
+
+// External integrations a notification can originate from. Each maps to a
+// display label, sprite icon id, and accent colour so the dashboard
+// identifies the source at a glance instead of a generic "notification".
+export const INTEGRATIONS = {
+  slack: { label: "Slack", icon: "message", color: "var(--purple-ink)" },
+  mattermost: { label: "Mattermost", icon: "hash", color: "var(--brown-ink)" },
+  jira: { label: "Jira", icon: "clipboard", color: "var(--blue-ink)" },
+  github: { label: "GitHub", icon: "git", color: "var(--text)" },
+  gitlab: { label: "GitLab", icon: "git", color: "var(--orange-ink)" },
+  confluence: { label: "Confluence", icon: "book", color: "var(--cyan-ink)" },
+  plane: { label: "Plane", icon: "clipboard", color: "var(--green-ink)" },
+  email: { label: "Email", icon: "inbox", color: "var(--amber-ink)" },
+};
+
+// Resolve an integration key (e.g. "slack") to its display metadata,
+// title-casing the key with a generic icon as the fallback for any custom
+// source an extension registered.
+export function integrationMeta(key) {
+  const k = String(key || "").toLowerCase();
+  if (INTEGRATIONS[k]) return INTEGRATIONS[k];
+  return {
+    label: k ? k.charAt(0).toUpperCase() + k.slice(1) : "External",
+    icon: "inbox",
+    color: "var(--pink-ink)",
+  };
+}
+
+// Notification events stamp their source as "notification_service.<key>"
+// (e.g. "notification_service.slack"). Return the bare integration key,
+// or "" for any non-notification source.
+export function integrationFromSource(source) {
+  const prefix = "notification_service.";
+  const s = String(source || "");
+  return s.startsWith(prefix) ? s.slice(prefix.length) : "";
+}
+
+// A compact branded badge (icon + label) identifying an integration.
+export function integrationBadge(key, cls = "") {
+  const m = integrationMeta(key);
+  return `<span class="int-badge ${cls}" style="--int-color:${m.color}">${icon(
+    m.icon,
+    "sm",
+  )}${m.label}</span>`;
+}

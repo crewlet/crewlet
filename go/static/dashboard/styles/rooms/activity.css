@@ -1,0 +1,70 @@
+/* activity room internals.
+ *
+ * Panels take their surface from the shared recipe in components.css —
+ * this file holds only what is specific to this room's layout. No
+ * colour is defined here: every value is a token from tokens.css.
+ */
+
+/* The scope of the filter counts, stated where they are read.
+ *
+ * The pills count the retained LIVE FEED; the list under them reaches
+ * further back through the event store. Without this label the two are
+ * two numbers that disagree with no way to tell which question each
+ * answered — so the label sits in the filter row itself, not in a
+ * tooltip on it. */
+.act-scope {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-right: var(--space-1);
+  cursor: help;
+}
+
+/* A solo trace has no chevron, so it reserves the column an expandable
+   one spends on one. 14px is `.ic.sm` in base.css — the icon sizes are
+   not on the token ramp, so this tracks that value by hand. */
+.act-nub {
+  width: 14px;
+  flex: none;
+}
+
+/* ---- The pager ----
+ *
+ * Three jobs that must not look alike: revealing rows already in memory
+ * is instant, reading the store is a network trip that can fail or run
+ * out, and a closing statement is neither — it is text that happens to
+ * sit where a control was. The room owns these rather than the shared
+ * sheet: `.show-more` is the button, and what makes one of them NOT a
+ * button belongs to the screen that draws it. */
+.act-pager.is-quiet {
+  cursor: default;
+  color: var(--text-dim);
+}
+.act-pager.is-quiet:hover {
+  color: var(--text-dim);
+  border-color: var(--border-subtle);
+}
+.act-pager.is-reading {
+  cursor: progress;
+  color: var(--text-muted);
+}
+
+/* What the pager is holding back, and why. Only ever drawn under a
+   multi-value filter, where one branch of the read has gone deeper than
+   another — rows exist in memory that the view cannot yet claim to have
+   the neighbours of. */
+.act-held {
+  margin-top: var(--space-2);
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* The second filter row (actors) reads as a continuation of the first,
+   not as a new block. */
+.act-filters + .act-filters {
+  margin-top: calc(-1 * var(--space-2));
+}
