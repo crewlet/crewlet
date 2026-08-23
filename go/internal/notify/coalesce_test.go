@@ -16,9 +16,20 @@ var t0 = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 // signal of their own — the shape the supersede rule exists for.
 type tracker struct{}
 
-func (tracker) Source() string                                  { return "tracker" }
-func (tracker) Build(n notify.Inbound, _ notify.Parties) string { return n.Body }
-func (tracker) RequiresRecon(notify.Inbound) bool               { return true }
+func (tracker) Source() string { return "tracker" }
+
+// Build front-loads triage boilerplate the way a real prompt does — around
+// 1.5k characters of it on a chat backend. The scaffolding is the whole
+// reason the salient body is carried separately: a worker filtering on a
+// prefix of the rendered trigger sees only text identical on every turn.
+func (tracker) Build(n notify.Inbound, _ notify.Parties) string {
+	return "## How to triage this\n\n" + n.Body
+}
+
+// RequiresRecon: this vendor's webhooks name a thing-that-changed rather
+// than carrying it, EXCEPT a plain message, which is self-contained. Both
+// branches exist so a hardcoded answer is visible.
+func (tracker) RequiresRecon(n notify.Inbound) bool { return n.EventType != "message" }
 
 // A pipeline result reports the outcome of the actor's OWN push, so it
 // reaches them; everything else this vendor emits, they already know about.
