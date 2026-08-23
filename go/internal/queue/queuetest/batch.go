@@ -428,6 +428,28 @@ func (s *suite) runBatch(t *testing.T) {
 		// Held while publishing so all three land in ONE batch as three
 		// partitions: delivered one at a time, the multi-partition loop
 		// this covers never runs.
+		//
+		// That one-batch outcome is an ASSUMPTION, not a guarantee the
+		// contract makes, and it is worth knowing which because this case
+		// has failed intermittently on JetStream and the cause is still
+		// unattributed. It was briefly written up as timing-independent
+		// "by construction" — that is wrong, and stating it here rather
+		// than leaving the correction in a commit message: the PUBLISH
+		// side is indeed race-free, since the hold means every event is
+		// in the mailbox before the attachment resumes, but the DRAIN
+		// side is not, and nothing obliges a backend to hand all three
+		// to one call.
+		//
+		// What is actually known: 22 consecutive clean runs here (12
+		// isolated, 10 full-package, all under -race), and no
+		// reproduction. Forcing a split with a max batch of 2 did not
+		// reproduce it either, though with a zero linger that variant may
+		// not exercise a split at all — so that experiment rules nothing
+		// out. If it recurs, capture the BACKLOG ORDER from the final
+		// assertion before anything else: a deferral pushes its partition
+		// to the front, so the order distinguishes a split (which is
+		// timing) from partitions handled past a deferral (which is the
+		// ordering defect this case exists to catch).
 		fillOneBatch(t, q, "topic.b", "grp", "a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
