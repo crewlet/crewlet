@@ -32,10 +32,12 @@
 package jetstream
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -200,7 +202,10 @@ func specForSubject(subject string, eventRetention time.Duration) (streamSpec, e
 	}
 
 	ns, _, _ := strings.Cut(subject, ".")
-	name := derivedPrefix + sanitizeStreamName(ns)
+	name, err := streamNameFor(ns)
+	if err != nil {
+		return streamSpec{}, err
+	}
 	return streamSpec{
 		name:      name,
 		subjects:  []string{ns, ns + ".>"},
@@ -221,32 +226,68 @@ func specForPattern(pattern string, eventRetention time.Duration) (streamSpec, e
 	return specForSubject(probe+".probe", eventRetention)
 }
 
-// sanitizeStreamName maps a subject segment onto a legal stream name.
-// JetStream forbids dots, spaces and wildcards in stream names.
-func sanitizeStreamName(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteRune('_')
+// namespaceName is the shape a subject's first segment must already have to
+// be usable as a stream name: lowercase, digits and underscore.
+var namespaceName = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// streamNameFor maps a subject's namespace onto a legal stream name.
+//
+// It VALIDATES rather than sanitizes. JetStream forbids dots, spaces and
+// wildcards in stream names, and the previous version rewrote every such
+// character to an underscore — which is lossy, and a lossy map ALIASES:
+// namespaces `a-b` and `a_b` both became `A_B`, so provisioning the second
+// replaced the first's subject list and the first namespace's events stopped
+// being captured by anything.
+//
+// Refusing is the honest answer and the one the contract allows: a backend
+// may decline a name it cannot represent, the way it declines a TTL it cannot
+// honour. It must not accept two distinct names and quietly merge them.
+// Every subject the engine publishes to has a namespace in this shape
+// already, so the rule costs nothing and closes the alias.
+func streamNameFor(ns string) (string, error) {
+	if !namespaceName.MatchString(ns) {
+		return "", fmt.Errorf(
+			"%w: namespace %q must match %s to be a stream name; a rewrite would let "+
+				"two namespaces share one stream", ErrSubject, ns, namespaceName)
 	}
-	if b.Len() == 0 {
-		return "DEFAULT"
-	}
-	return b.String()
+	return derivedPrefix + strings.ToUpper(ns), nil
 }
+
+// consumerNameMax bounds the readable part of a durable name. NATS allows
+// more; this leaves room for the hash and keeps a name an operator can read
+// in a `nats consumer ls` listing.
+const consumerNameMax = 180
 
 // consumerName maps a (topic, group) pair onto a durable consumer name.
 //
-// JetStream durable names may not contain dots, spaces, or the wildcard
-// characters, while group names are already dot-free by construction
-// (agent-{handle}). The topic is folded in so two subscriptions sharing a
-// group name on different subjects cannot collide on one consumer.
+// It must be INJECTIVE, and making it so is the whole reason it is not just
+// a string join. JetStream durable names may not contain dots, spaces or the
+// wildcard characters, so the readable part has to be a lossy rewrite of both
+// halves — and lossy alone aliases: topic `a.b` and topic `a_b` in one group
+// produced ONE consumer, so two subscriptions shared a mailbox and each
+// received the other's events. Measured by the conformance suite's
+// distinct_pairs_never_share_a_subscription, which found it because it was
+// the first case to SEND a pair differing only in a rewritten character —
+// no amount of mutating this backend could have revealed it, because the
+// input never arrived.
+//
+// So the readable part is for operators and the HASH is the identity. It is
+// taken over the raw pair joined by a NUL, which cannot occur in either half,
+// so no two distinct pairs share a digest. Forty-eight bits leaves a
+// collision probability below one in ten million for a company with ten
+// thousand subscriptions, against a real ceiling in the hundreds.
 func consumerName(topic, group string) string {
 	safe := func(s string) string {
 		return strings.NewReplacer(".", "_", "*", "_", ">", "_", " ", "_").Replace(s)
 	}
-	return safe(group) + "__" + safe(topic)
+	sum := sha256.Sum256([]byte(group + "\x00" + topic))
+	id := hex.EncodeToString(sum[:6])
+
+	readable := safe(group) + "__" + safe(topic)
+	// Truncation cannot reintroduce an alias: the digest is over the full
+	// pair and is appended after it.
+	if max := consumerNameMax - len(id) - 2; len(readable) > max {
+		readable = readable[:max]
+	}
+	return readable + "__" + id
 }

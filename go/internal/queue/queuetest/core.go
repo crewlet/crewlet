@@ -57,6 +57,58 @@ func (s *suite) runCore(t *testing.T) {
 		g2.awaitLabels(t, "group g2's copy", "t")
 	})
 
+	t.Run("distinct_pairs_never_share_a_subscription", func(t *testing.T) {
+		t.Parallel()
+		// Two pairs that differ only in a character a backend is tempted to
+		// rewrite when it flattens (topic, group) into one broker-side name.
+		//
+		// Found by enumerating what this suite SENDS rather than what it
+		// asserts: every topic and group in it was a plain lowercase dotted
+		// identifier, so no mutation of any backend could ever have revealed
+		// this — the input never arrived. Measured on a shipped backend
+		// whose consumer name is safe(group)+"__"+safe(topic) with "."
+		// rewritten to "_": topic `a.b` and topic `a_b` in one group land on
+		// ONE consumer. For real engine subjects that is two seats sharing an
+		// inbox, reachable from two operator handles differing only by a dot,
+		// and it defeats the mutual exclusion seat ownership rests on.
+		//
+		// A backend MAY REFUSE a name it cannot represent — the same latitude
+		// it has to refuse a linger it cannot honour — and this skips if it
+		// does. What it may not do is accept two distinct pairs and quietly
+		// alias them.
+		q := s.start(t)
+
+		// Topic side: one group, two topics differing only by . vs _.
+		dotted, under := newJournal(), newJournal()
+		if err := q.Subscribe(ctx, "coll.a.b", "g", recordingHandler(dotted)); err != nil {
+			t.Skipf("backend refuses the topic name coll.a.b: %v", err)
+		}
+		if err := q.Subscribe(ctx, "coll.a_b", "g", recordingHandler(under)); err != nil {
+			t.Skipf("backend refuses the topic name coll.a_b: %v", err)
+		}
+		publish(t, q, "coll.a.b", newEvent("to-dotted"))
+		publish(t, q, "coll.a_b", newEvent("to-under"))
+
+		dotted.awaitLabels(t, "the dotted topic's own event", "to-dotted")
+		under.awaitLabels(t, "the underscored topic's own event", "to-under")
+		dotted.staysAt(t, 1, "two topics collapsed onto one subscription")
+		under.staysAt(t, 1, "two topics collapsed onto one subscription")
+
+		// Group side: one topic, two groups differing only by . vs _. Distinct
+		// groups each get a copy; aliased ones would COMPETE for one.
+		gd, gu := newJournal(), newJournal()
+		if err := q.Subscribe(ctx, "coll.shared", "h.i", recordingHandler(gd)); err != nil {
+			t.Skipf("backend refuses the group name h.i: %v", err)
+		}
+		if err := q.Subscribe(ctx, "coll.shared", "h_i", recordingHandler(gu)); err != nil {
+			t.Skipf("backend refuses the group name h_i: %v", err)
+		}
+		publish(t, q, "coll.shared", newEvent("fanout"))
+
+		gd.awaitLabels(t, "the dotted group's copy", "fanout")
+		gu.awaitLabels(t, "the underscored group's copy", "fanout")
+	})
+
 	t.Run("consumer_group_competing", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(t)
