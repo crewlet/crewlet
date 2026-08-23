@@ -30,6 +30,12 @@ type Deps struct {
 	Episodes   EpisodeStore
 	Diary      DiaryStore
 	Onboarding OnboardingStore
+
+	// Sandbox launches a detached coding run. Nil omits run_sandbox, which
+	// is what a build with no providers.sandbox has — and omitting it is
+	// the point: a seat offered a code tool that cannot start a box would
+	// plan around one and fail at the call.
+	Sandbox SandboxLauncher
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -62,6 +68,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&refreshMemory{diary: deps.Diary}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
+		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
 	}
 
 	var names []string
@@ -106,6 +113,16 @@ func annotationsFor(name string) tools.Annotations {
 		// A write whose repeat is genuinely free: the marker is a fact
 		// about this seat, and setting it again sets the same fact.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.Yes}
+	case RunSandboxTool:
+		// The one builtin that writes to a SHARED SURFACE, which
+		// ReadOnly=No plus OpenWorld=Yes is how that is stated: a coding
+		// run pushes branches and opens pull requests other people see, so
+		// mcp.WritesToSharedSurface reads true and the sub-agent guard
+		// keeps it away from a sub-agent acting under its parent's name.
+		// Not destructive — a branch and a pull request are additive — and
+		// nowhere near idempotent: a second call is a second run, a second
+		// box, and a second set of commits.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
 		// reversible — which is exactly what Destructive asks about.

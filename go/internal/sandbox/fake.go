@@ -136,6 +136,13 @@ func (s *FakeSandbox) Commands() []string {
 	return slices.Clone(s.commands)
 }
 
+// Background is every command started detached, in order.
+func (s *FakeSandbox) Background() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.background)
+}
+
 // Put seeds a file, standing in for something the job wrote.
 func (s *FakeSandbox) Put(p, content string) {
 	s.mu.Lock()

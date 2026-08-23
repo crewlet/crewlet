@@ -46,6 +46,36 @@ type Surface struct {
 // Optional, and checked at the one frame that holds both halves. A plain
 // Callable — every MCP tool, every discovery meta-tool — is unaffected and
 // knows nothing about turns.
+type Detached interface {
+	Callable
+
+	// CallDetached runs the tool and may ask the loop to SUSPEND with this
+	// call unanswered.
+	CallDetached(ctx context.Context, turn *turnctx.Turn, args map[string]any) (DetachedResult, error)
+}
+
+// DetachedResult is an ordinary result that may also stop the loop.
+//
+// A SECOND optional interface rather than a Suspend field on [Result], for the
+// same reason SeatCallable is one: Result is the MCP tool contract, an MCP
+// server has no notion of a turn to suspend, and widening it would put a
+// turn-engine concept on every bridged tool to be ignored. This way the one
+// tool whose work outlives its turn asks for the ability, and the rest of the
+// registry is unaffected.
+type DetachedResult struct {
+	Result
+
+	// Suspend stops the loop with this call UNANSWERED, so the conversation
+	// can be persisted and re-entered when the detached work finishes.
+	// Honoured only where the phase allows suspending — Execute — and
+	// logged and ignored elsewhere, because a phase that never persists a
+	// partial conversation cannot resume one. See d-402.
+	Suspend bool
+
+	// Payload is handed to the caller to persist alongside the state.
+	Payload map[string]any
+}
+
 type SeatCallable interface {
 	Callable
 
@@ -194,7 +224,10 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return toolloop.ToolResult{}, err
 	}
 	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
-	return toolloop.ToolResult{Output: res.Output, Failed: res.Failed}, nil
+	return toolloop.ToolResult{
+		Output: res.Output, Failed: res.Failed,
+		Suspend: res.Suspend, SuspendPayload: res.Payload,
+	}, nil
 }
 
 // invoke runs one tool, telling it who is calling when it asks.
@@ -210,11 +243,17 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 // widening the signature would put a turn-shaped argument on every bridged
 // tool to be ignored. This way the two kinds of tool coexist under one
 // registry, and the one that needs the fact asks for it.
-func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (Result, error) {
-	if seated, ok := tool.(SeatCallable); ok {
-		return seated.CallForTurn(ctx, s.turn, args)
+func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (DetachedResult, error) {
+	switch t := tool.(type) {
+	case Detached:
+		return t.CallDetached(ctx, s.turn, args)
+	case SeatCallable:
+		res, err := t.CallForTurn(ctx, s.turn, args)
+		return DetachedResult{Result: res}, err
+	default:
+		res, err := tool.Call(ctx, args)
+		return DetachedResult{Result: res}, err
 	}
-	return tool.Call(ctx, args)
 }
 
 func (s *Surface) record(c Call) {
