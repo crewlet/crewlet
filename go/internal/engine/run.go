@@ -189,8 +189,20 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 }
 
 // Start brings the engine up.
+//
+// The node's long-lived loops are started on a DETACHED context, and that is
+// the whole substance of this method. The seat host derives its heartbeat and
+// sweep loops from whatever it is started with, so an engine started on a
+// signal context stops renewing its leases the instant SIGTERM arrives —
+// before the drain has begun. The drain then waits for in-flight turns, which
+// can take minutes, while every lease lapses at the TTL and peers claim seats
+// this node is still running turns on. Two nodes, one seat, arrived at through
+// the graceful path.
+//
+// STOP is what ends an engine. A caller's context bounds how long Start itself
+// may take, not how long the engine runs.
 func (e *Engine) Start(ctx context.Context) error {
-	if err := e.node.Start(ctx); err != nil {
+	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
 	log.Info("engine_started", "company", e.company.Config.Name,

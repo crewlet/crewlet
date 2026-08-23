@@ -387,3 +387,44 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
+	t.Parallel()
+	// Stop is what ends an engine. The seat host derives its heartbeat and
+	// sweep loops from whatever Start is given, so an engine started on a
+	// signal context would stop renewing its leases the instant SIGTERM
+	// arrived — before the drain began. The drain then waits for in-flight
+	// turns while every lease lapses at the TTL and peers claim seats this
+	// node is still running turns on.
+	//
+	// The TTL is shortened so the lapse would happen inside a test rather
+	// than in forty-five seconds. The heartbeat follows it, which is what
+	// makes a short TTL workable at all.
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		b.Coordination.LeaseTTLSeconds = 0.9
+	})
+	e := newEngine(t, engine.Options{Bootstrap: b})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitFor(t, "the seats to be claimed", func() bool {
+		return len(e.Node().Host().Held()) == 2
+	})
+
+	cancel()
+	// Comfortably past the lease TTL: an engine whose loops died with the
+	// context has stopped renewing, so the leases have expired.
+	time.Sleep(2 * time.Second)
+
+	if got := e.Node().Host().Held(); len(got) != 2 {
+		t.Errorf("held seats = %v after the start context was cancelled, want both: "+
+			"the engine stopped renewing its leases without being stopped", got)
+	}
+	if _, ok := e.Node().Host().MayStart("ceo"); !ok {
+		t.Error("the seat host no longer considers a held seat fresh: " +
+			"its heartbeat died with the start context")
+	}
+}
