@@ -1,7 +1,13 @@
 package memory_test
 
 import (
+	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -9,13 +15,23 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/queuetest"
 )
 
-// TestConformance is the whole test surface of this package.
+// TestConformance is nearly the whole test surface of this package.
 //
-// The twin has no behaviour of its own to test: everything it does is the
-// EventQueue contract, so a memory-only test would be a second, weaker
-// statement of the same thing that could drift away from the suite the other
-// backends answer to. Anything worth asserting here belongs in queuetest,
-// where every backend has to satisfy it.
+// Almost everything the twin does is the EventQueue contract, so a memory-only
+// test is usually a second, weaker statement of the same thing that can drift
+// away from the suite the other backends answer to. Anything shared belongs in
+// queuetest, where every backend has to satisfy it.
+//
+// "Nearly" is doing real work, and this paragraph used to say "the whole" and
+// "no behaviour of its own". That was untested and false, and a defect had
+// already moved into the gap: this backend's DEFAULT delivery budget is a
+// property of this backend alone — Pulsar ships 10 total attempts, JetStream
+// 25 — so the shared suite cannot assert it, and does not. It configures the
+// budget explicitly in every case that touches one, which is correct for a
+// portable suite and means the default is exercised by nothing. The default
+// was one attempt out of step with Pulsar for as long as it existed, and the
+// suite passed identically before and after the fix. A per-backend default is
+// exactly the shape of thing "it all belongs in the shared suite" cannot hold.
 func TestConformance(t *testing.T) {
 	t.Parallel()
 	queuetest.RunWith(t,
@@ -69,4 +85,63 @@ func TestConformance(t *testing.T) {
 			// its mail outlive it, so Start serves again.
 			Restartable: true,
 		})
+}
+
+// TestDefaultDeliveryBudgetMatchesPulsar pins the DEFAULT budget, which the
+// conformance suite cannot: the correct value differs per backend, so the suite
+// sets it explicitly in every case that reads one.
+//
+// Ten TOTAL attempts, matching internal/queue/pulsar's maxDeliveries = 10. The
+// two constants are written in different currencies — this backend counts
+// redeliveries after the first, Pulsar counts total deliveries — so they agree
+// at 9 and 10 respectively, and agreeing at 10 and 10 is the bug this catches.
+// Asserted on the OBSERVABLE (how many times a handler runs) rather than on the
+// constant, because the constant is the half that was already wrong while
+// reading correct.
+//
+// Pulsar is the twin to track, not JetStream: both this backend and Pulsar
+// deliver a deferral for free, while JetStream spends an attempt on one and
+// budgets 25 to cover handoff. If Pulsar's number moves, this moves with it.
+func TestDefaultDeliveryBudgetMatchesPulsar(t *testing.T) {
+	t.Parallel()
+	const pulsarTotalAttempts = 10
+
+	q := memory.New()
+	if err := q.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	var mu sync.Mutex
+	var attempts int
+	err := q.Subscribe(context.Background(), "topic", "grp",
+		func(context.Context, *events.Event) queue.Result {
+			mu.Lock()
+			attempts++
+			mu.Unlock()
+			return queue.Nak(errors.New("permanent failure"))
+		})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if err := q.Publish(context.Background(), "topic", &events.Event{
+		ID:        uuid.New(),
+		Type:      "poison",
+		Timestamp: time.Now().UTC(),
+		Source:    "memory_test",
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != pulsarTotalAttempts {
+		t.Errorf("default budget ran the handler %d times, want %d "+
+			"(Pulsar's maxDeliveries; see defaultMaxRedeliveries)", got, pulsarTotalAttempts)
+	}
+	if dl := q.DeadLetters("topic", "grp"); len(dl) != 1 {
+		t.Errorf("exhausted event reached the dead-letter subject %d times, want 1", len(dl))
+	}
 }

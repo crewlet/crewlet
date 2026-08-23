@@ -72,14 +72,48 @@ var ErrNotStarted = errors.New("memory: event queue is not started")
 var ErrNilHandler = errors.New("memory: handler is nil")
 
 const (
-	// defaultMaxRedeliveries is in lockstep with the Pulsar backend's
-	// budget. The twin must not disagree about a number that decides
-	// whether a healthy event lives or dies.
-	defaultMaxRedeliveries = 10
+	// defaultMaxRedeliveries matches the Pulsar backend's budget in TOTAL
+	// ATTEMPTS, which is the only comparison that means anything here: this
+	// constant counts redeliveries AFTER the first delivery, while Pulsar's
+	// DLQPolicy.MaxDeliveries and NATS MaxDeliver both count total
+	// deliveries. So 9 here and 10 there are the same budget, and the 10
+	// this used to hold was one attempt MORE than Pulsar's — the same
+	// numeral denoting a different quantity.
+	//
+	// That is worth the paragraph because the repo has already been bitten
+	// by it once: the suite's capability was renamed WithRedeliveryBudget
+	// -> WithDeliveryAttempts precisely because "budget" never said which
+	// convention it counted, and a backend then wrote MaxDeliver: budget+1
+	// to satisfy the missing half. The suite was fixed; this constant kept
+	// asserting "in lockstep with Pulsar" without ever naming a convention,
+	// so the claim read as checked and could not be checked.
+	//
+	// Pulsar is the right twin and JetStream is not: both this backend and
+	// Pulsar deliver a deferral for FREE (Capabilities.FreeDeferral on
+	// both), whereas JetStream returns a deferral via Nak, which spends an
+	// attempt — so it budgets 25 to cover handoff as well as poison. See
+	// internal/queue/pulsar/pulsar.go maxDeliveries and
+	// internal/queue/jetstream/stream.go maxDeliver; if either moves, this
+	// tracks Pulsar's.
+	defaultMaxRedeliveries = 9
 
 	// defaultMaxHistory bounds the published-event log this backend keeps
 	// for tests and diagnostics. It is not a mailbox — retention that
 	// matters lives in the subscriptions.
+	//
+	// It is a CEILING against unbounded growth, not a capacity anyone
+	// should tune to, and the two are worth telling apart because the
+	// number looks like a sizing decision and is not one. Measured: the
+	// high-water mark of any one broker's history across a full conformance
+	// run is 5 events, so this is not sized to test traffic at all — a
+	// backlog of 5 and a ceiling of 10000 are answers to different
+	// questions, and the ceiling exists for a broker that outlives a test
+	// binary.
+	//
+	// What it actually costs is the reason to keep it finite: entries are
+	// live pointers, so the buffer pins whole events against GC for as long
+	// as the broker lives. That is the trade to reason about if anyone
+	// moves it — not how many events a test publishes.
 	defaultMaxHistory = 10000
 )
 

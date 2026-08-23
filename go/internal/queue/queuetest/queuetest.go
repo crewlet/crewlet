@@ -626,8 +626,11 @@ const (
 func timedOut(t *testing.T, what string, v deliveryVerdict, observed any) {
 	t.Helper()
 	const budgetNote = "settleFor is a constant this suite advertises, not a promise the " +
-		"contract makes. If a backend genuinely needs longer, that is a finding to raise — " +
-		"not a number to quietly raise here, which would blunt the check for every other backend."
+		"contract makes — and raising it is almost never the repair. Measured, the only pressure " +
+		"ever seen on it is REDELIVERY SPACING rather than delivery: check your backend's " +
+		"redelivery delay first (JetStream's harness cuts a 1s nak delay to 25ms for exactly " +
+		"this reason). Raising this blunts the check for every other backend, and every positive " +
+		"assertion in the suite pays for it."
 
 	switch v {
 	case verdictPartial:
