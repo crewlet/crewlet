@@ -50,9 +50,11 @@ var readCases = []testCase{
 	}},
 
 	{"list_owned_excludes_lapsed_leases", func(h *harness) {
+		// Short-TTL claim last: everything after it is real time against
+		// that TTL on a backend the suite cannot fast-forward.
 		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
-		h.claim("seat:cto", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
 		h.claim("seat:pm", coord.AcquireOptions{Owner: "node-b", TTL: LongTTL})
+		h.claim("seat:cto", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
 		h.lapse()
 
 		h.requireResources(`ListOwned("node-a")`, h.listOwned("node-a"), "seat:ceo")
@@ -238,9 +240,12 @@ var readCases = []testCase{
 		// nothing in exactly the case it exists for: a node coming back
 		// from a restart looking for the seats whose MCP children and
 		// caches it had warm.
-		h.claim("seat:ceo", coord.AcquireOptions{
-			Owner: "node-a:1", TTL: ShortTTL, Preferred: "node-a",
-		})
+		// The short-TTL claim goes LAST, immediately before the lapse.
+		// On a backend whose clock the suite cannot move, everything
+		// between the two is real time spent against that TTL, and this
+		// case's setup is three store round trips — so ordering it this
+		// way removes the dependency on how fast the store is rather
+		// than merely tolerating it.
 		released := h.claim("seat:cto", coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
 		})
@@ -248,6 +253,9 @@ var readCases = []testCase{
 			Owner: "node-b:1", TTL: LongTTL, Preferred: "node-b",
 		})
 		h.release("seat:cto", "node-a:1", released.Epoch)
+		h.claim("seat:ceo", coord.AcquireOptions{
+			Owner: "node-a:1", TTL: ShortTTL, Preferred: "node-a",
+		})
 		h.lapse()
 
 		h.requireResources("live seats", h.listLive(coord.SeatPrefix), "seat:pm")

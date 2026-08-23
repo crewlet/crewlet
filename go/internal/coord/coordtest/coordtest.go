@@ -77,6 +77,18 @@
 // of two timestamps — see expires_at_is_a_utc_deadline_on_the_stores_clock for
 // why ordering admits a second reason.
 //
+// The largest thing this suite assumes without saying so is READ-YOUR-OWN-
+// WRITE: every case reads back a claim it just made, and coord.go never
+// promises that. Both certified backends make it true for free — one is a
+// mutex over a map, the other a single-connection KV — so no case here can
+// tell a store that guarantees it from one that happens to. A backend with
+// asynchronous replication would fail case after case for a property nobody
+// wrote down. It is enforced rather than relaxed because a claim you cannot
+// read back cannot provide mutual exclusion, and the seat host reads ListLive
+// and FleetProtocolFloor immediately after claiming — but see
+// rewrite/questions/coord-contract-read-your-own-write.md, because that is the
+// contract owner's call and not the suite's.
+//
 // The same applies to what a case QUIETLY assumes. Every meta payload here is
 // JSON-shaped, which is why none of them could see that a value's Go type does
 // not survive a real backend's round trip; that gap is stated at the meta
@@ -139,18 +151,40 @@ const (
 	// refusal as the correct answer.
 	LongTTL = 5 * time.Minute
 
-	// ShortTTL is the TTL for the lease a case intends to lapse.
+	// ShortTTL is the TTL for a lease a case intends to lapse, and it is
+	// only ever claimed as the LAST act before lapsing it.
 	//
-	// It has to outlast whatever a case does between claiming that lease
-	// and calling lapse — a handful of store round trips, plus however
-	// long the runtime deschedules a parallel goroutine under -race.
-	// 100 ms is three orders of magnitude more than the in-process case
-	// needs and comfortably more than a slow round trip, while keeping a
-	// fully serialised sleeping run (-parallel 1) to a few seconds. It
-	// holds against a real backend: the embedded-NATS store runs the whole
-	// suite on the sleeping path, under -race, with no lapse-window
-	// failure.
+	// It is therefore NOT required to cover any store work — a case that
+	// must do something while the lease is still live uses WindowTTL
+	// instead. That distinction is the whole correction: this comment used
+	// to claim 100ms was "comfortably more than a slow round trip", which
+	// is simply false and was falsified by a real backend. Under -count=2
+	// with the suite parallel under -race, a handful of round trips
+	// against an embedded broker cost 200-330ms, and two cases failed
+	// intermittently for months' worth of runs before anyone caught the
+	// dump instead of truncating it.
+	//
+	// So the value now answers a much easier question: how long a lease
+	// should live when the only thing that must happen before it expires
+	// is nothing at all. Overrunning a zero-operation window is harmless —
+	// the lease lapses, which is what the case wanted. 100ms keeps a
+	// fully serialised sleeping run (-parallel 1) to a few seconds.
 	ShortTTL = 100 * time.Millisecond
+
+	// WindowTTL is ShortTTL's sibling for the few cases that must complete a
+	// store operation WHILE the short lease is still live — a renew that
+	// proves it extends, a re-acquire that proves it keeps its epoch. Those
+	// windows are irreducible: the operation happening while live IS the
+	// invariant, so no reordering closes them.
+	//
+	// Sized from a measurement, not a guess. Those cases run in 0.17-0.20s
+	// against an embedded broker at rest; under -count=2 with the whole
+	// suite in parallel under -race they were observed at 0.36-0.48s, so a
+	// handful of round trips can cost 200-330ms. 2s leaves roughly six
+	// times that. ShortTTL stayed at 100ms because every other lapsing case
+	// claims its short lease as the LAST thing it does — a window of zero
+	// operations cannot be overrun, and lapsing early is harmless there.
+	WindowTTL = 2 * time.Second
 
 	// lapseMargin is how far past ShortTTL harness.lapse travels. On the
 	// sleeping path the store's clock is the real one, and a sleep is only
@@ -239,6 +273,17 @@ type harness struct {
 	t   *testing.T
 	ctx context.Context
 	b   coord.Backend
+
+	// The most recent claim, so stillLive can tell the suite overrunning
+	// its own window apart from a backend dropping a live lease. Written
+	// and read only on the test goroutine — the concurrency cases call the
+	// backend directly rather than through claim(), and -race would say so
+	// if that ever changed.
+	lastClaimAt  time.Time
+	lastClaimTTL time.Duration
+	// travelled records that the suite moved the STORE's clock since that
+	// claim. Wall time is then no guide at all — see stillLive.
+	travelled bool
 }
 
 func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harness {
@@ -265,6 +310,7 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 // claim acquires and fails the case unless the backend granted the lease.
 func (h *harness) claim(resource string, opts coord.AcquireOptions) *coord.Lease {
 	h.t.Helper()
+	h.lastClaimAt, h.lastClaimTTL, h.travelled = time.Now(), opts.TTL, false
 	lease, err := h.b.TryAcquire(h.ctx, resource, opts)
 	if err != nil {
 		h.t.Fatalf("TryAcquire(%q, owner=%q): unexpected error: %v", resource, opts.Owner, err)
@@ -376,18 +422,86 @@ func (h *harness) await(wg *sync.WaitGroup, what string) {
 	select {
 	case <-done:
 	case <-time.After(stallBudget):
-		h.t.Fatalf("%s: still inside the backend after %v — a coord.Backend call that "+
-			"never returns takes the whole test binary down with it", what, stallBudget)
+		// Evidence, not a verdict — the same correction stillLive needed.
+		// This helper cannot see the difference between a call that never
+		// returns and one merely slower than a budget THIS SUITE chose,
+		// and "never returns" is a serious accusation to hand an author
+		// on no more evidence than a timer firing.
+		h.t.Fatalf("%s: still running after %v, which is stallBudget — a constant this "+
+			"suite picked, not a promise the contract makes. Most likely a coord.Backend "+
+			"call is not returning; but a store merely slower than that budget looks "+
+			"identical from here, and if this backend is known to be slow then both "+
+			"readings are live and this helper cannot separate them", what, stallBudget)
 	}
+}
+
+// stillLive asserts a ShortTTL lease has not run out yet.
+//
+// Call it in any case that does store work between claiming a short lease and
+// depending on it. On a backend with no Advancer that window is real time, and
+// a slow store — or a loaded machine, or -race, or a suite that has grown
+// since the constant was chosen — can spend the whole TTL inside it. What
+// happens then is the expensive part: the case fails LATER, on an invariant
+// the backend never broke, and reads as a takeover bug or a renew that
+// wrongly reported loss. This turns that into a failure that names its own
+// cause, so the next reader spends the time on the suite's timing assumption
+// rather than on the backend.
+func (h *harness) stillLive(resource string) {
+	h.t.Helper()
+	if lease := h.get(resource); lease != nil {
+		return
+	}
+	// Two causes, and the first version of this guard asserted the one it
+	// happened to be built for — which is the same misattribution it exists
+	// to prevent, pointing the other way. A backend that DROPS a lease it
+	// just granted trips this too, and telling its author "this is the
+	// suite's timing assumption, not a backend defect" would send them
+	// looking anywhere but at the bug. So it accuses whichever the elapsed
+	// time actually implicates.
+	// On a backend whose clock the suite can move, wall time stops being
+	// evidence the moment it moves one: the lease is gone in STORE time
+	// while no wall time has passed, which reads exactly like a backend
+	// dropping a live lease. Accusing it would be a false find handed to
+	// its author, so the guard says what it actually knows instead.
+	if h.travelled {
+		h.t.Fatalf("%s is unheld because THIS CASE advanced the store's clock past its TTL "+
+			"since claiming it. Neither the backend nor the suite's timing window is "+
+			"implicated — the case is asking whether a lease is live after deliberately "+
+			"outlasting it", resource)
+	}
+	elapsed := time.Since(h.lastClaimAt)
+	if elapsed >= h.lastClaimTTL {
+		// Evidence, not a verdict. The first version of this branch said
+		// flatly "this is not a backend defect", which is the same
+		// over-claim in the other direction: a store that spent seconds
+		// on three operations IS a finding, and that message told the one
+		// reader whose problem was the backend to look elsewhere. So it
+		// reports the number and names what each reading implies.
+		h.t.Fatalf("%s lapsed before this case was ready for it: %v elapsed against a %v TTL. "+
+			"The suite spent its own window, so the case should claim its short lease "+
+			"later — but read the raw %v too: that is how long this store took for the "+
+			"setup, and if it is slower than you expect then BOTH are live and this "+
+			"helper cannot separate them. What it is not is a reason to raise the "+
+			"constant here, which would blunt the check for every other backend",
+			resource, elapsed, h.lastClaimTTL, elapsed)
+	}
+	h.t.Fatalf("%s is already unheld %v into a %v TTL — the store dropped a lease it had "+
+		"just granted. This is a BACKEND defect: too little time has passed for the "+
+		"suite's own timing to explain it", resource, elapsed, h.lastClaimTTL)
 }
 
 // lapse outlasts a ShortTTL lease. See the package doc: the suite never edits
 // a backend's records, it lets a TTL run out.
-func (h *harness) lapse() {
+func (h *harness) lapse() { h.lapsePast(ShortTTL) }
+
+// lapsePast outlasts a lease of the given TTL. Cases holding a WindowTTL lease
+// must travel past THAT, not past ShortTTL.
+func (h *harness) lapsePast(ttl time.Duration) {
 	h.t.Helper()
-	d := ShortTTL + lapseMargin
+	d := ttl + lapseMargin
 	if a, ok := h.b.(Advancer); ok {
 		a.Advance(d)
+		h.travelled = true
 		return
 	}
 	time.Sleep(d)

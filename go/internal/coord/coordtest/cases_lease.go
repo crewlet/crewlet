@@ -59,12 +59,16 @@ var leaseCases = []testCase{
 	{"an_unbroken_same_owner_reacquire_extends_the_deadline", func(h *harness) {
 		// Re-acquire doubles as renew, which is what lets a heartbeat
 		// use one call for "still mine, still wanted".
-		first := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
+		first := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: WindowTTL})
+		// If the short lease has already lapsed, the re-claim is a
+		// re-acquire and MUST bump the epoch — a correct backend then
+		// fails the assertion below for the suite's reason, not its own.
+		h.stillLive("seat:ceo")
 		again := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		if again.Epoch != first.Epoch {
 			h.t.Fatalf("unbroken re-acquire moved the epoch %d -> %d", first.Epoch, again.Epoch)
 		}
-		h.lapse()
+		h.lapsePast(WindowTTL)
 		h.mustHold("seat:ceo", "node-a")
 	}},
 
@@ -96,13 +100,16 @@ var leaseCases = []testCase{
 	// --- renew ---------------------------------------------------------
 
 	{"renew_extends_a_live_lease", func(h *harness) {
-		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
+		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: WindowTTL})
+		// A lapsed lease is correctly NOT renewable, so without this the
+		// assertion below would blame the backend for the suite's delay.
+		h.stillLive("seat:ceo")
 		if !h.renew("seat:ceo", "node-a", lease.Epoch, LongTTL) {
 			h.t.Fatal("renew of a live lease reported loss")
 		}
 		// The renewed TTL has to reach the store's own clock, not just
 		// the returned struct: this is the call a heartbeat survives on.
-		h.lapse()
+		h.lapsePast(WindowTTL)
 		h.mustHold("seat:ceo", "node-a")
 	}},
 

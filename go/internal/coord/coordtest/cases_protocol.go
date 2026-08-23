@@ -43,9 +43,14 @@ var protocolCases = []testCase{
 	{"the_gate_lifts_when_the_old_lease_lapses", func(h *harness) {
 		// A rolling deploy converges because that is what a rolling
 		// deploy does: drain the old, the new take over.
-		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old-node:1", TTL: ShortTTL, Protocol: 1})
+		// The old hold is claimed LONG for the part that must happen while
+		// it is live, then shortened at the last moment. The refusal and
+		// the lapse both still mean what they did, and neither is racing
+		// a wall clock any more.
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old-node:1", TTL: LongTTL, Protocol: 1})
 		h.refused("seat:ceo", coord.AcquireOptions{Owner: "new-node:1", TTL: LongTTL, Protocol: 2})
 
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old-node:1", TTL: ShortTTL, Protocol: 1})
 		h.lapse()
 		lease := h.claim("seat:ceo", coord.AcquireOptions{
 			Owner: "new-node:1", TTL: LongTTL, Protocol: 2,
@@ -249,11 +254,16 @@ var protocolCases = []testCase{
 			h.t.Fatalf("FleetProtocolFloor = (%d, %v), want (3, true)", floor, any)
 		}
 
-		h.claim("seat:eng", coord.AcquireOptions{Owner: "old:1", TTL: ShortTTL, Protocol: 1})
+		// Long while the floor is read, shortened immediately before the
+		// lapse: an unbroken same-owner re-claim keeps the epoch and just
+		// moves the deadline in. A full fleet scan inside a 100ms window
+		// is how this case used to fail on a real broker under load.
+		h.claim("seat:eng", coord.AcquireOptions{Owner: "old:1", TTL: LongTTL, Protocol: 1})
 		if floor, any := h.floor(); !any || floor != 1 {
 			h.t.Fatalf("FleetProtocolFloor = (%d, %v), want (1, true)", floor, any)
 		}
 
+		h.claim("seat:eng", coord.AcquireOptions{Owner: "old:1", TTL: ShortTTL, Protocol: 1})
 		h.lapse()
 		if floor, any := h.floor(); !any || floor != 3 {
 			h.t.Fatalf("FleetProtocolFloor = (%d, %v) after the old hold lapsed, want (3, true)",
@@ -262,11 +272,12 @@ var protocolCases = []testCase{
 	}},
 
 	{"fleet_protocol_floor_ignores_lapsed_and_released_leases", func(h *harness) {
-		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old:1", TTL: ShortTTL, Protocol: 1})
+		// Short-TTL claim last — see the same reorder in the read cases.
 		released := h.claim("seat:cto", coord.AcquireOptions{
 			Owner: "old:2", TTL: LongTTL, Protocol: 1,
 		})
 		h.release("seat:cto", "old:2", released.Epoch)
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "old:1", TTL: ShortTTL, Protocol: 1})
 		h.lapse()
 		if floor, any := h.floor(); any {
 			h.t.Fatalf("FleetProtocolFloor = (%d, true) with nothing live, want (_, false)", floor)
