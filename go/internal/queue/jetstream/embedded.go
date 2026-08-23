@@ -128,6 +128,23 @@ func startEmbedded(cfg Config) (*embeddedServer, error) {
 		// cannot be reached by anything but this process.
 		DontListen: len(cfg.ClusterURLs) == 0 && cfg.ClusterPort == 0,
 		StoreDir:   cfg.StoreDir,
+
+		// THE ENGINE OWNS THE PROCESS SIGNALS. Left false, Server.Start
+		// installs its own SIGINT/SIGTERM handler, which shuts the
+		// broker down and then calls os.Exit(0) — from a library, inside
+		// a process that is in the middle of something.
+		//
+		// Measured, end to end: SIGTERM to a solo node ran the drain and
+		// the process vanished part way through Backends.Close, exit 0,
+		// with the seat release done and nothing after it. A slower
+		// drain — one with a turn still running, which is the case the
+		// drain exists for — loses that turn and the lease release with
+		// it, so a peer waits out the full TTL for seats a graceful
+		// shutdown was meant to hand back immediately.
+		//
+		// The engine's own handler is the one that must run, and it must
+		// run to completion.
+		NoSigs: true,
 	}
 	var scratch string
 	if opts.StoreDir == "" {
