@@ -10,6 +10,7 @@ package tools
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -385,3 +386,32 @@ func (s Snapshot) KnownReads() []string {
 
 // Entries returns every entry in the snapshot.
 func (s Snapshot) Entries() []Entry { return slices.Clone(s.entries) }
+
+// With returns a snapshot carrying one additional entry.
+//
+// A COPY, because the extra tool is per-phase state: Plan's submission tool
+// and Review's are different objects belonging to different phases of one
+// turn, and registering either into the shared registry would leave it visible
+// to the other — or, worse, to the next turn, still holding the last one's
+// answer.
+//
+// A name already in the snapshot is refused for the same reason Register
+// refuses it: silently shadowing a real tool with a phase-local one means the
+// model's call reaches something other than what the catalogue described.
+func (s Snapshot) With(e Entry) (Snapshot, error) {
+	if e.Tool == nil || e.Name() == "" {
+		return Snapshot{}, fmt.Errorf("tools: cannot add an unnamed tool to a snapshot")
+	}
+	if _, dup := s.byName[e.Name()]; dup {
+		return Snapshot{}, fmt.Errorf("tools: %q is already in the snapshot", e.Name())
+	}
+	out := Snapshot{
+		entries: append(slices.Clone(s.entries), e),
+		byName:  maps.Clone(s.byName),
+	}
+	if out.byName == nil {
+		out.byName = map[string]Entry{}
+	}
+	out.byName[e.Name()] = e
+	return out, nil
+}

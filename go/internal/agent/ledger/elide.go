@@ -165,3 +165,11 @@ func marshal(v map[string]any) string {
 // tool surface should never have produced (a NaN, a cyclic structure); it
 // exists so such a value costs a scruffy line rather than the whole record.
 func goString(v any) string { return fmt.Sprintf("%v", v) }
+
+// Elide trims text to limit runes with a visible ellipsis.
+//
+// Exported for callers outside this package that need the SAME budget applied
+// the same way — the reviewer's copy of the draft is the ledger's artifact
+// answering the same question, and two trimming functions would eventually
+// disagree about where a limit falls.
+func Elide(text string, limit int) string { return elide(text, limit) }
