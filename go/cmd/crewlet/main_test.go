@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 const companyYAML = `
@@ -343,4 +346,133 @@ func getJSON(t *testing.T, url string) map[string]any {
 	}
 	t.Fatalf("%s never answered", url)
 	return nil
+}
+
+// THE RUN FLAGS THAT OVERRIDE TIER A. Their right value depends on where the
+// process is running rather than on what the company is — which job this
+// node does in a fleet, and where its HTTP surface binds — so they are
+// flags. Everything else in Tier A belongs in the file.
+func TestRunFlagsOverrideTheBootstrap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		check func(*testing.T, *config.Bootstrap)
+	}{
+		{
+			name: "roles narrow what this node does",
+			args: []string{"-roles", "ingress,workers"},
+			check: func(t *testing.T, b *config.Bootstrap) {
+				roles, err := b.Node.RoleSet()
+				if err != nil {
+					t.Fatalf("RoleSet: %v", err)
+				}
+				if !roles.Has(placement.RoleIngress) || !roles.Has(placement.RoleWorkers) {
+					t.Errorf("roles = %v", roles)
+				}
+				if roles.Has(placement.RoleSeats) {
+					t.Error("a node told to run ingress and workers still claims seats")
+				}
+			},
+		},
+		{
+			name: "whitespace and a trailing comma are not roles",
+			args: []string{"-roles", " seats , "},
+			check: func(t *testing.T, b *config.Bootstrap) {
+				roles, err := b.Node.RoleSet()
+				if err != nil {
+					t.Fatalf("RoleSet: %v", err)
+				}
+				if len(roles) != 1 || !roles.Has(placement.RoleSeats) {
+					t.Errorf("roles = %v, want only seats", roles)
+				}
+			},
+		},
+		{
+			name: "the api bind is overridden",
+			args: []string{"-api-host", "127.0.0.1", "-api-port", "9999"},
+			check: func(t *testing.T, b *config.Bootstrap) {
+				if b.API.Host != "127.0.0.1" || b.API.Port != 9999 {
+					t.Errorf("api = %s:%d", b.API.Host, b.API.Port)
+				}
+			},
+		},
+		{
+			// ZERO IS A REAL VALUE — "serve no HTTP at all" — which is
+			// why the flag's unset sentinel cannot be zero.
+			name: "port zero disables the surface",
+			args: []string{"-api-port", "0"},
+			check: func(t *testing.T, b *config.Bootstrap) {
+				if b.API.Port != 0 {
+					t.Errorf("api.port = %d, want 0", b.API.Port)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080}}
+			boot.Node.Roles = []string{"seats"}
+			fs, roles, host, port := parseOverrides(t, tc.args)
+			if err := overrideNode(boot, fs, roles, host, port); err != nil {
+				t.Fatalf("overrideNode: %v", err)
+			}
+			tc.check(t, boot)
+		})
+	}
+}
+
+// AN UNSET FLAG CHANGES NOTHING, which is the whole reason each is applied
+// only when it was actually given: an unset -api-port read as 0 would serve
+// no HTTP at all and make every integration go deaf.
+func TestUnsetRunFlagsLeaveTheBootstrapAlone(t *testing.T) {
+	t.Parallel()
+	boot := &config.Bootstrap{API: config.API{Host: "0.0.0.0", Port: 8080}}
+	boot.Node.Roles = []string{"seats"}
+	fs, roles, host, port := parseOverrides(t, nil)
+	if err := overrideNode(boot, fs, roles, host, port); err != nil {
+		t.Fatalf("overrideNode: %v", err)
+	}
+	if boot.API.Host != "0.0.0.0" || boot.API.Port != 8080 {
+		t.Errorf("api = %s:%d, want the file's values", boot.API.Host, boot.API.Port)
+	}
+	if len(boot.Node.Roles) != 1 || boot.Node.Roles[0] != "seats" {
+		t.Errorf("roles = %v, want the file's", boot.Node.Roles)
+	}
+}
+
+// AN UNKNOWN ROLE IS REJECTED, not dropped. `-roles seat` would otherwise
+// produce a node that runs nothing and reports itself healthy.
+func TestBadRunOverridesAreRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"a misspelled role", []string{"-roles", "seat"}},
+		{"a role list of only separators", []string{"-roles", " , "}},
+		{"a port above the range", []string{"-api-port", "70000"}},
+		{"a negative port", []string{"-api-port", "-2"}},
+	} {
+		boot := &config.Bootstrap{}
+		fs, roles, host, port := parseOverrides(t, tc.args)
+		if err := overrideNode(boot, fs, roles, host, port); err == nil {
+			t.Errorf("%s was accepted", tc.name)
+		}
+	}
+}
+
+// parseOverrides builds the flag set runEngine builds, so the tests exercise
+// the same "was this flag given" logic the command does.
+func parseOverrides(t *testing.T, args []string) (*flag.FlagSet, string, string, int) {
+	t.Helper()
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	roles := fs.String("roles", "", "")
+	host := fs.String("api-host", "", "")
+	port := fs.Int("api-port", -1, "")
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse %v: %v", args, err)
+	}
+	return fs, *roles, *host, *port
 }

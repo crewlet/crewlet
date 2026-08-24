@@ -259,11 +259,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// SET BEFORE the node, because the node is handed this exact value —
 	// two constructions of it would be two places to disagree about what
 	// this node does.
-	e.profile = placement.NodeProfile{
-		ID:     nodeID,
-		Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
-		Labels: opts.Bootstrap.Node.Labels,
-	}
+	// THROUGH THE BOOTSTRAP'S OWN ACCESSOR, not a second construction of
+	// the same thing: it parses the roles with the validator that already
+	// refused an unknown one at load, and it is what the fleet view reads
+	// a peer's presence row back through.
+	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	n, err := node.New(node.Config{
 		Queue: backends.Queue,
 		Coord: backends.Coord,

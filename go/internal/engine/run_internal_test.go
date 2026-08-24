@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -26,11 +27,11 @@ func TestAnEmptyRoleListMeansEveryRole(t *testing.T) {
 	// Reading it as "no roles" produces a node that claims no seats, runs
 	// no workers and hears no webhook — a process that starts cleanly and
 	// does nothing at all.
-	got := nodeRoles(nil)
+	got := profileFor(t, nil).Roles
 	if !got.Equal(placement.DefaultRoles()) {
 		t.Errorf("roles = %v, want every role", got)
 	}
-	if !nodeRoles([]string{}).Equal(placement.DefaultRoles()) {
+	if !profileFor(t, []string{}).Roles.Equal(placement.DefaultRoles()) {
 		t.Error("an empty slice is not the same as nil here, and must be")
 	}
 }
@@ -39,13 +40,21 @@ func TestConfiguredRolesAreTheOnesTaken(t *testing.T) {
 	t.Parallel()
 	// The counterfactual: "everything" is the default only when nothing is
 	// named, and a node told to run one role must not quietly run three.
-	got := nodeRoles([]string{string(placement.RoleIngress)})
+	got := profileFor(t, []string{string(placement.RoleIngress)}).Roles
 	if !got.Has(placement.RoleIngress) {
 		t.Error("the configured role was not taken")
 	}
 	if got.Has(placement.RoleSeats) || got.Has(placement.RoleWorkers) {
-		t.Errorf("roles = %v: a node configured for ingress alone took more", got)
+		t.Errorf("roles = %v, want only ingress", got)
 	}
+}
+
+// profileFor builds a node profile the way the engine does — through the
+// bootstrap's own accessor, which is the only parse of node.roles there is.
+func profileFor(t *testing.T, roles []string) placement.NodeProfile {
+	t.Helper()
+	node := config.Node{Roles: roles}
+	return node.Profile("n1")
 }
 
 // engineOn wires just enough engine for the park and pause hooks: they reach

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // THE FLEET SINGLETONS, and the one gate they all pass through.
@@ -56,18 +55,3 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 // healthy node — and the pass's own "skipped this tick" path is already the
 // right behaviour.
 func refuseDuty(context.Context) (bool, error) { return false, nil }
-
-// nodeRoles resolves the operator's role names, defaulting to every role.
-//
-// THE EMPTY SET MEANS EVERY ROLE, which is what makes a single-node
-// deployment work with no `node:` block at all — see placement.RoleSet.
-func nodeRoles(names []string) placement.RoleSet {
-	if len(names) == 0 {
-		return placement.DefaultRoles()
-	}
-	roles := make([]placement.NodeRole, 0, len(names))
-	for _, name := range names {
-		roles = append(roles, placement.NodeRole(name))
-	}
-	return placement.Roles(roles...)
-}

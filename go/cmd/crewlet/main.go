@@ -35,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/version"
 )
@@ -100,6 +101,7 @@ func usage(w io.Writer) {
 
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
+                              -roles ingress|seats|workers narrows what this node does
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
@@ -203,15 +205,35 @@ func runEngine(args []string, stderr io.Writer) error {
 	cfg := addConfigFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	logFormat := fs.String("log-format", "text", "log format: text or json")
+	debug := fs.Bool("debug", false, "shorthand for -log-level debug")
+	roles := fs.String("roles", "",
+		"what this node runs, overriding node.roles: ingress, seats, workers")
+	apiHost := fs.String("api-host", "", "bind address, overriding api.host")
+	apiPort := fs.Int("api-port", -1,
+		"bind port, overriding api.port; 0 serves no HTTP at all")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	logging.Configure(logging.ParseLevel(*logLevel), logging.ParseFormat(*logFormat), stderr)
+	level := logging.ParseLevel(*logLevel)
+	if *debug {
+		// The SHORTHAND WINS, because writing both is an operator asking
+		// for debug in the loudest way available to them.
+		level = slog.LevelDebug
+	}
+	logging.Configure(level, logging.ParseFormat(*logFormat), stderr)
 	log := logging.Get("cli")
 
 	boot, company, err := cfg.load()
 	if err != nil {
+		return err
+	}
+	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
+	// validation failure names the file's own value rather than one the
+	// command line put there. Each is applied only when it was actually
+	// given: an unset -api-port is not "port 0", which would serve no
+	// HTTP at all and make every integration go deaf.
+	if err := overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
 		return err
 	}
 
@@ -598,4 +620,58 @@ func splitSubject(args []string) (string, []string) {
 		return args[0], args[1:]
 	}
 	return "", args
+}
+
+// overrideNode applies the run flags that override Tier A.
+//
+// # Why these three and not a general mechanism
+//
+// They are the fields whose right value depends on WHERE the process is
+// running rather than on what the company is: which job this node does in a
+// fleet, and where its HTTP surface binds. Everything else in Tier A is a
+// property of the deployment that belongs in the file, where it can be
+// reviewed — a flag for each would be a second configuration surface with no
+// history and no validation story.
+func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
+	roles, apiHost string, apiPort int,
+) error {
+	if isFlagSet(fs, "roles") {
+		names := splitRoles(roles)
+		if len(names) == 0 {
+			return errors.New("-roles was given with no role names")
+		}
+		// THROUGH THE SAME PARSER the file goes through, which fails
+		// CLOSED: an unknown name is an error rather than a skipped
+		// entry, because a typo like `-roles seat` would otherwise
+		// produce a node that runs nothing and reports itself healthy.
+		// The flag is applied after the file has loaded, so this is the
+		// only thing that validates it.
+		if _, err := placement.ParseRoles(names); err != nil {
+			return fmt.Errorf("-roles: %w", err)
+		}
+		boot.Node.Roles = names
+	}
+	if isFlagSet(fs, "api-host") {
+		boot.API.Host = apiHost
+	}
+	if isFlagSet(fs, "api-port") {
+		if apiPort < 0 || apiPort > 65535 {
+			return fmt.Errorf("-api-port must be 0 (no HTTP surface) or "+
+				"a port 1..65535, got %d", apiPort)
+		}
+		boot.API.Port = apiPort
+	}
+	return nil
+}
+
+// splitRoles reads a comma-separated role list, ignoring blank entries so a
+// trailing comma is not a role named "".
+func splitRoles(value string) []string {
+	var out []string
+	for _, name := range strings.Split(value, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }

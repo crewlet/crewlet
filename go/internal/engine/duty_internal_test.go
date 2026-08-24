@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -47,7 +48,7 @@ func TestALoneWorkerNodeGetsNoDutyFunctionAtAll(t *testing.T) {
 // existing deployment into one that sweeps nothing.
 func TestAnUnconfiguredNodeRunsWorkerDuties(t *testing.T) {
 	t.Parallel()
-	e := &Engine{profile: placement.NodeProfile{ID: "n1", Roles: nodeRoles(nil)}}
+	e := &Engine{profile: (&config.Node{}).Profile("n1")}
 	if !e.profile.RunsWorkers() {
 		t.Fatal("a node that declared no roles does not run worker duties")
 	}
@@ -68,7 +69,7 @@ func TestDeclaredRolesAreResolvedAsWritten(t *testing.T) {
 		{names: []string{"ingress"}, ingress: true},
 		{names: []string{"seats", "ingress"}, seats: true, ingress: true},
 	} {
-		p := placement.NodeProfile{ID: "n1", Roles: nodeRoles(tc.names)}
+		p := (&config.Node{Roles: tc.names}).Profile("n1")
 		if p.RunsSeats() != tc.seats || p.RunsWorkers() != tc.workers ||
 			p.RunsIngress() != tc.ingress {
 			t.Errorf("%v: seats=%v workers=%v ingress=%v, want %v/%v/%v",

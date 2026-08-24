@@ -52,22 +52,25 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 ## `crewlet run`
 
 ```
-crewlet run [config] [--debug] [--api-port PORT] [--api-host HOST]
-            [--roles ROLE[,ROLE...]]
-            [--import-company PATH]
-            [--import-confluence [PATH]] [--update-confluence]
-            [--create-confluence-space] [--prune-confluence]
-            [--import-plane [PATH]] [--update-plane] [--prune-plane]
+crewlet run [-config PATH] [-company PATH] [-debug]
+            [-log-level LEVEL] [-log-format FORMAT]
+            [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
 Reads Tier A bootstrap (`./config.yaml` by default) and starts the agent engine. Tier B is read from the `company_config` PostgreSQL table — if no active revision exists, the engine boots in the **unconfigured** state with the API still serving so an operator can bootstrap via `crewlet config import` or `PUT /config`. See [Configuration concept doc](../concepts/configuration.md).
 
 | Flag | Description |
 |------|-------------|
-| `--debug` | Enable DEBUG-level logging |
-| `--api-port PORT` | Start an embedded API server on this port (for webhooks). Overrides `api.port` in the bootstrap config. |
-| `--api-host HOST` | Bind host for the API server. Overrides `api.host` in the bootstrap config. |
-| `--roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is rejected rather than dropped. See [Running a Fleet](../guides/fleet.md). |
+| `-config PATH` | Tier A: this node's broker, store and API (default `./config.yaml`) |
+| `-company PATH` | Tier B **seed**: imported into the store when the store does not already hold it. A running node serves the store, not this file. |
+| `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
+| `-log-format FORMAT` | `text` (default) or `json` |
+| `-debug` | Shorthand for `-log-level debug`; wins if both are given |
+| `-api-host HOST` | Bind address, overriding `api.host` |
+| `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
+
+The three overrides are the fields whose right value depends on *where the process is running* rather than on what the company is. Everything else in Tier A belongs in the file, where it can be reviewed.
 | `--import-company PATH` | Before booting, import the Tier B company YAML at `PATH` as the first revision **if no active revision exists** — a one-command bootstrap (`crewlet run config.yaml --import-company company.yaml`). Idempotent: a no-op once a revision is active (use `crewlet config import --force` to overwrite). The file's embedding dimensions size the pgvector columns on first migrate. A missing/invalid file aborts before any DB work. |
 | `--import-confluence [PATH]` | Before booting the engine, run the same publish as `crewlet confluence import` against `PATH` (defaults to `examples/` when given without a value; walked recursively). Publishes both [Tool Skills](../concepts/tool-skills.md) and [knowledge docs](../concepts/knowledge-system.md#publishing-knowledge-docs), routed by frontmatter. Requires `--import-company`: the Confluence credentials come from the Tier B company YAML's `confluence:` block, not the Tier A bootstrap. The import runs **before** the Tier A bootstrap is loaded — it depends only on `--import-company`, so it publishes even when the positional `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to actually start afterward). Failures abort engine start. Mutually exclusive with `--import-plane`. |
 | `--update-confluence` | With `--import-confluence`: overwrite existing pages instead of skipping them. |
