@@ -2,104 +2,92 @@
 
 ## Prerequisites
 
-- **Python 3.12+**
-- **[uv](https://docs.astral.sh/uv/)** — used to run MCP servers via `uvx` (and the easiest way to install Crewlet from source)
-- **Docker** — for the local Apache Pulsar + PostgreSQL stack (and the optional local Plane / GitLab profiles)
+**None, to run the engine.** Crewlet is one static binary with no runtime to
+install: it embeds its event stream (a NATS JetStream server) and its database
+is a local file it creates. There is no broker to operate and nothing to point
+a DSN at.
 
-## Install from PyPI
+Two things are worth having anyway, for what runs *around* it:
 
-```bash
-pip install crewlet
-```
+- **[uv](https://docs.astral.sh/uv/)** — many MCP servers are launched with
+  `uvx`, so a company whose roles use one needs it on the engine's PATH.
+- **Docker** — only for the local integration loops (Plane, GitLab,
+  Mattermost) and for the container mode of the
+  [code sandbox](../concepts/code-sandbox.md).
 
-Crewlet's optional dependencies are split into extras — install the ones your
-deployment uses:
-
-| Extra | Pulls in | Needed for |
-|---|---|---|
-| `postgresql` | `asyncpg` | Database-backed operation (the default): the per-agent diary vector store, the episodic store, token tracking, the TimescaleDB event store, and versioned company config |
-| `api` | `starlette`, `uvicorn` | The REST API + dashboard + webhook receiver (embedded or standalone) |
-| `sandbox` | `e2b` | The [code sandbox](../concepts/code-sandbox.md) — lets sandbox-enabled roles author code with a coding agent in an isolated E2B sandbox |
-| `forge` | `pyjwt[crypto]` | Verifying Atlassian **Forge** webhook signatures (Jira/Confluence Cloud) |
-| `all` | everything above | Kitchen sink |
+## Install
 
 ```bash
-pip install "crewlet[postgresql,api]"     # the typical minimum
-pip install "crewlet[all]"                # everything
+go install github.com/crewlet/crewlet/cmd/crewlet@latest
 ```
 
-## Install from Source
+Or take a signed release binary — every tag publishes archives for linux,
+macOS and Windows on amd64 and arm64, plus a `checksums.txt` with a keyless
+[Sigstore](https://www.sigstore.dev/) signature beside it:
+
+```bash
+# from https://github.com/crewlet/crewlet/releases
+tar xzf crewlet_<version>_<os>_<arch>.tar.gz
+
+cosign verify-blob checksums.txt \
+  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/crewlet/crewlet/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum -c checksums.txt --ignore-missing
+```
+
+Or run the container image, `ghcr.io/crewlet/crewlet` — a Debian userland
+rather than a distroless one, because the engine spawns process trees (stdio
+MCP servers, and the local sandbox's coding agent).
+
+A binary from `go install` reports its module version and one from a release
+reports its tag; neither ever claims to be something it is not.
+
+## Install from source
 
 ```bash
 git clone https://github.com/crewlet/crewlet.git
 cd crewlet
-uv sync --all-extras
+go build ./cmd/crewlet
 ```
 
-This installs Crewlet with all extras plus dev tools (pytest, ruff). Prefix
-commands with `uv run` (e.g. `uv run crewlet --version`) or activate the
-`.venv` it creates.
-
-## Install uv
-
-uv is required at runtime to launch stdio MCP servers via `uvx` (e.g. the
-Plane MCP server), and recommended for source installs:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+That is the whole setup — see [CONTRIBUTING.md](https://github.com/crewlet/crewlet/blob/main/CONTRIBUTING.md)
+for the test and lint commands.
 
 ## Infrastructure
 
-Crewlet requires two services:
+**The engine needs none.** `crewlet run` in a directory with a config is a
+working company:
 
-- **Apache Pulsar** — the persistent event queue every subsystem communicates
-  through.
-- **PostgreSQL with the TimescaleDB + pgvector extensions** — one database
-  holds operational state, the per-agent diary vector store, the episodic
-  store, the versioned company config, and the event store.
+- the **event stream** is a JetStream server inside the process. A deployment
+  that outgrows one node points the same config slot at an external NATS or
+  an Apache Pulsar cluster instead — see [Fleet](../guides/fleet.md).
+- the **store** is one local file this process owns *exclusively*. Not a
+  shared database, and no DSN: two engines pointed at one file corrupt it.
+  Coordination between nodes goes through a separate KV slot, never the file.
 
-### Docker Compose (recommended)
+### The compose file is for the integrations
 
-The included `docker-compose.yml` provides both, plus web UIs:
-
-```bash
-cp .env.example .env    # copy default env vars (first time only)
-docker compose up -d    # start Pulsar + PostgreSQL (+ UIs)
-docker compose down     # stop and remove containers
-```
-
-| Service | Port | Details |
-|---------|------|---------|
-| Pulsar | 6650, 8080 | `apachepulsar/pulsar` image, standalone mode. 6650 = broker binary protocol (the engine connects here); 8080 = admin/REST |
-| Dekaf (Pulsar UI) | 8090 | Pulsar web UI — topics, subscriptions, backlog, message browse |
-| PostgreSQL | 5432 | TimescaleDB image — TimescaleDB + pgvector preloaded. User/pass: `crewlet/crewlet` |
-| pgweb | 8150 | PostgreSQL web UI, auto-connected |
-
-Pulsar runs in standalone mode (`bin/pulsar standalone --no-functions-worker
---no-stream-storage`). The web UI is
-[Dekaf](https://pulsar.apache.org/docs/next/administration-dekaf-ui/) at
-<http://localhost:8090> (auto-wired to the broker; Apache-2.0, no account
-needed). The CLI works too, e.g.:
-
-```bash
-docker compose exec pulsar bin/pulsar-admin topics list public/default
-```
-
-Optional **profiles** in the same compose file bring up local instances of
-the bigger integrations for end-to-end testing (none start by default):
+`docker-compose.yml` in a repo checkout starts **nothing by default** —
+every service in it is behind a profile, because none of them is the engine:
 
 ```bash
 docker compose --profile plane up -d              # self-hosted Plane fork (tracker + knowledge base)
 docker compose --profile gitlab up -d             # local GitLab (code host)
 docker compose --profile mattermost up -d --wait  # self-hosted Mattermost (chat)
+docker compose --profile pulsar up -d             # Pulsar + Dekaf, for the external-stream backend
 ```
 
-Each pairs with a bootstrap script under `scripts/` that seeds the instance
-and provisions the agent seats. See
+Each of the three integrations pairs with a bootstrap script under `scripts/`
+that seeds the instance and provisions the agent seats. See
 [Plane § Local testing](../integrations/plane.md#local-testing),
 [GitLab § Local testing](../integrations/gitlab.md#local-testing) and
 [Mattermost § Local testing](../integrations/mattermost.md#local-testing).
+
+The `pulsar` profile is for developing against the external stream backend,
+and for running its conformance suite locally — that suite skips without
+`CREWLET_TEST_PULSAR_URL`, and skipping is not passing. Dekaf, the web UI the
+Pulsar docs recommend, comes up with it on <http://localhost:8090>.
 
 Running any of these on a **remote host** rather than your own machine? Each
 one has to be told the address browsers reach it on — `MATTERMOST_PUBLIC_URL`
@@ -112,15 +100,6 @@ URL](../integrations/mattermost.md#the-site-url) explains why.
 (`--wait` is safe for the Mattermost profile — every service there has a
 healthcheck. Do not add it to the Plane profile: its migrator is a one-shot
 job whose clean exit `--wait` treats as a failure.)
-
-### Bring your own infrastructure
-
-Any reachable Pulsar cluster and PostgreSQL server work — point the Tier A
-bootstrap config at them (`providers.queue.url`, `providers.database.dsn`).
-The PostgreSQL server must have the TimescaleDB and pgvector extensions
-available; migrations run automatically at engine start. To keep Crewlet's
-topics off a shared Pulsar cluster's defaults, or to authenticate against the
-broker, see [Deployment](../guides/deployment.md).
 
 ## Verify Installation
 
