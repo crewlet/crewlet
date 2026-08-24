@@ -97,11 +97,27 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		"a GitLab token permitted to create service accounts; empty reads GITLAB_ADMIN_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook")
+	rotate := fs.Bool("rotate", false,
+		"mint a fresh token for every seat, including seats whose current "+
+			"one still works (the engine has to be restarted after)")
+	decommission := fs.Bool("decommission", false,
+		"delete managed service accounts whose seats have left the config")
+	expiryDays := fs.Int("token-expiry-days", 0,
+		"lifetime for minted tokens; 0 sends none and lets the instance "+
+			"policy decide")
 	dryRun := fs.Bool("dry-run", false,
 		"print what the run would do and touch nothing")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// PASSED ONLY WHEN THE OPERATOR TYPED IT, so the flag's default
+	// cannot be told from a deliberate zero.
+	var expiry *int
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "token-expiry-days" {
+			expiry = expiryDays
+		}
+	})
 	tail := fs.Args()
 	if companyPath == "" && len(tail) == 1 {
 		companyPath, tail = tail[0], nil
@@ -109,8 +125,12 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	if companyPath == "" || len(tail) > 0 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet gitlab provision <company.yaml> "+
-				"[-secret-store|-env-file PATH|-print] [-dry-run]")
+				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
+				"[-rotate] [-decommission] [-token-expiry-days N] [-dry-run]")
 		return errors.New("name exactly one company document")
+	}
+	if expiry != nil && *expiry < 0 {
+		return errors.New("-token-expiry-days must not be negative")
 	}
 
 	company, err := config.LoadCompany(companyPath)
@@ -170,6 +190,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
 		WebhookBase:   *publicURL,
 		SigningSecret: env.Value(cfg.SigningSecret),
+		Rotate:        *rotate, Decommission: *decommission, ExpiryDays: expiry,
 	})
 	if err != nil {
 		return err
@@ -206,18 +227,34 @@ func printResult(w io.Writer, res *gitlab.Result, where string) {
 			len(res.Created), strings.Join(res.Created, ", "))
 	}
 	if len(res.Rotated) > 0 {
-		// SAID PLAINLY, because it is the surprising part: a personal
-		// access token's value is shown once, so there is no
-		// already-correct state and every run rotates.
-		fmt.Fprintf(w, "Minted a fresh token for %d seat(s): %s\n"+
-			"  (every run rotates — a token's value is returned once and "+
-			"cannot be read back)\n",
+		fmt.Fprintf(w, "Minted a token for %d seat(s): %s\n",
 			len(res.Rotated), strings.Join(res.Rotated, ", "))
+	}
+	printKept(w, res.Kept)
+	if len(res.Decommissioned) > 0 {
+		fmt.Fprintf(w, "Deleted %d account(s) whose seats have left: %s\n",
+			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
 	}
 	if res.Hooked != "" {
 		fmt.Fprintf(w, "Webhook registered at %s\n", res.Hooked)
 	}
 	printNotes(w, res.Notes)
+}
+
+// printKept reports the seats a run deliberately did not touch.
+//
+// SAID OUT LOUD, because it is the successful outcome of a re-run: a report
+// that mentioned only what changed would read as a run that did nothing,
+// and the operator's next move would be to reach for -rotate — which is
+// exactly the outage this behaviour exists to prevent.
+func printKept(w io.Writer, kept []string) {
+	if len(kept) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
+		"and rotating it would revoke what the running engine is using: %s\n"+
+		"  (pass -rotate to mint fresh ones, and restart the engine after)\n",
+		len(kept), strings.Join(kept, ", "))
 }
 
 func printNotes(w io.Writer, notes []string) {
@@ -257,6 +294,9 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	adminToken := fs.String("admin-token", "",
 		"a Mattermost token for a system administrator; empty reads MATTERMOST_ADMIN_TOKEN")
+	rotate := fs.Bool("rotate", false,
+		"mint a fresh token for every bot, including bots whose current "+
+			"one still works (the engine has to be restarted after)")
 	dryRun := fs.Bool("dry-run", false,
 		"print what the run would do and touch nothing")
 	if err := fs.Parse(args); err != nil {
@@ -269,7 +309,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	if companyPath == "" || len(tail) > 0 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost provision <company.yaml> "+
-				"[-secret-store|-env-file PATH|-print] [-dry-run]")
+				"[-secret-store|-env-file PATH|-print] [-rotate] [-dry-run]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -324,6 +364,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 
 	res, err := mattermost.Reconcile(ctx, mattermost.Options{
 		Client: client, Config: cfg, Org: organization, Plan: plan, Sink: sink,
+		Rotate: *rotate,
 	})
 	if err != nil {
 		return err
@@ -340,11 +381,10 @@ func printChatResult(w io.Writer, res *mattermost.Result, where string) {
 			len(res.Created), strings.Join(res.Created, ", "))
 	}
 	if len(res.Rotated) > 0 {
-		fmt.Fprintf(w, "Minted a fresh token for %d bot(s): %s\n"+
-			"  (every run rotates — a token's value is returned once and "+
-			"cannot be read back)\n",
+		fmt.Fprintf(w, "Minted a token for %d bot(s): %s\n",
 			len(res.Rotated), strings.Join(res.Rotated, ", "))
 	}
+	printKept(w, res.Kept)
 	// THE CHANNELS ARE THE PART TO CHECK. A bot receives only what its
 	// channels deliver, so this line is the difference between an agent
 	// that wakes and one that never does.
@@ -495,15 +535,7 @@ func printTrackerResult(w io.Writer, res *plane.Result, where string) {
 		fmt.Fprintf(w, "Minted a token for %d seat(s): %s\n",
 			len(res.Rotated), strings.Join(res.Rotated, ", "))
 	}
-	if len(res.Kept) > 0 {
-		// SAID OUT LOUD, because it is the successful outcome of a
-		// re-run and a silent report reads as a run that did nothing.
-		fmt.Fprintf(w, "Left %d seat(s) alone — their credential still "+
-			"works and rotating it would revoke what the running engine "+
-			"is using: %s\n  (pass -rotate to mint fresh ones, and restart "+
-			"the engine after)\n",
-			len(res.Kept), strings.Join(res.Kept, ", "))
-	}
+	printKept(w, res.Kept)
 	if len(res.Decommissioned) > 0 {
 		fmt.Fprintf(w, "Deleted %d account(s) whose seats have left: %s\n",
 			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))

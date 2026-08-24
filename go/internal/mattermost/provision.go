@@ -136,37 +136,65 @@ func (c *Client) CreateBot(ctx context.Context, username, displayName string) (B
 // Its value is returned once and never again, which is why the sink is
 // written through: between here and the record there is a window where the
 // only copy of a live credential is in this process's memory.
-func (c *Client) CreateAccessToken(ctx context.Context, userID, description string) (string, error) {
-	var out struct {
-		Token string `json:"token"`
-		ID    string `json:"id"`
-	}
+func (c *Client) CreateAccessToken(ctx context.Context, userID, description string) (Token, error) {
+	var out Token
 	_, err := c.request(ctx, http.MethodPost, "/users/"+userID+"/tokens",
 		map[string]string{"description": description}, &out, false)
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
-	if out.Token == "" {
-		return "", fmt.Errorf("mattermost: the server minted a token for %s and "+
+	if out.Value == "" {
+		return Token{}, fmt.Errorf("mattermost: the server minted a token for %s and "+
 			"returned no value; it exists and cannot be recovered — revoke it "+
 			"in the account's settings", userID)
 	}
-	return out.Token, nil
+	return out, nil
 }
 
-// RevokeTokens removes every access token on an account, for the rollback.
-func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
-	var tokens []struct {
-		ID string `json:"id"`
+// Token is a personal access token as the list endpoint serves it.
+//
+// Never the value: the server returns that from the mint call alone. There
+// is no expiry field — Mattermost personal access tokens do not expire, so
+// a token that exists and is not revoked is a token that works.
+type Token struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	// Value is the plaintext, present on a mint response only.
+	Value string `json:"token"`
+}
+
+// Tokens lists an account's access tokens.
+func (c *Client) Tokens(ctx context.Context, userID string) ([]Token, error) {
+	var tokens []Token
+	_, err := c.request(ctx, http.MethodGet,
+		"/users/"+userID+"/tokens", nil, &tokens, true)
+	return tokens, err
+}
+
+// RevokeToken removes one access token.
+func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
+	_, err := c.request(ctx, http.MethodPost, "/users/tokens/revoke",
+		map[string]string{"token_id": tokenID}, nil, false)
+	if isStatus(err, http.StatusNotFound) {
+		return nil
 	}
-	if _, err := c.request(ctx, http.MethodGet,
-		"/users/"+userID+"/tokens", nil, &tokens, true); err != nil {
+	return err
+}
+
+// RevokeTokens removes every access token on an account.
+//
+// THE ROLLBACK PATH FOR A BOT THIS RUN CREATED, and only that: nothing else
+// has ever minted on it, so taking everything takes exactly what this run
+// caused. On a bot that already existed the rollback revokes by id instead —
+// sweeping it would take an administrator's own token with no way to tell.
+func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
+	tokens, err := c.Tokens(ctx, userID)
+	if err != nil {
 		return err
 	}
 	var stuck []string
 	for _, t := range tokens {
-		if _, err := c.request(ctx, http.MethodPost, "/users/tokens/revoke",
-			map[string]string{"token_id": t.ID}, nil, false); err != nil {
+		if err := c.RevokeToken(ctx, t.ID); err != nil {
 			stuck = append(stuck, t.ID)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -236,35 +237,65 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				seat.Handle, seat.TokenVar))
 			continue
 		}
-		why, err := credentialFor(ctx, opts, account, seat)
-		if err != nil {
-			return nil, rollback(ctx, opts, made, fmt.Errorf("plane: %s: %w", seat.Handle, err))
-		}
-		switch {
-		case why == credentialLive && !opts.Rotate:
-			res.Kept = append(res.Kept, seat.Handle)
-		default:
-			token, err := rotate(ctx, opts, account, seat)
-			if token != "" {
-				// rotate RETURNS WHAT IT MINTED even when it then
-				// failed, which is the only reason it returns an id at
-				// all — dropping it on the error path would leave a
-				// live credential nothing recorded and nothing revokes.
-				made = append(made, minted{handle: seat.Handle,
-					accountID: account.ID, tokenID: token})
-			}
+		verdict, held := provision.VerdictRejected, true
+		if !opts.Rotate {
+			verdict, held, err = credentialFor(ctx, opts, account, seat)
 			if err != nil {
 				return nil, rollback(ctx, opts, made,
 					fmt.Errorf("plane: %s: %w", seat.Handle, err))
 			}
-			res.Rotated = append(res.Rotated, seat.Handle)
-			if why == credentialUnrecorded {
-				res.Notes = append(res.Notes, fmt.Sprintf(
-					"%s: the account held a working token but %s did not, so "+
-						"a fresh one was minted and the old one retired — a "+
-						"running engine holding the old value has to be "+
-						"restarted", seat.Handle, seat.TokenVar))
-			}
+		}
+		switch verdict {
+		case provision.VerdictSelf:
+			res.Kept = append(res.Kept, seat.Handle)
+			continue
+		case provision.VerdictOther:
+			// A COPY-PASTED VARIABLE. Minting over it hands this seat a
+			// second identity while the other keeps authenticating as
+			// one account from two places, and nothing anywhere reports
+			// it.
+			return nil, rollback(ctx, opts, made, fmt.Errorf(
+				"plane: %s: %s holds a credential that authenticates as a "+
+					"different account — give this seat its own variable",
+				seat.Handle, seat.TokenVar))
+		case provision.VerdictUnknown:
+			// LEFT EXACTLY AS IT WAS. Re-minting on "cannot tell"
+			// destroys a credential that works; the recovery for one
+			// that does not is a -rotate away.
+			res.Kept = append(res.Kept, seat.Handle)
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: could not check whether the credential in %s still "+
+					"works, so it was left alone — re-run with -rotate if "+
+					"this seat is failing to authenticate",
+				seat.Handle, seat.TokenVar))
+			continue
+		}
+
+		token, retired, err := rotate(ctx, opts, account, seat)
+		if token != "" {
+			// rotate RETURNS WHAT IT MINTED even when it then failed,
+			// which is the only reason it returns an id at all —
+			// dropping it on the error path would leave a live
+			// credential nothing recorded and nothing revokes.
+			made = append(made, minted{handle: seat.Handle,
+				accountID: account.ID, tokenID: token})
+		}
+		if err != nil {
+			return nil, rollback(ctx, opts, made,
+				fmt.Errorf("plane: %s: %w", seat.Handle, err))
+		}
+		res.Rotated = append(res.Rotated, seat.Handle)
+		if !held && retired > 0 {
+			// THE SURPRISING CASE, and the only one that earns a note: the
+			// operator asked for nothing, but the variable was empty on
+			// this machine while a live token existed on the account — so
+			// a rotation happened anyway, and whatever is running with the
+			// old value is now failing to authenticate.
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: the account held a working token but %s did not, so a "+
+					"fresh one was minted and the old one retired — a running "+
+					"engine holding the old value has to be restarted",
+				seat.Handle, seat.TokenVar))
 		}
 	}
 	for _, project := range projects {
@@ -350,57 +381,52 @@ func seedCredential(ctx context.Context, opts Options, caps Capabilities, accoun
 	return nil
 }
 
-// credentialState is why a seat does or does not need a fresh token.
-type credentialState int
-
-const (
-	// credentialLive: the variable holds a value AND the account has a
-	// token that would still authenticate. Nothing to do.
-	credentialLive credentialState = iota
-	// credentialUnrecorded: the account has a working token but nothing
-	// wrote its value down. Minting is the only recovery — the value
-	// cannot be read back — and it costs a restart, so it is reported.
-	credentialUnrecorded
-	// credentialMissing: no usable token at the vendor, whatever the
-	// variable holds. Minting is unambiguously right.
-	credentialMissing
-)
-
-// credentialFor answers whether this seat already has a working
-// credential that something wrote down.
+// credentialFor decides whether this seat already has a working credential.
 //
-// BOTH HALVES, because either alone is wrong: a variable with a value whose
-// token was revoked leaves an agent 401ing for ever, and a live token whose
-// value nobody kept is a credential that cannot be deployed.
-func credentialFor(ctx context.Context, opts Options, account Account, seat provision.Seat) (credentialState, error) {
-	tokens, err := opts.Client.Tokens(ctx, account.ID)
-	if err != nil {
-		return credentialMissing, fmt.Errorf("list tokens: %w", err)
-	}
-	label := TokenLabel(seat.Handle)
-	usable := false
-	for _, token := range tokens {
-		if token.Label == label && token.Usable(now(opts)) {
-			usable = true
-			break
-		}
-	}
-	if !usable {
-		return credentialMissing, nil
-	}
-	held, err := opts.Sink.Holds(ctx, seat.TokenVar)
+// # It PROVES it, rather than inferring it
+//
+// The weaker test — "the variable has a value and the account has some
+// token" — reads as provisioned in exactly the case that matters: an
+// operator who restored an older env file has a stale value sitting beside
+// a live token that is not it, and the seat then authenticates with
+// nothing, on every run, forever. So the run takes the value the variable
+// actually holds and asks the instance who it is.
+func credentialFor(ctx context.Context, opts Options, account Account, seat provision.Seat) (provision.Verdict, bool, error) {
+	value, held, err := opts.Sink.Value(ctx, seat.TokenVar)
 	if err != nil {
 		// UNREADABLE IS NOT ABSENT. Treating it as absent would rotate
 		// every live credential in the company because a store blinked.
-		return credentialMissing, fmt.Errorf(
-			"cannot tell whether %s already holds a credential, and "+
-				"guessing would either rotate a live token or leave a seat "+
-				"with none: %w", seat.TokenVar, err)
+		return provision.VerdictUnknown, false, fmt.Errorf(
+			"cannot read %s, and guessing would either rotate a live token or "+
+				"leave a seat with none: %w", seat.TokenVar, err)
 	}
-	if held {
-		return credentialLive, nil
+	if !held {
+		return provision.VerdictRejected, false, nil
 	}
-	return credentialUnrecorded, nil
+	return opts.Client.verify(ctx, value, account.ID), true, nil
+}
+
+// verify asks the instance who a credential authenticates as.
+func (c *Client) verify(ctx context.Context, value, wantID string) provision.Verdict {
+	probe, err := NewClient(ClientOptions{
+		URL: c.base, Workspace: c.workspace, APIKey: value, HTTP: c.http,
+	})
+	if err != nil {
+		return provision.VerdictRejected
+	}
+	who, err := probe.Me(ctx)
+	switch {
+	case err == nil && strings.EqualFold(who.ID, wantID):
+		return provision.VerdictSelf
+	case err == nil:
+		return provision.VerdictOther
+	case Status(err) == http.StatusUnauthorized, Status(err) == http.StatusForbidden:
+		return provision.VerdictRejected
+	default:
+		// A 5xx or a dropped connection. NOT a rejection: re-minting on
+		// "cannot tell" destroys a credential that works.
+		return provision.VerdictUnknown
+	}
 }
 
 // now is the run's clock.
@@ -556,20 +582,21 @@ func ensureAccount(ctx context.Context, opts Options, accounts map[string]Accoun
 // The new token is written down BEFORE the old ones are retired, so a sink
 // failure leaves the seat authenticating with the credential it already had.
 // The other order leaves it with none.
-func rotate(ctx context.Context, opts Options, account Account, seat provision.Seat) (string, error) {
+func rotate(ctx context.Context, opts Options, account Account, seat provision.Seat) (string, int, error) {
 	label := TokenLabel(seat.Handle)
 	existing, err := opts.Client.Tokens(ctx, account.ID)
 	if err != nil {
-		return "", fmt.Errorf("list tokens: %w", err)
+		return "", 0, fmt.Errorf("list tokens: %w", err)
 	}
 	token, err := opts.Client.MintToken(ctx, account.ID, label, expiry(opts))
 	if err != nil {
-		return "", fmt.Errorf("mint token: %w", err)
+		return "", 0, fmt.Errorf("mint token: %w", err)
 	}
 	if err := opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
 		// The caller rolls back, which revokes the token just minted.
-		return token.ID, fmt.Errorf("record %s: %w", seat.TokenVar, err)
+		return token.ID, 0, fmt.Errorf("record %s: %w", seat.TokenVar, err)
 	}
+	retired := 0
 	// `existing` was read BEFORE the mint, so it cannot contain the token
 	// just minted — which is what makes revoking from it safe with no
 	// self-exclusion check.
@@ -587,10 +614,11 @@ func rotate(ctx context.Context, opts Options, account Account, seat provision.S
 			continue
 		}
 		if err := opts.Client.RevokeToken(ctx, account.ID, old.ID); err != nil {
-			return token.ID, fmt.Errorf("revoke the previous token: %w", err)
+			return token.ID, retired, fmt.Errorf("revoke the previous token: %w", err)
 		}
+		retired++
 	}
-	return token.ID, nil
+	return token.ID, retired, nil
 }
 
 // TokenLabel is the label this tool mints under.
@@ -819,7 +847,7 @@ func ensureWebhook(ctx context.Context, opts Options, made *[]minted) (string, [
 			return "", nil, fmt.Errorf("plane: update webhook: %w", err)
 		}
 		var notes []string
-		held, err := opts.Sink.Holds(ctx, secretVar)
+		_, held, err := opts.Sink.Value(ctx, secretVar)
 		if err != nil || !held {
 			// SAID ONLY WHEN IT MATTERS. A sink that already holds the
 			// secret needs no advice, and printing it every run trains

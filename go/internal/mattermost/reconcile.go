@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -16,6 +18,10 @@ import (
 type Result struct {
 	Created []string
 	Rotated []string
+	// Kept names the seats whose existing token was left alone — the
+	// SUCCESSFUL outcome of a re-run, said out loud because a silent
+	// report reads as a run that did nothing.
+	Kept []string
 	// Joined maps a seat to the channels it was added to, which is the
 	// part an operator most needs to see: a bot hears only what it has
 	// joined, so a seat with an empty list is one that will never wake.
@@ -36,14 +42,28 @@ type Options struct {
 
 	Plan *provision.Plan
 	Sink provision.TokenSink
+
+	// Rotate forces a fresh token for every bot, including bots whose
+	// current one still works.
+	//
+	// # Why it is a flag rather than what a run does
+	//
+	// Mattermost returns an access token's value once, so a provisioner
+	// cannot check that what it recorded last time still matches. The
+	// tempting answer is to mint every run — and that is an outage: the
+	// engine is running with the OLD value, and rotating revokes the
+	// credential every bot's websocket is currently authenticated with.
+	// An operator adding a tenth seat would take the other nine down,
+	// from a command whose whole promise is that it is safe to re-run.
+	Rotate bool
 }
 
 // Reconcile runs one pass.
 //
-// Like every provisioner here it MINTS EVERY TIME: an access token's value
-// is returned once, so there is no already-correct state to detect, and
-// pretending otherwise would leave an operator believing a token they cannot
-// read is still the one in their config.
+// A RE-RUN IS SAFE AND QUIET: a bot that exists is found rather than
+// re-created, a channel it is in is left alone, and a token that still
+// works is not replaced. See [Options.Rotate] for why the last of those is
+// the default rather than the flag.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Client == nil {
 		return nil, errors.New("mattermost: no client")
@@ -70,7 +90,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// its own — a channel that does not exist, a bot that joined nothing
 	// — and a snapshot taken now would silently drop every one of them.
 	res := &Result{Joined: map[string][]string{}}
-	minted := map[string]string{}
+	minted := map[string]mintedToken{}
 
 	for _, seat := range opts.Plan.Seats {
 		username := BotUsername(opts.Config.Provisioning, seat.Handle)
@@ -109,18 +129,73 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 					"or on the seat itself", seat.Handle))
 		}
 
-		token, err := opts.Client.CreateAccessToken(ctx, user.ID, "crewlet-"+seat.Handle)
+		created := slices.Contains(res.Created, seat.Handle)
+		verdict, held := provision.VerdictRejected, true
+		if !created && !opts.Rotate {
+			verdict, held, err = credentialFor(ctx, opts, user.ID, seat)
+			if err != nil {
+				return nil, rollback(ctx, opts, minted,
+					fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
+			}
+		}
+		switch verdict {
+		case provision.VerdictSelf:
+			res.Kept = append(res.Kept, seat.Handle)
+			continue
+		case provision.VerdictOther:
+			// A COPY-PASTED VARIABLE. Minting over it hands this seat a
+			// second identity while the other keeps authenticating as
+			// one account from two places, and nothing reports it.
+			return nil, rollback(ctx, opts, minted, fmt.Errorf(
+				"mattermost: %s: %s holds a token that authenticates as a "+
+					"different account — give this seat its own variable",
+				seat.Handle, seat.TokenVar))
+		case provision.VerdictUnknown:
+			// LEFT EXACTLY AS IT WAS. Re-minting on "cannot tell"
+			// destroys a token that works; the recovery for one that
+			// does not is a -rotate away.
+			res.Kept = append(res.Kept, seat.Handle)
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: could not check whether the token in %s still works, so "+
+					"it was left alone — re-run with -rotate if this seat is "+
+					"failing to authenticate", seat.Handle, seat.TokenVar))
+			continue
+		}
+
+		token, err := opts.Client.CreateAccessToken(ctx, user.ID, TokenDescription(seat.Handle))
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: mint token: %w", seat.Handle, err))
 		}
-		minted[seat.Handle] = user.ID
-		if err := opts.Sink.Record(ctx, seat.TokenVar, token); err != nil {
+		minted[seat.Handle] = mintedToken{
+			userID: user.ID, tokenID: token.ID, createdBot: created,
+		}
+		if err := opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: record %s: %w",
 					seat.Handle, seat.TokenVar, err))
 		}
 		res.Rotated = append(res.Rotated, seat.Handle)
+		if created {
+			continue
+		}
+		// RETIRED AFTER THE RECORD, and only this tool's own: an
+		// administrator may have minted a token on this bot by hand.
+		retired, err := retirePrevious(ctx, opts, user.ID, seat, token.ID)
+		if err != nil {
+			return nil, rollback(ctx, opts, minted,
+				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
+		}
+		if !held && retired > 0 {
+			// THE SURPRISING CASE, and the only one that earns a note:
+			// the operator asked for nothing, but the variable was empty
+			// on this machine while a live token existed on the account.
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: the bot held a working token but %s did not, so a fresh "+
+					"one was minted and the old one retired — a running engine "+
+					"holding the old value has to be restarted",
+				seat.Handle, seat.TokenVar))
+		}
 	}
 
 	if err := opts.Sink.Flush(ctx); err != nil {
@@ -128,6 +203,90 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	res.Notes = append(notesOf(opts.Plan), res.Notes...)
 	return res, nil
+}
+
+// mintedToken is one credential this run created, as its rollback needs it.
+type mintedToken struct {
+	userID  string
+	tokenID string
+	// createdBot says the bot is this run's, which decides HOW the
+	// rollback undoes it: everything on an account nothing else ever
+	// minted on, versus exactly the one token on one that already
+	// existed.
+	createdBot bool
+}
+
+// TokenDescription is the description this tool mints under.
+//
+// It is the ONLY thing distinguishing a token this tool owns from one an
+// administrator created by hand, and both the keep-or-mint decision and the
+// retire step key on it.
+func TokenDescription(handle string) string { return "crewlet-" + handle }
+
+// credentialFor decides whether this bot already has a working token.
+//
+// # It PROVES it, rather than inferring it
+//
+// The weaker test — "the variable has a value and the account has some
+// token" — reads as provisioned in exactly the case that matters: an
+// operator who restored an older env file has a stale value sitting beside
+// a live token that is not it, and the bot then authenticates with nothing,
+// on every run, forever. So the run takes the value the variable actually
+// holds and asks the server who it is.
+func credentialFor(ctx context.Context, opts Options, userID string, seat provision.Seat) (provision.Verdict, bool, error) {
+	value, held, err := opts.Sink.Value(ctx, seat.TokenVar)
+	if err != nil {
+		// UNREADABLE IS NOT ABSENT. Treating it as absent would rotate
+		// every live credential in the company because a store blinked.
+		return provision.VerdictUnknown, false, fmt.Errorf(
+			"cannot read %s, and guessing would either rotate a live token or "+
+				"leave a seat with none: %w", seat.TokenVar, err)
+	}
+	if !held {
+		return provision.VerdictRejected, false, nil
+	}
+	return opts.Client.verify(ctx, value, userID), true, nil
+}
+
+// verify asks the server who a token authenticates as.
+func (c *Client) verify(ctx context.Context, value, wantID string) provision.Verdict {
+	probe, err := NewClient(ClientOptions{URL: c.base, Token: value, HTTP: c.http})
+	if err != nil {
+		return provision.VerdictRejected
+	}
+	var who User
+	_, err = probe.request(ctx, http.MethodGet, "/users/me", nil, &who, true)
+	switch {
+	case err == nil && who.ID == wantID:
+		return provision.VerdictSelf
+	case err == nil:
+		return provision.VerdictOther
+	case isStatus(err, http.StatusUnauthorized), isStatus(err, http.StatusForbidden):
+		return provision.VerdictRejected
+	default:
+		// A 5xx or a dropped connection. NOT a rejection: re-minting on
+		// "cannot tell" destroys a token that works.
+		return provision.VerdictUnknown
+	}
+}
+
+// retirePrevious revokes this tool's earlier tokens on an existing bot.
+func retirePrevious(ctx context.Context, opts Options, userID string, seat provision.Seat, keep string) (int, error) {
+	tokens, err := opts.Client.Tokens(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("list tokens: %w", err)
+	}
+	retired := 0
+	for _, token := range tokens {
+		if token.ID == keep || token.Description != TokenDescription(seat.Handle) {
+			continue
+		}
+		if err := opts.Client.RevokeToken(ctx, token.ID); err != nil {
+			return retired, fmt.Errorf("revoke the previous token: %w", err)
+		}
+		retired++
+	}
+	return retired, nil
 }
 
 // joinChannels adds a bot to the company-wide channels plus its own.
@@ -186,7 +345,7 @@ func (o Options) noteMissingChannel(handle, name string) {
 }
 
 // rollback revokes what this run minted and clears what it recorded.
-func rollback(ctx context.Context, opts Options, minted map[string]string, cause error) error {
+func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, cause error) error {
 	if len(minted) == 0 {
 		return cause
 	}
@@ -195,8 +354,16 @@ func rollback(ctx context.Context, opts Options, minted map[string]string, cause
 	// live.
 	ctx = context.WithoutCancel(ctx)
 	var problems []string
-	for handle, userID := range minted {
-		if err := opts.Client.RevokeTokens(ctx, userID); err != nil {
+	for handle, m := range minted {
+		var err error
+		if m.createdBot {
+			// Nothing else has ever minted on a bot this run made, so
+			// taking everything takes exactly what this run caused.
+			err = opts.Client.RevokeTokens(ctx, m.userID)
+		} else {
+			err = opts.Client.RevokeToken(ctx, m.tokenID)
+		}
+		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", handle, err))
 		}
 	}

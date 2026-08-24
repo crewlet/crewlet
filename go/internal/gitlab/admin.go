@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The write half of the GitLab client: what a provisioning run needs and the
@@ -176,47 +177,118 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID, a
 	return err
 }
 
+// Token is a personal access token as the list endpoint serves it.
+//
+// Never the value: GitLab returns that from the mint call alone, so a run
+// that fails to persist what it minted cannot go back and read it.
+type Token struct {
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Revoked bool   `json:"revoked"`
+	Active  bool   `json:"active"`
+	// ExpiresAt is a DATE, not a timestamp — GitLab serves "2026-01-31".
+	//
+	// Read for the record rather than for a decision: whether a token
+	// still authenticates is answered by USING it, not by comparing this
+	// to a clock. A calendar check here would be a second opinion that
+	// can disagree with the instance — over a timezone, a grace period,
+	// or a token revoked before its date.
+	ExpiresAt Date `json:"expires_at"`
+	// Value is the plaintext, present on a mint response only.
+	Value string `json:"token"`
+}
+
+// Date is GitLab's bare `YYYY-MM-DD` expiry, which is not a timestamp and
+// does not unmarshal as one.
+//
+// Its own type rather than a string, because the only question anyone asks
+// of it is whether it has passed — and a string comparison would answer
+// that correctly right up until somebody compared it to a timestamp.
+type Date struct{ time.Time }
+
+// UnmarshalJSON accepts a date, a null, or an empty string. An expiry GitLab
+// did not set is the zero time, which reads as "never" — the same thing the
+// API means by a null here.
+func (d *Date) UnmarshalJSON(raw []byte) error {
+	var text *string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return err
+	}
+	if text == nil || strings.TrimSpace(*text) == "" {
+		d.Time = time.Time{}
+		return nil
+	}
+	parsed, err := time.Parse(time.DateOnly, strings.TrimSpace(*text))
+	if err != nil {
+		// UNPARSEABLE IS NEVER-EXPIRES rather than an error: the only
+		// consumer asks "has this passed", and refusing the whole
+		// listing over a format nobody anticipated would break a run
+		// that has nothing to do with expiry.
+		d.Time = time.Time{}
+		return nil
+	}
+	d.Time = parsed
+	return nil
+}
+
+// Tokens lists an account's personal access tokens.
+func (c *Client) Tokens(ctx context.Context, userID int) ([]Token, error) {
+	var tokens []Token
+	err := c.get(ctx, "/personal_access_tokens",
+		url.Values{"user_id": {strconv.Itoa(userID)}}, &tokens)
+	return tokens, err
+}
+
 // CreateToken mints a personal access token for a service account.
 //
 // The value is returned ONCE, by GitLab, and never again — which is why the
 // sink is written through rather than batched: between minting and recording
 // there is a window where the only copy of a live credential is in this
 // process's memory.
-func (c *Client) CreateToken(ctx context.Context, userID int, name string, scopes []string) (string, error) {
-	var out struct {
-		Token string `json:"token"`
+func (c *Client) CreateToken(ctx context.Context, userID int, name string, scopes []string, expiry time.Time) (Token, error) {
+	body := map[string]any{"name": name, "scopes": scopes}
+	if !expiry.IsZero() {
+		body["expires_at"] = expiry.UTC().Format(time.DateOnly)
 	}
+	var out Token
 	err := c.send(ctx, http.MethodPost,
-		"/users/"+strconv.Itoa(userID)+"/personal_access_tokens",
-		map[string]any{"name": name, "scopes": scopes}, &out)
+		"/users/"+strconv.Itoa(userID)+"/personal_access_tokens", body, &out)
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
-	if out.Token == "" {
-		return "", fmt.Errorf("gitlab: the instance minted a token for %s and "+
+	if out.Value == "" {
+		return Token{}, fmt.Errorf("gitlab: the instance minted a token for %s and "+
 			"returned no value; it exists and cannot be recovered — revoke it "+
 			"in the account's settings", name)
 	}
-	return out.Token, nil
+	return out, nil
+}
+
+// RevokeToken removes one token.
+func (c *Client) RevokeToken(ctx context.Context, tokenID int) error {
+	err := c.send(ctx, http.MethodDelete,
+		"/personal_access_tokens/"+strconv.Itoa(tokenID), nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // RevokeTokens removes every token on an account.
 //
-// THE ROLLBACK PATH. A run that cannot record what it minted revokes it, and
-// revoking by account rather than by id is deliberate: the id of a token
-// whose creation response was lost is exactly what is not available.
+// THE ROLLBACK PATH FOR AN ACCOUNT THIS RUN CREATED, and only that: nothing
+// else has ever minted on it, so taking everything is taking exactly what
+// this run caused. On an account that already existed the rollback revokes
+// by id instead — sweeping it would take an administrator's own token with
+// no way to tell that it had.
 func (c *Client) RevokeTokens(ctx context.Context, userID int) error {
-	var tokens []struct {
-		ID int `json:"id"`
-	}
-	if err := c.get(ctx, "/personal_access_tokens",
-		url.Values{"user_id": {strconv.Itoa(userID)}}, &tokens); err != nil {
+	tokens, err := c.Tokens(ctx, userID)
+	if err != nil {
 		return err
 	}
 	var failures []string
 	for _, t := range tokens {
-		if err := c.send(ctx, http.MethodDelete,
-			"/personal_access_tokens/"+strconv.Itoa(t.ID), nil, nil); err != nil {
+		if err := c.RevokeToken(ctx, t.ID); err != nil {
 			failures = append(failures, strconv.Itoa(t.ID))
 		}
 	}
@@ -226,6 +298,34 @@ func (c *Client) RevokeTokens(ctx context.Context, userID int) error {
 			userID, strings.Join(failures, ", "))
 	}
 	return nil
+}
+
+// GroupMembers lists a group's members.
+//
+// The enumeration decommission targets from: an account is "managed" only
+// if it is in the group this company provisions into, so a service account
+// somebody else made elsewhere on the instance is never a candidate.
+func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]User, error) {
+	var out []User
+	err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/members",
+		url.Values{"per_page": {"100"}}, &out)
+	return out, err
+}
+
+// DeleteServiceAccount removes a group service account.
+//
+// The group-scoped route rather than the instance-wide user delete, which
+// needs an instance admin — and which would happily remove a person.
+func (c *Client) DeleteServiceAccount(ctx context.Context, groupID, userID int) error {
+	err := c.send(ctx, http.MethodDelete,
+		"/groups/"+strconv.Itoa(groupID)+"/service_accounts/"+strconv.Itoa(userID),
+		nil, nil)
+	if isNotFound(err) {
+		// Unknown or already removed. Both are the state the caller
+		// asked for, and a re-run must not fail on the second.
+		return nil
+	}
+	return err
 }
 
 // Hook is a registered webhook.

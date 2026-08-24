@@ -52,23 +52,29 @@ type TokenSink interface {
 	// write-through one has nothing to do and says so.
 	Flush(ctx context.Context) error
 
-	// Holds reports whether this sink already carries a value for a
-	// variable.
+	// Value reads back what this sink carries for a variable.
 	//
 	// # It is what makes a re-run safe to run
 	//
-	// A vendor that serves a credential once — which is all of them — gives
-	// a provisioner no way to check that the value it recorded last time
-	// still matches. So the only alternative to asking this is to mint a
-	// fresh one every run, and that is an outage: the engine is running
-	// with the OLD value, and rotating it revokes the credential every
-	// agent is currently authenticating with. An operator adding one seat
-	// would take the other nine down.
+	// A vendor that serves a credential once — which is all of them —
+	// gives a provisioner no way to check that the value it recorded last
+	// time still matches. Without this the only option is to mint fresh
+	// every run, and that is an outage: the engine is running with the
+	// OLD value, and rotating it revokes the credential every agent is
+	// currently authenticating with. An operator adding one seat would
+	// take the other nine down.
 	//
-	// A sink that persists nothing answers false, which is correct rather
-	// than a degradation: nothing was kept, so the operator needs the
-	// value again.
-	Holds(ctx context.Context, name string) (bool, error)
+	// It returns the VALUE rather than a yes/no because the honest test
+	// is using the credential. "There is a value here and the account has
+	// some token" reads as provisioned in exactly the case that matters:
+	// an operator who restored an older env file has a stale value beside
+	// a live token that is not it, and the seat then authenticates with
+	// nothing.
+	//
+	// A sink that persists nothing answers not-held, which is correct
+	// rather than a degradation: nothing was kept, so the operator needs
+	// the value again.
+	Value(ctx context.Context, name string) (string, bool, error)
 
 	// Describe names where the values went, for the run's report. It is
 	// what tells an operator whether to go looking in a file or in the
@@ -112,6 +118,35 @@ func ReferencedVars(value string) []string {
 func SoleVar(value string) (string, bool) {
 	return envref.Whole(strings.TrimSpace(value))
 }
+
+// Verdict is what probing a recorded credential concluded.
+//
+// FOUR OUTCOMES, not two, because the two that are easy to merge are the
+// two that must not be: "the vendor refused this credential" and "I could
+// not reach the vendor" lead to opposite actions.
+type Verdict int
+
+const (
+	// VerdictUnknown: the probe could not reach a conclusion — a
+	// transport failure, a 5xx. The seat is LEFT ALONE and reported:
+	// re-minting on "cannot tell" destroys a credential that works, and
+	// the recovery for one that does not is one -rotate away.
+	VerdictUnknown Verdict = iota
+
+	// VerdictSelf: the value authenticates as this seat's own account.
+	// Nothing to do.
+	VerdictSelf
+
+	// VerdictRejected: the vendor refused it. Whatever is in the variable
+	// is not a credential, so minting is unambiguously right.
+	VerdictRejected
+
+	// VerdictOther: it authenticates as a DIFFERENT account. This is a
+	// copy-pasted variable, and minting over it would hand this seat a
+	// second identity while the other seat keeps authenticating as one
+	// account from two places. It stops the run.
+	VerdictOther
+)
 
 // Seat is one agent seat a provisioner has work to do for.
 //

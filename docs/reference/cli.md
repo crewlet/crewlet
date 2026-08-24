@@ -41,9 +41,9 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet plane import <company.yaml> [PATH]` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) (`trigger:` ⇒ skill in the Tool Skills project; otherwise ⇒ doc in its parent-directory project) |
 | `crewlet plane resync <company.yaml>` | Re-fetch the Tool Skills project and print loaded keys |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
-| `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. `-dry-run` reports without touching anything; a run that cannot record what it minted revokes it. |
+| `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
 | `crewlet slack provision <company.yaml> --base-url URL` | Create/update one Slack app per Slack-enabled agent via Slack's App Manifest APIs, run the OAuth installs, write tokens into `.env` or the [secret store](../concepts/secret-store.md) |
-| `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into `.env` or the [secret store](../concepts/secret-store.md) |
+| `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). A re-run leaves a working token alone; `-rotate` mints fresh ones. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits, a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
 | `crewlet --version` | Show the installed version |
 
@@ -581,30 +581,27 @@ Re-runs are idempotent (ledger-keyed; byte-identical manifests are skipped as `u
 ## `crewlet mattermost provision`
 
 ```
-crewlet mattermost provision my_company.yaml [--admin-token TOKEN]
-                                             [--secret-store] [--env-file PATH]
-                                             [--bootstrap PATH] [--dsn DSN]
-                                             [--handles a,b] [--dry-run]
-                                             [--decommission a,b]
+crewlet mattermost provision <company.yaml> [-admin-token TOKEN]
+                                           [-secret-store | -env-file PATH | -print]
+                                           [-rotate] [-dry-run]
 ```
 
-Creates (or updates) **one Mattermost bot account per Mattermost-enabled agent seat** — a role whose `integrations.mattermost.bot_token` is a whole-value `${VAR}` placeholder — adds it to the configured team and channels, and mints its personal access token into the exact `${VAR}` the YAML references: into `.env` by default, or the encrypted [secret store](../concepts/secret-store.md) with `--secret-store`.
+Creates (or updates) **one Mattermost bot account per Mattermost-enabled agent seat** — a role whose `mattermost.bot_token` is a whole-value `${VAR}` reference — adds it to the configured team and channels, and mints its personal access token into the exact `${VAR}` the YAML references.
 
-Unlike the Slack provisioner there is **no app manifest, no local ledger and no OAuth click**: Mattermost is its own directory, so a seat is found by looking up a deterministic username and the reconcile is stateless. The one manual prerequisite is a **system-admin personal access token** (`--admin-token`, or `$MATTERMOST_ADMIN_TOKEN`) — creating bot accounts and minting their tokens both require system-admin rights, and an admin must first enable personal access tokens in System Console → Integrations.
+Unlike the Slack provisioner there is **no app manifest, no local ledger and no OAuth click**: Mattermost is its own directory, so a seat is found by looking up a deterministic username and the reconcile is stateless. The one manual prerequisite is a **system-admin personal access token** (`-admin-token`, or `$MATTERMOST_ADMIN_TOKEN`) — creating bot accounts and minting their tokens both require system-admin rights, and an admin must first enable personal access tokens in System Console → Integrations.
 
-A preflight aborts before touching anything if the run cannot finish: the credential is not a system admin, the team does not exist, `ServiceSettings.EnableBotAccountCreation` or `ServiceSettings.EnableUserAccessTokens` is off (both default to false on a fresh install, and both fail *after* every bot has been created and joined), or the server's [Site URL](../integrations/mattermost.md#the-site-url) is a loopback address while the server is reached at a real one — which would silently cost every browser its live updates. A half-provisioned fleet is worse than a refusal. It also reports the server's active-**human**-user headroom; bot accounts are excluded from that cap, so agent seats do not consume it.
+**A bot hears only what it has joined**, so the channel list is not a convenience: a bot that exists, authenticates and is in no channel is an agent that never wakes, and the failure is silent on both sides. A channel that does not exist is a note rather than an abort — half a fleet joined and the run stopped is a worse state than every bot joined to the channels that do exist and a line saying which did not.
+
+**A plain re-run does not rotate a working token.** Mattermost returns an access token's value once, so minting every run would revoke the credential every bot's websocket is currently authenticated with — an operator adding a tenth seat would take the other nine down. A bot is left alone when the variable holding its token still has a value **and** the account still has a token under this tool's description (`crewlet-<handle>`). `-rotate` mints for every bot regardless, retiring the previous one after recording the new.
 
 | Flag | Description |
 |------|-------------|
-| `--admin-token TOKEN` | System-admin personal access token (default: `$MATTERMOST_ADMIN_TOKEN`). |
-| `--handles a,b` | Comma-separated agent handles to provision (default: all Mattermost-enabled seats). |
-| `--decommission a,b` | Disable these handles' bot accounts and revoke their tokens instead of provisioning. The account is disabled first (that is what stops the seat acting), then each token is revoked on its own, so one failure costs one token rather than the whole seat; anything left over is named in the outcome and exits non-zero. Accounts keep their history and can be re-enabled by a later run, which mints a fresh token. |
-| `--dry-run` | Print the plan (which seats would mint which vars); create and modify nothing. Applies to `--decommission` too. |
-| `--secret-store` | Write minted tokens into the encrypted [`secret_values`](../concepts/secret-store.md) table instead of an env file. Needs a Tier A keyring + DSN (`--bootstrap` / `--dsn`). |
-| `--env-file PATH` | The env file minted tokens are written to (default `.env`). Ignored with `--secret-store`. |
-| `--bootstrap PATH` / `--dsn DSN` | Tier A bootstrap YAML (default `./config.yaml`) supplying the DB DSN + keyring for `--secret-store`, or an explicit DSN override. |
+| `-admin-token` | System-admin personal access token. Falls back to `$MATTERMOST_ADMIN_TOKEN`. The bots' own tokens are what this run mints, so it cannot bootstrap itself from them. |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
+| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. **Restart the engine afterwards.** |
+| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. |
 
-Re-runs are idempotent and resumable: every step is find-or-create, a seat whose token var already carries a value is never re-minted (Mattermost returns a token's value exactly once), and one seat's failure is reported as `FAILED` while the rest still provision — the exit code is then non-zero. See [Mattermost integration](../integrations/mattermost.md#automated-setup-crewlet-mattermost-provision).
+A bot this run created is rolled back by revoking every token on it — nothing else has ever minted there. On a bot that already existed, only the token this run minted is revoked. See [Mattermost integration](../integrations/mattermost.md#automated-setup-crewlet-mattermost-provision).
 
 ---
 
@@ -710,27 +707,27 @@ Every mutation is undone when the run cannot finish: minted tokens are revoked, 
 ## `crewlet gitlab provision`
 
 ```
-crewlet gitlab provision <company.yaml> [--provision-token TOKEN]
-                                        [--mode group|instance]
-                                        [--webhook-url URL]
-                                        [--env-file PATH] [--print]
-                                        [--rotate] [--decommission-removed]
-                                        [--token-expiry-days N]
+crewlet gitlab provision <company.yaml> [-admin-token TOKEN]
+                                        [-secret-store | -env-file PATH | -print]
+                                        [-public-url URL]
+                                        [-rotate] [-decommission]
+                                        [-token-expiry-days N] [-dry-run]
 ```
 
-Idempotent reconcile from company config to GitLab state. For each **agent** seat that declares GitLab credentials (`mcp_env.gitlab`), it ensures a [service account](../integrations/gitlab.md#provisioning) exists (username `<username_prefix><handle>`), adds group/project membership, mints a per-agent PAT derived from the seat's own `${VAR}` references (skipping any var that already has a value — GitLab never returns a token after creation), and — when `--webhook-url` is passed — registers project (or group) webhooks. The positional argument is the Tier B company YAML; its `integrations.gitlab.provisioning` block supplies the group, access levels, and token scopes. Human seats are resolved, never created.
+Idempotent reconcile from company config to GitLab state. For each **agent** seat that declares a GitLab credential under `mcp_env.gitlab` as a whole `${VAR}` reference, it ensures a [service account](../integrations/gitlab.md#provisioning) exists (username `<username_prefix><handle>`), adds group and project membership, mints a personal access token into that variable, and — with `-public-url` — registers the group webhook at `<url>/webhooks/gitlab`. The positional argument is the Tier B company YAML; its `integrations.gitlab.provisioning` block supplies the group, access levels, and token scopes. Human seats are resolved, never created.
+
+**A plain re-run does not rotate a working token.** GitLab returns a personal access token's value once, so a provisioner cannot verify that what it recorded last time still matches — and minting every run is an outage, because the engine is running with the *old* value: an operator adding a tenth seat would revoke the nine credentials the other agents are authenticating with. A seat is left alone when the variable holding its token still has a value **and** the account still has a usable token under this tool's name (`crewlet-<handle>`), and both halves are checked because either alone is wrong — a recorded value whose token was revoked leaves an agent 401ing for ever, and a live token nobody wrote down cannot be deployed. `-rotate` mints for every seat regardless, retiring the previous one **after** recording the new: never before, or a failed record leaves the seat with nothing.
 
 | Flag | Description |
 |------|-------------|
-| `--provision-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_PROVISION_TOKEN`, then `$GITLAB_ADMIN_TOKEN`. |
-| `--mode` | `group` (default; group-Owner-callable on GitLab.com) or `instance` (self-managed admin, instance-wide accounts). |
-| `--webhook-url` | Engine webhook endpoint to register on the group/projects (e.g. `https://engine.example.com/webhooks/gitlab`). Omit to skip webhook registration. |
-| `--secret-store` | Write minted credentials into the encrypted [`secret_values`](../concepts/secret-store.md) table instead of an env file. The engine resolves `${VAR}` from there directly, so nothing has to be sourced into a shell. Needs a Tier A keyring + DSN (`--bootstrap` / `--dsn`). |
-| `--env-file` | Env file to append/update minted `VAR=token` lines into (default `.env.gitlab`). Source it before starting the engine. Ignored with `--secret-store`. |
-| `--print` | Print `export VAR=token` lines to stdout instead of writing an env file. |
-| `--rotate` | Rotate each managed service-account token (re-mints with a fresh expiry). The once-a-year cron path on GitLab.com Free, where every PAT expires within 365 days. |
-| `--decommission-removed` | Soft-delete service accounts whose seats left the config. Requires `provisioning.username_prefix` to scope managed accounts safely. |
-| `--token-expiry-days` | Expiry for minted/rotated tokens (default `364`; GitLab.com Free max is 365). `0` omits `expires_at` so the instance default/max applies. |
+| `-admin-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_ADMIN_TOKEN`. The seats' own tokens are what this run mints, so it cannot bootstrap itself from them. |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the vendor and prints none of them. See [the secret store](../concepts/secret-store.md). |
+| `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. Omit to skip webhook registration — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
+| `-rotate` | Mint a fresh token for every seat, including seats whose current one still works. **Restart the engine afterwards.** |
+| `-decommission` | Delete service accounts whose seats have left the config. Scoped **twice**: the username must start with `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) *and* the account must be a member of this company's group, because either alone is too broad. An account the instance refuses to delete because it is not a service account is reported rather than aborting — that refusal is GitLab catching what the scan should not have proposed, so it is a signal about the prefix. |
+| `-token-expiry-days` | Lifetime minted onto each token. Omitted, no `expires_at` is sent and the instance's own policy applies — GitLab.com caps personal access tokens at a year regardless, which is the instance enforcing its policy rather than this tool choosing one. Nothing in Crewlet renews a credential on a schedule, so a lifetime nobody renews is an outage with a date on it. |
+| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. |
 
-The CLI probes the operator credential with `GET /user` up front and fails fast with the endpoint + status when the token or its scopes are wrong. See [GitLab Integration — Provisioning](../integrations/gitlab.md#provisioning) for the permission matrix and the full walkthrough.
+An account this run created is rolled back by revoking every token on it — nothing else has ever minted there. On an account that already existed, only the token this run minted is revoked: sweeping it would take an administrator's own token with no way to tell that it had. Both go through a detached context, because the failure is often the cancellation itself.
 
+See [GitLab Integration — Provisioning](../integrations/gitlab.md#provisioning) for the permission matrix and the full walkthrough.

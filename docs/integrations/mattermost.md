@@ -352,35 +352,51 @@ An admin must first enable personal access tokens in
 **System Console → Integrations → Integration Management**.
 
 The token is an *operator* credential and is never read from the company
-config: pass `--admin-token` or export `MATTERMOST_ADMIN_TOKEN`.
+config: pass `-admin-token` or export `MATTERMOST_ADMIN_TOKEN`. The bots' own
+tokens are what this run *mints*, so it cannot bootstrap itself from them.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
-| `--handles a,b` | Only provision these agent handles. |
-| `--decommission a,b` | Disable these handles' bots and revoke their tokens. |
-| `--dry-run` | Print the plan; create and modify nothing. Applies to `--decommission` too. |
-| `--env-file PATH` | Env file minted tokens are written to (default `.env`). |
-| `--secret-store` | Write minted tokens into the encrypted `secret_values` table instead. |
-| `--print` | Print `export VAR=token` lines to stdout (and `unset VAR` when a mint is rolled back, so the stream stays sourceable). |
+| `-admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. |
+| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
+| `-dry-run` | Print the plan; create and modify nothing. |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials
 and opens each seat's websocket.
 
-### Decommissioning
+### Why a re-run does not rotate
 
-`--decommission` disables the bot account and revokes its tokens. Disable
-rather than delete: the account keeps its history, so channels it posted in
-stay readable, and a later provision run re-enables it *and mints a fresh
-token*, since the revoked one is gone.
+Mattermost returns an access token's value **once**, so the reconcile cannot
+verify that what it recorded last time still matches. Minting every run
+would be an outage: the engine is running with the *old* value, and rotating
+revokes the credential every bot's websocket is currently authenticated
+with — an operator adding a tenth seat would take the other nine down, from
+a command whose whole promise is that it is safe to re-run.
 
-The account is disabled first — deactivating it is what actually stops the
-seat acting — and each token is then revoked on its own, so one failure
-costs one token rather than the whole seat. What is left over is named in
-the outcome (`error: 1 token(s) still active`) and exits non-zero.
-`--dry-run` applies here too, and prints what it would disable.
+So a bot is left alone when **both** halves hold: the variable holding its
+token still has a value (answered by the sink the run is writing to, and an
+*unreadable* sink stops the run rather than being read as empty), and the
+account still has a token under this tool's description, `crewlet-<handle>`.
+Either alone is wrong — a recorded value whose token was revoked leaves a
+bot 401ing for ever, and a live token nobody wrote down cannot be deployed.
+
+`-rotate` mints for every bot regardless, retiring the previous one *after*
+recording the new: never before, or a failed record leaves the seat with
+nothing. Only this tool's own description is retired — an administrator may
+have minted a token on the bot by hand, and revoking it would break whatever
+is using it, silently.
+
+### When a run cannot finish
+
+Everything it minted is undone. A bot this run **created** is rolled back by
+revoking every token on it, because nothing else has ever minted there; on a
+bot that already **existed**, only the token this run minted is revoked —
+sweeping the account would take an administrator's own token with no way to
+tell that it had. The rollback runs through a detached context, because the
+failure is often the cancellation itself.
 
 ### Seats and licensing
 

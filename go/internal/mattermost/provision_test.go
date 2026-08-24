@@ -90,19 +90,39 @@ func TestThePlanNeedsAnEnabledIntegrationAndATeam(t *testing.T) {
 type chatServer struct {
 	mu sync.Mutex
 
-	bots     map[string]string   // username -> user id
-	tokens   map[string][]string // user id -> live token ids
-	teamOf   map[string]bool     // user id -> in team
-	channels map[string]string   // channel name -> id
-	members  map[string]bool     // "channelID:userID"
+	bots    map[string]string             // username -> user id
+	tokens  map[string][]mattermost.Token // user id -> its live tokens
+	revokes int
+	// identityFails makes the identity route answer 500 for a BOT's
+	// token, which is "cannot tell" rather than "this token is bad".
+	identityFails bool
+	teamOf        map[string]bool   // user id -> in team
+	channels      map[string]string // channel name -> id
+	members       map[string]bool   // "channelID:userID"
 
 	failRecord string
 	next       int
 }
 
+// forget clears the counters, so a test can measure ONE run.
+func (s *chatServer) forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revokes = 0
+}
+
+func (s *chatServer) revoked() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revokes
+}
+
+// adminToken is the operator credential the fixture's client presents.
+const adminToken = "admin-token"
+
 func newChatServer() *chatServer {
 	return &chatServer{
-		bots: map[string]string{}, tokens: map[string][]string{},
+		bots: map[string]string{}, tokens: map[string][]mattermost.Token{},
 		teamOf: map[string]bool{}, members: map[string]bool{},
 		channels: map[string]string{"general": "ch-general", "leadership": "ch-lead"},
 	}
@@ -115,6 +135,33 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	switch {
+	case r.Method == http.MethodGet && path == "/users/me":
+		// WHOEVER PRESENTED THE TOKEN. The re-run check takes the value
+		// a variable holds and asks the server who it is, so a fake
+		// answering the same account for every token would prove
+		// nothing. A revoked token is simply absent from the store,
+		// which is how Mattermost serves it.
+		presented := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if s.identityFails && presented != adminToken {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message":"500"}`))
+			return
+		}
+		if presented == adminToken {
+			json.NewEncoder(w).Encode(map[string]any{"id": "admin", "username": "root"})
+			return
+		}
+		for user, tokens := range s.tokens {
+			for _, token := range tokens {
+				if token.Value == presented {
+					json.NewEncoder(w).Encode(map[string]any{"id": user})
+					return
+				}
+			}
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"message":"Invalid or expired session"}`))
+
 	case r.Method == http.MethodGet && path == "/teams/name/nimbus":
 		json.NewEncoder(w).Encode(map[string]any{"id": "team-1", "name": "nimbus"})
 
@@ -176,29 +223,41 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/tokens"):
 		userID := strings.TrimSuffix(strings.TrimPrefix(path, "/users/"), "/tokens")
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
 		s.next++
-		id := fmt.Sprintf("tok-%d", s.next)
-		s.tokens[userID] = append(s.tokens[userID], id)
+		token := mattermost.Token{
+			ID: fmt.Sprintf("tok-%d", s.next), Description: body["description"],
+		}
+		token.Value = "mmtok-" + token.ID
+		s.tokens[userID] = append(s.tokens[userID], token)
 		json.NewEncoder(w).Encode(map[string]any{
-			"id": id, "token": "mmtok-" + id,
+			"id": token.ID, "token": token.Value, "description": token.Description,
 		})
 
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/tokens"):
 		userID := strings.TrimSuffix(strings.TrimPrefix(path, "/users/"), "/tokens")
-		var out []map[string]any
-		for _, id := range s.tokens[userID] {
-			out = append(out, map[string]any{"id": id})
+		out := make([]map[string]any, 0, len(s.tokens[userID]))
+		for _, token := range s.tokens[userID] {
+			// THE VALUE IS NEVER LISTED — the server returns it from the
+			// mint call alone.
+			out = append(out, map[string]any{
+				"id": token.ID, "description": token.Description,
+			})
 		}
 		json.NewEncoder(w).Encode(out)
 
 	case r.Method == http.MethodPost && path == "/users/tokens/revoke":
 		var body map[string]string
 		json.NewDecoder(r.Body).Decode(&body)
-		for user, ids := range s.tokens {
-			var kept []string
-			for _, id := range ids {
-				if id != body["token_id"] {
-					kept = append(kept, id)
+		s.revokes++
+		// A REVOKED TOKEN IS GONE from the listing, which is how
+		// Mattermost serves it — there is no revoked flag.
+		for user, tokens := range s.tokens {
+			var kept []mattermost.Token
+			for _, token := range tokens {
+				if token.ID != body["token_id"] {
+					kept = append(kept, token)
 				}
 			}
 			s.tokens[user] = kept
@@ -221,9 +280,12 @@ func (s *chatServer) liveTokens() int {
 }
 
 type chatSink struct {
-	mu       sync.Mutex
-	values   map[string]string
-	failOn   string
+	mu     sync.Mutex
+	values map[string]string
+	failOn string
+	// holdsErr makes the sink unreadable, which must never be read as
+	// "nothing is held" — that would rotate every live credential.
+	holdsErr error
 	discards int
 }
 
@@ -249,10 +311,26 @@ func (s *chatSink) Discard(context.Context) error {
 
 // Holds implements the sink contract: this fixture starts empty, so
 // nothing is held until this run records it.
-func (s *chatSink) Holds(_ context.Context, name string) (bool, error) {
+func (s *chatSink) Value(_ context.Context, name string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.values[name] != "", nil
+	if s.holdsErr != nil {
+		return "", false, s.holdsErr
+	}
+	return s.values[name], s.values[name] != "", nil
+}
+
+// seed puts a value in the sink as an EARLIER run would have.
+func (s *chatSink) seed(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values[name] = value
+}
+
+func (s *chatSink) value(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.values[name]
 }
 
 func (s *chatSink) Flush(context.Context) error { return nil }
@@ -272,10 +350,18 @@ func reconcileChat(t *testing.T, srv *chatServer, sink provision.TokenSink,
 	roles []*org.Role,
 ) (*mattermost.Result, error) {
 	t.Helper()
+	return reconcileChatWith(t, srv, sink, roles, func(*mattermost.Options) {})
+}
+
+// reconcileChatWith is the same run with the options a test wants to vary.
+func reconcileChatWith(t *testing.T, srv *chatServer, sink provision.TokenSink,
+	roles []*org.Role, tune func(*mattermost.Options),
+) (*mattermost.Result, error) {
+	t.Helper()
 	http := httptest.NewServer(http.HandlerFunc(srv.serve))
 	t.Cleanup(http.Close)
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: http.URL, Token: "admin-token",
+		URL: http.URL, Token: adminToken,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -286,9 +372,11 @@ func reconcileChat(t *testing.T, srv *chatServer, sink provision.TokenSink,
 	if err != nil {
 		t.Fatalf("PlanFor: %v", err)
 	}
-	return mattermost.Reconcile(context.Background(), mattermost.Options{
+	opts := mattermost.Options{
 		Client: client, Config: cfg, Org: o, Plan: plan, Sink: sink,
-	})
+	}
+	tune(&opts)
+	return mattermost.Reconcile(context.Background(), opts)
 }
 
 func TestAReconcileCreatesJoinsAndMints(t *testing.T) {
@@ -407,5 +495,253 @@ func TestAChatReconcileNeedsAClientAndASink(t *testing.T) {
 	t.Parallel()
 	if _, err := mattermost.Reconcile(context.Background(), mattermost.Options{}); err == nil {
 		t.Error("a reconcile with no client was accepted")
+	}
+}
+
+// ---- what a re-run does and does not touch ------------------------------ //
+
+// A PLAIN RE-RUN KEEPS A WORKING TOKEN. Rotating it revokes the credential
+// every bot's websocket is currently authenticated with — an operator
+// adding one seat would take the others down.
+func TestARerunKeepsAWorkingBotToken(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, sink, roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	first := sink.value("MM_TOKEN_SWE")
+	srv.forget()
+
+	res, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Rotated) != 0 || len(res.Kept) != 1 {
+		t.Fatalf("rotated %v, kept %v", res.Rotated, res.Kept)
+	}
+	if sink.value("MM_TOKEN_SWE") != first {
+		t.Error("the recorded credential changed under a running engine")
+	}
+	if srv.revoked() != 0 {
+		t.Errorf("a plain re-run revoked %d tokens", srv.revoked())
+	}
+}
+
+// -rotate IS THE OPERATOR ASKING, and it retires only this tool's own.
+func TestRotateMintsAfreshAndSparesTheAdminsBotToken(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, sink, roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	first := sink.value("MM_TOKEN_SWE")
+	srv.mu.Lock()
+	for user := range srv.tokens {
+		srv.tokens[user] = append(srv.tokens[user], mattermost.Token{
+			ID: "tok-by-hand", Description: "set up by an admin",
+		})
+	}
+	srv.mu.Unlock()
+
+	res, err := reconcileChatWith(t, srv, sink, roles,
+		func(o *mattermost.Options) { o.Rotate = true })
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Rotated) != 1 {
+		t.Fatalf("rotated = %v", res.Rotated)
+	}
+	if sink.value("MM_TOKEN_SWE") == first {
+		t.Error("-rotate left the credential alone")
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	byHand, recorded := false, false
+	for _, tokens := range srv.tokens {
+		for _, token := range tokens {
+			if token.ID == "tok-by-hand" {
+				byHand = true
+			}
+			if token.Value == sink.value("MM_TOKEN_SWE") {
+				recorded = true
+			}
+		}
+	}
+	if !byHand {
+		t.Error("rotation revoked a token it did not mint")
+	}
+	// THE RECORDED VALUE MUST STILL BE LIVE. Retiring the previous
+	// tokens re-lists them AFTER the mint, so the fresh one is in that
+	// list — revoking it would record a credential that is already dead.
+	if !recorded {
+		t.Error("rotation revoked the token it had just recorded")
+	}
+}
+
+// A VARIABLE NOBODY RECORDED IS MINTED INTO even though the bot has a
+// working token: the value cannot be read back.
+func TestAnUnrecordedBotVariableIsMintedInto(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, newChatSink(), roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	fresh := newChatSink() // a second machine: nothing recorded here
+	res, err := reconcileChat(t, srv, fresh, roles)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Rotated) != 1 {
+		t.Fatalf("rotated = %v, kept = %v", res.Rotated, res.Kept)
+	}
+	if fresh.value("MM_TOKEN_SWE") == "" {
+		t.Error("nothing was recorded")
+	}
+}
+
+// A REVOKED TOKEN IS MINTED OVER whatever the variable holds.
+func TestARevokedBotTokenIsReplaced(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, sink, roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	srv.mu.Lock()
+	for user := range srv.tokens {
+		srv.tokens[user] = nil
+	}
+	srv.mu.Unlock()
+
+	res, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Rotated) != 1 {
+		t.Errorf("rotated = %v, kept = %v", res.Rotated, res.Kept)
+	}
+}
+
+// AN UNREADABLE SINK IS NOT AN EMPTY ONE.
+func TestAnUnreadableSinkStopsTheChatRun(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, sink, roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	srv.forget()
+	sink.holdsErr = errors.New("the store is unreachable")
+	if _, err := reconcileChat(t, srv, sink, roles); err == nil {
+		t.Fatal("an unreadable sink was read as holding nothing")
+	}
+	if srv.revoked() != 0 {
+		t.Errorf("%d tokens were revoked on an unreadable sink", srv.revoked())
+	}
+}
+
+// A ROLLBACK ON A PRE-EXISTING BOT REVOKES ONLY WHAT IT MINTED. Sweeping
+// the account would take an administrator's own token with no way to tell
+// that it had.
+func TestARollbackOnAnExistingBotSparesTheAdminsToken(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, newChatSink(), roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	srv.mu.Lock()
+	for user := range srv.tokens {
+		srv.tokens[user] = append(srv.tokens[user], mattermost.Token{
+			ID: "tok-by-hand", Description: "set up by an admin",
+		})
+	}
+	srv.mu.Unlock()
+
+	failing := newChatSink()
+	failing.failOn = "MM_TOKEN_SWE"
+	if _, err := reconcileChatWith(t, srv, failing, roles,
+		func(o *mattermost.Options) { o.Rotate = true }); err == nil {
+		t.Fatal("the run reported success with nothing recorded")
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	for _, tokens := range srv.tokens {
+		for _, token := range tokens {
+			if token.ID == "tok-by-hand" {
+				return
+			}
+		}
+	}
+	t.Fatal("the rollback revoked a token it did not mint")
+}
+
+// A COPY-PASTED VARIABLE IS CAUGHT AT THE SERVER.
+func TestABotTokenBelongingToAnotherAccountStopsTheRun(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, sink, roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	srv.mu.Lock()
+	srv.tokens["user-other"] = []mattermost.Token{{
+		ID: "tok-other", Description: mattermost.TokenDescription("qa"),
+		Value: "mmtok-other",
+	}}
+	srv.mu.Unlock()
+	sink.seed("MM_TOKEN_SWE", "mmtok-other")
+
+	if _, err := reconcileChat(t, srv, sink, roles); err == nil {
+		t.Fatal("a token belonging to another account was accepted")
+	} else if !strings.Contains(err.Error(), "different account") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// "CANNOT TELL" LEAVES THE SEAT EXACTLY AS IT WAS.
+func TestAnUnverifiableBotTokenIsLeftAloneWithANote(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	if _, err := reconcileChat(t, srv, sink, roles); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	before := sink.value("MM_TOKEN_SWE")
+	srv.forget()
+	srv.mu.Lock()
+	srv.identityFails = true
+	srv.mu.Unlock()
+
+	res, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Rotated) != 0 || len(res.Kept) != 1 {
+		t.Fatalf("rotated %v, kept %v", res.Rotated, res.Kept)
+	}
+	if sink.value("MM_TOKEN_SWE") != before {
+		t.Error("a token that could not be checked was replaced")
+	}
+	found := false
+	for _, note := range res.Notes {
+		if strings.Contains(note, "could not check") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("notes = %q", res.Notes)
+	}
+	if srv.revoked() != 0 {
+		t.Errorf("%d tokens were revoked on an unverifiable seat", srv.revoked())
 	}
 }

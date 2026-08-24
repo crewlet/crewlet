@@ -226,19 +226,16 @@ type Token struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
 	Active bool   `json:"is_active"`
-	// ExpiresAt is when it dies, or the zero time for never. Read rather
-	// than ignored because an expired row can still arrive with
-	// is_active true — the flag records revocation, not the calendar —
-	// and a run that trusted the flag would leave a seat holding a
-	// credential that stopped working at midnight.
+	// ExpiresAt is when it dies, or the zero time for never.
+	//
+	// Read for the record rather than for a decision: whether a token
+	// still authenticates is answered by USING it, not by comparing this
+	// to a clock. An expired row can still arrive with is_active true —
+	// the flag records revocation, not the calendar — so a check here
+	// would be a second opinion that can disagree with the instance.
 	ExpiresAt time.Time `json:"expired_at"`
 	// Value is the plaintext, present on a mint response only.
 	Value string `json:"token"`
-}
-
-// Usable reports a token that would still authenticate at the given instant.
-func (t Token) Usable(now time.Time) bool {
-	return t.Active && (t.ExpiresAt.IsZero() || t.ExpiresAt.After(now))
 }
 
 // Tokens lists an account's tokens.

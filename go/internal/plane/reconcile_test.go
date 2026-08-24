@@ -70,7 +70,7 @@ func TestTheEngineAccountIsCreatedAndItsTokenRecorded(t *testing.T) {
 	if len(res.Created) != 2 {
 		t.Fatalf("created %v", res.Created)
 	}
-	if sink.value("PLANE_ENGINE_TOKEN") == "" {
+	if sink.recorded("PLANE_ENGINE_TOKEN") == "" {
 		t.Error("the engine's credential was not recorded")
 	}
 	created := f.writes(http.MethodPost, "/service-accounts/")
@@ -197,10 +197,10 @@ func TestAFreshWorkspaceGetsAnAccountATokenAndAWebhook(t *testing.T) {
 	if len(res.Created) != 1 || len(res.Rotated) != 1 {
 		t.Fatalf("created %v rotated %v", res.Created, res.Rotated)
 	}
-	if got := sink.value("PLANE_TOKEN_SWE"); !strings.HasPrefix(got, "plane_api_") {
+	if got := sink.recorded("PLANE_TOKEN_SWE"); !strings.HasPrefix(got, "plane_api_") {
 		t.Errorf("recorded token = %q", got)
 	}
-	if got := sink.value("PLANE_WEBHOOK_SECRET"); !strings.HasPrefix(got, "plane_wh_") {
+	if got := sink.recorded("PLANE_WEBHOOK_SECRET"); !strings.HasPrefix(got, "plane_wh_") {
 		t.Errorf("recorded webhook secret = %q", got)
 	}
 	if res.Hooked != "https://crewlet.example.com/webhooks/plane" {
@@ -252,7 +252,7 @@ func TestASecondRunFindsTheAccountItMade(t *testing.T) {
 	if f.accountCount() != 1 {
 		t.Errorf("the workspace holds %d accounts", f.accountCount())
 	}
-	if got := sink.value("PLANE_TOKEN_SWE"); got == "" {
+	if got := sink.recorded("PLANE_TOKEN_SWE"); got == "" {
 		t.Error("the second run recorded nothing")
 	}
 }
@@ -386,7 +386,7 @@ func TestWithoutTokenLifecycleNewSeatsStillWorkAndExistingOnesAreNamed(t *testin
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(res.Created) != 1 || sink.value("PLANE_TOKEN_SWE") == "" {
+	if len(res.Created) != 1 || sink.recorded("PLANE_TOKEN_SWE") == "" {
 		t.Fatalf("a new seat was not provisioned: %+v", res)
 	}
 	if !anyContains(res.Notes, "token-lifecycle") {
@@ -446,7 +446,7 @@ func TestAnIgnoredUsernameUndoesTheAccountAndStops(t *testing.T) {
 	if f.accountCount() != 0 {
 		t.Errorf("the account was left behind: %d", f.accountCount())
 	}
-	if sink.value("PLANE_TOKEN_SWE") != "" {
+	if sink.recorded("PLANE_TOKEN_SWE") != "" {
 		t.Error("a credential was recorded for an unfindable account")
 	}
 }
@@ -587,7 +587,7 @@ func TestAnExistingWebhookIsConvergedAndItsSecretIsNotClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if got := sink.value("PLANE_WEBHOOK_SECRET"); got != "" {
+	if got := sink.recorded("PLANE_WEBHOOK_SECRET"); got != "" {
 		t.Errorf("the second run claimed to have re-read the secret: %q", got)
 	}
 	if len(f.hooks) != 1 {
@@ -637,10 +637,10 @@ func TestRecreatingTheWebhookMintsAFreshSecret(t *testing.T) {
 	if len(f.hooks) != 1 {
 		t.Fatalf("the workspace holds %d hooks", len(f.hooks))
 	}
-	if got := sink.value("PLANE_WEBHOOK_SECRET"); got == "" || got == first {
+	if got := sink.recorded("PLANE_WEBHOOK_SECRET"); got == "" || got == first {
 		t.Errorf("recorded secret = %q, first = %q", got, first)
 	}
-	if f.hooks[0].SecretKey != sink.value("PLANE_WEBHOOK_SECRET") {
+	if f.hooks[0].SecretKey != sink.recorded("PLANE_WEBHOOK_SECRET") {
 		t.Error("the recorded secret is not the one the workspace now holds")
 	}
 }
@@ -862,7 +862,7 @@ func TestATokenlessMintResponseIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("an empty credential was accepted")
 	}
-	if sink.value("PLANE_TOKEN_SWE") != "" {
+	if sink.recorded("PLANE_TOKEN_SWE") != "" {
 		t.Error("an empty credential was recorded")
 	}
 }
@@ -1044,7 +1044,7 @@ func TestARotationThatAnswersWithNoTokenValueIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("an empty rotation was accepted")
 	}
-	if sink.value("PLANE_TOKEN_SWE") != "" {
+	if sink.recorded("PLANE_TOKEN_SWE") != "" {
 		t.Error("an empty credential was recorded over a live one")
 	}
 }
@@ -1305,7 +1305,7 @@ func TestARerunKeepsACredentialThatStillWorks(t *testing.T) {
 	if _, err := run(t, f, plane.Options{Sink: sink}); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	first := sink.value("PLANE_TOKEN_SWE")
+	first := sink.recorded("PLANE_TOKEN_SWE")
 	f.forget()
 
 	res, err := run(t, f, plane.Options{Sink: sink})
@@ -1318,7 +1318,7 @@ func TestARerunKeepsACredentialThatStillWorks(t *testing.T) {
 	if len(res.Kept) != 1 {
 		t.Errorf("kept = %v", res.Kept)
 	}
-	if sink.value("PLANE_TOKEN_SWE") != first {
+	if sink.recorded("PLANE_TOKEN_SWE") != first {
 		t.Error("the recorded credential changed under a running engine")
 	}
 	if n := f.tokenRevokes(); n != 0 {
@@ -1334,7 +1334,7 @@ func TestRotateForcesAFreshCredential(t *testing.T) {
 	if _, err := run(t, f, plane.Options{Sink: sink}); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	first := sink.value("PLANE_TOKEN_SWE")
+	first := sink.recorded("PLANE_TOKEN_SWE")
 	res, err := run(t, f, plane.Options{Sink: sink, Rotate: true})
 	if err != nil {
 		t.Fatalf("second run: %v", err)
@@ -1342,7 +1342,7 @@ func TestRotateForcesAFreshCredential(t *testing.T) {
 	if len(res.Rotated) != 1 {
 		t.Errorf("rotated = %v", res.Rotated)
 	}
-	if sink.value("PLANE_TOKEN_SWE") == first {
+	if sink.recorded("PLANE_TOKEN_SWE") == first {
 		t.Error("-rotate left the credential alone")
 	}
 }
@@ -1364,7 +1364,7 @@ func TestAnUnrecordedVariableIsMintedIntoAndSaysWhy(t *testing.T) {
 	if len(res.Rotated) != 1 {
 		t.Fatalf("rotated = %v, kept = %v", res.Rotated, res.Kept)
 	}
-	if sink.value("PLANE_TOKEN_SWE") == "" {
+	if sink.recorded("PLANE_TOKEN_SWE") == "" {
 		t.Error("nothing was recorded")
 	}
 	if !anyContains(res.Notes, "has to be restarted") {
@@ -1593,5 +1593,65 @@ func TestAnUnrelatedHookIsNotReportedAsADuplicate(t *testing.T) {
 	}
 	if anyContains(res.Notes, "arrives twice") {
 		t.Errorf("an unrelated hook was called a duplicate: %q", res.Notes)
+	}
+}
+
+// A COPY-PASTED VARIABLE IS CAUGHT AT THE VENDOR. Minting over it would
+// hand this seat a second identity while the other keeps authenticating as
+// one account from two places, and nothing anywhere would report it.
+func TestACredentialBelongingToAnotherAccountStopsTheRun(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	sink := newTrackerSink()
+	if _, err := run(t, f, plane.Options{Sink: sink}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	// Somebody else's live credential pasted into this seat's variable.
+	f.mu.Lock()
+	f.accounts["crewlet-qa"] = &plane.Account{ID: "acct-qa", Username: "crewlet-qa", IsBot: true}
+	f.tokens["acct-qa"] = []*plane.Token{{
+		ID: "tok-qa", Label: plane.TokenLabel("qa"), Active: true, Value: "plane_api_qa",
+	}}
+	f.mu.Unlock()
+	sink.seed("PLANE_TOKEN_SWE", "plane_api_qa")
+
+	_, err := run(t, f, plane.Options{Sink: sink})
+	if err == nil {
+		t.Fatal("a credential belonging to another account was accepted")
+	}
+	if !strings.Contains(err.Error(), "different account") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// "CANNOT TELL" LEAVES THE SEAT EXACTLY AS IT WAS. Re-minting on an
+// unreachable instance destroys a credential that works; the recovery for
+// one that does not is a -rotate away.
+func TestAnUnverifiableCredentialIsLeftAloneWithANote(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	sink := newTrackerSink()
+	if _, err := run(t, f, plane.Options{Sink: sink}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	before := sink.recorded("PLANE_TOKEN_SWE")
+	f.forget()
+	f.identityFails = true
+
+	res, err := run(t, f, plane.Options{Sink: sink})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Rotated) != 0 || len(res.Kept) != 1 {
+		t.Fatalf("rotated %v, kept %v", res.Rotated, res.Kept)
+	}
+	if sink.recorded("PLANE_TOKEN_SWE") != before {
+		t.Error("a credential that could not be checked was replaced")
+	}
+	if !anyContains(res.Notes, "could not check") {
+		t.Errorf("notes = %q", res.Notes)
+	}
+	if n := f.tokenRevokes(); n != 0 {
+		t.Errorf("%d tokens were revoked on an unverifiable seat", n)
 	}
 }

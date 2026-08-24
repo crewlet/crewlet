@@ -45,6 +45,9 @@ type instance struct {
 	badWorkspace      bool // the slug does not resolve
 	noUsernames       bool // member rows carry no username
 	badCredential     bool // the API key does not authenticate
+	// identityFails makes the identity route answer 500 for a SEAT's
+	// key, which is "cannot tell" rather than "this credential is bad".
+	identityFails     bool
 	secretlessWebhook bool // the create response carries no secret_key
 	// duplicateAs is the status a repeat membership is refused with. The
 	// fork improved the message to a 409 on some paths and stock CE maps
@@ -66,6 +69,9 @@ type instance struct {
 
 	calls  []string
 	nextID int
+	// now is the instant token expiry is judged against, so a test can
+	// age a token without waiting.
+	now time.Time
 	// bodies are the write payloads, so a test can assert what was SENT
 	// rather than what the fake chose to remember about it.
 	bodies []recorded
@@ -84,6 +90,7 @@ func newInstance() *instance {
 		tokens:   map[string][]*plane.Token{},
 		member:   map[string]bool{},
 		projects: []plane.Project{{ID: "p-eng", Identifier: "ENG", Name: "Engineering"}},
+		now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -115,7 +122,24 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 			deny(w, http.StatusUnauthorized, "invalid api key")
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"id": "admin", "username": "root"})
+		// WHOEVER PRESENTED THE KEY. The re-run check takes the value a
+		// variable holds and asks the instance who it is, so a fake that
+		// answered "admin" for every key would prove nothing.
+		key := r.Header.Get("X-API-Key")
+		if f.identityFails && key != adminKey {
+			deny(w, http.StatusInternalServerError, "upstream is unwell")
+			return
+		}
+		if key == adminKey {
+			json.NewEncoder(w).Encode(map[string]any{"id": "admin", "username": "root"})
+			return
+		}
+		owner, live := f.owner(key)
+		if !live {
+			deny(w, http.StatusUnauthorized, "invalid api key")
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": owner})
 
 	case path == ws+"/projects/" && r.Method == http.MethodPost:
 		project := plane.Project{
@@ -176,7 +200,7 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 			account.Token = ""
 		}
 		f.tokens[account.ID] = []*plane.Token{{
-			ID: f.id("tok"), Label: "initial", Active: true,
+			ID: f.id("tok"), Label: "initial", Active: true, Value: account.Token,
 		}}
 		json.NewEncoder(w).Encode(account)
 
@@ -199,6 +223,7 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			token := &plane.Token{ID: f.id("tok"), Label: label, Active: true}
+			token.Value = "plane_api_" + token.ID
 			if raw, ok := body["expired_at"].(string); ok {
 				token.ExpiresAt, _ = time.Parse(time.RFC3339, raw)
 			}
@@ -206,7 +231,7 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 			// response carries its value — which is what makes an
 			// empty response the worst answer available.
 			f.tokens[account] = append(f.tokens[account], token)
-			value := "plane_api_" + token.ID
+			value := token.Value
 			if f.mintEmpty {
 				value = ""
 			}
@@ -339,6 +364,24 @@ func (f *instance) deactivate(account, tokenID string) {
 	}
 }
 
+// adminKey is the operator credential the fixture's client presents.
+const adminKey = "admin-key"
+
+// owner resolves a token value to the account it belongs to, and reports
+// whether it would still authenticate.
+func (f *instance) owner(value string) (string, bool) {
+	for account, tokens := range f.tokens {
+		for _, token := range tokens {
+			if token.Value == value {
+				live := token.Active &&
+					(token.ExpiresAt.IsZero() || token.ExpiresAt.After(f.now))
+				return account, live
+			}
+		}
+	}
+	return "", false
+}
+
 func deny(w http.ResponseWriter, status int, detail string) {
 	w.WriteHeader(status)
 	fmt.Fprintf(w, `{"error":%q}`, detail)
@@ -417,6 +460,9 @@ func (f *instance) expireAll(at time.Time) {
 			t.ExpiresAt = at
 		}
 	}
+	// The instance's own clock moves past the expiry too — otherwise the
+	// token still authenticates and the run is right to keep it.
+	f.now = at.Add(time.Hour)
 }
 
 // forget clears the call log, so a test can count what ONE run did.
@@ -452,7 +498,7 @@ func workspaceClient(t *testing.T, f *instance) *plane.Client {
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(server.Close)
 	c, err := plane.NewClient(plane.ClientOptions{
-		URL: server.URL, Workspace: "nimbus", APIKey: "admin-key",
+		URL: server.URL, Workspace: "nimbus", APIKey: adminKey,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -533,20 +579,27 @@ func (s *trackerSink) Flush(context.Context) error {
 	return nil
 }
 
-// Holds implements the sink contract. `held` seeds a value that was
-// recorded by an EARLIER run, which is what a re-run has to see.
-func (s *trackerSink) Holds(_ context.Context, name string) (bool, error) {
+// Value implements the sink contract — what an EARLIER run recorded, which
+// is what a re-run has to see.
+// seed puts a value in the sink as an EARLIER run would have.
+func (s *trackerSink) seed(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values[name] = value
+}
+
+func (s *trackerSink) Value(_ context.Context, name string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.holdsErr != nil {
-		return false, s.holdsErr
+		return "", false, s.holdsErr
 	}
-	return s.values[name] != "", nil
+	return s.values[name], s.values[name] != "", nil
 }
 
 func (s *trackerSink) Describe() string { return "a test sink" }
 
-func (s *trackerSink) value(name string) string {
+func (s *trackerSink) recorded(name string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.values[name]

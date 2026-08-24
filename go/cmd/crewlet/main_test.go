@@ -228,10 +228,15 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	//
 	// The engine is not built at all: the port check comes first
 	// precisely so a node that serves nothing does not pay to find out.
+	// THE LOGGER IS THE TEST'S OWN, not the process root. Configuring the
+	// root from a parallel test is a race with every other test in this
+	// package: the CLI dispatch reconfigures it to WARN-on-stderr for
+	// every non-`run` command, so whichever ran last decided where this
+	// assertion's record went.
 	var logged bytes.Buffer
-	logging.Configure(slog.LevelInfo, logging.ParseFormat("text"), &logged)
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
