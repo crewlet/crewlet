@@ -128,3 +128,89 @@ func releaseFile(t *testing.T, name string) string {
 	}
 	return string(raw)
 }
+
+// THE GENERATED NOTES CANNOT SILENTLY DROP A PULL REQUEST.
+//
+// GitHub writes each release body from the pull requests merged since the
+// previous tag, and .github/release.yml sorts that list into categories. A
+// pull request matching NO category is omitted — not flagged, not appended,
+// omitted — so without a catch-all the notes are missing whatever nobody
+// labelled. Those notes are the only record a release has, and the omission
+// is discoverable only by reading a release and noticing an absence.
+func TestTheGeneratedNotesHaveACatchAllCategory(t *testing.T) {
+	t.Parallel()
+	if config := releaseFile(t, ".github/release.yml"); !strings.Contains(config, `- "*"`) {
+		t.Error(".github/release.yml has no catch-all category, so a pull " +
+			"request with no labels is dropped from the release notes")
+	}
+}
+
+// GITHUB WRITES THE NOTES, NOT GORELEASER.
+//
+// goreleaser's default changelog is assembled from commit SUBJECTS. Ours
+// must come from pull request TITLES, because a pull request squash-merges
+// into one commit and the title is what CONTRIBUTING.md asks contributors to
+// write as a release note. Flip this to any other mode and .github/release.yml
+// becomes a dead file: the categories keep being maintained and stop
+// appearing anywhere.
+func TestTheReleaseNotesComeFromGitHub(t *testing.T) {
+	t.Parallel()
+	if config := releaseFile(t, ".goreleaser.yaml"); !strings.Contains(config, "use: github-native") {
+		t.Error(".goreleaser.yaml does not use github-native release notes, " +
+			"so the body would be built from commit subjects and " +
+			".github/release.yml would shape nothing")
+	}
+}
+
+// A PRE-RELEASE NEVER BECOMES THE DEFAULT DOWNLOAD.
+//
+// Two surfaces hand an unpinned user whatever the newest release is: GitHub's
+// "Latest" badge and the image's `latest` tag. A release candidate taking
+// either one ships it to everyone who pinned nothing, and both are set at
+// release time from this file alone.
+func TestAPreReleaseTakesNeitherLatest(t *testing.T) {
+	t.Parallel()
+	config := releaseFile(t, ".goreleaser.yaml")
+	if !strings.Contains(config, "prerelease: auto") {
+		t.Error(".goreleaser.yaml does not flag pre-releases, so an rc tag " +
+			"would become GitHub's Latest release")
+	}
+	if !strings.Contains(config, "{{ if not .Prerelease }}latest{{ end }}") {
+		t.Error(".goreleaser.yaml does not guard the `latest` image tag on " +
+			"the release being stable, so `docker pull crewlet` would serve " +
+			"a pre-release")
+	}
+}
+
+// EXACTLY ONE WORKFLOW PUBLISHES A TAG.
+//
+// Two workflows triggered by `v*` both try to create one GitHub Release for
+// one tag, and the loser fails the run after its artifacts are already built.
+// That is how the rewrite's pipeline and the one it replaced coexisted, and
+// the whole reason the tag trigger had to move in the same commit that
+// deleted the old workflow.
+func TestOnlyOneWorkflowIsTriggeredByAVersionTag(t *testing.T) {
+	t.Parallel()
+	paths, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatalf("globbing the workflows: %v", err)
+	}
+	var triggered []string
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "tags:") && strings.Contains(trimmed, `"v*"`) {
+				triggered = append(triggered, filepath.Base(path))
+				break
+			}
+		}
+	}
+	if len(triggered) != 1 {
+		t.Errorf("workflows triggered by a v* tag = %v, want exactly one — "+
+			"two of them race to create one GitHub Release", triggered)
+	}
+}
