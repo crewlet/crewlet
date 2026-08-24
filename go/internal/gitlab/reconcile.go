@@ -138,6 +138,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	res := &Result{Notes: notesOf(opts.Plan)}
+
+	// PROJECTS ARE RESOLVED BEFORE ANYTHING IS MUTATED, and a missing one
+	// is dropped rather than fatal — see [resolveProjects].
+	projects, notes, err := resolveProjects(ctx, opts.Client, p.Projects)
+	if err != nil {
+		return nil, err
+	}
+	res.Notes = append(res.Notes, notes...)
+
 	// MINTED IDS ARE TRACKED so a failure can revoke them. Held here
 	// rather than looked up on the way out, because the account whose
 	// token needs revoking may be one this run just created.
@@ -157,7 +166,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: group membership: %w", seat.Handle, err))
 		}
-		for _, project := range p.Projects {
+		for _, project := range projects {
 			if err := opts.Client.AddProjectMember(ctx, project, user.ID, level); err != nil {
 				return nil, rollback(ctx, opts, minted,
 					fmt.Errorf("gitlab: %s: membership of %s: %w",
@@ -249,7 +258,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if target := webhookTarget(opts.WebhookBase); target != "" {
-		hooked, notes, err := ensureHooks(ctx, opts, group.ID, target)
+		hooked, notes, err := ensureHooks(ctx, opts, group.ID, projects, target)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
@@ -475,25 +484,27 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 //
 // # Why there is a choice at all
 //
-// GROUP WEBHOOKS ARE PREMIUM. On gitlab.com Free and on an unlicensed
-// self-managed instance — which is what this repository's own compose
-// stack runs — the group hooks API is not there, and GitLab hides a
-// licensed endpoint as a 404 rather than a 402. Registering only at the
-// group level therefore failed the whole reconcile on the most common
-// self-hosted tier, and failed it AFTER minting, so the rollback revoked
-// every credential the run had just created.
+// THE GROUP HOOKS API IS NOT EVERYWHERE. It is a Premium feature on
+// gitlab.com and it does not exist in Community Edition at all, and GitLab
+// hides an unavailable endpoint as a 404 rather than a 402 — so "not found"
+// is what an instance says about a feature it does not serve. Registering
+// only at the group level therefore failed the whole reconcile there, and
+// failed it AFTER minting, so the rollback revoked every credential the run
+// had just created.
+//
+// MEASURED, because the obvious guess is wrong in both directions: the
+// unlicensed `gitlab-ee` image this repository's compose stack runs (19.3.0,
+// no license) DOES serve `GET /groups/:id/hooks`, so the local loop takes
+// the group path and never exercises the fallback. Reach for `false` to
+// exercise it, and do not assume "unlicensed" means "no group hooks".
 //
 // Modes come from provisioning.group_webhook — auto (default) tries the
 // group and falls back, true demands the group, false goes straight to the
 // projects.
-func ensureHooks(ctx context.Context, opts Options, groupID int, target string) ([]string, []string, error) {
+func ensureHooks(ctx context.Context, opts Options, groupID int, projects []string, target string) ([]string, []string, error) {
 	mode := config.GroupWebhookAuto
-	projects := []string(nil)
-	if pv := opts.Config.Provisioning; pv != nil {
-		if pv.GroupWebhook != "" {
-			mode = pv.GroupWebhook
-		}
-		projects = pv.Projects
+	if pv := opts.Config.Provisioning; pv != nil && pv.GroupWebhook != "" {
+		mode = pv.GroupWebhook
 	}
 	secret := opts.SigningSecret
 
@@ -529,6 +540,50 @@ func ensureHooks(ctx context.Context, opts Options, groupID int, target string) 
 
 	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
 	return hooked, nil, err
+}
+
+// resolveProjects keeps the declared projects this instance actually has.
+//
+// # A missing one is dropped, not fatal
+//
+// `provisioning.projects` names a company's real repositories, and one of
+// them being renamed, moved or not created yet is an ordinary state of a
+// config — not a reason to refuse to provision the other nine. Aborting on
+// the first 404 did exactly that, and it aborted MID-LOOP, after minting, so
+// the rollback then revoked the credentials the run had already created.
+//
+// It runs BEFORE any mutation for the same reason the group is resolved up
+// front: a check that happens halfway through leaves half a reconcile
+// behind, and the operator's fix — create the project, re-run — is what the
+// note tells them to do.
+//
+// It is the opposite call from the Plane importer, deliberately. There a
+// missing project aborts before a single page is written, because half an
+// import looks like a complete knowledge base with holes in it. Memberships
+// and hooks are additive and independent: the seats that could be added
+// were added, and re-running adds the rest.
+func resolveProjects(ctx context.Context, c *Client, declared []string) ([]string, []string, error) {
+	kept := make([]string, 0, len(declared))
+	var missing []string
+	for _, project := range declared {
+		exists, err := c.ProjectExists(ctx, project)
+		if err != nil {
+			return nil, nil, fmt.Errorf("gitlab: check project %s: %w", project, err)
+		}
+		if !exists {
+			missing = append(missing, project)
+			continue
+		}
+		kept = append(kept, project)
+	}
+	if len(missing) == 0 {
+		return kept, nil, nil
+	}
+	return kept, []string{fmt.Sprintf(
+		"these provisioning.projects are not on this instance and were "+
+			"skipped: %s — create them (or drop them from the config) and "+
+			"re-run; everything else reconciled",
+		strings.Join(missing, ", "))}, nil
 }
 
 // ensureGroupHook registers the one group webhook, or re-points it.
@@ -603,10 +658,11 @@ func ensureProjectHook(ctx context.Context, c *Client, project, target, secret s
 // gatedByTier reports whether a failure is GitLab withholding a licensed
 // endpoint rather than refusing this request.
 //
-// 404 is the one that matters and the one that reads wrong: GitLab hides a
-// Premium endpoint rather than answering 402, so "not found" is what a Free
-// instance says about a feature it has. 403 is the same answer from an
-// instance that surfaces the endpoint and refuses the call. Anything else —
+// 404 is the one that matters and the one that reads wrong: GitLab hides an
+// unavailable endpoint rather than answering 402, so "not found" is what an
+// instance says about a feature its tier does not serve. 403 is the same
+// answer from one that surfaces the endpoint and refuses the call. Anything
+// else —
 // a 401, a 5xx, a transport failure — is a real problem, and falling back on
 // it would paper over a broken credential with four project hooks.
 func gatedByTier(err error) bool {

@@ -193,6 +193,23 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID, a
 	return err
 }
 
+// ProjectExists reports whether a project path resolves on this instance.
+//
+// It answers a QUESTION rather than raising: a declared project that has
+// been renamed, moved or never created is an ordinary state of a company's
+// config, and the reconcile's answer to it is to drop that one and carry on.
+// A 404 is therefore data here, and every other refusal is still an error.
+func (c *Client) ProjectExists(ctx context.Context, project string) (bool, error) {
+	err := c.get(ctx, "/projects/"+url.PathEscape(project), nil, nil)
+	if err == nil {
+		return true, nil
+	}
+	if Status(err) == http.StatusNotFound {
+		return false, nil
+	}
+	return false, err
+}
+
 // Token is a personal access token as the list endpoint serves it.
 //
 // Never the value: GitLab returns that from the mint call alone, so a run
@@ -386,9 +403,9 @@ func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, erro
 
 // CreateProjectHook registers a webhook on one project.
 //
-// The FREE-TIER path. Group webhooks are Premium, so on gitlab.com Free and
-// on an unlicensed self-managed instance this is the only way a hook exists
-// at all — see [config.GroupWebhookMode].
+// The path for an instance whose tier has no group hooks — Premium on
+// gitlab.com, absent from Community Edition — where this is the only way a
+// hook exists at all. See [config.GroupWebhookMode].
 func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret string) (Hook, error) {
 	var out Hook
 	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",

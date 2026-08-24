@@ -155,7 +155,9 @@ Human seats are never created — they carry `contact.gitlab_username` and are r
 | **`true`** | Group hook only. **Fail** if the group hooks API is unavailable — no silent fallback, because the mode exists for an operator who needs the group-level guarantee and would otherwise find out the day a new repository went unwatched |
 | **`false`** | Per-project hooks only, one per listed `projects` entry, without touching the group |
 
-> **Group webhooks are a GitLab Premium feature.** On gitlab.com Free and on an unlicensed self-managed instance — which is what this repository's `docker compose --profile gitlab` stack runs — the endpoint is not there, and GitLab **hides a licensed endpoint as a `404`** rather than answering `402`. So "not found" is what a Free instance says about a feature it has, and `auto` treats a `403`/`404` from that endpoint as the tier gate. Any other refusal — a `401`, a `5xx`, a transport failure — is a real problem and aborts, because falling back on it would paper over a broken credential with a set of project hooks nobody asked for.
+> **The group hooks API is not everywhere.** It is a **Premium** feature on gitlab.com and it does not exist in **Community Edition** at all, and GitLab **hides an unavailable endpoint as a `404`** rather than answering `402` — so "not found" is what an instance says about a feature its tier does not serve. `auto` treats a `403`/`404` from that endpoint as the tier gate. Any other refusal — a `401`, a `5xx`, a transport failure — is a real problem and aborts, because falling back on it would paper over a broken credential with a set of project hooks nobody asked for.
+>
+> Measured, because the obvious guess is wrong: the **unlicensed `gitlab-ee`** image this repository's `docker compose --profile gitlab` stack runs (19.3.0, no license) *does* serve `GET /groups/:id/hooks`, so the local loop takes the group path. Set `group_webhook: false` to exercise the per-project path there.
 
 Per-project mode needs `provisioning.projects` to list something. A run with none **refuses** rather than registering nothing: an instance reporting a healthy integration that delivers to nobody is exactly the failure the skip-rather-than-guess rule exists to prevent.
 
@@ -326,9 +328,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
        -public-url http://host.docker.internal:80 \
        -env-file .env.gitlab
    ```
-   The compose instance is **unlicensed**, so it runs as Free and the group webhooks API is not there. The run falls back to one hook per `provisioning.projects` entry and says so — see [Where the webhook lands](#where-the-webhook-lands).
-
-   Only `nimbus-hq/nimbuscore` is seeded by the bootstrap, so the config's other projects (`nimbusk0s`, `console`, `website`) are dropped with a note — create them in the UI if you want them, then re-run (the reconcile is idempotent).
+   Only `nimbus-hq/nimbuscore` is seeded by the bootstrap, so the config's other projects (`nimbusk0s`, `console`, `website`) are checked, **dropped with a note, and everything else still reconciles** — create them in the UI if you want them, then re-run (the reconcile is idempotent). The compose instance serves group hooks, so the webhook lands on the group; see [Where the webhook lands](#where-the-webhook-lands) for the instances where it does not.
 5. **Run the engine** with the minted tokens sourced (add your base runtime `config.yaml` — providers, queue, DB — per the [quickstart](../getting-started/quickstart.md)). With `api.port: 80` in that Tier A file, the engine's **embedded API** receives the GitLab webhooks and serves the dashboard — one process is the whole stack; binding 80 needs privileged-port access on Linux (see the example config's `api` comment). (Do *not* also start a second, ingress-only node here — the two would fight over the port; splitting ingress off is for [fleets](../guides/fleet.md) only):
    ```bash
    source .env.gitlab
@@ -345,5 +345,5 @@ The full loop this validates: **provision** (service accounts appear with the ag
 ## Limitations
 
 - **The default MCP tool server is experimental.** `glab mcp serve` is GitLab-official but flagged experimental; pin a known-good `glab` version if that matters. The community `@zereight/mcp-gitlab` is the supported alternative for a single shared server. GitLab's built-in `/api/v4/mcp` endpoint stays unused until it gains PAT authentication (it is OAuth-only today). See [MCP tool server](#mcp-tool-server).
-- **A single group webhook is a Premium feature.** On the Free tier the provisioner registers **per-project** hooks; `group_webhook: auto` uses a group hook only when the instance accepts it.
+- **A single group webhook is not available on every tier** — Premium on gitlab.com, absent from Community Edition. `group_webhook: auto` uses a group hook where the instance serves the API and registers **per-project** hooks where it does not; see [Where the webhook lands](#where-the-webhook-lands). Per-project hooks cover exactly the declared `provisioning.projects`, so a repository added later needs another run.
 - **No composite identity.** GitLab's dual-attribution token mechanism (agent + triggering human) has no public API, so Crewlet's seats are plain service accounts. Every action is attributed to the agent that took it.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -36,16 +35,21 @@ type adminInstance struct {
 	hookBodies   []map[string]any
 	updatedHooks []string
 
-	// freeTier makes the GROUP hooks API answer 404, the way GitLab
-	// hides a Premium endpoint on Free — which is what this repository's
-	// own unlicensed compose instance does.
-	freeTier bool
+	// noGroupHooks makes the GROUP hooks API answer 404, the way GitLab
+	// hides an endpoint the instance's tier does not serve.
+	noGroupHooks bool
 	// hookStatus answers the group-hooks route with this status instead,
 	// for the refusals that are NOT a tier gate.
 	hookStatus int
 	// projectHooks is what the per-project route holds, keyed by project
 	// path.
 	projectHooks map[string][]gitlab.Hook
+	// missingProjects answer the existence probe with a 404, the way a
+	// renamed or not-yet-created repository does.
+	missingProjects map[string]bool
+	// projectStatus answers the existence probe with this status instead,
+	// for the refusals that are NOT absence.
+	projectStatus int
 
 	// failToken makes minting fail for this username, to reach the
 	// rollback path.
@@ -249,9 +253,29 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/projects/") &&
+		!strings.HasSuffix(path, "/members") && !strings.HasSuffix(path, "/hooks"):
+		// The existence probe. A project this instance does not have
+		// answers 404, which the reconcile reads as data.
+		//
+		// The project path arrives DECODED — net/http hands
+		// r.URL.Path with %2F already turned back into a slash — so
+		// "nimbus/api" is what a route sees, not "nimbus%2Fapi".
+		project := strings.TrimPrefix(path, "/projects/")
+		if f.projectStatus != 0 {
+			w.WriteHeader(f.projectStatus)
+			json.NewEncoder(w).Encode(map[string]any{"message": "refused"})
+			return
+		}
+		if f.missingProjects[project] {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "404 Project Not Found"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": 99, "path_with_namespace": project})
+
 	case strings.HasSuffix(path, "/hooks") && strings.HasPrefix(path, "/projects/"):
 		project := strings.TrimSuffix(strings.TrimPrefix(path, "/projects/"), "/hooks")
-		project = mustUnescape(project)
 		if r.Method == http.MethodGet {
 			json.NewEncoder(w).Encode(f.projectHooks[project])
 			return
@@ -270,7 +294,7 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(f.hookStatus)
 		json.NewEncoder(w).Encode(map[string]any{"message": "refused"})
 
-	case strings.HasPrefix(path, "/groups/7/hooks") && f.freeTier:
+	case strings.HasPrefix(path, "/groups/7/hooks") && f.noGroupHooks:
 		// GitLab HIDES a licensed endpoint rather than answering 402, so
 		// Free says "not found" about a feature it has.
 		w.WriteHeader(http.StatusNotFound)
@@ -333,16 +357,6 @@ func (f *adminInstance) revoked() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.revokes
-}
-
-// mustUnescape decodes a path-escaped project ("nimbus%2Fapi"), which is
-// how every project route addresses one.
-func mustUnescape(raw string) string {
-	decoded, err := url.PathUnescape(raw)
-	if err != nil {
-		return raw
-	}
-	return decoded
 }
 
 func atoi(s string) int {
@@ -1208,18 +1222,21 @@ func TestAnUnverifiableTokenIsLeftAloneWithANote(t *testing.T) {
 
 // --- where the webhook lands ---------------------------------------------
 
-// GROUP WEBHOOKS ARE PREMIUM, and a run must not fail on the tier most
-// self-hosted instances are.
+// AN INSTANCE WITH NO GROUP HOOKS STILL GETS HOOKS.
 //
-// GitLab hides a licensed endpoint as a 404 rather than a 402, so on Free
-// the group hooks API simply is not there. Registering only at the group
-// level failed the whole reconcile — AFTER minting, so the rollback revoked
-// every credential the run had just created — on the exact instance this
-// repository's own compose stack starts.
+// The API is Premium on gitlab.com and absent from Community Edition, and
+// GitLab hides an unavailable endpoint as a 404 rather than a 402. So
+// registering only at the group level failed the whole reconcile there —
+// AFTER minting, so the rollback revoked every credential the run had just
+// created.
+//
+// This is the only place that path is exercised: the unlicensed `gitlab-ee`
+// image this repository's compose stack runs was measured to serve group
+// hooks, so the local loop takes the group branch every time.
 func TestOnFreeTheHookFallsBackToTheProjects(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	f.freeTier = true
+	f.noGroupHooks = true
 	sink := newRecordingSink()
 
 	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
@@ -1296,7 +1313,7 @@ func TestGroupWebhookFalseNeverTouchesTheGroup(t *testing.T) {
 func TestGroupWebhookTrueFailsRatherThanFallingBack(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	f.freeTier = true
+	f.noGroupHooks = true
 	_, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
@@ -1357,7 +1374,7 @@ func TestPerProjectHooksWithNoProjectsRefuses(t *testing.T) {
 func TestAnExistingProjectHookIsUpdated(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	f.freeTier = true
+	f.noGroupHooks = true
 	f.projectHooks = map[string][]gitlab.Hook{
 		"nimbus/api": {{ID: 4, URL: "https://crewlet.example.com/webhooks/gitlab"}},
 	}
@@ -1370,5 +1387,100 @@ func TestAnExistingProjectHookIsUpdated(t *testing.T) {
 	}
 	if len(f.updatedHooks) != 1 || !strings.HasSuffix(f.updatedHooks[0], "/hooks/4") {
 		t.Errorf("updated = %v, want the existing hook re-pointed", f.updatedHooks)
+	}
+}
+
+// A DECLARED PROJECT THIS INSTANCE DOES NOT HAVE IS DROPPED, not fatal.
+//
+// `provisioning.projects` names a company's real repositories, and one being
+// renamed, moved or not created yet is an ordinary state of a config — not a
+// reason to refuse to provision the other nine. Aborting on the first 404
+// did exactly that, and it aborted MID-LOOP, after minting, so the rollback
+// then revoked the credentials the run had already created. Measured against
+// a real instance: the bootstrap seeds one project, the shipped example
+// declares four, and the run died on the second.
+func TestAMissingProjectIsSkippedRatherThanFatal(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.missingProjects = map[string]bool{"nimbus/gone": true}
+	sink := newRecordingSink()
+
+	res, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/gone"}
+		})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// THE REST RECONCILED. The seat has its token and its membership of
+	// the project that does exist.
+	if sink.value("GITLAB_TOKEN_SWE") == "" {
+		t.Error("the run rolled back and revoked what it had minted")
+	}
+	joined := false
+	for key := range f.members {
+		if strings.HasPrefix(key, "/projects/nimbus/api/members") {
+			joined = true
+		}
+		if strings.HasPrefix(key, "/projects/nimbus/gone/") {
+			t.Errorf("the seat was added to a project that does not exist: %s", key)
+		}
+	}
+	if !joined {
+		t.Errorf("the seat did not join the project that exists: %v", f.members)
+	}
+	// AND IT SAID WHAT IT SKIPPED, with the fix: an operator who is not
+	// told cannot know why an agent never sees that repository.
+	notes := strings.Join(res.Notes, "\n")
+	if !strings.Contains(notes, "nimbus/gone") || !strings.Contains(notes, "re-run") {
+		t.Errorf("notes do not name the skipped project and the fix: %v", res.Notes)
+	}
+}
+
+// THE CHECK RUNS BEFORE ANYTHING IS MUTATED, so a missing project cannot
+// leave half a reconcile behind for the operator to reason about.
+func TestProjectsAreCheckedBeforeAnySeatIsTouched(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.missingProjects = map[string]bool{"nimbus/gone": true}
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.Projects = []string{"nimbus/gone", "nimbus/api"}
+		}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	probe, firstWrite := -1, -1
+	for i, call := range f.calls {
+		if probe < 0 && call == "GET /projects/nimbus/gone" {
+			probe = i
+		}
+		if firstWrite < 0 && strings.HasPrefix(call, "POST ") {
+			firstWrite = i
+		}
+	}
+	if probe < 0 || firstWrite < 0 {
+		t.Fatalf("expected both a probe and a write: %v", f.calls)
+	}
+	if probe > firstWrite {
+		t.Errorf("the project was probed at %d, after the first write at %d", probe, firstWrite)
+	}
+}
+
+// A PROJECT THAT REFUSES FOR ANOTHER REASON IS STILL AN ERROR. A 403 says
+// the operator credential cannot see it, and dropping it silently would
+// provision a company whose agents are missing from a repository nobody
+// mentioned.
+func TestAForbiddenProjectIsNotSilentlySkipped(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.projectStatus = http.StatusForbidden
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.Projects = []string{"nimbus/api"}
+		})
+	if err == nil {
+		t.Fatal("a forbidden project was treated as merely absent")
 	}
 }
