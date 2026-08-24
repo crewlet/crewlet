@@ -289,6 +289,15 @@ services:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
       - gitlab-data:/var/opt/gitlab
+    # Webhook deliveries POST to the engine at host.docker.internal, and
+    # GitLab's SSRF check resolves the target when the hook is created.
+    # Docker Desktop provides the name natively; `host-gateway` covers
+    # Linux hosts, where it otherwise resolves to nothing and every
+    # delivery fails with a name lookup — the same mapping plane-api and
+    # plane-worker carry, and the reason the mattermost block below says
+    # gitlab and plane both need it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Lean config settles around ~1.9 GiB; this ceiling OOM-kills (and
     # restarts) rather than letting the box swap the host — same guard the
     # pulsar service uses.

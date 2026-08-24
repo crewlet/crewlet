@@ -276,3 +276,80 @@ func readRepoFile(t *testing.T, rel string) string {
 	}
 	return string(raw)
 }
+
+// --- the local loop's own wiring ------------------------------------------
+
+// A VENDOR THAT POSTS INTO THE ENGINE MUST BE ABLE TO RESOLVE THE HOST.
+//
+// The bootstrap scripts register webhooks at `host.docker.internal`, which
+// Docker Desktop provides natively and a Linux host does not — there it
+// needs `extra_hosts: host.docker.internal:host-gateway`, or the name
+// resolves to nothing and every delivery fails a lookup.
+//
+// plane-api and plane-worker carry it. `gitlab` did not, for the length of
+// the rewrite, while the compose file's own mattermost comment said "gitlab
+// and plane both need it" — the file asserted an invariant it broke. Nothing
+// noticed because the only guard was a Python test that named the plane
+// services and stopped there.
+//
+// Mattermost is deliberately absent: it never calls the engine at all — the
+// engine opens an outbound websocket per seat, because Mattermost has no
+// usable inbound webhook — which is also why that stack works behind NAT
+// with no tunnel.
+func TestEveryInboundVendorCanResolveTheEngineHost(t *testing.T) {
+	t.Parallel()
+	compose := readRepoFile(t, "docker-compose.yml")
+	const mapping = "host.docker.internal:host-gateway"
+
+	for _, service := range []string{"gitlab", "plane-api", "plane-worker"} {
+		block := composeService(t, compose, service)
+		if !strings.Contains(block, mapping) {
+			t.Errorf("the %s service has no %q, so on a Linux host every "+
+				"webhook it sends the engine fails a name lookup",
+				service, mapping)
+		}
+	}
+
+	// And the one that must NOT have it, so the exclusion stays a
+	// decision: a mapping here would imply an inbound path Mattermost
+	// does not have, and the next reader would go looking for it.
+	if strings.Contains(composeService(t, compose, "mattermost"), mapping) {
+		t.Error("the mattermost service carries the host mapping; it never " +
+			"calls the engine, so that says an inbound path exists")
+	}
+}
+
+// composeService returns one service's block, from its key to the next
+// top-level service key.
+//
+// A text slice rather than a YAML parse: the compose file carries anchors
+// and merge keys that a naive decode flattens, and what is under test is a
+// line a person wrote under a specific service.
+func composeService(t *testing.T, compose, name string) string {
+	t.Helper()
+	start := strings.Index(compose, "\n  "+name+":\n")
+	if start < 0 {
+		t.Fatalf("no %s service in docker-compose.yml", name)
+	}
+	rest := compose[start+1:]
+	for offset := 1; ; {
+		next := strings.Index(rest[offset:], "\n  ")
+		if next < 0 {
+			return rest
+		}
+		offset += next + 1
+		// A sibling key, not a nested one: two spaces then a
+		// non-space, then a colon before the end of the line.
+		line := rest[offset:]
+		if end := strings.IndexByte(line, '\n'); end >= 0 {
+			line = line[:end]
+		}
+		trimmed := strings.TrimPrefix(line, "  ")
+		if strings.HasPrefix(trimmed, " ") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasSuffix(strings.TrimSpace(trimmed), ":") {
+			return rest[:offset]
+		}
+	}
+}
