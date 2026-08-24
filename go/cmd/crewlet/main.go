@@ -109,6 +109,7 @@ Usage:
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet gitlab provision    Reconcile the company's seats into a GitLab instance
+  crewlet mattermost provision  Reconcile the company's seats into a Mattermost team
   crewlet version             Print the version
   crewlet help                Show this message
 

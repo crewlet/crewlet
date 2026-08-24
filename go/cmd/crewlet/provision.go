@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -231,10 +233,128 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 	switch {
 	case vendor == "gitlab" && sub == "provision":
 		return runGitLabProvision(rest, stdout, stderr)
+	case vendor == "mattermost" && sub == "provision":
+		return runMattermostProvision(rest, stdout, stderr)
 	case sub == "" || sub == "help":
 		fmt.Fprintf(stderr, "usage: crewlet %s provision <company.yaml>\n", vendor)
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown %s command %q", vendor, sub)
 	}
+}
+
+// runMattermostProvision is `crewlet mattermost provision`.
+func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
+	companyPath, args := splitSubject(args)
+
+	fs := flag.NewFlagSet("mattermost provision", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	sinks := addSinkFlags(fs)
+	adminToken := fs.String("admin-token", "",
+		"a Mattermost token for a system administrator; empty reads MATTERMOST_ADMIN_TOKEN")
+	dryRun := fs.Bool("dry-run", false,
+		"print what the run would do and touch nothing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	tail := fs.Args()
+	if companyPath == "" && len(tail) == 1 {
+		companyPath, tail = tail[0], nil
+	}
+	if companyPath == "" || len(tail) > 0 {
+		fmt.Fprintln(stderr,
+			"usage: crewlet mattermost provision <company.yaml> "+
+				"[-secret-store|-env-file PATH|-print] [-dry-run]")
+		return errors.New("name exactly one company document")
+	}
+
+	company, err := config.LoadCompany(companyPath)
+	if err != nil {
+		return err
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		return err
+	}
+	cfg := company.Integrations.Mattermost
+	plan, err := mattermost.PlanFor(organization, cfg)
+	if err != nil {
+		return err
+	}
+
+	printPlan(stdout, plan)
+	if *dryRun {
+		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, joined or minted.")
+		return nil
+	}
+	if plan.Empty() {
+		return nil
+	}
+
+	ctx := context.Background()
+	stdoutForPrintSink = stdout
+	sink, closeSink, err := sinks.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeSink()
+
+	env := config.EnvOnly()
+	token := strings.TrimSpace(*adminToken)
+	if token == "" {
+		token = strings.TrimSpace(env.Lookup("MATTERMOST_ADMIN_TOKEN"))
+	}
+	if token == "" {
+		return errors.New(
+			"no administrator token: pass -admin-token or export " +
+				"MATTERMOST_ADMIN_TOKEN. The bots' own tokens are what this " +
+				"run MINTS, so it cannot bootstrap itself from them")
+	}
+	client, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: env.Value(cfg.URL), Token: token,
+	})
+	if err != nil {
+		return err
+	}
+
+	res, err := mattermost.Reconcile(ctx, mattermost.Options{
+		Client: client, Config: cfg, Org: organization, Plan: plan, Sink: sink,
+	})
+	if err != nil {
+		return err
+	}
+	printChatResult(stdout, res, sink.Describe())
+	return nil
+}
+
+// printChatResult renders what a Mattermost run did.
+func printChatResult(w io.Writer, res *mattermost.Result, where string) {
+	fmt.Fprintf(w, "\nRecorded in %s.\n", where)
+	if len(res.Created) > 0 {
+		fmt.Fprintf(w, "Created %d bot(s): %s\n",
+			len(res.Created), strings.Join(res.Created, ", "))
+	}
+	if len(res.Rotated) > 0 {
+		fmt.Fprintf(w, "Minted a fresh token for %d bot(s): %s\n"+
+			"  (every run rotates — a token's value is returned once and "+
+			"cannot be read back)\n",
+			len(res.Rotated), strings.Join(res.Rotated, ", "))
+	}
+	// THE CHANNELS ARE THE PART TO CHECK. A bot receives only what its
+	// channels deliver, so this line is the difference between an agent
+	// that wakes and one that never does.
+	for _, seat := range sortedKeys(res.Joined) {
+		fmt.Fprintf(w, "  %-16s channels: %s\n", seat,
+			strings.Join(res.Joined[seat], ", "))
+	}
+	printNotes(w, res.Notes)
+}
+
+func sortedKeys(m map[string][]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

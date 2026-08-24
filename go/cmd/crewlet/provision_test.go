@@ -157,3 +157,65 @@ func TestAnUnknownIntegrationCommandIsRefused(t *testing.T) {
 		t.Fatal("an unknown gitlab command was accepted")
 	}
 }
+
+const chatCompanyDoc = `
+name: Nimbus
+providers:
+  llm:
+    main:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${ANTHROPIC_API_KEY}"]
+integrations:
+  mattermost:
+    enabled: true
+    url: https://chat.example.com
+    team: nimbus
+    provisioning:
+      username_prefix: "agent-"
+      channels: [general]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: main
+    integrations:
+      mattermost:
+        bot_token: "${MM_TOKEN_CEO}"
+        channel: leadership
+`
+
+// THE MATTERMOST COMMAND SHARES THE SAME SAFETY RULES: a dry run reaches
+// nothing, and a real run with nowhere to put what it mints is refused
+// before it touches the instance.
+func TestTheMattermostCommandSharesTheProvisioningRules(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "company.yaml")
+	if err := os.WriteFile(path, []byte(chatCompanyDoc), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	chat := func(args ...string) (string, error) {
+		var out, errs bytes.Buffer
+		err := run(append([]string{"mattermost", "provision"}, args...), &out, &errs)
+		return out.String(), err
+	}
+
+	out, err := chat(path, "-dry-run")
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if !strings.Contains(out, "ceo") || !strings.Contains(out, "MM_TOKEN_CEO") {
+		t.Errorf("the plan does not name the seat:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing was created") {
+		t.Errorf("the dry run does not say it did nothing:\n%s", out)
+	}
+
+	if _, err := chat(path, "-admin-token", "t"); err == nil {
+		t.Fatal("a run with no sink was accepted")
+	}
+	if _, err := chat(path, "-print"); err == nil {
+		t.Fatal("a run with no administrator token was accepted")
+	} else if !strings.Contains(err.Error(), "MATTERMOST_ADMIN_TOKEN") {
+		t.Errorf("the refusal does not name the variable: %v", err)
+	}
+}
