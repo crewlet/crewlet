@@ -9,6 +9,19 @@ Nothing here is needed to *use* Crewlet; it is process for people with commit
 rights on this repository, which is why it lives beside
 [CONTRIBUTING.md](CONTRIBUTING.md) rather than in `docs/`.
 
+> **The Go release tooling is in the tree and is not the live pipeline.**
+> [`.goreleaser.yaml`](.goreleaser.yaml), [`Dockerfile`](Dockerfile) and
+> [`go-release.yml`](.github/workflows/go-release.yml) build the binaries,
+> archives, checksums and container image the rewrite will ship. They are
+> exercised in snapshot mode — on demand and on any pull request touching the
+> release surface — and they push nothing: `release.yml` still owns the `v*`
+> tag, and two workflows creating one GitHub Release for one tag is a race
+> whose loser fails the run. The tag trigger moves in the same commit that
+> deletes `release.yml`, and this runbook is rewritten for the binary in that
+> commit. Reasoning:
+> [`rewrite/decisions/901-release-tooling.md`](rewrite/decisions/901-release-tooling.md).
+> **Everything below describes the pipeline that is live today.**
+
 ---
 
 ## How a release flows

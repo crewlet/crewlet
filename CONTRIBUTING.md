@@ -125,19 +125,21 @@ covered by `tests/test_queue/test_protocol.py`.
 
 ## Dependency updates
 
-Dependabot watches all three dependency surfaces this repository has, and
-opens a pull request when any of them has a newer release:
+Dependabot watches every dependency surface this repository has, and opens a
+pull request when any of them has a newer release:
 
 | Surface | Ecosystem | What it covers |
 |---|---|---|
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `pyproject.toml` | `pip` | the package's own requirements |
+| `go/go.mod` | `gomod` | the engine's own Go dependencies |
+| `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
-The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): three
-entries on a weekly schedule, and nothing else. Each pull request is reviewed
-on its own merits, and CI runs on it — for the actions and Compose surfaces
-that is most of the review. Two things are worth knowing:
+The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
+entry per surface on a weekly schedule, and nothing else. Each pull request is
+reviewed on its own merits, and CI runs on it — for the actions, image and
+Compose surfaces that is most of the review. Three things are worth knowing:
 
 - **Python pull requests are rare.** `pyproject.toml` declares open floors
   (`pydantic>=2.0`), which already admit new releases, so a routine upstream
@@ -149,6 +151,9 @@ that is most of the review. Two things are worth knowing:
   compose file and to keep an existing volume readable. Closing that pull
   request is the right answer; Dependabot does not reopen one for a version
   you have already turned down.
+- **`docker` and `docker-compose` are two ecosystems, not one.** The first
+  reads `Dockerfile`s and the second reads Compose files; neither sees the
+  other's manifests, so a repository with both needs both entries.
 
 Adding a new dependency surface — the first `Dockerfile`, a `package.json` —
 means adding its `updates:` entry in the same change. Nothing reports the

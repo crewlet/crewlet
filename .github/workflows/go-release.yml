@@ -1,0 +1,104 @@
+name: go-release
+
+# Builds the Crewlet binaries, archives, checksums and container image with
+# goreleaser. See rewrite/decisions/901-release-tooling.md.
+#
+# WHAT IS NOT HERE YET: the `push: tags: ["v*"]` trigger. release.yml still
+# owns that tag and still creates the GitHub Release for it — two workflows
+# creating one Release for one tag is a race with a loser, and the loser
+# would be whichever finished second. The tag trigger arrives in the
+# root-replacement commit that deletes release.yml, and it is the only line
+# of this file that changes then.
+#
+# Until then ONE job runs the whole pipeline — every target, the archives,
+# the checksums and the container image — pushing nothing, on two triggers:
+# on demand, and on any pull request that touches the release surface. So the
+# path cannot rot into the move and then run for the first time on the tag
+# that publishes.
+#
+# It pushes nothing because it runs in SNAPSHOT mode, not because publishing
+# is skipped: goreleaser's dockers_v2 builds and pushes in ONE step, so
+# `--skip=publish` skips the image build entirely and would leave the
+# Dockerfile untested.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Only when the release surface itself changes. A full six-target build
+    # on every engine pull request would buy nothing: what breaks here is
+    # this config, the Dockerfile, or the module's own toolchain.
+    paths:
+      - ".goreleaser.yaml"
+      - "Dockerfile"
+      - ".github/workflows/go-release.yml"
+      - "go/go.mod"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  snapshot:
+    name: goreleaser snapshot
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags: goreleaser derives the version from the most
+      # recent tag, and a shallow clone has none — which turns every run into
+      # a v0.0.0 snapshot that proves nothing about the real version path.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      # The image is built for linux/arm64 as well as amd64, and the base
+      # image's package install RUNs on the target architecture. Without
+      # binfmt registered, the arm64 leg fails at apt-get with an exit code
+      # and no explanation.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          # `check` first so a config error is reported as a config error
+          # rather than as whatever the build does with a bad field.
+          args: check
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=sign
+
+      - name: Prove the built binary reports the stamped version
+        # The ldflags stamp is the one part of this pipeline with no other
+        # symptom: a renamed variable or a moved package silently stops
+        # applying, and every release then reports "dev" from the build-info
+        # fallback. Nothing but running the binary catches it.
+        run: |
+          reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version)"
+          echo "$reported"
+          case "$reported" in
+            *dev*|"") echo "::error::the version stamp did not land: $reported"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: snapshot-dist
+          # The unarchived per-target directories are the same binaries
+          # again; uploading only what a user would download keeps this
+          # under a gigabyte.
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          if-no-files-found: error

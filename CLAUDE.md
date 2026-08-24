@@ -1370,7 +1370,7 @@ If the change touches `pyproject.toml`, `README.md`, or any non-`.py` file under
 - `python -m build && twine check --strict dist/*`
 
 ## Dependency Updates
-Dependabot watches every dependency surface in the repo — `.github/workflows/*.yml` (`github-actions`), `pyproject.toml` (`pip`), and `docker-compose.yml` (`docker-compose`). The config is `.github/dependabot.yml`, and it is deliberately three entries on a weekly schedule with no further knobs; keep it that way unless a knob earns its place.
+Dependabot watches every dependency surface in the repo — `.github/workflows/*.yml` (`github-actions`), `pyproject.toml` (`pip`), `go/go.mod` (`gomod`), `Dockerfile` (`docker`), and `docker-compose.yml` (`docker-compose`). The config is `.github/dependabot.yml`, and it is deliberately one entry per surface on a weekly schedule with no further knobs; keep it that way unless a knob earns its place. `docker` and `docker-compose` are separate ecosystems reading separate manifests — a repository with both needs both entries.
 
 - **A new dependency surface ships with its `updates:` entry.** Adding the first `Dockerfile`, a `package.json`, a `go.mod` — the Dependabot entry is part of that change, not a follow-up. Nothing fails when it is missing; the surface is just never watched, which looks exactly like a surface with nothing to update.
 - **Actions pinned to a non-version ref are invisible to Dependabot.** A branch pointer (`@release/v1`) or `@main` yields no update PRs at all, so pin actions to a version tag or a full SHA. Maintainer-facing detail is in `CONTRIBUTING.md`.
