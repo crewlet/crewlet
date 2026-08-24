@@ -643,8 +643,27 @@ func TestTheHookSubscribesToExactlyWhatIsRouted(t *testing.T) {
 			t.Errorf("%s is not subscribed", on)
 		}
 	}
-	if _, present := body["push_events"]; present {
-		t.Error("push is subscribed, and nothing routes it")
+	// OFF IS STATED, NOT OMITTED.
+	//
+	// This assertion used to demand that push be ABSENT from the body,
+	// which is the bug it was written to prevent: GitLab defaults
+	// push_events to TRUE, so a body that never mentions push subscribes
+	// to it. Measured on a real instance — the hook came back
+	// push_events: true from exactly this body.
+	for _, off := range []string{
+		"push_events", "tag_push_events", "job_events", "wiki_page_events",
+		"deployment_events", "releases_events", "emoji_events",
+		"confidential_issues_events", "confidential_note_events",
+	} {
+		value, present := body[off]
+		if !present {
+			t.Errorf("%s is omitted, which leaves it at whatever this "+
+				"GitLab version defaults it to", off)
+			continue
+		}
+		if value != false {
+			t.Errorf("%s is subscribed, and nothing routes it", off)
+		}
 	}
 	// TLS VERIFICATION STAYS ON. A provisioner that turned it off for a
 	// self-signed development instance would leave it off in production,

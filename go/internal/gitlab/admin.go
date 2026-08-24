@@ -421,25 +421,75 @@ func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID i
 }
 
 // hookBody is the subscription every crewlet hook carries.
+// EVERY EVENT IS STATED, including the ones that are off.
+//
+// Omitting a field does not mean "off" — it means "whatever this GitLab
+// version defaults it to", and `push_events` defaults to TRUE. Sending only
+// the four the parser routes therefore subscribed every hook to every push
+// on every repository, which the engine answers with a 200 and drops.
+// Measured on a real instance: the hook came back `push_events: true` from a
+// body that never mentioned push.
+//
+// So the list below is exhaustive over what GitLab's hook API accepts, and a
+// future version that flips a default cannot quietly sign this deployment up
+// for traffic nothing reads.
 func hookBody(target, secret string) map[string]any {
-	return map[string]any{
+	body := map[string]any{
 		"url": target,
 		// The Standard-Webhooks signing token. GitLab sends it back as a
 		// header the engine verifies an HMAC with; the weaker plain-token
 		// scheme is deliberately unsupported.
 		"token": secret,
-		// The four the parser routes. Push is absent on purpose: nothing
-		// routes it, and subscribing would spend delivery on events this
-		// engine answers 200 and drops.
-		"issues_events":         true,
-		"merge_requests_events": true,
-		"note_events":           true,
-		"pipeline_events":       true,
 		// TLS verification stays ON. A provisioner that turned it off to
 		// make a self-signed development instance work would leave it off
 		// in production, where the hook carries a signing secret.
 		"enable_ssl_verification": true,
 	}
+	for _, event := range hookEvents {
+		body[event] = routedEvents[event]
+	}
+	return body
+}
+
+// hookEvents is every subscription GitLab's hook API takes.
+//
+// Read off a real instance (19.3.0-ee) rather than off the reference docs,
+// because the point of the list is that nothing is left to a default and a
+// doc that lags the API would leave exactly the gap this exists to close. A
+// name a given version does not know is ignored, so listing one that arrived
+// later costs nothing and omitting one costs a subscription nobody chose.
+var hookEvents = []string{
+	"push_events",
+	"tag_push_events",
+	"issues_events",
+	"confidential_issues_events",
+	"merge_requests_events",
+	"note_events",
+	"confidential_note_events",
+	"job_events",
+	"pipeline_events",
+	"wiki_page_events",
+	"deployment_events",
+	"feature_flag_events",
+	"releases_events",
+	"emoji_events",
+	"milestone_events",
+	"repository_update_events",
+	"resource_access_token_events",
+	"resource_deploy_token_events",
+	"vulnerability_events",
+}
+
+// routedEvents are the ones the parser turns into a notification. Everything
+// else in [hookEvents] is registered OFF.
+//
+// Emoji is the near miss and is deliberately absent: an award names a user
+// and a target, but no party to notify — see the parser's own note.
+var routedEvents = map[string]bool{
+	"issues_events":         true,
+	"merge_requests_events": true,
+	"note_events":           true,
+	"pipeline_events":       true,
 }
 
 // isNotFound reports an error that is a 404 — "not there yet", which for a
