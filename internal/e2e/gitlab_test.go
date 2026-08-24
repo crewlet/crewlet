@@ -63,6 +63,12 @@ func (f *forge) identityLookups() int {
 	return f.lookups
 }
 
+// testSigningSecret is a well-formed Standard-Webhooks key: whsec_ over 32
+// bytes, the only shape GitLab signs with and the only shape the engine
+// starts on. A placeholder rather than a credential — these tests publish
+// onto the inbound queue directly, so nothing here ever computes an HMAC.
+const testSigningSecret = "whsec_ZTJlLXRlc3Qtc2lnbmluZy1rZXktMzItYnl0ZXMhISE="
+
 // gitlabCompany enables the code host with no seat holding a credential.
 func gitlabCompany(url string) func(string) string {
 	return func(doc string) string {
@@ -70,7 +76,7 @@ func gitlabCompany(url string) func(string) string {
   gitlab:
     enabled: true
     url: `+url+`
-    signing_secret: ${CREWLET_TEST_GITLAB_SECRET}
+    signing_secret: `+testSigningSecret+`
 roles:
 `, 1)
 	}
@@ -159,6 +165,53 @@ func TestASeatWithNoCredentialIsUnreachableFromTheCodeHost(t *testing.T) {
 
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
 	box.quiet(t)
+}
+
+// A SIGNING SECRET THAT CANNOT VERIFY ANYTHING STOPS THE CODE HOST, LOUDLY.
+//
+// The route holds the other half of this — an unusable secret answers 503
+// rather than accepting an unverifiable delivery — but by then the operator
+// has a hook GitLab's own settings page reports as healthy, failing every
+// delivery, with nothing naming the variable behind it. Config already
+// refuses a bad LITERAL, so the only way to get here is a ${VAR} that
+// resolved to nothing or to something else, which is exactly the case config
+// cannot see. The company keeps running: the code host is what is
+// unavailable, and saying so beats reporting it enabled and inert.
+func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
+	forge := fakeGitLab(t, map[string]string{"glpat-ceo": "ceo-bot"})
+	// Both cases are REFERENCES, because that is the only way to reach this
+	// code: config refuses a literal that is not a usable key outright, so
+	// what the engine has left to catch is a reference resolving to nothing
+	// or to something else — precisely what config cannot see.
+	const ref = "${CREWLET_TEST_GITLAB_SECRET}"
+	for _, tc := range []struct{ name, resolvesTo string }{
+		{"a reference nothing answers", ""},
+		{"a value the vendor could not have produced", "not-a-whsec-value"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.resolvesTo != "" {
+				t.Setenv("CREWLET_TEST_GITLAB_SECRET", tc.resolvesTo)
+			}
+			// THE SEAT HOLDS A CREDENTIAL, which is what makes the silence
+			// mean something: this exact company with a usable signing
+			// secret wakes the CEO on this exact delivery, as
+			// TestACodeHostAssignmentWakesTheSeatThatOwnsTheAccount does.
+			n := startWith(t, func(doc string) string {
+				return strings.Replace(withSeatCredential(forge.url)(doc),
+					testSigningSecret, ref, 1)
+			})
+			box := watchInbox(t, n, "ceo")
+
+			// The company is up — the seat's mailbox exists and the rest of
+			// the spine is running — and the code host is not.
+			gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))
+			box.quiet(t)
+			if got := forge.identityLookups(); got != 0 {
+				t.Errorf("the code host resolved %d identities on a config it "+
+					"could not verify a delivery with", got)
+			}
+		})
+	}
 }
 
 // THE ONE EXCEPTION TO THE SELF-ACTION RULE, through the whole spine. The

@@ -1,11 +1,11 @@
 package config
 
 import (
-	"encoding/base64"
 	"regexp"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/whsec"
 )
 
 // Integrations is the INBOUND half of the external world: how events reach
@@ -486,14 +486,7 @@ func (g *GitLab) APIBase() string { return strings.TrimRight(g.URL, "/") + "/api
 // "Must be in whsec_<base64> format encoding a 32-byte key" — the API's own
 // words. STANDARD base64: the URL-safe alphabet usually still decodes to
 // something, which is a mismatch with no message rather than an error.
-func validSigningSecret(secret string) bool {
-	payload, ok := strings.CutPrefix(secret, "whsec_")
-	if !ok {
-		return false
-	}
-	raw, err := base64.StdEncoding.DecodeString(payload)
-	return err == nil && len(raw) == 32
-}
+func validSigningSecret(secret string) bool { return whsec.Valid(secret) }
 
 // GitLabProvisioning is the provisioning CLI's inputs: one service account
 // per agent seat, memberships, per-agent tokens minted into the config's

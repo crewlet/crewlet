@@ -2,8 +2,6 @@ package gitlab
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/whsec"
 )
 
 // Reconcile brings a GitLab instance in line with the company config.
@@ -566,33 +565,14 @@ func signingSecret(ctx context.Context, opts Options) (string, string, error) {
 
 // SigningSecretPrefix is what GitLab's Standard-Webhooks implementation
 // expects a signing token to start with.
-const SigningSecretPrefix = "whsec_"
+const SigningSecretPrefix = whsec.Prefix
 
 // MintSigningSecret generates a Standard-Webhooks signing secret.
 //
-// 32 bytes, which is the HMAC-SHA256 block-equivalent strength the signature
-// scheme gets its security from — more is not stronger and less is the only
-// way to get this wrong.
-//
-// # The encoding is load-bearing
-//
-// The `whsec_` prefix means the payload is base64 and the HMAC KEY is those
-// DECODED bytes, not the printable form. So the encoding here has to be the
-// one the verifier decodes with — STANDARD base64, padded, per the spec.
-//
-// Getting it wrong is silent. A URL-safe payload usually fails a standard
-// decode, and the verifier's fallback then keys on the printable string
-// verbatim — deliberately, so a hand-written secret still works — while
-// GitLab keys on the decoded bytes. Every delivery is then refused with a
-// signature mismatch and nothing anywhere names the encoding. Measured:
-// that is exactly what the first version of this did.
-func MintSigningSecret() (string, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("gitlab: generate a signing secret: %w", err)
-	}
-	return SigningSecretPrefix + base64.StdEncoding.EncodeToString(raw), nil
-}
+// The FORMAT lives in [whsec], with the three readers that must agree on it.
+// This is the vendor-facing name for it, because a caller here is asking
+// GitLab a question and should not have to know which spec answers it.
+func MintSigningSecret() (string, error) { return whsec.Mint() }
 
 // ensureHooks registers this deployment's webhook, at ONE level.
 //

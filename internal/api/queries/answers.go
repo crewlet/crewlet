@@ -103,6 +103,14 @@ type Sources struct {
 	// three apart rather than folding them into a boolean.
 	Routed func() []string
 
+	// Verifiable names the integrations whose resolved material could
+	// accept a delivery, or nil when this process cannot say. Populated
+	// from the same NodeRuntime as Routed, and kept apart from it for the
+	// same reason: "would a delivery be verified" and "would a verified
+	// delivery reach anyone" fail independently, and an operator staring at
+	// a silent integration has to know which half broke.
+	Verifiable func() []string
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
 	NodeID string

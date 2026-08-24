@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/whsec"
 )
 
 // The provider signature schemes. Four of them, over seven routes: GitHub's
@@ -131,17 +133,7 @@ func verifyGitLab(body []byte, secret, id, timestamp, signature string, now time
 // endless stream of signature mismatches, indistinguishable from an attack,
 // with nothing anywhere naming the encoding. Answering false makes the
 // route say `no_webhook_secret` instead, which is the true statement.
-func gitlabKey(secret string) ([]byte, bool) {
-	payload, ok := strings.CutPrefix(secret, "whsec_")
-	if !ok {
-		return nil, false
-	}
-	raw, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		return nil, false
-	}
-	return raw, true
-}
+func gitlabKey(secret string) ([]byte, bool) { return whsec.Key(secret) }
 
 // withinWindow reports whether a signed decimal-seconds timestamp is close
 // enough to now, in EITHER direction. A future stamp is as suspect as an old

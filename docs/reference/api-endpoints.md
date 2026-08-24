@@ -728,27 +728,45 @@ trace anywhere except the provider's own delivery UI.
 ```json
 {
   "traffic_known": true,
-  "window_hours": 24,
+  "traffic_since": "2026-06-07T09:12:00Z",
   "integrations": [
     {
-      "key": "slack", "configured": true, "enabled": true,
-      "url": "", "workspace": "",
-      "inbound_kind": "webhook", "inbound_path": "/webhooks/slack/{handle}",
-      "secret_present": true, "seats": ["eng", "pm"],
-      "inbound": 128, "routed": 96, "skipped": 30, "coalesced": 2,
+      "key": "gitlab", "configured": true, "enabled": true,
+      "url": "https://gitlab.example.com",
+      "inbound_kind": "webhook", "inbound_path": "/webhooks/gitlab",
+      "routes": true,
+      "secret_present": true, "secret_usable": true,
+      "seats": ["eng", "pm"],
+      "inbound": 128,
       "last_at": "2026-06-08T07:31:10+00:00"
     }
   ]
 }
 ```
 
-`secret_present` is three-valued because the cases mean opposite things:
-`null` — this surface does not use one (Mattermost authenticates its
-websocket with the bot's own token); `false` — it does, and none is
-configured, which means the webhook route answers `503` to every delivery.
-That last one is a real, silent outage and must not render like "not
-applicable". Only the boolean is ever returned; the value never leaves the
-process.
+`secret_present` and `secret_usable` are **two different facts**, and the gap
+between them is a silent outage.
+
+`secret_present` is a claim about the **document**: an operator wrote a secret
+down. It is three-valued because the cases mean opposite things: `null` — this
+surface does not use one (Mattermost authenticates its websocket with the
+bot's own token); `false` — it does, and none is configured, which means the
+webhook route answers `503` to every delivery.
+
+`secret_usable` is a claim about what this process **resolved**. A secret lives
+in the config as a `${VAR}`, so `secret_present: true, secret_usable: false` is
+a route refusing every delivery while the config shows a secret and the
+vendor's settings page shows a healthy hook — with nothing anywhere naming the
+variable. For GitLab the bar is higher than non-empty: the value must be
+`whsec_` over standard base64 of a 32-byte key, the only shape the vendor
+signs with. `null` means this process cannot say — a standalone API has no
+engine whose resolution to read — or the surface has no secret to resolve.
+
+Only the booleans are ever returned; no secret value leaves the process.
+
+`routes` is the third of the same family: whether a **verified** delivery
+would wake a seat. The three fail independently, and an operator staring at a
+silent integration needs to know which half broke.
 
 **Health is deliberately not inferred.** An idle Slack and a 401-ing Slack
 are indistinguishable in the event store, so silence is reported as "no

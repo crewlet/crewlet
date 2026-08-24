@@ -286,6 +286,88 @@ test("integrations: a missing signing secret is a finding", async () => {
   );
 });
 
+test("integrations: a secret that did not resolve is not a secret", async () => {
+  // The failure every other surface hides. The config names a ${VAR}, so
+  // secret_present is true and the vendor's settings page shows a healthy
+  // hook — while the route answers 503 to every delivery because nothing
+  // answered the variable. Rendering that as "configured" is the whole bug.
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: null,
+        integrations: [
+          {
+            key: "gitlab",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/gitlab",
+            secret_present: true,
+            secret_usable: false,
+            routes: true,
+            seats: ["swe"],
+            inbound: 0,
+            last_at: null,
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /did not resolve to a usable key/);
+      assert.match(html, /turned away with a 503/);
+    },
+  );
+});
+
+test("integrations: a resolved secret says so, and an unknown one does not claim to", async () => {
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: null,
+        integrations: [
+          {
+            key: "gitlab",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/gitlab",
+            secret_present: true,
+            secret_usable: true,
+            routes: true,
+            seats: ["swe"],
+            inbound: 0,
+            last_at: null,
+          },
+          {
+            key: "plane",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/plane",
+            secret_present: true,
+            secret_usable: null,
+            routes: true,
+            seats: [],
+            inbound: 0,
+            last_at: null,
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /configured and resolved/);
+      assert.match(html, /not visible from this process/);
+      assert.doesNotMatch(html, /did not resolve to a usable key/);
+    },
+  );
+});
+
 test("integrations: a surface with no shared secret is not missing one", async () => {
   await withView(
     createIntegrationsView,

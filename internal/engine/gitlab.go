@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/whsec"
 )
 
 // The code host, wired.
@@ -176,6 +177,40 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 		// missing variable — and starting anyway would point every
 		// lookup at "" and fail with a much less useful message.
 		return nil, fmt.Errorf("engine: gitlab: url resolved empty (%q)", cfg.URL)
+	}
+
+	// THE SIGNING SECRET IS NOT OPTIONAL, and it is checked HERE rather
+	// than left to the first delivery.
+	//
+	// Config already refuses an enabled GitLab whose signing_secret is
+	// missing or is a literal the vendor could never have produced, so
+	// reaching this line with an unusable value means a ${VAR} that did not
+	// resolve, or resolved to something else. Neither is visible from
+	// anywhere: the route answers 503 to every delivery, GitLab's own
+	// settings page shows a healthy hook that keeps failing, and no log
+	// line anywhere names the variable.
+	//
+	// The same call url gets above, and it is not a boot refusal: the
+	// caller logs gitlab_unavailable and the company runs on without its
+	// code host. That is the honest outcome, because the integration IS
+	// unavailable — the alternative is one that reports itself enabled and
+	// is inert.
+	secret := env.Value(cfg.SigningSecret)
+	if secret == "" {
+		return nil, fmt.Errorf(
+			"engine: gitlab: signing_secret resolved empty (%q) — nothing "+
+				"would verify an inbound delivery, so every webhook this "+
+				"instance sends would be refused; set that variable in the "+
+				"environment or this node's secret store", cfg.SigningSecret)
+	}
+	if !whsec.Valid(secret) {
+		// NAMES ONLY, never the value: this line goes to a log file.
+		return nil, fmt.Errorf(
+			"engine: gitlab: signing_secret (%q) resolved to a value that is "+
+				"not %s followed by standard base64 over a %d-byte key, which "+
+				"is the only shape GitLab signs with — it cannot be the HMAC "+
+				"key for any delivery",
+			cfg.SigningSecret, whsec.Prefix, whsec.KeyBytes)
 	}
 
 	// THE ENGINE CREDENTIAL IS OPTIONAL and its absence is a documented

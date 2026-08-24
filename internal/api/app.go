@@ -145,6 +145,12 @@ func New(opts Options) *App {
 	if sources.Routed == nil && opts.Runtime != nil {
 		sources.Routed = func() []string { return opts.Runtime.Snapshot().RoutedSources }
 	}
+	// And only a co-located engine knows what its ${VAR}s resolved to.
+	if sources.Verifiable == nil && opts.Runtime != nil {
+		sources.Verifiable = func() []string {
+			return opts.Runtime.Snapshot().VerifiableSources
+		}
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 

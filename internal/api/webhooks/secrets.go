@@ -1,8 +1,11 @@
 package webhooks
 
 import (
+	"slices"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/whsec"
 )
 
 // Secrets is the verification material one configuration epoch supplies.
@@ -32,6 +35,44 @@ type Secrets struct {
 	// own Slack app. The handle comes from the URL path, which is why that
 	// route is the only one whose secret depends on where it was addressed.
 	Slack map[string]string
+}
+
+// Verifiable names the surfaces whose material can actually verify a
+// delivery, sorted. The answer to "would a real delivery be accepted right
+// now", asked without sending one.
+//
+// NOT "is a secret configured", which is what every operator surface showed
+// before this: a secret lives in the config as a ${VAR}, and one that did not
+// resolve renders as present while the route answers 503 to every delivery
+// and the vendor's settings page reports a healthy hook. The config says set,
+// the vendor says fine, and the deliveries stop — with nothing anywhere
+// naming the variable.
+//
+// The rule is per surface and it is the ROUTE's own: GitLab needs a key the
+// vendor could have signed with, not merely a non-empty string, because a
+// value that is not one cannot be the HMAC key for any delivery. Mattermost
+// is absent by design — it holds a websocket rather than a route, so there is
+// no delivery to verify — and so is Slack, whose material is per seat.
+func (s Secrets) Verifiable() []string {
+	var out []string
+	if whsec.Valid(s.GitLab) {
+		out = append(out, "gitlab")
+	}
+	for _, pair := range []struct {
+		kind, secret string
+	}{
+		{"github", s.GitHub},
+		{"plane", s.Plane},
+		{"jira", s.Jira},
+		{"confluence", s.Confluence},
+		{"forge", s.ForgeAppID},
+	} {
+		if pair.secret != "" {
+			out = append(out, pair.kind)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // SecretsOf reads the verification material out of a company epoch.

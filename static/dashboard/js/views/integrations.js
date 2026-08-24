@@ -78,15 +78,33 @@ export function createIntegrationsView({ query, refresh }) {
     }</div>`;
   }
 
+  // Whether a delivery from this surface can be VERIFIED.
+  //
+  // Two facts, and the gap between them is the failure worth showing. A
+  // secret lives in the config as a ${VAR}: `secret_present` says an
+  // operator wrote one down, `secret_usable` says this process resolved it
+  // to something a route can check a signature with. An unset variable is
+  // present-and-unusable — and from everywhere else it looks fine: the
+  // config shows a secret, the vendor's settings page shows a healthy hook,
+  // and every delivery is refused with nothing naming the variable.
+  //
+  // `secret_usable` null means the server could not say (a standalone API
+  // has no engine to ask), which must not render as "no".
   function secretRow(row) {
     if (row.secret_present === null || row.secret_present === undefined) {
       // A surface with no shared secret is not a surface missing one.
       return `<div class="int-kv"><span>Verification</span><span>the seat's own token</span></div>`;
     }
+    if (!row.secret_present) {
+      return `<div class="int-kv"><span>Signing secret</span><span class="warn-ink">missing — every delivery is being turned away with a 503</span></div>`;
+    }
+    if (row.secret_usable === false) {
+      return `<div class="int-kv"><span>Signing secret</span><span class="warn-ink">configured, but it did not resolve to a usable key — every delivery is being turned away with a 503</span></div>`;
+    }
     return `<div class="int-kv"><span>Signing secret</span>${
-      row.secret_present
-        ? `<span>configured</span>`
-        : `<span class="warn-ink">missing — every delivery is being turned away with a 503</span>`
+      row.secret_usable
+        ? `<span>configured and resolved</span>`
+        : `<span>configured<span class="zero"> — whether it resolved is not visible from this process</span></span>`
     }</div>`;
   }
 

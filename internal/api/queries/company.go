@@ -124,6 +124,14 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		routed = s.Routed()
 		known = routed != nil
 	}
+	// The same shape for what could VERIFY a delivery, and read the same
+	// way: nil is "cannot say", empty is "nothing here can verify".
+	var verifiable []string
+	verifiableKnown := s.Verifiable != nil
+	if verifiableKnown {
+		verifiable = s.Verifiable()
+		verifiableKnown = verifiable != nil
+	}
 
 	out := []map[string]any{}
 	// CONFIGURED and ENABLED are different facts and the answer sends both.
@@ -155,7 +163,24 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// THREE-VALUED, and the third value is the point: null means this
 		// surface uses no secret at all, false means a route is refusing
 		// every delivery, and only an operator can tell those apart.
+		//
+		// CONFIGURED, which is a claim about the DOCUMENT. A secret lives
+		// there as a ${VAR}, so this being true says an operator wrote one
+		// down — not that the route has anything to verify with.
 		row["secret_present"] = secret
+		// Which is the question secret_usable answers, from what this
+		// process actually RESOLVED. The gap between the two is invisible
+		// from every other surface: an unset variable renders as a secret
+		// present, the vendor's settings page shows a healthy hook, and
+		// every delivery is refused with nothing anywhere naming the
+		// variable. Null when this process cannot say — a standalone API —
+		// or when the surface has no secret to resolve, exactly as above.
+		switch {
+		case secret == nil || !verifiableKnown:
+			row["secret_usable"] = nil
+		default:
+			row["secret_usable"] = boolPtr(slices.Contains(verifiable, kind))
+		}
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
 		// their own for this surface — and it is not the same as absent.

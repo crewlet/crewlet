@@ -286,6 +286,32 @@ func (e *Engine) WebhookSecrets() webhooks.Secrets {
 	return webhooks.SecretsOf(company.Config, company.Org, e.Resolve)
 }
 
+// VerifiableSources lists the integrations whose RESOLVED material can
+// actually verify an inbound delivery on this node, sorted.
+//
+// The companion to [Engine.RoutedSources], and the other half of "is this
+// integration really working". Routed answers whether a verified delivery
+// would reach a seat; this answers whether one would be verified at all.
+// Both are facts only a co-located engine holds, because both depend on what
+// this process resolved rather than on what the document says.
+//
+// Nil when there is no company yet — "cannot say", which is not the same
+// claim as an empty slice, and a standalone API answers it for every
+// integration.
+func (e *Engine) VerifiableSources() []string {
+	if e.Company() == nil {
+		return nil
+	}
+	sources := e.WebhookSecrets().Verifiable()
+	if sources == nil {
+		// A REAL EMPTY ANSWER, not "cannot say": this node has a company
+		// and nothing in it can verify a delivery. Collapsing the two here
+		// would report the most alarming state as unknown.
+		return []string{}
+	}
+	return sources
+}
+
 // Mattermost is the running chat transport, or nil when the company has no
 // chat surface. Beside [Engine.Registry] and [Engine.Status]: the facts only
 // a co-located engine can answer about what it actually built.

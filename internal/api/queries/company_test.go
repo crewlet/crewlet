@@ -815,6 +815,84 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 	}
 }
 
+// CONFIGURED IS NOT RESOLVED EITHER, and the answer says which.
+//
+// A secret lives in the config as a ${VAR}. secret_present says an operator
+// wrote one down; only this process knows what it resolved to. The gap is
+// the failure that hides everywhere else: an unset variable renders as a
+// secret present, the vendor's settings page shows a healthy hook, and the
+// route answers 503 to every delivery with nothing naming the variable.
+func TestIntegrationsTellsAResolvedSecretFromAConfiguredOne(t *testing.T) {
+	t.Parallel()
+	// Its own document rather than the shared fixture: the comparison needs
+	// two secret-bearing surfaces, one resolved and one not.
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+integrations:
+  mattermost: {enabled: true, url: https://mm.example.com, team: acme}
+  gitlab: {enabled: true, url: https://gitlab.example.com, signing_secret: "${GL}"}
+  plane: {enabled: true, url: https://plane.example.com, workspace: acme, webhook_secret: "${PL}"}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// The engine resolved gitlab's secret and not plane's — which is
+		// exactly what an unset ${VAR} on one of them looks like.
+		Verifiable: func() []string { return []string{"gitlab"} },
+	}, "integrations", nil))
+
+	byKind := map[string]map[string]any{}
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+	if got := byKind["gitlab"]["secret_usable"]; got != true {
+		t.Errorf("gitlab secret_usable = %v, want true", got)
+	}
+	if got := byKind["plane"]["secret_present"]; got != true {
+		t.Errorf("plane secret_present = %v — the fixture must configure one, "+
+			"or the comparison below proves nothing", got)
+	}
+	if got := byKind["plane"]["secret_usable"]; got != false {
+		t.Errorf("plane secret_usable = %v, want false — its secret is written "+
+			"down and this process could not resolve it, which is a route "+
+			"refusing every delivery", got)
+	}
+	// A surface with no secret at all stays null on BOTH: it has nothing to
+	// resolve, and "no secret here" must not read as "a secret that failed".
+	if got := byKind["mattermost"]["secret_usable"]; got != nil {
+		t.Errorf("mattermost secret_usable = %v, want null", got)
+	}
+}
+
+// AND A PROCESS THAT CANNOT SEE AN ENGINE DOES NOT GUESS.
+func TestAnApiWithNoEngineCannotSayWhatResolved(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// No Verifiable: the standalone shape.
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		usable, present := entry["secret_usable"]
+		if !present {
+			t.Fatalf("%v omits secret_usable entirely; null and absent are "+
+				"different to a client", entry["key"])
+		}
+		if usable != nil {
+			t.Fatalf("%v secret_usable = %v, want null — this process cannot "+
+				"resolve anything, which is not a claim that the secret failed",
+				entry["key"], usable)
+		}
+	}
+}
+
 // NOT KNOWING IS NOT KNOWING NOTHING.
 //
 // A standalone API has no co-located engine to ask which parsers registered,

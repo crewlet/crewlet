@@ -59,6 +59,20 @@ type RuntimeState struct {
 	// both are the opposite of an empty slice, which is a real claim that
 	// nothing routes.
 	RoutedSources []string
+
+	// VerifiableSources names the integrations whose RESOLVED verification
+	// material could accept a delivery right now.
+	//
+	// The other half of RoutedSources, and it answers the earlier question:
+	// routed says a verified delivery would reach a seat, this says one
+	// would be verified at all. Both depend on what the process resolved
+	// rather than on what the document says — a secret is a ${VAR}, and one
+	// that did not resolve renders as configured while the route answers
+	// 503 to every delivery and the vendor reports a healthy hook.
+	//
+	// Nil is "cannot say", exactly as above, and an empty slice is the real
+	// claim that nothing here can verify anything.
+	VerifiableSources []string
 }
 
 // NodeRuntime is the seam for facts only a co-located engine can answer.

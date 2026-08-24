@@ -560,6 +560,11 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		// one is exactly what drifts, and it would drift towards
 		// claiming more than the build does.
 		RoutedSources: r.engine.RoutedSources(),
+		// And which of them could actually verify a delivery, from the
+		// RESOLVED secrets rather than from the config text. Same reason:
+		// a list of what the document names would claim more than this
+		// process can do.
+		VerifiableSources: r.engine.VerifiableSources(),
 	}
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached

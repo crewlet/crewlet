@@ -396,6 +396,64 @@ func TestARotatedSecretTakesEffectWithoutARestart(t *testing.T) {
 	}
 }
 
+// VERIFIABLE IS A CLAIM ABOUT THE RESOLVED VALUE, not about the document.
+//
+// A secret lives in the config as a ${VAR}, and the gap between "written
+// down" and "resolved to something a route can check a signature with" is
+// invisible from every other surface: the config shows a secret, the vendor's
+// settings page shows a healthy hook, and every delivery is refused with
+// nothing naming the variable.
+func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   webhooks.Secrets
+		want []string
+	}{
+		{"nothing configured", webhooks.Secrets{}, nil},
+		{
+			"a resolved gitlab key",
+			webhooks.Secrets{GitLab: "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="},
+			[]string{"gitlab"},
+		},
+		{
+			// THE CASE THIS EXISTS FOR. Non-empty and useless: the
+			// reference reached the verifier verbatim, so a route with a
+			// "configured" secret refuses every delivery.
+			"gitlab holding an unresolved reference",
+			webhooks.Secrets{GitLab: "${GITLAB_SIGNING_SECRET}"},
+			nil,
+		},
+		{
+			// GitLab signs with the DECODED 32 bytes. A value that is not
+			// one cannot be the key for any delivery, however non-empty.
+			"gitlab holding a key the vendor could not have produced",
+			webhooks.Secrets{GitLab: "whsec_c2hvcnQ="},
+			nil,
+		},
+		{
+			"the surfaces whose secret is any non-empty string",
+			webhooks.Secrets{GitHub: "gh", Plane: "pl", Jira: "jr", Confluence: "cf", ForgeAppID: "forge"},
+			[]string{"confluence", "forge", "github", "jira", "plane"},
+		},
+		{
+			// Mattermost holds a websocket rather than a route, and Slack's
+			// material is per seat. Neither is a delivery this can verify.
+			"a chat surface with no route to verify",
+			webhooks.Secrets{Slack: map[string]string{"ceo": "s"}},
+			nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := tc.in.Verifiable()
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("Verifiable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // literal is the resolver for the fixtures whose secrets are already plain
 // values: it hands back what it was given.
 func literal(value string) string { return value }
