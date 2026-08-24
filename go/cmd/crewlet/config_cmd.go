@@ -1,0 +1,419 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// `crewlet config` — the Tier B company configuration, in the store.
+//
+// # The store is authoritative at runtime; the file is a seed
+//
+// Both halves matter. Without the seed a first run has nothing to activate
+// and the node serves a company no peer can see; without the store a change
+// on one node would be invisible to every other. A running node serves the
+// revision the activation pointer names, and these commands operate on that
+// pointer and the revisions behind it.
+//
+// # Revisions are immutable and the pointer is append-only
+//
+// Nothing here edits a revision. Importing writes a new one; activating
+// appends to the pointer. That is what makes re-activating an unchanged
+// revision a meaningful gesture — it mints a new epoch every node is
+// watching, which is how a rotated secret reaches a running fleet.
+
+const configUsage = `crewlet config — the company configuration in the store
+
+Usage:
+  crewlet config import FILE       Write a company document as a new active revision
+  crewlet config show              Print the active revision (secrets redacted)
+  crewlet config export [-revision ID] [-redact]
+                                   Print a revision as YAML
+  crewlet config revisions [-limit N]
+                                   List revisions, newest first
+  crewlet config diff ID [-against ID|active]
+                                   Compare two revisions
+  crewlet config activate ID       Re-point the fleet at a revision
+
+Flags:
+  -config PATH   Tier A config naming the store and its keyring (default %q)
+`
+
+func runConfig(args []string, stdout, stderr io.Writer) error {
+	sub, rest := splitSubject(args)
+	if sub == "" || sub == "help" {
+		fmt.Fprintf(stdout, configUsage, defaultBootstrapPath)
+		return flag.ErrHelp
+	}
+	// The subject, for the same reason `secrets` peels one: Go's flag
+	// package stops at the first non-flag argument, so `config diff ID
+	// -against active` would leave -against unparsed and defaulted.
+	subject, rest := splitSubject(rest)
+
+	fs := flag.NewFlagSet("config "+sub, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	bootstrapPath := fs.String("config", defaultBootstrapPath,
+		"Tier A config: this node's store and its secret keyring")
+	revision := fs.String("revision", "", "which revision (export); default active")
+	against := fs.String("against", "active", "what to compare with (diff)")
+	limit := fs.Int("limit", 20, "how many revisions to list")
+	redact := fs.Bool("redact", false, "mask secret-shaped values (export)")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	tail := fs.Args()
+	if subject == "" && len(tail) == 1 {
+		subject, tail = tail[0], nil
+	}
+	if len(tail) > 0 {
+		return fmt.Errorf("config %s takes one argument, got %d", sub, len(tail)+1)
+	}
+
+	ctx := context.Background()
+	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	switch sub {
+	case "import":
+		return importConfig(ctx, cs, subject, stdout)
+	case "show":
+		return exportConfig(ctx, cs, "", true, stdout)
+	case "export":
+		return exportConfig(ctx, cs, firstNonEmpty(subject, *revision), *redact, stdout)
+	case "revisions":
+		return listRevisions(ctx, cs, *limit, stdout)
+	case "diff":
+		return diffRevisions(ctx, cs, subject, *against, stdout)
+	case "activate":
+		return activateRevision(ctx, cs, subject, stdout)
+	default:
+		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
+		return fmt.Errorf("unknown config command %q", sub)
+	}
+}
+
+// configStore is the store plus the keyring that opens what it holds.
+//
+// The two travel together because every revision is sealed: a handle to the
+// table without the cipher can list ids and read nothing.
+type configStore struct {
+	configs *store.Configs
+	cipher  secrets.Cipher
+}
+
+func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, func(), error) {
+	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
+	if err != nil {
+		return nil, nil, err
+	}
+	// A NIL CIPHER IS VALID HERE, unlike for `secrets`: company_config
+	// supports a plaintext mode so pre-encryption deployments keep working,
+	// and secrets.Open passes an unsealed payload straight through.
+	var cipher secrets.Cipher
+	if len(boot.Secrets.Keys) > 0 {
+		if cipher, err = boot.Secrets.Cipher(); err != nil {
+			return nil, nil, fmt.Errorf("secrets keyring: %w", err)
+		}
+	}
+	db, err := store.Open(ctx, boot.Store.Path, store.Options{
+		Driver:       store.Driver(boot.Store.Driver),
+		MaxOpenConns: boot.Store.MaxOpenConns,
+		BusyTimeout: time.Duration(
+			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("open store: %w", err)
+	}
+	return &configStore{configs: db.Configs(), cipher: cipher}, func() { _ = db.Close() }, nil
+}
+
+// importConfig writes a company document as a new active revision.
+//
+// IDEMPOTENT BY CONTENT, the same rule the boot seed follows: importing an
+// unchanged file writes nothing and says so, while an edited one writes
+// once. Silently ignoring an edited file would be the worst of the three —
+// an operator changes a config, runs the command, and nothing happens.
+func importConfig(ctx context.Context, cs *configStore, path string, stdout io.Writer) error {
+	if path == "" {
+		return errors.New("config import needs a company document to read")
+	}
+	// VALIDATED BEFORE IT IS STORED. A revision that cannot be built is one
+	// every node in the fleet will refuse, one after another, each reporting
+	// its own failure — which is a fleet-wide incident produced by a typo
+	// that could have been caught here.
+	company, err := config.LoadCompany(path)
+	if err != nil {
+		return err
+	}
+	document, err := json.Marshal(company)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+
+	active, found, err := cs.configs.Active(ctx)
+	if err != nil {
+		return fmt.Errorf("read the active revision: %w", err)
+	}
+	parent := ""
+	if found {
+		current, err := secrets.Open(cs.cipher, active.Payload)
+		if err != nil {
+			return fmt.Errorf("open the active revision: %w", err)
+		}
+		if bytes.Equal(current, document) {
+			fmt.Fprintf(stdout,
+				"%s already matches the active revision %s; nothing imported\n",
+				path, active.ID)
+			return nil
+		}
+		parent = active.ID
+	}
+
+	payload, err := secrets.Seal(cs.cipher, document)
+	if err != nil {
+		return err
+	}
+	id, epoch, err := cs.configs.InsertActive(ctx, store.Revision{
+		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
+		Summary: "imported from " + path,
+		Payload: payload,
+	})
+	if err != nil {
+		return fmt.Errorf("import %s: %w", path, err)
+	}
+	fmt.Fprintf(stdout, "imported %s as revision %s (epoch %d, sealed=%t)\n",
+		path, id, epoch, cs.cipher != nil)
+	return nil
+}
+
+// exportConfig prints one revision as YAML.
+func exportConfig(ctx context.Context, cs *configStore, revisionID string,
+	redact bool, stdout io.Writer,
+) error {
+	rev, err := revisionOrActive(ctx, cs, revisionID)
+	if err != nil {
+		return err
+	}
+	document, err := secrets.Open(cs.cipher, rev.Payload)
+	if err != nil {
+		return fmt.Errorf("open revision %s: %w", rev.ID, err)
+	}
+	company, err := config.DecodeCompany(document)
+	if err != nil {
+		return fmt.Errorf("parse revision %s: %w", rev.ID, err)
+	}
+	if redact {
+		// STRUCTURAL, not a regex over the text: it masks the fields the
+		// config types declare as secret-bearing, so a new one is masked
+		// by declaring it rather than by remembering to add a pattern.
+		company = company.Redact()
+	}
+	body, err := config.EncodeCompanyYAML(company)
+	if err != nil {
+		return fmt.Errorf("render revision %s: %w", rev.ID, err)
+	}
+	_, err = stdout.Write(body)
+	return err
+}
+
+func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Writer) error {
+	if limit <= 0 {
+		return errors.New("config revisions needs a positive limit")
+	}
+	rows, err := cs.configs.List(ctx, limit, 0)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(stdout, "no revisions are stored; run `crewlet config import`")
+		return nil
+	}
+	active, found, err := cs.configs.Active(ctx)
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "\tREVISION\tCREATED\tBY\tSOURCE\tSUMMARY")
+	for _, r := range rows {
+		marker := " "
+		if found && r.ID == active.ID {
+			// THE ACTIVE ONE IS MARKED, because "which is running" is the
+			// question this list is opened to answer and an id alone
+			// cannot answer it.
+			marker = "*"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", marker, r.ID,
+			r.CreatedAt.Format(time.RFC3339), r.CreatedBy, r.Source, r.Summary)
+	}
+	return w.Flush()
+}
+
+// diffRevisions compares two revisions, REDACTED on both sides.
+//
+// Always redacted, with no flag to turn it off: a diff is what an operator
+// pastes into a ticket or a chat thread to ask a colleague whether a change
+// looks right, and that is the single most likely way a credential leaves
+// the machine. `export -revision ID` is there for the rare case that needs
+// the real values, and it takes a deliberate act.
+func diffRevisions(ctx context.Context, cs *configStore, revisionID, against string,
+	stdout io.Writer,
+) error {
+	if revisionID == "" {
+		return errors.New("config diff needs a revision to compare")
+	}
+	left, err := redactedYAML(ctx, cs, revisionID)
+	if err != nil {
+		return err
+	}
+	other := against
+	if other == "active" {
+		other = ""
+	}
+	right, err := redactedYAML(ctx, cs, other)
+	if err != nil {
+		return err
+	}
+	if left == right {
+		fmt.Fprintf(stdout, "%s and %s are identical\n", revisionID, against)
+		return nil
+	}
+	return writeUnifiedDiff(stdout, against, revisionID, right, left)
+}
+
+func redactedYAML(ctx context.Context, cs *configStore, revisionID string) (string, error) {
+	rev, err := revisionOrActive(ctx, cs, revisionID)
+	if err != nil {
+		return "", err
+	}
+	document, err := secrets.Open(cs.cipher, rev.Payload)
+	if err != nil {
+		return "", fmt.Errorf("open revision %s: %w", rev.ID, err)
+	}
+	company, err := config.DecodeCompany(document)
+	if err != nil {
+		return "", fmt.Errorf("parse revision %s: %w", rev.ID, err)
+	}
+	body, err := config.EncodeCompanyYAML(company.Redact())
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func activateRevision(ctx context.Context, cs *configStore, revisionID string, stdout io.Writer) error {
+	if revisionID == "" {
+		return errors.New("config activate needs a revision id")
+	}
+	if _, found, err := cs.configs.Get(ctx, revisionID); err != nil {
+		return err
+	} else if !found {
+		return fmt.Errorf("no revision %s", revisionID)
+	}
+	epoch, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP and the message
+	// says so: the pointer is append-only, so it mints a new epoch every
+	// node is watching — which is how a rotated secret reaches a running
+	// fleet without a restart.
+	fmt.Fprintf(stdout, "activated %s as epoch %d; every node picks it up on "+
+		"its next reconcile\n", revisionID, epoch)
+	return nil
+}
+
+// revisionOrActive resolves an id, or the active revision for an empty one.
+func revisionOrActive(ctx context.Context, cs *configStore, revisionID string) (store.Revision, error) {
+	if revisionID == "" {
+		rev, found, err := cs.configs.Active(ctx)
+		if err != nil {
+			return store.Revision{}, err
+		}
+		if !found {
+			return store.Revision{}, errors.New(
+				"no revision is active; run `crewlet config import`")
+		}
+		return rev, nil
+	}
+	rev, found, err := cs.configs.Get(ctx, revisionID)
+	if err != nil {
+		return store.Revision{}, err
+	}
+	if !found {
+		return store.Revision{}, fmt.Errorf("no revision %s", revisionID)
+	}
+	return rev, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// writeUnifiedDiff prints a line diff of two rendered revisions.
+//
+// A LINE DIFF, computed here rather than shelled out to `diff`: this has to
+// work identically on every platform the binary runs on, and the alternative
+// is a command that behaves differently — or is absent — depending on where
+// an operator happens to be standing.
+func writeUnifiedDiff(w io.Writer, leftName, rightName, left, right string) error {
+	fmt.Fprintf(w, "--- %s\n+++ %s\n", leftName, rightName)
+	for _, line := range diffLines(
+		strings.Split(strings.TrimRight(left, "\n"), "\n"),
+		strings.Split(strings.TrimRight(right, "\n"), "\n"),
+	) {
+		fmt.Fprintln(w, line)
+	}
+	return nil
+}
+
+// diffLines renders a diff of two line sequences.
+//
+// The common-prefix and common-suffix trim is what makes this readable on a
+// config: the overwhelmingly common change is a handful of lines in the
+// middle of a document that is otherwise identical, and printing the whole
+// thing with two markers in it is what an operator opened a diff to avoid.
+func diffLines(left, right []string) []string {
+	head := 0
+	for head < len(left) && head < len(right) && left[head] == right[head] {
+		head++
+	}
+	tail := 0
+	for tail < len(left)-head && tail < len(right)-head &&
+		left[len(left)-1-tail] == right[len(right)-1-tail] {
+		tail++
+	}
+	out := make([]string, 0, (len(left)-head-tail)+(len(right)-head-tail)+2)
+	if head > 0 {
+		out = append(out, fmt.Sprintf("@@ %d identical line(s) above @@", head))
+	}
+	for _, line := range left[head : len(left)-tail] {
+		out = append(out, "-"+line)
+	}
+	for _, line := range right[head : len(right)-tail] {
+		out = append(out, "+"+line)
+	}
+	if tail > 0 {
+		out = append(out, fmt.Sprintf("@@ %d identical line(s) below @@", tail))
+	}
+	return out
+}

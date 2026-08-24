@@ -58,6 +58,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	cmd, rest := args[0], args[1:]
+
+	// THE OPERATOR COMMANDS ARE QUIET BY DEFAULT. They open a store, which
+	// logs a migration line per schema file and an open line per call —
+	// noise on a one-shot command whose stdout is meant to be piped, read
+	// or diffed. `run` configures its own level from its own flag, and
+	// nothing here silences a WARNING.
+	if cmd != "run" {
+		logging.Configure(slog.LevelWarn, logging.FormatText, stderr)
+	}
+
 	switch cmd {
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "crewlet %s", version.String())
@@ -77,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return emitSchema(rest, stdout, stderr)
 	case "secrets":
 		return runSecrets(rest, stdout, stderr)
+	case "config":
+		return runConfig(rest, stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", cmd)
@@ -91,6 +103,7 @@ Usage:
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
+  crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet version             Print the version
   crewlet help                Show this message
 

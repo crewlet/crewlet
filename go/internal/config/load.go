@@ -268,3 +268,36 @@ func decodeError(err error) error {
 	}
 	return out.err()
 }
+
+// EncodeCompanyYAML renders a company config back to YAML.
+//
+// # Why YAML rather than the JSON the store holds
+//
+// Both round-trip, and the store's payload is JSON — but this output is for
+// a PERSON: it is what `crewlet config export` prints, what a diff compares,
+// and what an operator edits and imports back. The authored form is YAML, so
+// handing back JSON would make every export a translation the reader has to
+// undo before they can use it.
+//
+// The struct tags are shared, so a field that exports is a field the loader
+// accepts: an export is importable by construction rather than by a rule
+// somebody maintains.
+func EncodeCompanyYAML(c *Company) ([]byte, error) {
+	if c == nil {
+		return nil, fmt.Errorf("config: nothing to encode")
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	// TWO SPACES, matching every shipped example and the modeline they
+	// carry. An export that indents differently from the file it came from
+	// makes a `diff` against that file unreadable, which is exactly when
+	// somebody reaches for one.
+	enc.SetIndent(2)
+	if err := enc.Encode(c); err != nil {
+		return nil, fmt.Errorf("config: encode: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, fmt.Errorf("config: encode: %w", err)
+	}
+	return buf.Bytes(), nil
+}

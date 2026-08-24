@@ -14,6 +14,7 @@
 package logging
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -87,6 +88,73 @@ func ParseFormat(name string) Format {
 // path — "queue.memory", "seat.host", "agent.turn" — matching the
 // get_logger() names the Python engine uses, so operator runbooks and log
 // queries keep working across the rewrite.
+//
+// # It resolves the root on every record, not once here
+//
+// Almost every caller is a PACKAGE-LEVEL VAR:
+//
+//	var log = logging.Get("store")
+//
+// which runs at package init — before main has parsed a flag. A logger that
+// captured the root here would be bound to the boot default for the life of
+// the process, so `-log-level debug` would reach nothing: the only lines
+// affected would be the ones emitted by loggers obtained after Configure,
+// which is a handful of them. Every subsystem would keep logging at info
+// with no indication why.
 func Get(component string) *slog.Logger {
-	return root.Load().With("component", component)
+	return slog.New(lazy{}).With("component", component)
+}
+
+// lazy is a handler that forwards to whatever root is current.
+//
+// It records the WithAttrs / WithGroup calls made on it and replays them
+// onto the current root's handler per record, rather than binding one. That
+// is what makes Configure's swap reach a logger handed out at init — which
+// is what [root] has always claimed to do.
+type lazy struct {
+	ops []func(slog.Handler) slog.Handler
+}
+
+func (l lazy) resolve() slog.Handler {
+	h := root.Load().Handler()
+	for _, op := range l.ops {
+		h = op(h)
+	}
+	return h
+}
+
+// Enabled asks the root handler DIRECTLY, without replaying the ops.
+//
+// This is the hot path — it is consulted for every suppressed line, so a
+// debug call in a loop pays it whether or not anything is emitted — and the
+// replay would allocate a handler per call to answer a question that does
+// not depend on attributes. Configure only ever builds slog's own text and
+// JSON handlers, whose Enabled reads the level from their options and
+// nothing else.
+func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
+	return root.Load().Handler().Enabled(ctx, level)
+}
+
+func (l lazy) Handle(ctx context.Context, r slog.Record) error {
+	return l.resolve().Handle(ctx, r)
+}
+
+func (l lazy) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return l.with(func(h slog.Handler) slog.Handler { return h.WithAttrs(attrs) })
+}
+
+func (l lazy) WithGroup(name string) slog.Handler {
+	return l.with(func(h slog.Handler) slog.Handler { return h.WithGroup(name) })
+}
+
+// with appends one op, COPYING the slice.
+//
+// slog hands the same handler to several derived loggers — every `log.With`
+// on a shared package logger starts from this one — so appending in place
+// would let one derivation's attributes appear on another's lines whenever
+// the backing array had spare capacity.
+func (l lazy) with(op func(slog.Handler) slog.Handler) slog.Handler {
+	ops := make([]func(slog.Handler) slog.Handler, len(l.ops), len(l.ops)+1)
+	copy(ops, l.ops)
+	return lazy{ops: append(ops, op)}
 }

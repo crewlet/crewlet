@@ -46,25 +46,27 @@ func wakeWithMessage(t *testing.T, n *node, handle string) {
 	}
 }
 
-// awaitRows polls until what is asked for exists, or fails saying what was
-// found instead. A poll because the write happens on the reflect
-// dispatcher's own goroutine, several hops after the turn the test drove.
+// awaitRows polls until the rows exist.
+//
+// Through the suite's own [waitFor] rather than a second deadline of its
+// own: this is the longest path any of these tests drive — a turn completes,
+// the event is published, a queue consumer picks it up, the dispatcher runs
+// three workers and each writes — so a tighter budget here is the one that
+// fails first when the machine is loaded, and a suite with two disagreeing
+// timeouts fails in whichever place happens to hold the smaller one.
+//
+// A read error is FATAL rather than retried: it means the store is
+// unreadable, which no amount of waiting fixes, and swallowing it would
+// spend the whole budget to report a timeout instead of the real fault.
 func awaitRows(t *testing.T, what string, found func() (int, error)) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	var last int
-	for time.Now().Before(deadline) {
+	waitFor(t, what, func() bool {
 		n, err := found()
 		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
-		if n > 0 {
-			return
-		}
-		last = n
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("waited for %s; found %d", what, last)
+		return n > 0
+	})
 }
 
 func TestACompletedTurnLeavesAnEpisodeBehind(t *testing.T) {

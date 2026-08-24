@@ -19,7 +19,8 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
-| `crewlet config diff <UUID> [--against <UUID\|active>]` | Structural diff between two revisions |
+| `crewlet config diff <UUID> [-against <UUID\|active>]` | Line diff of two revisions, always redacted on both sides |
+| `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
 | `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [--dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `config.yaml` snippet to install it |
@@ -90,12 +91,14 @@ The per-tier console notices are best-effort: each press schedules its shutdown 
 
 ## `crewlet config`
 
-Manage the Tier B company configuration stored in PostgreSQL. Every subcommand connects to the DB using the DSN from the Tier A bootstrap (`--bootstrap`, default `./config.yaml`) or an explicit `--dsn`.
+Manage the Tier B company configuration in the store. Every subcommand opens the store named by the Tier A bootstrap (`-config`, default `./config.yaml`), and decrypts what it holds with that file's keyring.
+
+**Revisions are immutable and the activation pointer is append-only.** Nothing here edits a revision: importing writes a new one, activating appends to the pointer. That is what makes re-activating an *unchanged* revision meaningful — it mints a new epoch every node is watching, which is how a [rotated secret](../concepts/secret-store.md) reaches a running fleet without a restart.
 
 ### `crewlet config import`
 
 ```
-crewlet config import <company.yaml> [--bootstrap PATH] [--dsn DSN]
+crewlet config import <company.yaml> [-config PATH]
                                      [--force] [--dry-run] [--summary STR]
 ```
 
@@ -104,7 +107,7 @@ Validates the Tier B YAML and writes it as a new active revision. Refuses when a
 ### `crewlet config export`
 
 ```
-crewlet config export [--bootstrap PATH] [--dsn DSN] [--revision UUID] [--redact]
+crewlet config export [-config PATH] [-revision UUID] [-redact]
 ```
 
 Dumps the active revision (or `--revision <UUID>`) as YAML to stdout. Emits the stored payload verbatim — a plaintext `${VAR}` config when unencrypted, or the inert `{__encrypted__: "enc:v1:…"}` document blob when [encrypted](../concepts/configuration.md#secrets) (round-trippable: re-importing decrypts and re-stores it). `--redact` decrypts the structure but masks every secret as `{encrypted: true, …}` markers for a share-safe dump. Never emits a plaintext secret.
@@ -112,7 +115,7 @@ Dumps the active revision (or `--revision <UUID>`) as YAML to stdout. Emits the 
 ### `crewlet config show`
 
 ```
-crewlet config show [--bootstrap PATH] [--dsn DSN]
+crewlet config show [-config PATH]
 ```
 
 Prints a short summary of the active revision (id, activated_at, created_by, source, summary, company name) — or `"No active revision (engine is unconfigured)"` when nothing is active.
@@ -120,7 +123,7 @@ Prints a short summary of the active revision (id, activated_at, created_by, sou
 ### `crewlet config revisions`
 
 ```
-crewlet config revisions [--bootstrap PATH] [--dsn DSN] [--limit 20]
+crewlet config revisions [-config PATH] [-limit 20]
 ```
 
 Lists recent revisions. The active revision is marked with `*`.
@@ -128,10 +131,22 @@ Lists recent revisions. The active revision is marked with `*`.
 ### `crewlet config diff`
 
 ```
-crewlet config diff <UUID> [--against <UUID|active>] [--bootstrap PATH] [--dsn DSN]
+crewlet config diff <UUID> [-against <UUID|active>] [-config PATH]
 ```
 
-Prints a structural diff between two revisions: `+ path : value`, `- path`, `~ path : old → new`. `--against active` (default) compares against the currently-active revision.
+Prints a line diff of two revisions rendered as YAML, with the unchanged bulk elided — a config is a long document and one line usually moved. `-against active` (default) compares against the currently-active revision.
+
+**Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act.
+
+### `crewlet config activate`
+
+```
+crewlet config activate <UUID> [-config PATH]
+```
+
+Re-points the fleet at a revision. Every node applies it on its next reconcile.
+
+**Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect on a running fleet.
 
 ### `crewlet config seal`
 
