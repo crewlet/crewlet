@@ -661,7 +661,7 @@ func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface) tools.Guard {
 		// tool call would take the guard path to be told yes.
 		return nil
 	}
-	return guard
+	return &reportingGuard{guard: guard, emit: r.emitter(), phase: ph}
 }
 
 // catalogue is the tool-skill registry as the prompt sees it, or nil.

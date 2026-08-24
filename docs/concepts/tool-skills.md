@@ -27,7 +27,7 @@ This covers the *how-to* half of tool decoupling. The structural half — the en
 flowchart TD
     OP["(operator authors / edits)"]
     KB["Knowledge backend — 'Tool Skills' container<br/>(Confluence space TS / Plane project TS)"]
-    SYNC["ToolSkillSyncWorker /<br/>PlaneSkillSyncWorker"]
+    SYNC["skill sync worker<br/>(one, per backend)"]
     REG["PromptSkillRegistry<br/>(in-memory)"]
     CAT["summary in per-phase catalogue"]
     LOAD["load_tool_skill(key) builtin<br/>(LLM-driven, always available)"]
@@ -43,7 +43,7 @@ flowchart TD
 
 **No code defaults.** The engine ships zero skill prose. An empty container → empty registry → just the tool catalogue. Operators seed it with `crewlet confluence import` / `crewlet plane import` (see below).
 
-**One sync worker, selected by backend.** The engine constructs exactly one — `ToolSkillSyncWorker` (Confluence) or `PlaneSkillSyncWorker` (Plane), matching the single-homed knowledge backend (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). Both apply the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (Confluence: the `crewlet-skill` marker label + a decodable YAML macro; Plane: a body that decodes to a leading YAML code block with a `trigger`). A previously admitted page that stops satisfying the predicate — deleted, archived, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+**One sync worker, selected by backend.** The engine constructs exactly one, matching the single-homed knowledge backend (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). Both apply the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (Confluence: the `crewlet-skill` marker label + a decodable YAML macro; Plane: a body that decodes to a leading YAML code block with a `trigger`). A previously admitted page that stops satisfying the predicate — deleted, archived, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
 
 ---
 
@@ -193,7 +193,7 @@ The engine deliberately does **not** auto-inject skill bodies. All loads are LLM
 
 ## Required skills — load-before-use enforcement
 
-A skill is practices for the tools its trigger names — and in practice models sometimes skip the `load_tool_skill` call and use the tool without reading them. Skills are therefore **enforced by default** (`required: true`): the guard (`crewlet.agent.skills.guard.SkillGuard`) enforces the load **in code, not in prompts**. Every tool call in Plan, Execute, and Sub-agent sessions passes through the engine's dispatch gate (`execute_tool`); a call to a tool the skill's trigger covers is rejected until the LLM has successfully called `load_tool_skill(key)` **in the same session**:
+A skill is practices for the tools its trigger names — and in practice models sometimes skip the `load_tool_skill` call and use the tool without reading them. Skills are therefore **enforced by default** (`required: true`): the guard enforces the load **in code, not in prompts**. Every tool call in Plan, Execute, and Sub-agent sessions passes through the engine's dispatch gate; a call to a tool the skill's trigger covers is rejected until the LLM has successfully called `load_tool_skill(key)` **in the same session**:
 
 ```
 Tool 'create_pull_request' is gated behind a required tool skill you
@@ -205,7 +205,11 @@ practice(s), then retry 'create_pull_request'. Loading is needed once
 per session; after that the tool works normally.
 ```
 
-The blocked call never executes; the LLM loads the skill on the next round and retries. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
+The blocked call never executes; the LLM loads the skill on the next round and retries.
+
+**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and Plan, Execute and each sub-agent are separate message histories — so a skill loaded during Plan is genuinely not in front of the executor, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too.
+
+**The exempt set is about deadlock, not policy.** `load_tool_skill` itself, the discovery meta-tools, and the phase submitters are never blocked, whatever a trigger says: gating the unlock would make a session unrecoverable, gating discovery would add rounds without protecting anything, and gating a submitter would brick the phase. A misauthored trigger can cost a phase some tools; it can never cost the phase. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
 
 ### Opting out — advisory skills
 
