@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -143,6 +145,8 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		Budget:       in.Budget,
 		Judge:        in.Judge,
 		Task:         in.Task,
+		Context:      in.Context,
+		Recon:        in.Recon,
 		Conversation: in.Conversation,
 		AlwaysOn:     te.ExecutorAlwaysOnTools,
 		SkipNames:    MetaToolNames(),
@@ -161,6 +165,13 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 type RunnerInput struct {
 	Task         string
 	Conversation string
+
+	// Context is the turn's prefetched prompt blocks, and Recon recovers
+	// the knowledge block a thin trigger's gate skipped once Plan has
+	// produced a summary worth searching on. Both are per-turn because
+	// both are judged against THIS turn's trigger.
+	Context prefetch.Blocks
+	Recon   func(ctx context.Context, planSummary string) string
 
 	// Budget is the shared token counter this turn charges. Nil is the
 	// embedded single-node case, where no counter is shared with anyone.

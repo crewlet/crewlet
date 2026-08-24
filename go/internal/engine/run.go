@@ -416,8 +416,22 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
 	tel := e.describeTurn(company, req)
+	task := DescribeTrigger(req.Events)
+	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
+	// receives strings and has nowhere to re-fetch from, so a self_iterate
+	// loop cannot move the system prompt underneath the planner. The one
+	// fetch that cannot be frozen — the knowledge search a thin trigger's
+	// gate skipped — rides the Recon seam below, keyed on a plan summary
+	// that does not exist until Plan has run.
+	prefetchReq, blocks := e.prefetchFor(ctx, company, req, task)
+	fetcher := e.prefetcher(company)
+
 	r, err := company.RunnerFor(req.Handle, RunnerInput{
-		Task:         DescribeTrigger(req.Events),
+		Task:    task,
+		Context: blocks,
+		Recon: func(ctx context.Context, planSummary string) string {
+			return fetcher.AfterPlan(ctx, prefetchReq, planSummary)
+		},
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
 		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth),

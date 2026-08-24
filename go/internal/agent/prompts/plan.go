@@ -87,8 +87,17 @@ const PlanHeader = "\n## PLAN phase" +
 	"\n" +
 	"\nMission, vision, policies, your role profile, your unit context, " +
 	"and your team roster are already in this prompt -- no lookup " +
-	"needed.  Relevant team documentation was surfaced in the Plan " +
-	"prompt's `## Relevant knowledge` block."
+	"needed."
+
+// planKnowledgeNote points the planner at the prefetched documentation.
+//
+// APPENDED ONLY WHEN THERE IS A BLOCK. It used to be part of the header and
+// therefore unconditional, which made it a false statement on every turn the
+// search was gated off, found nothing, or had no backend to run against — and
+// a planner told the documentation is already here is a planner that does not
+// go looking for it.
+const planKnowledgeNote = "  Relevant team documentation was surfaced in the " +
+	"`## Relevant knowledge` block below."
 
 // PlanHeaderModelSplit is appended when Execute runs on a cheaper model than
 // Plan, so the planner writes a plan that does not need planner-level
@@ -193,6 +202,9 @@ func BuildPlan(seat Seat, in PlanInput) string {
 	)
 
 	header := PlanHeader
+	if in.RelevantKnowledge != "" {
+		header += planKnowledgeNote
+	}
 	if in.ModelSplitEnabled {
 		header += PlanHeaderModelSplit
 	}

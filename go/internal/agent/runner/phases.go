@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -54,6 +55,29 @@ type Config struct {
 	// fixed for the turn.
 	Task         string
 	Conversation string
+
+	// Recon recovers the knowledge block a thin trigger's gate skipped,
+	// keyed on the plan summary. Nil means no recovery, which is the right
+	// answer for a company with no knowledge backend and for a runner a
+	// test drives directly.
+	//
+	// THE ONE MID-TURN FETCH, and structurally so: its input does not
+	// exist until Plan has run. It happens once, between the phases, so
+	// the Execute prompt is still fixed for the whole of Execute.
+	Recon func(ctx context.Context, planSummary string) string
+
+	// Context is what this seat remembers, what its company has written
+	// down, what it has done before, and who it is talking to — rendered
+	// by the caller BEFORE the turn.
+	//
+	// Strings rather than a seam the runner could pull on, and that is the
+	// freeze: Plan runs again on a self_iterate loop, and a runner able to
+	// re-fetch would produce a different system prompt on each pass. A
+	// provider caches on an exact prefix, so a prompt that moves costs the
+	// whole prompt again every iteration — and the planner would see its
+	// own context change underneath a decision it is mid-way through
+	// making. There is nowhere here for a second fetch to happen.
+	Context prefetch.Blocks
 
 	// AlwaysOn are tools Execute has whatever the plan named.
 	AlwaysOn []string
@@ -103,12 +127,46 @@ type Runner struct {
 	spend Spend
 
 	// mu guards suspension, which the Execute phase writes and the engine
-	// reads once the turn returns.
+	// reads once the turn returns, and onboardedThisTurn, which the
+	// onboarding pass writes and Plan reads.
 	mu         sync.Mutex
 	suspension *Suspension
+
+	// onboardedThisTurn suppresses the Plan prompt's onboarding hint for a
+	// seat that has just been through the pass. See [Runner.Onboard].
+	onboardedThisTurn bool
 }
 
 var _ turn.Phases = (*Runner)(nil)
+
+// onboardingHint is the prefetched hint, unless this turn's own onboarding
+// pass just ran.
+//
+// The prefetch is frozen at turn start and the pass runs after it, so the
+// hint is rendered against a seat that had not onboarded YET. Repeating it
+// afterwards tells a seat that has just read its onboarding pages to go and
+// read them.
+func (r *Runner) onboardingHint() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.onboardedThisTurn {
+		return ""
+	}
+	return r.cfg.Context.OnboardingHint
+}
+
+// recon recovers the knowledge block a thin trigger skipped, or answers
+// empty.
+//
+// Wrapped rather than called inline so the nil case lives in one place: the
+// Execute prompt is assembled in a struct literal, and a nil check inside
+// one would be the kind of thing a later edit drops.
+func (r *Runner) recon(ctx context.Context, planSummary string) string {
+	if r.cfg.Recon == nil {
+		return ""
+	}
+	return r.cfg.Recon(ctx, planSummary)
+}
 
 // New builds a runner.
 func New(cfg Config) (*Runner, error) {
@@ -141,6 +199,13 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 	system := prompts.BuildPlan(r.cfg.Seat, prompts.PlanInput{
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
 		AvailableTools: snapshot.Names(),
+
+		PersonalMemory:      r.cfg.Context.PersonalMemory,
+		RelevantKnowledge:   r.cfg.Context.RelevantKnowledge,
+		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
+		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
+		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
+		OnboardingHint:      r.onboardingHint(),
 	})
 	user := prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
@@ -212,6 +277,13 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 		PlanSummary:    p.Summary,
 		AvailableTools: surface.Active(),
 		ToolCatalogue:  r.cfg.Registry.Catalogue(),
+		// FORWARDED from the Plan-phase prefetch. The executor needs the
+		// requester's observed traits even where the plan describes the
+		// action abstractly — "reply in the counterparty's preferred
+		// register" is a plan step that cannot be carried out by
+		// somebody who cannot see what that register is.
+		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
+		RelevantKnowledge:   r.recon(ctx, p.Summary),
 		// Named explicitly, because a planner that guessed an MCP tool's
 		// name wrong and is not told so assumes the tool exists, fails to
 		// call it, and settles for a text reply that delivers nothing.

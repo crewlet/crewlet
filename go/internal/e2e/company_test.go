@@ -143,6 +143,11 @@ type scriptedModel struct {
 	mu      sync.Mutex
 	calls   []string
 	offered []string
+	// systems is the SYSTEM prompt of every call, which is where the
+	// Plan-phase prefetch's blocks land. Captured because "the block was
+	// rendered" and "the model was shown it" are different claims and only
+	// the second one matters.
+	systems []string
 }
 
 func newScriptedModel(t *testing.T) *scriptedModel {
@@ -164,6 +169,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(names)
 	m.offered = append(m.offered, strings.Join(names, "+"))
+	m.systems = append(m.systems, systemPrompt(raw))
 	m.mu.Unlock()
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
@@ -251,6 +257,37 @@ func (m *scriptedModel) seen() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.calls...)
+}
+
+// systemPrompts is what the model was actually shown, per call.
+func (m *scriptedModel) systemPrompts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.systems...)
+}
+
+// systemPrompt reads a Messages request's system block, which the SDK sends
+// either as a string or as a list of content parts.
+func systemPrompt(raw []byte) string {
+	var asString struct {
+		System string `json:"system"`
+	}
+	if json.Unmarshal(raw, &asString) == nil && asString.System != "" {
+		return asString.System
+	}
+	var asParts struct {
+		System []struct {
+			Text string `json:"text"`
+		} `json:"system"`
+	}
+	if json.Unmarshal(raw, &asParts) != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range asParts.System {
+		b.WriteString(part.Text)
+	}
+	return b.String()
 }
 
 // toolUse renders a Messages response whose content is one tool call.

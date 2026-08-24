@@ -267,6 +267,16 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",
 		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.ID,
 		"marked", marked, "rounds", res.Rounds, "chain", chain)
+	// RECORDED HERE, not left to the caller. The Plan prompt carries an
+	// onboarding hint rendered BEFORE this pass ran — the prefetch is
+	// frozen at turn start, and at that moment the seat genuinely had not
+	// onboarded — so without this a seat that onboards on this very turn
+	// is then told to go and read the pages it has just read. The rule
+	// belongs where the fact is, because a caller can forget it and this
+	// cannot.
+	r.mu.Lock()
+	r.onboardedThisTurn = true
+	r.mu.Unlock()
 	return marked, nil
 }
 

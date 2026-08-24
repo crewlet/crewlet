@@ -130,6 +130,53 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) string {
 		"with your knowledge-base tools."
 }
 
+// AfterPlan recovers the knowledge block a thin trigger's gate skipped.
+//
+// The Plan-time search is gated off when the trigger is a bare pointer,
+// because searching on "PR #42 got a comment" is noise. But once Plan has
+// done its recon the PLAN SUMMARY is a real, task-shaped query — so this
+// runs the search the gate skipped and hands the result to Execute.
+//
+// Keyed on the summary ALONE, not on the summary plus the original task:
+// on a thin trigger the task is the boilerplate the gate rejected, and
+// including it would dilute the one good query this turn has.
+//
+// It is the ONE fetch here that cannot be frozen, and the reason is
+// structural rather than a preference: its input does not exist until Plan
+// has run. It happens exactly once, between the phases, so the Execute
+// prompt is still fixed for the whole of Execute — including a suspend and
+// resume, where the saved conversation carries it.
+//
+// EMPTY unless the trigger actually required recon. Otherwise the Plan-time
+// prefetch already ran against a real trigger and Execute has nothing
+// missing to recover; running anyway would spend a model call and a search
+// to produce the block the planner already read.
+func (f *Fetcher) AfterPlan(ctx context.Context, r Request, planSummary string) string {
+	if f == nil || !r.RequiresRecon || f.src.Knowledge == nil {
+		return ""
+	}
+	summary := strings.TrimSpace(planSummary)
+	if summary == "" {
+		return ""
+	}
+	// The recon flag is what gated the Plan-time search; clearing it here
+	// is what lets the SAME renderer run, against the plan summary as the
+	// task. One implementation, so the two blocks cannot come to disagree
+	// about how a page is rendered or which drafts are hidden.
+	recovered := r
+	recovered.RequiresRecon = false
+	recovered.Task = summary
+
+	block := f.relevantKnowledge(ctx, recovered)
+	if block == EmptyKnowledgeHint {
+		// The hint is the PLAN prompt's answer — "look again after
+		// recon". Repeating it in Execute tells a seat that has just
+		// done the recon to go and do it again.
+		return ""
+	}
+	return block
+}
+
 // knowledgeQuery asks the auxiliary model for a search query.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r.Seat, knowledgeQuerySystemPrompt,
