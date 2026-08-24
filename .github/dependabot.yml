@@ -1,8 +1,7 @@
 # Automated dependency updates — one entry per dependency surface:
 #
 #   .github/workflows/*.yml   the actions CI and releases run on
-#   pyproject.toml            the package's own requirements
-#   go/go.mod                 the engine's own Go dependencies
+#   go.mod                    the engine's own Go dependencies
 #   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
 #
@@ -24,17 +23,8 @@ updates:
     schedule:
       interval: weekly
 
-  - package-ecosystem: pip
-    directory: "/"
-    schedule:
-      interval: weekly
-
-  # The Go module lives under go/ until the root replacement moves it; this
-  # directory moves with it. Without an entry the engine's own dependency
-  # tree — every vendor SDK, the broker clients, both store drivers — was
-  # watched by nothing at all.
   - package-ecosystem: gomod
-    directory: "/go"
+    directory: "/"
     schedule:
       interval: weekly
 

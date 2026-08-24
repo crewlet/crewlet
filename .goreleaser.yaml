@@ -13,7 +13,7 @@
 #
 # Rehearse locally with `goreleaser release --snapshot --clean`, which builds
 # every target and the container image without touching GitHub. That is the
-# whole point of keeping this declarative: the Python pipeline it replaces
+# whole point of keeping this declarative: the PyPI pipeline it replaced
 # could only rehearse by uploading to TestPyPI.
 version: 2
 
@@ -21,9 +21,6 @@ project_name: crewlet
 
 builds:
   - id: crewlet
-    # `dir` is the Go module root. It disappears when the Go tree moves to
-    # the repository root; nothing else in this file moves with it.
-    dir: go
     main: ./cmd/crewlet
     binary: crewlet
     env:
