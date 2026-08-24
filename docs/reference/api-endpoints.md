@@ -906,7 +906,7 @@ Receives GitHub webhook payloads. Verifies HMAC-SHA256 signature via the `x-hub-
 
 ### `/webhooks/gitlab`
 
-Receives GitLab webhook payloads. Verification is the GitLab 19.1+ signing token **only**: the `webhook-signature` header is verified as a Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (±5-minute timestamp tolerance) against the configured `signing_secret`; the plain `X-Gitlab-Token` scheme is unsupported. Invalid or missing signatures are rejected with 401. Returns 500 if no `signing_secret` is configured. Publishes to `crewlet.notifications.inbound`. See [GitLab Integration — Webhooks](../integrations/gitlab.md#webhooks).
+Receives GitLab webhook payloads. **Two schemes, in order**, both against the configured `signing_secret`: a `webhook-signature` header is verified as a Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (±5-minute timestamp tolerance), and a delivery that carries **no** signature is verified by its `X-Gitlab-Token`, constant-time. The signature check runs whenever the header is present, so stripping it is not a downgrade path. GitLab does not always sign — measured on gitlab-ee 19.3.0, which sends the Standard-Webhooks envelope and no signature — see [GitLab § Verification](../integrations/gitlab.md#verification). Neither credential, or a wrong one, is rejected with 401. Answers 503 with a `Retry-After` when no `signing_secret` is configured, so the delivery is held for retry. Publishes to `crewlet.notifications.inbound`. See [GitLab Integration — Webhooks](../integrations/gitlab.md#webhooks).
 
 ### `/webhooks/plane`
 

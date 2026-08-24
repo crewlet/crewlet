@@ -367,3 +367,97 @@ func vendorSignedDelivery(t *testing.T, body []byte, secret, id string, at time.
 		"X-Gitlab-Event":    "Issue Hook",
 	}
 }
+
+// --- the two GitLab schemes ------------------------------------------------
+
+// GITLAB DOES NOT SIGN, and the integration has to work anyway.
+//
+// Measured on gitlab-ee 19.3.0: a real Issue Hook delivery carries
+// `webhook-id` and `webhook-timestamp` — the Standard-Webhooks envelope —
+// and NO `webhook-signature`, with the `webhook_standard_signature` feature
+// flag on or off. Requiring the signature meant the integration received
+// nothing at all, from a hook GitLab's own settings page called healthy.
+// See rewrite/decisions/702-gitlab-webhook-verification.md.
+func TestGitLabVerifiesAnUnsignedDeliveryByItsToken(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = "whsec_the-hooks-token"
+
+	body := []byte(`{"object_kind":"issue"}`)
+	got := e.post(t, "/webhooks/gitlab", body, map[string]string{
+		// Exactly what GitLab sends: the envelope, no signature.
+		"webhook-id":          "c32719e0",
+		"webhook-timestamp":   strconv.FormatInt(pinned.Unix(), 10),
+		"X-Gitlab-Token":      "whsec_the-hooks-token",
+		"X-Gitlab-Event":      "Issue Hook",
+		"X-Gitlab-Event-UUID": "243c86f4",
+	}).Code
+	if got != http.StatusOK {
+		t.Fatalf("got %d — a delivery shaped exactly like a real one was refused", got)
+	}
+}
+
+// A WRONG TOKEN IS STILL A WRONG TOKEN.
+func TestGitLabRefusesAnUnsignedDeliveryWithTheWrongToken(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = "whsec_the-hooks-token"
+
+	// SAME LENGTH, different bytes. A wrong token of a different length is
+	// refused by a comparison that only measures — which is not a
+	// comparison at all, and is what a hand-rolled equality check tends to
+	// decay into.
+	for _, wrong := range []string{"whsec_the-hooks-taken", "not-the-token"} {
+		got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
+			"webhook-id":        "c32719e0",
+			"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
+			"X-Gitlab-Token":    wrong,
+			"X-Gitlab-Event":    "Issue Hook",
+		}).Code
+		if got != http.StatusUnauthorized {
+			t.Errorf("token %q got %d, want 401", wrong, got)
+		}
+	}
+}
+
+// AND NO TOKEN AT ALL IS NOT A WAY IN. An unsigned delivery with nothing
+// presented is the shape an attacker sends first.
+func TestGitLabRefusesADeliveryWithNeitherCredential(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = "whsec_the-hooks-token"
+
+	got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
+		"webhook-id":        "c32719e0",
+		"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
+		"X-Gitlab-Event":    "Issue Hook",
+	}).Code
+	if got != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", got)
+	}
+}
+
+// STRIPPING THE SIGNATURE IS NOT A DOWNGRADE PATH.
+//
+// The whole risk of accepting two schemes is that an attacker picks the
+// weaker one. They cannot: the signature check runs whenever the header is
+// present, so a delivery that carries a BAD signature is refused rather than
+// falling through to the token — even when the attacker also presents a
+// token they somehow hold. The only way to the token path is GitLab sending no
+// signature at all.
+func TestABadSignatureDoesNotFallThroughToTheToken(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = "whsec_the-hooks-token"
+
+	got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
+		"webhook-id":        "c32719e0",
+		"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
+		"webhook-signature": "v1,bm90LWEtc2lnbmF0dXJl",
+		"X-Gitlab-Token":    "whsec_the-hooks-token",
+		"X-Gitlab-Event":    "Issue Hook",
+	}).Code
+	if got != http.StatusUnauthorized {
+		t.Fatalf("got %d — a bad signature reached the token path", got)
+	}
+}

@@ -65,11 +65,29 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 			req.Header.Get("webhook-id"), req.Header.Get("webhook-timestamp"),
 			signature, now)
 	}
-	v, ok := r.authenticate(w, "gitlab", r.secrets().GitLab,
-		req.Header.Get("webhook-signature"), raw, standardWebhooks)
+	// TWO SCHEMES, IN ORDER — see rewrite/decisions/702.
+	//
+	// A signed delivery must have a VALID signature: that check runs
+	// whenever the header is present, so stripping it is not a way down
+	// to the weaker path. Only a delivery GitLab sent unsigned is
+	// verified by its token.
+	//
+	// Measured, because the doc's premise was wrong: gitlab-ee 19.3.0
+	// sends `webhook-id` and `webhook-timestamp` — the Standard-Webhooks
+	// envelope — and no `webhook-signature`, with the feature flag on or
+	// off. Requiring the signature meant the integration received
+	// nothing at all, from a hook GitLab's own settings page called
+	// healthy.
+	signature := req.Header.Get("webhook-signature")
+	check, presented := scheme(standardWebhooks), signature
+	if signature == "" {
+		check, presented = gitlabToken, req.Header.Get("X-Gitlab-Token")
+	}
+	v, ok := r.authenticate(w, "gitlab", r.secrets().GitLab, presented, raw, check)
 	if !ok {
 		return
 	}
+	noteGitLabScheme(signature != "")
 	// GitLab 19.1+ sends webhook-id; older deliveries carry
 	// X-Gitlab-Event-UUID. Either is a stable per-delivery identity, and a
 	// deployment mid-upgrade sends both across its instances.

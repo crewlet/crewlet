@@ -17,7 +17,7 @@ integrations:
   gitlab:
     enabled: true
     url: "https://gitlab.com"                   # instance base URL — REQUIRED
-    signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_… — 19.1+ Standard-Webhooks HMAC — REQUIRED
+    signing_secret: "${GITLAB_SIGNING_SECRET}"  # whsec_… — the hook's secret — REQUIRED
     token: "${GITLAB_ENGINE_TOKEN}"             # optional read credential → participants-based routing
     provisioning:                # consumed ONLY by `crewlet gitlab provision`, ignored by the engine
       group: nimbus-hq           # top-level group the agent service accounts join
@@ -33,7 +33,7 @@ integrations:
 Unlike `integrations.github`, three fields differ:
 
 - **`url` is required** when GitLab is enabled — the instance address is needed for webhook links, boot-time identity resolution (`GET {url}/api/v4/user`), and provisioning. GitHub's is implied.
-- **`signing_secret` is required** when enabled — inbound webhooks are verified by the GitLab 19.1+ Standard-Webhooks HMAC signature (`webhook-signature` header) and nothing else. The weaker plain `X-Gitlab-Token` scheme is intentionally unsupported; gitlab.com always runs ≥ 19.1 and the docker-compose test instance runs `gitlab-ee:latest`, so the signing token is always available. **Self-managed GitLab older than 19.1 is not supported.** Point it at a `${VAR}` and you don't even have to invent a value: when `crewlet gitlab provision -public-url …` runs and that var is unset, the provisioner **generates a `whsec_…` secret**, stamps it on the hook, and writes it back to the token sink — see [Provisioning](#what-a-run-does). See [Webhooks](#webhooks).
+- **`signing_secret` is required** when enabled — it is the value every inbound delivery is verified against, under whichever scheme the instance uses (see [Verification](#verification)). Point it at a `${VAR}` and you don't even have to invent a value: when `crewlet gitlab provision -public-url …` runs and that var is unset, the provisioner **generates a `whsec_…` secret**, stamps it on the hook, and writes it back to the token sink — see [Provisioning](#what-a-run-does). See [Webhooks](#webhooks).
 - **`token` (optional)** enables **participants-based routing**: comments and state changes fan out to everyone participating in the issue/MR — GitLab's own notification reach — instead of only assignees and mentioned users. Webhook payloads don't carry the participants list, so this costs one `GET …/participants` REST call per comment/state-change event, made with this credential (any group member's PAT with `read_api`; the provisioner mints a dedicated read-only `crewlet-engine` account for the referenced `${VAR}` automatically). Without it, routing degrades to payload-derived targets — directed events are unaffected. This mirrors `integrations.jira`'s admin token, which exists for the same reason (watcher lookups). See [Event routing](#event-routing).
 
 The `provisioning:` sub-block is read **only by the provisioning CLI** — the engine never looks at it. Its fields drive the reconcile described under [Provisioning](#provisioning).
@@ -212,9 +212,18 @@ Inbound GitLab events arrive at **`POST /webhooks/gitlab`**.
 
 ### Verification
 
-Verification is the GitLab **signing token only**. The `webhook-signature` header is verified as a 19.1+ Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (constant-time compare, ±5-minute timestamp tolerance; the `whsec_…` secret's base64 payload is the HMAC key). An invalid or missing signature → **401**; a request that arrives before `signing_secret` is configured → **503** with a `Retry-After`, so the delivery is held for retry rather than discarded.
+**Two schemes, in that order** — because GitLab does not always sign. See [d-702](https://github.com/crewlet/crewlet/blob/main/rewrite/decisions/702-gitlab-webhook-verification.md).
 
-The provisioner sets that secret as each hook's `signing_token` when it registers webhooks. The weaker plain `X-Gitlab-Token` scheme is not supported.
+1. **`webhook-signature` present** → verified as a Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (constant-time compare, ±5-minute timestamp tolerance; the `whsec_…` secret's base64 payload is the HMAC key). This check runs **whenever the header is there**, so a bad signature is a `401` rather than a fall-through — stripping it is not a way to the weaker path.
+2. **No `webhook-signature`** → the hook's `X-Gitlab-Token` is compared against `signing_secret`, constant-time.
+
+Neither present, or a wrong value → **401**. A request that arrives before `signing_secret` is configured → **503** with a `Retry-After`, so the delivery is held for retry rather than discarded.
+
+> **Measured, because the obvious assumption is wrong.** On **gitlab-ee 19.3.0** a real `Issue Hook` delivery carries `webhook-id` and `webhook-timestamp` — the Standard-Webhooks *envelope* — and **no `webhook-signature`**. The `webhook_standard_signature` feature flag is **off by default** there, and enabling it changed nothing. Requiring the signature meant the integration received **nothing at all**, from a hook GitLab's own settings page reported as healthy.
+>
+> The token scheme is weaker in one specific way: it is a bearer value with no timestamp, so a captured delivery can be replayed. That is bounded by the delivery ledger, which dedupes on the `X-Gitlab-Event-UUID` every GitLab request carries — a replay is dropped before it wakes anything. The engine logs which scheme is in use **once**, not per delivery, so an operator on the weaker path knows it.
+
+The provisioner sets that secret as each hook's token when it registers webhooks, and mints one when the `${VAR}` is unset.
 
 GitLab **does not auto-retry** failed webhook deliveries (and auto-disables a hook after 4 consecutive failures), so operators use the manual resend endpoint; the engine carries the delivery UUID / `Idempotency-Key` into event metadata so resends are idempotent.
 
