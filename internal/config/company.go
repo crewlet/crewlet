@@ -227,25 +227,21 @@ func (c *Company) Validate() error {
 func (c *Company) validateKnowledgeBackend() error {
 	var p problems
 	planeActive := c.Integrations.Plane != nil && c.Integrations.Plane.Enabled
-	confluenceActive := c.Integrations.Confluence != nil
 
-	if planeActive && confluenceActive {
-		p.add("integrations", ErrConflict,
-			"integrations.confluence and an enabled integrations.plane are "+
-				"mutually exclusive — the knowledge backend is single-homed; "+
-				"a Confluence-to-Plane migration is a cut-over (disable one)")
-	}
-	if planeActive && len(c.Knowledge.ConfluenceSpaces) > 0 {
-		p.add("knowledge.confluence_spaces", ErrConflict,
-			"this is a scope list for the disabled Confluence backend — "+
-				"remove it when integrations.plane is enabled, and use "+
+	// THE SINGLE-HOMING RULE HAS ONE BACKEND LEFT TO ENFORCE IT AGAINST.
+	//
+	// Confluence is refused outright now (see [unservedIntegrations]), so
+	// the branches that compared it against Plane could only ever fire
+	// alongside that refusal — a second error saying the same thing about
+	// a config that was already rejected. They are gone rather than left
+	// as guards that cannot fire, which read as invariants stronger than
+	// they are.
+	if len(c.Knowledge.ConfluenceSpaces) > 0 {
+		p.add("knowledge.confluence_spaces", ErrUnimplemented,
+			"this is a read scope for a Confluence backend this build does "+
+				"not have a searcher for, so it would narrow nothing — the "+
+				"knowledge base this build serves is Plane, scoped with "+
 				"knowledge.plane_projects")
-	}
-	if confluenceActive && len(c.Knowledge.PlaneProjects) > 0 {
-		p.add("knowledge.plane_projects", ErrConflict,
-			"this is a scope list for the disabled Plane backend — remove it "+
-				"when integrations.confluence is configured, and use "+
-				"knowledge.confluence_spaces")
 	}
 	if len(c.Knowledge.PlaneProjects) > 0 && !planeActive {
 		p.add("knowledge.plane_projects", ErrConflict,
@@ -266,7 +262,7 @@ func (c *Company) validateKnowledgeBackend() error {
 // an agent searching with its own credentials sees every space its account
 // can read. Set this only to NARROW to a curated floor.
 type Knowledge struct {
-	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty" desc:"Org-wide Confluence read scope. Empty = unscoped."`
+	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher reads a Confluence space, so this would narrow nothing. Scope the knowledge base this build serves with knowledge.plane_projects."`
 	PlaneProjects    []string `yaml:"plane_projects,omitempty" json:"plane_projects,omitempty" desc:"Org-wide Plane read scope. Empty = unscoped. Requires integrations.plane."`
 }
 

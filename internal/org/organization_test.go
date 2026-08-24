@@ -44,8 +44,8 @@ func TestLeadCascadesThroughEveryLevel(t *testing.T) {
 		Name: "BigCorp",
 		Units: []*OrgUnit{{
 			Name: "Technology", Type: UnitTypeDivision, Lead: "CTO",
-			SlackChannel: "C_TECH",
-			Roles:        []*Role{{Name: "CTO"}},
+			Channel: "C_TECH",
+			Roles:   []*Role{{Name: "CTO"}},
 			Children: []*OrgUnit{{
 				Name: "Engineering", Type: UnitTypeDepartment,
 				Children: []*OrgUnit{{
@@ -65,8 +65,8 @@ func TestLeadCascadesThroughEveryLevel(t *testing.T) {
 		}
 		// The team channel rides the same cascade: a child that names none
 		// talks where its parent talks.
-		if u.SlackChannel != "C_TECH" {
-			t.Errorf("unit %q channel = %q, want C_TECH", unit, u.SlackChannel)
+		if u.Channel != "C_TECH" {
+			t.Errorf("unit %q channel = %q, want C_TECH", unit, u.Channel)
 		}
 	}
 }
@@ -429,7 +429,7 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 			Name:  "Acme",
 			Roles: []*Role{{Name: "CEO", Manages: []string{"Engineering"}}, {Name: "Dev C", UnitRef: "Backend"}},
 			Units: []*OrgUnit{{
-				Name: "Engineering", Lead: "VP Eng", SlackChannel: "C_ENG",
+				Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
 				MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 				Roles:  []*Role{{Name: "VP Eng"}, {Name: "Analyst"}},
 				Children: []*OrgUnit{{
@@ -728,7 +728,7 @@ units:
   - name: Engineering
     type: department
     lead: CEO
-    slack_channel: C_ENG
+    channel: C_ENG
     mcp_env:
       atlassian:
         JIRA_API_TOKEN: "${JIRA_TOKEN_TEAM}"
@@ -802,7 +802,7 @@ units:
 	if o.Unit("Backend").Role("Dev C") == nil {
 		t.Error("the unit: reference did not move the seat")
 	}
-	if got := o.Unit("Backend").SlackChannel; got != "C_ENG" {
+	if got := o.Unit("Backend").Channel; got != "C_ENG" {
 		t.Errorf("child channel = %q, want the inherited C_ENG", got)
 	}
 	if got := o.Unit("Backend").Schedules[0]; got.IsEnabled() || got.Timeout() != DefaultScheduleTimeout {

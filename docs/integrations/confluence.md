@@ -1,15 +1,22 @@
 # Confluence Integration
 
-> **v1 status — webhook ingestion only.** This build verifies and stores
-> Confluence deliveries on `POST /webhooks/confluence`, and agents reach
-> Confluence through MCP. What it does **not** yet have is the routing
-> half, the knowledge searcher, or the publishing CLI — no parser turns a
-> delivery into a notification, and `crewlet confluence import` does not
-> exist. The knowledge backend that is live is [Plane](plane.md), through
+> **v1 status — `integrations.confluence` is REFUSED by this build**, along
+> with `knowledge.confluence_spaces` (its read scope) and the per-seat and
+> per-unit identities `role.integrations.confluence` and
+> `unit.integrations.confluence`. There is no Confluence searcher, no parser
+> and no publishing CLI, so the block named a knowledge base the engine never
+> queried — an empty `## Relevant knowledge` on every Plan phase, with
+> nothing saying why — and the space identities named a write home nothing
+> wrote to. Config validation now rejects all of them by name: the knowledge
+> base this build serves is [Plane](plane.md), scoped with
+> `knowledge.plane_projects`, owned per seat and unit with
+> `…integrations.plane`, and published with
 > [`crewlet plane import`](../reference/cli.md#crewlet-plane-import).
-> Everything below describes the intended contract; the parts that are live
-> today are the `confluence:` config block, the webhook endpoint and the MCP
-> surface.
+>
+> `POST /webhooks/confluence` still exists and fails closed at 503, and comes
+> alive in the same change that ships the searcher and parser. **Agents still
+> reach Confluence through MCP**, which is unaffected. Everything below
+> describes the intended contract.
 
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 

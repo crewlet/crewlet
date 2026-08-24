@@ -1,13 +1,21 @@
 # Jira Integration
 
-> **v1 status — webhook ingestion only.** This build verifies and stores
-> Jira deliveries on `POST /webhooks/jira` (and Forge invocations on
-> `POST /webhooks/forge`), and agents reach Jira through MCP. What it does
-> **not** yet have is the routing half: no parser turns a delivery into a
-> notification, so a Jira event does not wake a seat. The tracker that
-> routes end to end is [Plane](plane.md). Everything below describes the
-> intended contract; the parts that are live today are the `jira:` config
-> block, the webhook endpoints and the MCP surface.
+> **v1 status — `integrations.jira` is REFUSED by this build**, along with
+> `integrations.forge_app_id` (whose only consumers are Jira and Confluence
+> Cloud) and the per-seat and per-unit identities `role.integrations.jira`
+> and `unit.integrations.jira`. No parser turns a Jira delivery into a
+> notification, so the block configured webhooks that verified events and
+> reached nobody, and the project identities recorded where those events
+> would have routed. Config validation now rejects all of them by name and
+> says what serves the role instead: the tracker this build routes end to
+> end is [Plane](plane.md), whose `role.integrations.plane` and
+> `unit.integrations.plane` are the identities that do get consulted.
+>
+> `POST /webhooks/jira` and `POST /webhooks/forge` still exist and fail
+> closed at 503, and come alive in the same change that ships the parser.
+> **Agents still reach Jira through MCP**, which is unaffected — that is
+> `mcp_servers` plus each seat's credentials, and has nothing to do with the
+> refused block. Everything below describes the intended contract.
 
 Crewlet integrates with Jira in two directions: agents control Jira via MCP tools, and Jira pushes events to agents via webhooks.
 

@@ -27,6 +27,12 @@ import (
 // and a next-run projection are both measured against it.
 var pinned = time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)
 
+// The fixture names only vendors this build SERVES — Mattermost for chat,
+// GitLab for the code host — because config validation refuses the rest
+// (config.ErrUnimplemented), so a company naming one no longer parses at all.
+// Nothing here is about those vendors: the org block plus a per-seat identity
+// is the shape these answers project, and Mattermost carries it exactly as the
+// Slack pair it replaced did.
 const companyDoc = `
 name: Acme
 providers:
@@ -36,9 +42,10 @@ providers:
       model: claude-sonnet-5
       api_keys: ["${K}"]
 integrations:
-  github:
+  mattermost:
     enabled: true
-    webhook_secret: "${GH}"
+    url: https://mm.example.com
+    team: acme
   gitlab:
     enabled: true
     url: https://gitlab.example.com
@@ -48,9 +55,8 @@ roles:
     handle: ceo
     llm: zulu
     integrations:
-      slack:
+      mattermost:
         bot_token: "${TOK}"
-        signing_secret: "${SEC}"
     schedules:
       - name: standup
         cron: "0 9 * * 1-5"
@@ -199,7 +205,7 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 		entry, _ := row.(map[string]any)
 		byKind[entry["key"].(string)] = entry
 	}
-	for _, kind := range []string{"github", "gitlab", "slack"} {
+	for _, kind := range []string{"gitlab", "mattermost"} {
 		if _, present := byKind[kind]; !present {
 			t.Errorf("%s is configured and absent from the answer", kind)
 		}
@@ -207,11 +213,13 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	if _, present := byKind["plane"]; present {
 		t.Error("an integration the company does not configure was reported")
 	}
-	// LISTED rather than counted: "which seats reach Slack" is the question
-	// that follows "how many", and the answer is already in the config.
-	seats, _ := byKind["slack"]["seats"].([]any)
+	// LISTED rather than counted: "which seats reach Mattermost" is the
+	// question that follows "how many", and the answer is already in the
+	// config.
+	seats, _ := byKind["mattermost"]["seats"].([]any)
 	if len(seats) != 1 || seats[0] != "CEO" {
-		t.Errorf("slack seats = %v, want the one seat with an app", byKind["slack"]["seats"])
+		t.Errorf("mattermost seats = %v, want the one seat with a bot of its own",
+			byKind["mattermost"]["seats"])
 	}
 }
 
@@ -221,7 +229,7 @@ func TestAMissingSecretIsReportedAsFalseNotAsAbsent(t *testing.T) {
 	// surface uses no secret at all, false means a route is refusing every
 	// delivery, and only an operator can tell those apart.
 	cfg := company(t)
-	cfg.Integrations.GitHub.WebhookSecret = ""
+	cfg.Integrations.GitLab.SigningSecret = ""
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
 	}, "integrations", nil))
@@ -229,7 +237,7 @@ func TestAMissingSecretIsReportedAsFalseNotAsAbsent(t *testing.T) {
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
 		entry, _ := row.(map[string]any)
-		if entry["key"] != "github" {
+		if entry["key"] != "gitlab" {
 			continue
 		}
 		present, ok := entry["secret_present"]
@@ -242,37 +250,50 @@ func TestAMissingSecretIsReportedAsFalseNotAsAbsent(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("github was not in the answer")
+	t.Fatal("gitlab was not in the answer")
 }
 
 func TestASurfaceWithNoSecretReportsNull(t *testing.T) {
 	t.Parallel()
-	// Forge's app id is the JWT AUDIENCE, in every manifest the operator
-	// installs. Reporting it as a secret that is present would invite an
-	// operator to go looking for the one they had not set.
+	// Mattermost holds one outbound websocket per seat and verifies no
+	// inbound delivery, so it has no secret of its own at all; Forge's app
+	// id is the JWT AUDIENCE, in every manifest the operator installs.
+	// Reporting either as a secret that is present would invite an operator
+	// to go looking for the one they had not set.
 	cfg := company(t)
+	// SET DIRECTLY, because forge_app_id can no longer come from a config:
+	// this build refuses it with config.ErrUnimplemented (the Forge route
+	// carries Jira and Confluence Cloud, and neither is wired). The row is
+	// still built from the field, and it still has to answer null.
 	cfg.Integrations.ForgeAppID = "app-123"
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
 	}, "integrations", nil))
 
+	want := map[string]bool{"forge": false, "mattermost": false}
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
 		entry, _ := row.(map[string]any)
-		if entry["key"] != "forge" {
+		kind, _ := entry["key"].(string)
+		if _, wanted := want[kind]; !wanted {
 			continue
 		}
+		want[kind] = true
 		value, present := entry["secret_present"]
 		if !present {
-			t.Fatal("the answer OMITS secret_present, so \"uses no secret\" and " +
-				"\"this build forgot to say\" are one answer")
+			t.Fatalf("%s OMITS secret_present, so \"uses no secret\" and "+
+				"\"this build forgot to say\" are one answer", kind)
 		}
 		if value != nil {
-			t.Fatalf("secret_present = %v, want null for a surface with no secret", value)
+			t.Fatalf("%s secret_present = %v, want null for a surface with no secret",
+				kind, value)
 		}
-		return
 	}
-	t.Fatal("forge was not in the answer")
+	for kind, seen := range want {
+		if !seen {
+			t.Fatalf("%s was not in the answer", kind)
+		}
+	}
 }
 
 // --- conversations ---------------------------------------------------------
@@ -773,7 +794,8 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		// Only gitlab has a parser in this fixture.
+		// The engine names gitlab and nothing else, so mattermost is the
+		// configured-but-unrouted side of the comparison.
 		Routed: func() []string { return []string{"gitlab"} },
 	}, "integrations", nil))
 
@@ -786,9 +808,10 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 	if got := byKind["gitlab"]["routes"]; got != true {
 		t.Errorf("gitlab routes = %v, want true", got)
 	}
-	if got := byKind["github"]["routes"]; got != false {
-		t.Errorf("github routes = %v, want false — it ingests and wakes "+
-			"nobody, and that is the whole point of the field", got)
+	if got := byKind["mattermost"]["routes"]; got != false {
+		t.Errorf("mattermost routes = %v, want false — a surface the engine "+
+			"registered no parser for ingests and wakes nobody, and that is "+
+			"the whole point of the field", got)
 	}
 }
 

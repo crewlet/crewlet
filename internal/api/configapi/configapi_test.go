@@ -18,6 +18,20 @@ import (
 
 var pinned = time.Date(2026, 8, 23, 15, 0, 0, 0, time.UTC)
 
+// The webhook signing tokens the fixture company carries. Both are REAL
+// values in GitLab's own shape — whsec_ over standard base64 of a 32-byte
+// key — because config validation refuses anything else, so a fixture that
+// merely looked the part would never parse.
+const (
+	signingSecret        = "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
+	rotatedSigningSecret = "whsec_YS1yb3RhdGVkLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
+)
+
+// companyDoc is a company carrying one credential of each kind this surface
+// has to keep out of a response: a literal provider key, a ${VAR} reference
+// that must survive an edit, and an integration secret. The integration is
+// GitLab because that is the code host this build serves — the unserved
+// ones are refused by validation and would never reach these routes.
 const companyDoc = `
 name: Acme
 providers:
@@ -27,9 +41,10 @@ providers:
       model: claude-sonnet-5
       api_keys: ["sk-literal", "${ROTATED}"]
 integrations:
-  github:
+  gitlab:
     enabled: true
-    webhook_secret: gh-literal
+    url: https://gitlab.example.com
+    signing_secret: ` + signingSecret + `
 roles:
   - name: CEO
     handle: ceo
@@ -145,7 +160,7 @@ func TestTheActiveConfigComesBackRedacted(t *testing.T) {
 		t.Fatalf("got %d: %s", res.Code, res.Body)
 	}
 	body := res.Body.String()
-	if strings.Contains(body, "sk-literal") || strings.Contains(body, "gh-literal") {
+	if strings.Contains(body, "sk-literal") || strings.Contains(body, signingSecret) {
 		t.Errorf("the config surface served a credential: %s", body)
 	}
 	if !strings.Contains(body, "${ROTATED}") {
@@ -320,14 +335,14 @@ func TestADiffNeverCarriesEitherSecret(t *testing.T) {
 	// this surface already refuses to serve.
 	s := newSurface(t, nil)
 	first := s.seed(t, companyDoc, nil)
-	s.seed(t, strings.Replace(companyDoc, "gh-literal", "gh-rotated", 1), nil)
+	s.seed(t, strings.Replace(companyDoc, signingSecret, rotatedSigningSecret, 1), nil)
 
 	res := s.do(t, http.MethodGet, "/config/revisions/"+first+"/diff", "", nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d", res.Code)
 	}
 	body := res.Body.String()
-	for _, secret := range []string{"gh-literal", "gh-rotated"} {
+	for _, secret := range []string{signingSecret, rotatedSigningSecret} {
 		if strings.Contains(body, secret) {
 			t.Errorf("the diff carries %q: %s", secret, body)
 		}
@@ -432,8 +447,8 @@ func TestAMaskedDocumentCanBeSentBack(t *testing.T) {
 	if got := stored.Providers.LLM["zulu"].APIKeys[0]; got != "sk-literal" {
 		t.Errorf("api key = %q, want the one the previous revision held", got)
 	}
-	if got := stored.Integrations.GitHub.WebhookSecret; got != "gh-literal" {
-		t.Errorf("webhook secret = %q", got)
+	if got := stored.Integrations.GitLab.SigningSecret; got != signingSecret {
+		t.Errorf("signing secret = %q", got)
 	}
 }
 

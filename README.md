@@ -179,11 +179,13 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 | **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
 
-**Webhook ingestion only** in this build — [Jira](docs/integrations/jira.md),
+**Refused by this build** — [Jira](docs/integrations/jira.md),
 [Confluence](docs/integrations/confluence.md), [GitHub](docs/integrations/github.md)
-and [Slack](docs/integrations/slack.md) each verify and store their deliveries, and
-agents reach them through MCP, but no parser turns one into a notification yet. Each
-page says exactly what is live.
+and [Slack](docs/integrations/slack.md) have no parser turning a delivery into a
+notification, so configuring one bought a webhook that verified events and reached
+nobody. `crewlet validate` rejects those blocks by name and says which vendor serves
+the role instead. Agents still reach all four through **MCP**, which is a separate
+surface and unaffected. Each page says exactly what is live.
 
 For Mattermost, Plane and GitLab, one command provisions the whole fleet — a bot or
 service account per seat, memberships, per-agent tokens minted into your config's own

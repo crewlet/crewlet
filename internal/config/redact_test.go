@@ -12,6 +12,13 @@ import (
 // is about masking: the mask must cover every credential FIELD, and a masked
 // document must be able to come back — a config nobody can edit is a config
 // nobody maintains.
+//
+// The fixture names the three vendors this build serves — Mattermost, Plane
+// and GitLab — because it has to PARSE: a company configuring an unserved one
+// is refused with config.ErrUnimplemented before Redact is ever reached. The
+// vendor is incidental to every assertion below; what each block contributes
+// is a SHAPE — a literal credential, a ${VAR} reference, a per-seat
+// credential, a credential inside a map.
 
 const credentialDoc = `
 name: Acme
@@ -26,9 +33,15 @@ providers:
     model: text-embedding-3-small
     api_key: sk-embeddings-literal
 integrations:
-  github:
+  mattermost:
     enabled: true
-    webhook_secret: gh-literal-secret
+    url: https://mm.example.com
+    team: acme
+  plane:
+    enabled: true
+    url: https://plane.example.com
+    workspace: acme
+    webhook_secret: pl-literal-secret
   gitlab:
     enabled: true
     url: https://gitlab.example.com
@@ -46,9 +59,8 @@ roles:
     mcp_env:
       notion: {NOTION_TOKEN: per-seat-literal}
     integrations:
-      slack:
-        bot_token: xoxb-literal
-        signing_secret: slack-literal
+      mattermost:
+        bot_token: mm-literal-bot-token
 `
 
 func credentialCompany(t *testing.T) *Company {
@@ -72,9 +84,9 @@ func TestNoLiteralCredentialSurvivesRedaction(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, literal := range []string{
-		"sk-literal-key", "sk-embeddings-literal", "gh-literal-secret",
+		"sk-literal-key", "sk-embeddings-literal", "pl-literal-secret",
 		"gl-literal-pat", "literal-notion-token", "per-seat-literal",
-		"xoxb-literal", "slack-literal",
+		"mm-literal-bot-token",
 	} {
 		if strings.Contains(string(blob), literal) {
 			t.Errorf("the redacted config still carries %q", literal)
@@ -130,7 +142,7 @@ func TestRedactionDoesNotTouchTheOriginal(t *testing.T) {
 	if got := original.Providers.LLM["zulu"].APIKeys[0]; got != "sk-literal-key" {
 		t.Fatalf("the original was masked in place: api key = %q", got)
 	}
-	if got := original.Roles[0].Integrations.Slack.BotToken; got != "xoxb-literal" {
+	if got := original.Roles[0].Integrations.Mattermost.BotToken; got != "mm-literal-bot-token" {
 		t.Fatalf("the original was masked in place: bot token = %q", got)
 	}
 }
@@ -167,7 +179,7 @@ func TestAMaskedConfigCanBeSentBack(t *testing.T) {
 	if got := edited.Providers.LLM["zulu"].APIKeys[1]; got != "${ROTATED_KEY}" {
 		t.Errorf("the reference was disturbed: %q", got)
 	}
-	if got := edited.Roles[0].Integrations.Slack.BotToken; got != "xoxb-literal" {
+	if got := edited.Roles[0].Integrations.Mattermost.BotToken; got != "mm-literal-bot-token" {
 		t.Errorf("bot token = %q", got)
 	}
 	if got := edited.Roles[0].MCPEnv["notion"]["NOTION_TOKEN"]; got != "per-seat-literal" {
@@ -185,9 +197,9 @@ func TestARealChangeToACredentialIsKept(t *testing.T) {
 	// old one — which would make rotation through this surface impossible.
 	original := credentialCompany(t)
 	edited := original.Redact()
-	edited.Integrations.GitHub.WebhookSecret = "a-new-secret"
+	edited.Integrations.Plane.WebhookSecret = "a-new-secret"
 	edited.RestoreRedacted(original)
-	if got := edited.Integrations.GitHub.WebhookSecret; got != "a-new-secret" {
+	if got := edited.Integrations.Plane.WebhookSecret; got != "a-new-secret" {
 		t.Errorf("webhook secret = %q, want the caller's new value", got)
 	}
 }

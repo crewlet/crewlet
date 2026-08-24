@@ -236,11 +236,11 @@ func propagateDownward(u *OrgUnit, parentLead, parentChannel string) {
 	if u.Lead == "" {
 		u.Lead = parentLead
 	}
-	if u.SlackChannel == "" {
-		u.SlackChannel = parentChannel
+	if u.Channel == "" {
+		u.Channel = parentChannel
 	}
 	for _, c := range u.Children {
-		propagateDownward(c, u.Lead, u.SlackChannel)
+		propagateDownward(c, u.Lead, u.Channel)
 	}
 }
 

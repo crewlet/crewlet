@@ -119,9 +119,7 @@ roles:
       node: node-2
       labels: {zone: eu}
     integrations:
-      slack: {bot_token: "${SLACK_SWE}", signing_secret: "${SIGN_SWE}", channel: C123}
-      jira: {project: ENG}
-      confluence: {space: ENGSPACE}
+      mattermost: {bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
       plane: {project: ENGP}
     sandbox:
       enabled: true
@@ -135,11 +133,19 @@ roles:
 	if seat.Handle() != "swe" {
 		t.Fatalf("handle = %q", seat.Handle())
 	}
-	if seat.Slack.BotToken != "${SLACK_SWE}" || seat.Slack.Channel != "C123" {
-		t.Fatalf("slack = %+v", seat.Slack)
+	if seat.Mattermost.BotToken != "${MM_SWE}" || seat.Mattermost.Username != "swe-bot" ||
+		seat.Mattermost.Channel != "eng" {
+		t.Fatalf("mattermost = %+v", seat.Mattermost)
 	}
-	if seat.JiraProject != "ENG" || seat.ConfluenceSpace != "ENGSPACE" || seat.PlaneProject != "ENGP" {
-		t.Fatalf("identities = %q %q %q", seat.JiraProject, seat.ConfluenceSpace, seat.PlaneProject)
+	if seat.PlaneProject != "ENGP" {
+		t.Fatalf("plane project = %q", seat.PlaneProject)
+	}
+	// The other two identities cannot be authored any more — jira and
+	// confluence are refused — and a config that cannot name one must not
+	// produce one from somewhere else.
+	if seat.JiraProject != "" || seat.ConfluenceSpace != "" {
+		t.Fatalf("a seat that named no Jira or Confluence identity got %q and %q",
+			seat.JiraProject, seat.ConfluenceSpace)
 	}
 	if seat.Placement.Node != "node-2" || seat.Placement.Labels["zone"] != "eu" {
 		t.Fatalf("placement = %+v", seat.Placement)
@@ -149,6 +155,41 @@ roles:
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {
 		t.Fatalf("mcp_env = %v", seat.MCPEnv)
+	}
+}
+
+// The refused halves of that same transform can no longer be reached from a
+// config: role.integrations.slack, .jira and .confluence are all refused
+// with ErrUnimplemented, because nothing parses a delivery from any of them,
+// so the seat would carry an app and two routing identities that wake
+// nobody. The TRANSFORM is still live code — the webhook route resolves each
+// seat's signing secret out of org.Role.Slack, and the dashboard reports
+// which identities a seat carries — so the authored seat is built directly
+// here. Parsing YAML would assert the refusal instead of what this test is
+// about, and deleting the transform would take working code out with the
+// vendor it is waiting for.
+func TestSeatTransformStillCarriesTheRefusedIdentities(t *testing.T) {
+	t.Parallel()
+	seat := (&Role{
+		Name: "Agent SWE",
+		Integrations: RoleIntegrations{
+			Slack: &RoleSlack{
+				BotToken:      "${SLACK_SWE}",
+				SigningSecret: "${SIGN_SWE}",
+				Channel:       "C123",
+			},
+			Jira:       &ProjectRef{Project: "ENG"},
+			Confluence: &SpaceRef{Space: "ENGSPACE"},
+		},
+	}).Seat()
+
+	if seat.JiraProject != "ENG" || seat.ConfluenceSpace != "ENGSPACE" {
+		t.Errorf("identities = %q %q", seat.JiraProject, seat.ConfluenceSpace)
+	}
+
+	if seat.Slack.BotToken != "${SLACK_SWE}" || seat.Slack.SigningSecret != "${SIGN_SWE}" ||
+		seat.Slack.Channel != "C123" {
+		t.Fatalf("slack = %+v", seat.Slack)
 	}
 }
 

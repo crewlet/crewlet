@@ -18,12 +18,12 @@ func acme() *org.Organization {
 		Vision:   "Be the best.",
 		Policies: []string{"Respect teammates.", "No secrets in code."},
 		Units: []*org.OrgUnit{{
-			Name:         "Eng Team",
-			Type:         org.UnitTypeTeam,
-			Purpose:      "Build the thing.",
-			Lead:         "Engineering Lead",
-			Goals:        []string{"Ship v1.0."},
-			SlackChannel: "C_ENG",
+			Name:    "Eng Team",
+			Type:    org.UnitTypeTeam,
+			Purpose: "Build the thing.",
+			Lead:    "Engineering Lead",
+			Goals:   []string{"Ship v1.0."},
+			Channel: "C_ENG",
 			Roles: []*org.Role{
 				{
 					Name:             "Engineering Lead",

@@ -381,12 +381,13 @@ units:
         lead: Tech Lead                 # optional — inherited from parent if omitted
         goals:                          # optional
           - "Ship features on 2-week cadence"
-        integrations:                   # optional — the unit's Atlassian "home" identity
-          jira:                          #   (webhook routing + write home; NOT read scope,
+        channel: backend                # optional — the team's chat channel, inherited
+        integrations:                   # optional — the unit's tracker "home" identity
+          plane:                         #   (webhook routing + write home; NOT read scope,
             project: "BACK"              #    NOT an MCP credential)
         mcp_env:                        # optional — per-agent MCP creds, inherited by roles
-          atlassian:                     #   (real tool credentials only; Slack transport
-            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   is per-agent)
+          atlassian:                     #   (real tool credentials only; the chat transport
+            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
         roles:
           - name: Tech Lead             # required — unique agent identity
             goal: "..."                 # optional — individual mission
@@ -401,16 +402,16 @@ units:
             behavioral_guidelines:      # optional
               - "Be thorough in code reviews"
             integrations:               # optional — per-agent transport identity
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_TL}"
-                signing_secret: "${SLACK_SIGNING_SECRET_TL}"
-                channel: C0123456789    # optional — default channel
+              mattermost:
+                bot_token: "${MATTERMOST_BOT_TOKEN_TL}"
+                username: tl-bot        # optional — the bot's Mattermost username
+                channel: backend        # optional — default channel
             mcp_env:                    # optional — per-agent MCP server credentials
               atlassian:
                 JIRA_USERNAME: "${TL_JIRA_USER}"
                 JIRA_API_TOKEN: "${TL_JIRA_TOKEN}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_TL}"   # same token as role.integrations.slack
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_BOT_TOKEN_TL}"  # same token as role.integrations.mattermost
               github:
                 Authorization: "Bearer ${GITHUB_TOKEN_TL}"
 ```
@@ -436,10 +437,10 @@ units:
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`, `plane.PLANE_API_KEY`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's Jira project / Confluence space / Plane project identity lives under `integrations` (below), not here |
-| `integrations.slack` | dict | no | Per-agent Slack **transport** identity (`bot_token`, `signing_secret`, optional `channel`). The same bot token is also named as `mcp_env.slack.SLACK_MCP_XOXB_TOKEN` for the Slack MCP subprocess |
+| `integrations.slack` | dict | no | **Refused by this build** — no parser routes a Slack delivery, so the app would verify deliveries that reach nobody. The per-agent transport identity that *is* served is `integrations.mattermost` |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
-| `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `OrgUnit.jira_project` / `Role.jira_project`). The team's Jira project as integration identity: inbound Jira activity with no better recipient routes to the unit lead, and it's the team's write home. **Not** an MCP credential, and it does **not** scope knowledge reads |
-| `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `OrgUnit.confluence_space` / `Role.confluence_space`). The team's Confluence space as integration identity: inbound Confluence activity with no better recipient routes to the unit lead, and it's the team's write / skill-promotion home. **Not** an MCP credential, and it does **not** scope knowledge reads — read scope is the org-wide `knowledge.confluence_spaces` only |
+| `integrations.jira.project` | string | no | **Refused by this build** — no parser routes a Jira delivery, so nothing would ever consult the identity. The tracker identity that *is* served is `integrations.plane.project` |
+| `integrations.confluence.space` | string | no | **Refused by this build** — no searcher and no parser read a Confluence space, so nothing would ever consult the identity. The knowledge identity that *is* served is `integrations.plane.project` |
 | `integrations.plane.project` | string | no | **Authored on a unit or root-level role** (→ `OrgUnit.plane_project` / `Role.plane_project`). The team's Plane project as integration identity: inbound Plane activity with no better recipient (unassigned work items, intake triage, page events) routes to the unit lead, and it's the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads — read scope is the org-wide `knowledge.plane_projects` only |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -490,25 +491,28 @@ units:
 
 ## Integrations
 
-Inbound / notification integrations live under a single `integrations:` block — admin credentials, webhook secrets, the Forge app id, the Slack transport marker, and outbound `transports`. These carry only **non-tool** config; the MCP **tool** servers are declared in [`mcp_servers`](#mcp-servers), and each agent's per-server credentials live in `role.mcp_env`. It's the inbound mirror of `mcp_servers` (outbound tool actions).
+Inbound / notification integrations live under a single `integrations:` block — admin credentials, webhook secrets, and outbound `transports`. These carry only **non-tool** config; the MCP **tool** servers are declared in [`mcp_servers`](#mcp-servers), and each agent's per-server credentials live in `role.mcp_env`. It's the inbound mirror of `mcp_servers` (outbound tool actions).
 
 ```yaml
 integrations:
-  forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"
+  # REFUSED BY THIS BUILD: forge_app_id, jira, confluence, slack, github.
+  # They are shown here for their shape only — `crewlet validate` rejects a
+  # config that sets any of them. See the notes under this block.
+  forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"   # refused
 
-  jira:
+  jira:                                  # refused
     url: "${JIRA_URL}"                    # Jira instance URL
     token: "${JIRA_API_TOKEN}"            # API token (admin/service account)
     email: "${JIRA_EMAIL}"                # Cloud only — admin email for Basic Auth
     webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
 
-  confluence:
+  confluence:                            # refused
     url: "${CONFLUENCE_URL}"              # Confluence instance URL (Cloud or Data Center)
     token: "${CONFLUENCE_API_TOKEN}"      # API token (admin/service account)
     email: "${CONFLUENCE_EMAIL}"          # Cloud only — admin email for Basic Auth
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
 
-  slack:                                 # enables the outbound Slack transport
+  slack:                                 # refused
     typing_status: addressed             # working indicator: addressed (default) | always | off
     status_phrases:                      # optional — replaces the built-in wording, per phase
       plan: ["is nimbusing...", "is thinking very hard..."]
@@ -521,8 +525,8 @@ integrations:
     provisioning:                        # read only by `crewlet mattermost provision`
       channels: [town-square, engineering]   # channels every agent bot joins
 
-  github:
-    enabled: true
+  github:                                      # refused when enabled: true
+    enabled: false
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"   # HMAC-SHA256 secret (required when enabled)
 
   gitlab:
@@ -545,25 +549,25 @@ integrations:
 ```
 
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when using the Forge app.
-- **`jira` / `confluence`** — admin/service account for watcher lookups + webhook routing. They share a single `atlassian` MCP server — declare it once under [`mcp_servers`](#mcp-servers) and set both `JIRA_URL` and `CONFLUENCE_URL` in its `env`. See [Confluence Integration](../integrations/confluence.md).
-- **`slack`** — enables the Slack transport; per-agent Slack identity lives on each role's `integrations.slack` block (`bot_token`, `signing_secret`), with the same bot token named as `mcp_env.slack.SLACK_MCP_XOXB_TOKEN` for the Slack MCP. `slack: {}` (no keys) is still a valid enable-marker. Its org-wide settings are the working indicator an agent shows while it reasons about a Slack message: **`typing_status`** — `addressed` (default — DMs, direct `@mentions`, followed threads), `always` (every Slack-triggered turn), or `off` — and **`status_phrases`**, which replaces the words it shows. Each phase draws one line from its own pool (*is crewleting…*, *is cracking on…*, *is marking its own homework…*); list your own under `onboarding` / `plan` / `execute` / `review` to rebrand them, and any phase you omit keeps the built-in pool. Keep phrases generic to the phase — the pick is arbitrary, so anything specific enough to read as a report of actual work ("is checking Jira…") is usually false when it shows. Uses the `chat:write` scope agents already hold. See [Slack § Working Status](../integrations/slack.md#working-status-is-thinking).
-- **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes the same `off` / `addressed` / `always` values as Slack's but defaults to `off`, and there is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. Slack and Mattermost may run side by side. See [Mattermost Integration](../integrations/mattermost.md).
-- **`github`** — webhook config; the GitHub MCP server is an [`mcp_servers`](#mcp-servers) `http` entry and each agent's token goes in `role.mcp_env.github.Authorization` as a `Bearer` header. See [GitHub Integration](../integrations/github.md).
+- **`jira` / `confluence`** — **refused by this build.** No parser routes a Jira or Confluence delivery and there is no Confluence searcher, so the blocks named surfaces the engine never read. `crewlet validate` rejects them by name; the tracker and knowledge base are `plane`. `integrations.forge_app_id` and `knowledge.confluence_spaces` are refused with them, having no other consumer. Agents still reach both through the `atlassian` MCP server, which is a separate surface. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
+- **`slack`** — **refused by this build**, both here and as each seat's `role.integrations.slack` app. No parser turns a Slack delivery into a notification, so the config provisioned apps and tokens for messages that woke nobody, and `crewlet slack provision` does not exist. `crewlet validate` rejects both by name; the chat surface is `mattermost`. Agents still reach Slack through the Slack MCP server. See [Slack Integration](../integrations/slack.md).
+- **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `off`, and there is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. It is the only chat surface this build serves — `integrations.slack` is refused. See [Mattermost Integration](../integrations/mattermost.md).
+- **`github`** — **refused by this build** when `enabled`. No parser routes a GitHub delivery, so the block bought a webhook endpoint that verified events and reached nobody; the code host is `gitlab`. The GitHub **MCP server** is unaffected and is how agents read and review GitHub — an [`mcp_servers`](#mcp-servers) `http` entry with each agent's token in `role.mcp_env.github.Authorization`. See [GitHub Integration](../integrations/github.md).
 - **`gitlab`** — webhook config + boot-time identity resolution. `url` and `signing_secret` are both **required** when enabled — inbound webhooks are verified by the GitLab 19.1+ signing-token HMAC only (the plain `X-Gitlab-Token` scheme is unsupported; self-managed < 19.1 is not supported). The optional `token` (a read-only PAT; the provisioner mints a dedicated `crewlet-engine` account for it) enables **participants-based routing** — comments and state changes reach everyone participating in the issue/MR, not just assignees and mentioned users. The GitLab MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry — by default the official `glab mcp serve` (stdio, spawned per-role by the engine, no separate server) — and each agent's service-account PAT goes in `role.mcp_env.gitlab.GITLAB_TOKEN`. The `provisioning:` sub-block is read only by `crewlet gitlab provision`, not the engine. See [GitLab Integration](../integrations/gitlab.md).
-- **`plane`** — webhook config + routing enrichment + boot-time identity resolution for the self-hosted [Plane fork](../integrations/plane.md). `url`, `workspace`, and `webhook_secret` are all **required** when enabled — inbound webhooks are verified by the `X-Plane-Signature` HMAC (Plane's only scheme; the secret is generated *by* Plane at webhook creation). The optional `token` (an engine read credential; the provisioner mints a dedicated `crewlet-engine` service account for it) enables **subscriber fan-out** and project-name resolution — without it, thread activity degrades to payload assignees and lead-fallback routing degrades after restarts. The Plane MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry (official `plane-mcp-server`, stdio) and each agent's service-account token goes in `role.mcp_env.plane.PLANE_API_KEY`. The `provisioning:` sub-block is read only by [`crewlet plane provision`](../reference/cli.md#crewlet-plane-provision), not the engine. **Mutually exclusive with `integrations.confluence`** when enabled — the knowledge backend is single-homed (Jira + Plane may coexist). See [Plane Integration](../integrations/plane.md).
-- **`transports`** — outbound delivery transports (e.g. `email`). The Jira/Confluence/Slack/Mattermost/Plane transports are auto-derived from the sections above; this list adds any others.
+- **`plane`** — webhook config + routing enrichment + boot-time identity resolution for the self-hosted [Plane fork](../integrations/plane.md). `url`, `workspace`, and `webhook_secret` are all **required** when enabled — inbound webhooks are verified by the `X-Plane-Signature` HMAC (Plane's only scheme; the secret is generated *by* Plane at webhook creation). The optional `token` (an engine read credential; the provisioner mints a dedicated `crewlet-engine` service account for it) enables **subscriber fan-out** and project-name resolution — without it, thread activity degrades to payload assignees and lead-fallback routing degrades after restarts. The Plane MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry (official `plane-mcp-server`, stdio) and each agent's service-account token goes in `role.mcp_env.plane.PLANE_API_KEY`. The `provisioning:` sub-block is read only by [`crewlet plane provision`](../reference/cli.md#crewlet-plane-provision), not the engine. Plane is the **only** knowledge backend this build has a searcher for, so there is no longer a pairing rule to state: `integrations.confluence` is refused outright rather than refused *alongside* Plane. See [Plane Integration](../integrations/plane.md).
+- **`transports`** — outbound delivery transports (e.g. `email`). The Mattermost, GitLab and Plane transports are auto-derived from the sections above; this list adds any others. There is no Jira, Confluence or Slack transport in this build — those blocks are refused.
 
 ## Knowledge
 
 ```yaml
 knowledge:
-  confluence_spaces: ["HANDBOOK"]        # org-wide spaces every agent can search (optional)
-  plane_projects: []                     # Plane analog (requires integrations.plane enabled)
+  plane_projects: ["ENG", "HANDBOOK"]    # org-wide projects every agent can search (optional)
+  confluence_spaces: []                  # refused by this build — no Confluence searcher
 ```
 
-Org-wide Confluence spaces visible to every agent — this list is the **entire** read scope for the Plan-phase `## Relevant knowledge` search. A unit's `integrations.confluence.space` is integration identity (webhook routing + write home), **not** read scope, so per-team spaces are *not* unioned in here. **Optional:** leave it unset and an agent with its own Confluence credentials searches *unscoped*, letting Confluence's page ACLs bound the results; a credential-less (admin-fallback) agent then searches nothing. Set spaces to *focus* the search or to scope admin-fallback agents. See [Knowledge System](../concepts/knowledge-system.md).
+`knowledge.plane_projects` is the org-wide read scope: [Plane](../integrations/plane.md) project identifiers, materialised onto `Organization.plane_projects` and consumed by the query-time `PlaneSearcher` ([Plane § Knowledge scope](../integrations/plane.md#knowledge-scope) — note the per-seat project-membership precondition). This list is the **entire** read scope for the Plan-phase `## Relevant knowledge` search. A unit's `integrations.plane.project` is integration identity (webhook routing + write home), **not** read scope, so per-team projects are *not* unioned in here. **Optional:** leave it unset and an agent with its own Plane credentials searches *unscoped*, letting Plane's own ACLs bound the results. Set projects to *focus* the search. It requires an enabled `integrations.plane` — a read scope for a backend that is off narrows nothing. See [Knowledge System](../concepts/knowledge-system.md).
 
-`knowledge.plane_projects` is the [Plane](../integrations/plane.md) analog — org-wide Plane project identifiers, materialised onto `Organization.plane_projects` and consumed by the query-time `PlaneSearcher` ([Plane § Knowledge scope](../integrations/plane.md#knowledge-scope) — note the per-seat project-membership precondition). The knowledge backend is **single-homed**: `plane_projects` requires an enabled `integrations.plane`, is rejected alongside `integrations.confluence`, and `confluence_spaces` is likewise rejected when Plane is enabled.
+`knowledge.confluence_spaces` is **refused by this build**: it is a read scope for a backend with no searcher behind it, so it would narrow nothing and the Plan phase would come back empty with nothing saying why. See [Confluence](../integrations/confluence.md).
 
 ---
 

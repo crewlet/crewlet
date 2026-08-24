@@ -219,10 +219,10 @@ func (s *RoleSandbox) validate(path string) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token, signing secret, default channel."`
+	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Slack delivery, so this seat's app would verify deliveries that reach nobody. Use role.integrations.mattermost."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
-	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns for webhook routing."`
-	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this seat owns."`
+	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Jira delivery, so nothing ever consults this routing identity. Use role.integrations.plane."`
+	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use role.integrations.plane."`
 	Plane      *ProjectRef     `yaml:"plane,omitempty" json:"plane,omitempty" desc:"The Plane project this seat owns."`
 }
 
@@ -256,33 +256,6 @@ type RoleSlack struct {
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
 	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel id for this seat."`
-}
-
-func (s *RoleSlack) validate(path string) error {
-	var p problems
-	// A signing secret with no token is dead config: a tokenless seat is
-	// never registered, so the secret verifies nothing. The reverse stays
-	// legal — an outbound-only app that never receives webhooks.
-	if s.SigningSecret != "" && s.BotToken == "" {
-		p.add(at(path, "signing_secret"), ErrConflict,
-			"a signing_secret with no bot_token verifies nothing — the app is "+
-				"never registered without a token")
-	}
-	// Both credentials must be the same KIND: whole-value ${VAR}
-	// placeholders the provisioner can fill, or literals for a manually
-	// managed app. A mixed pair leaves one credential unprovisionable and
-	// surfaces later as a silent webhook-verification failure.
-	if s.BotToken != "" && s.SigningSecret != "" {
-		_, tokenRef := envref.Whole(s.BotToken)
-		_, secretRef := envref.Whole(s.SigningSecret)
-		if tokenRef != secretRef {
-			p.add(path, ErrConflict,
-				"bot_token and signing_secret must both be whole-value ${VAR} "+
-					"placeholders or both be literals — a mixed pair leaves one "+
-					"credential the provisioner cannot fill")
-		}
-	}
-	return p.err()
 }
 
 // RoleMattermost is a seat's Mattermost bot.
@@ -325,8 +298,20 @@ func (r *Role) validate(path string) error {
 		p.add(at(path, "name"), ErrMissing, "every seat needs a name")
 	}
 	if r.Integrations.Slack != nil {
-		p.wrap(r.Integrations.Slack.validate(at(path, "integrations.slack")))
+		// REFUSED FOR THE SAME REASON AS THE ORG-LEVEL BLOCK. A per-seat
+		// Slack app is what the inbound route verifies with, and no parser
+		// turns a verified Slack delivery into a notification — so the app
+		// is provisioned, the seat carries a token, the route accepts
+		// deliveries, and no agent is ever woken. Refusing only the org
+		// block would leave that half standing, which is the same silence
+		// in a smaller place. See [unservedIntegrations].
+		p.add(at(path, "integrations.slack"), ErrUnimplemented,
+			"no parser is wired for Slack, so this seat's app would verify "+
+				"deliveries that reach nobody — the chat surface this build "+
+				"serves is Mattermost (role.integrations.mattermost)")
 	}
+	refuseUnservedIdentities(&p, at(path, "integrations"), "role",
+		r.Integrations.Jira, r.Integrations.Confluence)
 	if r.Integrations.Mattermost != nil {
 		p.wrap(r.Integrations.Mattermost.validate(at(path, "integrations.mattermost")))
 	}
@@ -453,9 +438,15 @@ type Unit struct {
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty" desc:"What this unit is working toward."`
 
-	// SlackChannel is where this unit talks; inherited by children that
+	// Channel is where this unit talks; inherited by children that
 	// set none.
-	SlackChannel string `yaml:"slack_channel,omitempty" json:"slack_channel,omitempty" desc:"Unit channel; inherited by child units."`
+	//
+	// Vendor-neutral, and it was not always: it was `slack_channel`, which
+	// made the ONE way to give a unit a channel name a vendor this build
+	// refuses — and put "Team Slack channel" into the prompt of every agent
+	// in a company that talks on Mattermost. A unit's channel is a fact
+	// about the unit, not about who hosts it.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
 	// read scope — org-wide read scope is the knowledge block.
@@ -478,10 +469,10 @@ type Unit struct {
 }
 
 // UnitIntegrations is a unit's integration identity. Chat at the unit level
-// is the slack_channel field, so it is deliberately not part of this block.
+// is the vendor-neutral channel field, so it is deliberately not here.
 type UnitIntegrations struct {
-	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
-	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`
+	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Jira delivery, so nothing ever consults this routing identity. Use unit.integrations.plane."`
+	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use unit.integrations.plane."`
 	Plane      *ProjectRef `yaml:"plane,omitempty" json:"plane,omitempty" desc:"The Plane project this unit owns."`
 }
 
@@ -490,11 +481,37 @@ func (u UnitIntegrations) IsZero() bool {
 	return u.Jira == nil && u.Confluence == nil && u.Plane == nil
 }
 
+// refuseUnservedIdentities rejects the tracker project and wiki space a seat
+// or a unit claims on a vendor this build does not serve.
+//
+// These are not credentials — they are WHERE work files and where deliveries
+// route to. That is exactly why they cannot be left standing: an operator
+// writes `jira: {project: ENG}` to say this unit owns ENG, and with no parser
+// to route a Jira delivery and no searcher to read a Confluence space, the
+// identity is recorded, rendered on the dashboard, and never consulted. Same
+// silence as the org-level block, one level down. See [unservedIntegrations].
+func refuseUnservedIdentities(p *problems, path, owner string, jira *ProjectRef, confluence *SpaceRef) {
+	if jira != nil {
+		p.add(at(path, "jira"), ErrUnimplemented,
+			"no parser routes a Jira delivery, so nothing would ever consult "+
+				"the project this %s owns — the tracker this build serves is "+
+				"Plane (%s.integrations.plane)", owner, owner)
+	}
+	if confluence != nil {
+		p.add(at(path, "confluence"), ErrUnimplemented,
+			"no searcher and no parser read a Confluence space, so nothing "+
+				"would ever consult the space this %s owns — the knowledge base "+
+				"this build serves is Plane (%s.integrations.plane)", owner, owner)
+	}
+}
+
 func (u *Unit) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(u.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every unit needs a name")
 	}
+	refuseUnservedIdentities(&p, at(path, "integrations"), "unit",
+		u.Integrations.Jira, u.Integrations.Confluence)
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -518,7 +535,7 @@ func (u *Unit) OrgUnit() *org.OrgUnit {
 		Purpose:       u.Purpose,
 		Lead:          u.Lead,
 		Goals:         append([]string(nil), u.Goals...),
-		SlackChannel:  u.SlackChannel,
+		Channel:       u.Channel,
 		KnowledgeRefs: append([]string(nil), u.Knowledge...),
 		MCPEnv:        u.MCPEnv.Clone(),
 		Schedules:     append([]org.Schedule(nil), u.Schedules...),

@@ -197,26 +197,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 
 		// integrations
 		{
-			"jira with neither url nor cloud id",
-			"name: Acme\nintegrations:\n  jira:\n    token: t\n",
-			"integrations.jira", ErrMissing,
-		},
-		{
-			"jira with both",
-			"name: Acme\nintegrations:\n  jira:\n    url: https://x\n    cloud_id: abc\n    token: t\n",
-			"integrations.jira", ErrConflict,
-		},
-		{
-			"jira with no token",
-			"name: Acme\nintegrations:\n  jira:\n    url: https://x\n",
-			"integrations.jira.token", ErrMissing,
-		},
-		{
-			"github enabled with no secret",
-			"name: Acme\nintegrations:\n  github:\n    enabled: true\n",
-			"integrations.github.webhook_secret", ErrMissing,
-		},
-		{
 			"gitlab enabled with no signing secret",
 			"name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.com\n",
 			"integrations.gitlab.signing_secret", ErrMissing,
@@ -230,16 +210,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"mattermost with no team",
 			"name: Acme\nintegrations:\n  mattermost:\n    enabled: true\n    url: https://chat.example.com\n",
 			"integrations.mattermost.team", ErrMissing,
-		},
-		{
-			"an unknown typing-status mode",
-			"name: Acme\nintegrations:\n  slack:\n    typing_status: sometimes\n",
-			"integrations.slack.typing_status", ErrUnknownValue,
-		},
-		{
-			"a blank status phrase",
-			"name: Acme\nintegrations:\n  slack:\n    status_phrases:\n      plan: [\"is planning...\", \"\"]\n",
-			"integrations.slack.status_phrases.plan[1]", ErrMissing,
 		},
 		{
 			"plane enabled with no workspace",
@@ -264,14 +234,28 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"roles[0].name", ErrMissing,
 		},
 		{
-			"a signing secret with no bot token",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        signing_secret: \"${S}\"\n",
-			"roles[0].integrations.slack.signing_secret", ErrConflict,
+			// EACH REFUSED BLOCK REPLACES ITS OWN RULES. These used to be
+			// five cases — a blank Slack status phrase, an unknown typing
+			// mode, GitHub enabled with no secret, Jira with neither url
+			// nor cloud id, Jira with no token. Every one exercised a
+			// validator that no longer runs, because the block carrying it
+			// is refused before its own rules are reached. An operator
+			// gets the error that matters instead of a field to fix on an
+			// integration they cannot use.
+			"an unserved block, refused before its own rules",
+			"name: Acme\nintegrations:\n  jira: {}\n",
+			"integrations.jira", ErrUnimplemented,
 		},
 		{
-			"a mixed literal/reference credential pair",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"${TOK}\"\n        signing_secret: literal-secret\n",
-			"roles[0].integrations.slack", ErrConflict,
+			// A PER-SEAT SLACK APP IS REFUSED BEFORE ITS OWN RULES RUN.
+			// It used to be checked for a signing secret without a bot
+			// token and for a mixed literal/${VAR} pair; neither matters
+			// now, because no parser routes a Slack delivery and the app
+			// would verify messages that reach nobody. Those rules return
+			// with the vendor.
+			"a per-seat slack app",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"${TOK}\"\n        signing_secret: \"${S}\"\n",
+			"roles[0].integrations.slack", ErrUnimplemented,
 		},
 		{
 			"a Mattermost username the server would refuse",
@@ -307,20 +291,37 @@ func TestCompanyValidatorRejections(t *testing.T) {
 func TestKnowledgeBackendIsSingleHomed(t *testing.T) {
 	t.Parallel()
 
-	t.Run("both backends", func(t *testing.T) {
+	// ONE BACKEND CAN BE CONFIGURED AT ALL, which is what single-homing
+	// now means in practice: Confluence is refused outright because this
+	// build has no searcher for it, so the rule that used to hold two
+	// backends apart has one left to enforce against.
+	t.Run("confluence is refused rather than weighed against plane", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, `
 name: Acme
 integrations:
   confluence: {url: "https://x/wiki", token: t}
   plane: {enabled: true, url: "https://p", workspace: w, webhook_secret: s}
-`, "integrations")
-		if !strings.Contains(err.Error(), "cut-over") {
-			t.Fatalf("the error should say a migration is a cut-over; got %v", err)
+`, "integrations.confluence")
+		if !errors.Is(err, ErrUnimplemented) {
+			t.Fatalf("want ErrUnimplemented, got %v", err)
 		}
 	})
 
-	t.Run("a scope for the disabled backend", func(t *testing.T) {
+	// A SCOPE FOR A BACKEND NOBODY CAN CONFIGURE narrows nothing, and
+	// reads as a working scope. It is refused for the same reason as the
+	// integration block, and on its own — a config that names no
+	// integration at all still cannot ask for a Confluence read scope.
+	t.Run("a confluence scope is refused on its own", func(t *testing.T) {
+		t.Parallel()
+		err := rejects(t, "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
+			"knowledge.confluence_spaces")
+		if !errors.Is(err, ErrUnimplemented) {
+			t.Fatalf("want ErrUnimplemented, got %v", err)
+		}
+	})
+
+	t.Run("a confluence scope beside an enabled plane is refused too", func(t *testing.T) {
 		t.Parallel()
 		rejects(t, `
 name: Acme
@@ -329,13 +330,6 @@ integrations:
 knowledge:
   confluence_spaces: [HANDBOOK]
 `, "knowledge.confluence_spaces")
-		rejects(t, `
-name: Acme
-integrations:
-  confluence: {url: "https://x/wiki", token: t}
-knowledge:
-  plane_projects: [ENG]
-`, "knowledge.plane_projects")
 	})
 
 	t.Run("a plane scope with no plane", func(t *testing.T) {
@@ -343,15 +337,16 @@ knowledge:
 		rejects(t, "name: Acme\nknowledge:\n  plane_projects: [ENG]\n", "knowledge.plane_projects")
 	})
 
-	t.Run("a disabled plane block beside confluence is inert", func(t *testing.T) {
+	// AND THE WORKING SHAPE STILL WORKS: the one backend this build serves,
+	// with its own scope.
+	t.Run("plane with a plane scope is accepted", func(t *testing.T) {
 		t.Parallel()
 		mustCompany(t, `
 name: Acme
 integrations:
-  confluence: {url: "https://x/wiki", token: t}
-  plane: {enabled: false}
+  plane: {enabled: true, url: "https://p", workspace: w, webhook_secret: s}
 knowledge:
-  confluence_spaces: [HANDBOOK]
+  plane_projects: [ENG]
 `)
 	})
 }
@@ -418,5 +413,66 @@ func TestMinimalCompanyLoads(t *testing.T) {
 	}
 	if org.Name != "Acme" {
 		t.Fatalf("org name = %q", org.Name)
+	}
+}
+
+// AN INTEGRATION THIS BUILD CANNOT SERVE IS REFUSED, NOT ACCEPTED AND IGNORED.
+//
+// The engine wires three vendors — Mattermost for chat, Plane for the tracker
+// and knowledge, GitLab for the code host. The other four had config models,
+// webhook routes and generated schema, and no parser, transport or searcher
+// behind them, so a company naming one got a block that validated, rendered
+// in the dashboard, and did nothing.
+//
+// Silently, which is the part that mattered: integrations.confluence is how
+// an operator says where the company's knowledge lives, and the answer was an
+// empty "## Relevant knowledge" on every Plan phase.
+func TestAnIntegrationThisBuildCannotServeIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, yaml, path, instead string }{
+		{"jira", "  jira: {url: \"https://x\", token: t}", "integrations.jira", "Plane"},
+		{"confluence", "  confluence: {url: \"https://x/wiki\", token: t}", "integrations.confluence", "Plane"},
+		{"slack", "  slack: {}", "integrations.slack", "Mattermost"},
+		{"github", "  github: {enabled: true, webhook_secret: s}", "integrations.github", "GitLab"},
+		{"forge", "  forge_app_id: an-app", "integrations.forge_app_id", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejects(t, "name: Acme\nintegrations:\n"+tc.yaml+"\n", tc.path)
+			if !errors.Is(err, ErrUnimplemented) {
+				t.Fatalf("want ErrUnimplemented, got %v", err)
+			}
+			// THE ERROR SAYS WHAT TO DO. An operator told only "not
+			// implemented" has to guess which of the three vendors covers
+			// the role they were configuring.
+			if tc.instead != "" && !strings.Contains(err.Error(), tc.instead) {
+				t.Errorf("the error does not name %s as what serves this role: %v",
+					tc.instead, err)
+			}
+		})
+	}
+}
+
+// A DISABLED BLOCK IS NOT A CONFIGURED ONE. `github: {enabled: false}` is an
+// operator who turned it off, and refusing that would fail a config whose
+// author already agreed with us.
+func TestADisabledUnservedIntegrationIsInert(t *testing.T) {
+	t.Parallel()
+	mustCompany(t, "name: Acme\nintegrations:\n  github: {enabled: false}\n")
+}
+
+// ONE CONFIG, ONE ERROR ABOUT FORGE. forge_app_id is the Atlassian Cloud
+// delivery path for Jira and Confluence and has no other consumer, so a
+// config naming all three should not collect three errors saying one thing.
+func TestForgeIsReportedOnlyWhenItIsTheOnlyFinding(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, `
+name: Acme
+integrations:
+  jira: {url: "https://x", token: t}
+  forge_app_id: an-app
+`, "integrations.jira")
+	if strings.Contains(err.Error(), "forge_app_id") {
+		t.Errorf("forge was reported beside the Jira block it exists for: %v", err)
 	}
 }

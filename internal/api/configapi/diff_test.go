@@ -95,7 +95,7 @@ func TestAFieldTurnedOffReadsAsRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, present := pathsOf(changes)["integrations.github.enabled"]
+	change, present := pathsOf(changes)["integrations.gitlab.enabled"]
 	if !present {
 		t.Fatal("turning the integration off produced no change at all")
 	}

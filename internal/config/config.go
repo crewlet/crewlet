@@ -93,6 +93,14 @@ var (
 	// ErrShape reports a value whose YAML shape is wrong — a mapping where
 	// a list belongs, a scalar where a block belongs.
 	ErrShape = errors.New("wrong shape")
+
+	// ErrUnimplemented reports a setting this build validates but does not
+	// SERVE. It is its own sentinel because it is the one failure that is
+	// not the operator's mistake: the config is well-formed and names a
+	// real capability, and the engine simply has no code behind it. The
+	// alternative is worse than an error — a block that validates, renders
+	// in the dashboard, and does nothing.
+	ErrUnimplemented = errors.New("not implemented in this build")
 )
 
 // fault builds one validation error: the field path an operator can search

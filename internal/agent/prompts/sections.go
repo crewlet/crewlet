@@ -41,8 +41,8 @@ func BuildIdentitySection(s Seat) []string {
 		"**Reports to:** "+managerLabel(s.manager()),
 		"**Direct reports:** "+reportsLabel(s.reports()),
 	)
-	if unit != nil && unit.SlackChannel != "" {
-		parts = append(parts, "**Team Slack channel:** "+unit.SlackChannel)
+	if unit != nil && unit.Channel != "" {
+		parts = append(parts, "**Team channel:** "+unit.Channel)
 	}
 	return parts
 }

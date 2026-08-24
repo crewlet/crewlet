@@ -3,8 +3,11 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,6 +80,12 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"LocalSandbox", "containment", strs(Containments)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
+		// Slack's definition is still generated and still committed, even
+		// though integrations.slack is refused (`not: {}`) and so nothing
+		// references it today. It is asserted for the same reason the type
+		// is kept: the def is where the vendor's schema lands when its
+		// parser ships, and an enum that drifted in the meantime would
+		// drift silently.
 		{"Slack", "typing_status", strs(WorkingStatuses)},
 		{"Mattermost", "typing_status", strs(WorkingStatuses)},
 		{"PlaneProvisioning", "role", strs(PlaneRoles)},
@@ -108,13 +117,23 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 }
 
 // parityCase is one document run through both layers.
+//
+// Exactly one of the two flags may be set, and the pair is what makes a case
+// able to FAIL: with neither, a document is asserted to survive both layers,
+// so a fixture that quietly stops validating is caught here rather than
+// sitting in the table proving nothing.
 type parityCase struct {
 	name string
 	tier Tier
 	yaml string
 	// editorCatches marks a mistake the schema is expected to flag on its
-	// own — the reason the artifact exists.
+	// own — the reason the artifact exists. The validator must refuse it too.
 	editorCatches bool
+	// validatorOnly marks a document the schema must LET THROUGH and the
+	// validator must refuse: a rule a JSON Schema cannot express. Asserting
+	// the schema's silence is the point — a case that drifts into being
+	// schema-rejected stops covering the rule it names.
+	validatorOnly bool
 }
 
 // THE INVARIANT: everything the schema rejects, the validator also rejects.
@@ -140,15 +159,276 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 				t.Fatalf("the schema rejects a config the engine accepts — an "+
 					"editor would flag a working file:\n%v", schemaErr)
 			}
-			if tc.editorCatches {
+			switch {
+			case tc.editorCatches:
 				if schemaErr == nil {
 					t.Fatal("the schema should catch this while the author is still typing")
 				}
 				if validatorErr == nil {
 					t.Fatal("the schema flags this but the engine accepts it")
 				}
+			case tc.validatorOnly:
+				if schemaErr != nil {
+					t.Fatalf("this case is here to prove the schema LETS this "+
+						"through — it now rejects it, so it no longer covers "+
+						"the rule it names:\n%v", schemaErr)
+				}
+				if validatorErr == nil {
+					t.Fatal("the engine must refuse this, or the case proves nothing")
+				}
+			default:
+				if validatorErr != nil {
+					t.Fatalf("this document is in the table as a WORKING config "+
+						"and the engine refuses it:\n%v", validatorErr)
+				}
 			}
 		})
+	}
+}
+
+// refusedField is the pair of documents that pins one refusal in place: the
+// same config with the setting OFF and with it ON.
+type refusedField struct {
+	tier    Tier
+	off, on string
+}
+
+// THE PAIRS ARE WRITTEN HERE; THE LIST OF FIELDS IS DERIVED FROM THE MODELS.
+//
+// That asymmetry is the whole point. The parity table above is hand-written
+// on both sides, so a field nobody thought to write down is a field nobody
+// checks — and integrations.github is what that cost: the generator refused
+// the KEY, so `github: {enabled: false}` was red-underlined by an editor and
+// booted happily by the engine, in both directions of the invariant at once.
+// A field tagged js:"unimplemented" with no pair below fails the sweep.
+//
+// The OFF document is the load-bearing half. Everyone remembers to prove a
+// refusal refuses; the direction that breaks is the setting an operator uses
+// to say "off", which the validator accepts and the schema must too.
+func refusedDocuments() map[string]refusedField {
+	return map[string]refusedField{
+		"company:integrations.jira": {tier: TierCompany,
+			off: "name: Acme\n",
+			on:  "name: Acme\nintegrations:\n  jira: {url: https://acme.example.com, token: \"${JIRA_TOKEN}\"}\n",
+		},
+		"company:integrations.confluence": {tier: TierCompany,
+			off: "name: Acme\n",
+			on:  "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: \"${CONFLUENCE_TOKEN}\"}\n",
+		},
+		"company:integrations.slack": {tier: TierCompany,
+			off: "name: Acme\n",
+			on:  "name: Acme\nintegrations:\n  slack: {typing_status: addressed}\n",
+		},
+		// The off document here is the bug, written down: a block carrying
+		// its own switch is off when the switch is off, not when the key is
+		// absent. An operator turning GitHub off leaves the block behind
+		// with its secret reference intact, which is what makes turning it
+		// back on a one-line change.
+		"company:integrations.github": {tier: TierCompany,
+			off: "name: Acme\nintegrations:\n  github: {enabled: false, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
+			on:  "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
+		},
+		// A scalar is off at its zero value, and an explicit empty string is
+		// how a config that once carried a Forge app id says it no longer
+		// does.
+		"company:integrations.forge_app_id": {tier: TierCompany,
+			off: "name: Acme\nintegrations:\n  forge_app_id: \"\"\n",
+			on:  "name: Acme\nintegrations:\n  forge_app_id: acme-forge\n",
+		},
+		// And a list is off when it is empty — an unscoped read scope, which
+		// is the documented default rather than a mistake.
+		"company:knowledge.confluence_spaces": {tier: TierCompany,
+			off: "name: Acme\nknowledge:\n  confluence_spaces: []\n",
+			on:  "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
+		},
+		// The same field, reached the other way. A seat inside a unit is
+		// validated through the unit walk rather than the top-level one, and
+		// a refusal that landed on only one of the two paths would leave
+		// every real org chart — which is all units — unguarded.
+		"company:units[].roles[].integrations.slack": {tier: TierCompany,
+			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
+			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}]}\n",
+		},
+		// The tracker project and wiki space a seat or a unit claims. Not
+		// credentials — WHERE work files and where deliveries route — which
+		// is why leaving them standing is the same silence as the org block:
+		// recorded, rendered, never consulted. Four paths, because both a
+		// seat and a unit can claim one and a seat can live in either place.
+		"company:roles[].integrations.jira": {tier: TierCompany,
+			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
+			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {jira: {project: ENG}}}\n",
+		},
+		"company:roles[].integrations.confluence": {tier: TierCompany,
+			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
+			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {confluence: {space: HANDBOOK}}}\n",
+		},
+		"company:units[].integrations.jira": {tier: TierCompany,
+			off: "name: Acme\nunits:\n  - {name: Engineering, integrations: {}}\n",
+			on:  "name: Acme\nunits:\n  - {name: Engineering, integrations: {jira: {project: ENG}}}\n",
+		},
+		"company:units[].integrations.confluence": {tier: TierCompany,
+			off: "name: Acme\nunits:\n  - {name: Engineering, integrations: {}}\n",
+			on:  "name: Acme\nunits:\n  - {name: Engineering, integrations: {confluence: {space: HANDBOOK}}}\n",
+		},
+		"company:units[].roles[].integrations.jira": {tier: TierCompany,
+			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
+			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {jira: {project: ENG}}}]}\n",
+		},
+		"company:units[].roles[].integrations.confluence": {tier: TierCompany,
+			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
+			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {confluence: {space: HANDBOOK}}}]}\n",
+		},
+		"company:roles[].integrations.slack": {tier: TierCompany,
+			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
+			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
+		},
+	}
+}
+
+// A REFUSAL MUST LAND WHERE THE VALIDATOR PUTS IT, NOT ON THE KEY.
+//
+// The schema and the validator each decide, independently, what "this build
+// does not serve that" means for a given field. They agree today because
+// [schemaGen.refuseWhenOn] reads the field's shape the same way the
+// validators do. This is what holds them there, and it sweeps the models so
+// a field added to one side cannot go unchecked on the other.
+func TestEveryRefusedFieldIsRefusedWhereTheValidatorRefusesIt(t *testing.T) {
+	t.Parallel()
+	compiled := map[Tier]*jsonschema.Schema{
+		TierBootstrap: compileSchema(t, TierBootstrap),
+		TierCompany:   compileSchema(t, TierCompany),
+	}
+	roots := map[Tier]reflect.Type{
+		TierBootstrap: reflect.TypeOf(Bootstrap{}),
+		TierCompany:   reflect.TypeOf(Company{}),
+	}
+	if len(roots) != len(SchemaTiers) {
+		t.Fatalf("a tier grew a root this sweep does not walk: %v", SchemaTiers)
+	}
+
+	var found []string
+	for _, tier := range SchemaTiers {
+		var paths []string
+		refusedPaths(roots[tier], "", map[reflect.Type]bool{}, &paths)
+		for _, path := range paths {
+			found = append(found, string(tier)+":"+path)
+		}
+	}
+	if len(found) == 0 {
+		t.Fatal("the sweep found no refused fields, so it certifies nothing — " +
+			"if the last vendor shipped, delete this test along with it")
+	}
+
+	docs := refusedDocuments()
+	for _, key := range found {
+		pair, ok := docs[key]
+		if !ok {
+			t.Errorf("%s is refused by this build and has no pair of documents, "+
+				"so nothing checks that the schema refuses it in the same place "+
+				"the validator does — add one to refusedDocuments", key)
+			continue
+		}
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			if err := validateTier(pair.tier, pair.off); err != nil {
+				t.Fatalf("the engine refuses the OFF document, so it cannot say "+
+					"what the schema is allowed to accept — fix the fixture:\n%v", err)
+			}
+			if err := compiled[pair.tier].Validate(asJSON(t, pair.off)); err != nil {
+				t.Fatalf("the schema refuses a config the engine runs, so an editor "+
+					"red-underlines a working file:\n%v", err)
+			}
+			if err := validateTier(pair.tier, pair.on); err == nil {
+				t.Fatal("the engine accepts the ON document, so this field is no " +
+					"longer refused and the js:\"unimplemented\" tag should go with it")
+			}
+			if err := compiled[pair.tier].Validate(asJSON(t, pair.on)); err == nil {
+				t.Fatal("the schema blesses a setting the engine refuses to boot on")
+			}
+		})
+	}
+	for key := range docs {
+		if !slices.Contains(found, key) {
+			t.Errorf("%s carries a pair of documents and is no longer refused by "+
+				"the models — the pair is stale", key)
+		}
+	}
+}
+
+// A REFUSAL THE GENERATOR CANNOT STATE IS A FAULT, NOT A GUESS.
+//
+// The convenient fallback for an unknown shape is the blanket refusal that
+// caused the bug above, so the generator has to be loud instead: a tag it
+// cannot translate fails generation, which fails the build's schema tests
+// long before the artifact could ship.
+func TestARefusalTheGeneratorCannotStateFailsGeneration(t *testing.T) {
+	t.Parallel()
+	type untranslatable struct {
+		Whatever any `yaml:"whatever,omitempty" js:"unimplemented" desc:"a shape with no notion of off"`
+	}
+	g := &schemaGen{defs: map[string]map[string]any{}}
+	g.structSchema(reflect.TypeOf(untranslatable{}))
+	if g.err == nil {
+		t.Fatal("the generator described a shape it has no rule for, so the " +
+			"schema now states a refusal nobody checked against the validator")
+	}
+	if !errors.Is(g.err, ErrUnknownValue) {
+		t.Errorf("the fault is not one a caller can match on: %v", g.err)
+	}
+	if !strings.Contains(g.err.Error(), "refuseWhenOn") {
+		t.Errorf("the fault does not name where to add the rule: %v", g.err)
+	}
+}
+
+// refusedPaths appends the dotted YAML path of every js:"unimplemented"
+// field under a config root, following the same walk the generator does:
+// through embedded structs, pointers, slice elements and map values, with a
+// guard on the path so a unit holding child units terminates.
+func refusedPaths(t reflect.Type, prefix string, onPath map[reflect.Type]bool, out *[]string) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || onPath[t] {
+		return
+	}
+	onPath[t] = true
+	defer delete(onPath, t)
+
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if f.PkgPath != "" {
+			continue
+		}
+		if f.Anonymous && f.Type.Kind() == reflect.Struct {
+			refusedPaths(f.Type, prefix, onPath, out)
+			continue
+		}
+		name, ok := yamlName(f)
+		if !ok {
+			continue
+		}
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		if _, refused := parseDirectives(f.Tag.Get("js"))["unimplemented"]; refused {
+			// The whole subtree goes with it; there is nothing below a key
+			// no document may carry.
+			*out = append(*out, path)
+			continue
+		}
+		ft := f.Type
+		for ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		switch ft.Kind() {
+		case reflect.Slice, reflect.Array:
+			refusedPaths(ft.Elem(), path+"[]", onPath, out)
+		case reflect.Map:
+			refusedPaths(ft.Elem(), path+"{}", onPath, out)
+		case reflect.Struct:
+			refusedPaths(ft, path, onPath, out)
+		}
 	}
 }
 
@@ -197,9 +477,12 @@ learning:
   skill_synthesis: {scheduler_enabled: true}
 scheduling: {enabled: true, tick_seconds: 10, default_timezone: UTC}
 integrations:
-  slack:
+  mattermost:
+    enabled: true
+    url: https://mm.example.com
+    team: acme
     typing_status: addressed
-    status_phrases: {plan: ["is planning..."]}
+    provisioning: {username_prefix: agent-, channels: [town-square], display_name_suffix: " (AI)"}
   gitlab:
     enabled: true
     url: https://gitlab.com
@@ -235,6 +518,7 @@ units:
     roles:
       - name: CTO
         handle: cto
+        integrations: {mattermost: {bot_token: "${MM_CTO}", username: cto-bot}}
         sandbox:
           enabled: true
           env: {GITHUB_TOKEN: "${GH_CTO}"}
@@ -245,6 +529,16 @@ units:
 			name: "a three-node fleet",
 			tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+		},
+		// A LITERAL signing secret, not a ${VAR}. The full company above
+		// carries the reference form, which validate() deliberately does not
+		// inspect — so without this document nothing proves a correctly
+		// shaped secret survives the whsec_<base64 of 32 bytes> check that
+		// the rejection case further down relies on.
+		{
+			name: "a literal gitlab signing secret", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.example.com\n" +
+				"    signing_secret: \"whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=\"\n",
 		},
 
 		// Mistakes an editor should catch inline.
@@ -270,17 +564,52 @@ units:
 			name: "an mcp server with no name", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nmcp_servers:\n  - {command: uvx}\n",
 		},
+		// THE INTEGRATIONS THIS BUILD VALIDATES AND DOES NOT SERVE.
+		//
+		// Both layers refuse each of these, and the schema's half is the
+		// half that matters here: a config the engine will not boot on must
+		// be underlined while the author is still typing, not accepted by
+		// the editor and then refused by `crewlet validate`. Each case dies
+		// with the change that ships that vendor's parser and transport.
+		//
+		// This is what became of the old "both knowledge backends" case:
+		// Confluence is refused outright now, so the Confluence-XOR-Plane
+		// rule it exercised can no longer be reached — a document that sets
+		// both is refused for the block, not for the overlap.
 		{
-			name: "both knowledge backends", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nintegrations:\n  confluence: {url: https://x/wiki, token: t}\n  plane: {enabled: true, url: https://p, workspace: w, webhook_secret: s}\n",
+			name: "an unserved tracker", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  jira: {url: https://acme.example.com/jira, token: t}\n",
+		},
+		{
+			name: "an unserved knowledge base", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: t}\n",
+		},
+		{
+			name: "an unserved chat surface", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  slack: {typing_status: addressed}\n",
+		},
+		{
+			name: "an unserved code host", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s}\n",
+		},
+		{
+			name: "a forge app with nothing behind it", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  forge_app_id: acme-forge\n",
+		},
+		// The per-seat half of the same refusal. Leaving it standing while
+		// the org block was refused would provision an app, hand the seat a
+		// token, accept deliveries — and wake nobody.
+		{
+			name: "a per-seat Slack app", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
 		},
 		{
 			name: "a plane scope with no plane", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nknowledge:\n  plane_projects: [ENG]\n",
 		},
 		{
-			name: "a confluence scope while plane is the backend", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nintegrations:\n  plane: {enabled: true, url: https://p, workspace: w, webhook_secret: s}\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
+			name: "a confluence read scope with no confluence searcher", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
 		},
 		{
 			name: "unknown bootstrap key", tier: TierBootstrap, editorCatches: true,
@@ -314,10 +643,24 @@ units:
 		// Rules the schema cannot express. They belong here to prove the
 		// SOUNDNESS direction on documents the schema must let through and
 		// the validator must not.
-		{name: "a signing secret with no bot token", tier: TierCompany, yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {signing_secret: \"${S}\"}}}\n"},
-		{name: "a stdio server with no command", tier: TierCompany, yaml: "name: Acme\nmcp_servers:\n  - {name: calc}\n"},
-		{name: "duplicate handles", tier: TierCompany, yaml: "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n"},
-		{name: "a ceiling below its base", tier: TierCompany, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
+		//
+		// The credential-shape case used to be a per-seat Slack app carrying
+		// a signing_secret with no bot_token. That seat block is refused
+		// outright now, so the schema stopped letting it through and the
+		// case stopped proving anything; GitLab's webhook token carries the
+		// same shape of rule on a vendor this build serves — a format
+		// contract with the vendor, checked in Go, invisible to the schema.
+		{
+			name: "a signing secret gitlab would refuse", tier: TierCompany, validatorOnly: true,
+			// Deliberately NOT a whsec_ token: GitLab accepts only
+			// whsec_<standard base64 of 32 bytes>, and a bare shared secret
+			// is what an operator reaches for first. The schema sees a
+			// string and has nothing to say.
+			yaml: "name: Acme\nintegrations:\n  gitlab: {enabled: true, url: https://gitlab.example.com, signing_secret: plain-shared-secret}\n",
+		},
+		{name: "a stdio server with no command", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nmcp_servers:\n  - {name: calc}\n"},
+		{name: "duplicate handles", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n"},
+		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
 	}
 }
 

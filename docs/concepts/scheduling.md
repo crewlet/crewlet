@@ -104,7 +104,7 @@ units:
   - name: Backend
     type: team
     lead: Backend Lead
-    slack_channel: C_BACKEND
+    channel: C_BACKEND
     schedules:
       # target defaults to `each` → every direct member posts their own update
       - name: daily-standup
@@ -137,7 +137,7 @@ whose tick won the ledger claim. The seat's agent id comes from
 every node derives, so the `TaskAssigned` a scheduler publishes names
 exactly the identity the turn will run under.
 
-> **Schedules are not inherited.** Unlike `lead` and `slack_channel`, a
+> **Schedules are not inherited.** Unlike `lead` and `channel`, a
 > schedule on a department does **not** cascade to child units — that
 > would silently multiply a standup across every squad. Declare schedules
 > explicitly on each unit that should run them.

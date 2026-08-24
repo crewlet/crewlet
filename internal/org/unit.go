@@ -50,9 +50,9 @@ type OrgUnit struct {
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty"`
 
-	// SlackChannel is where this unit talks. Inherited by child units that
+	// Channel is where this unit talks. Inherited by child units that
 	// do not set their own.
-	SlackChannel string `yaml:"slack_channel,omitempty" json:"slack_channel,omitempty"`
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 
 	// JiraProject, ConfluenceSpace and PlaneProject are the unit's
 	// integration IDENTITY: inbound activity with no better recipient

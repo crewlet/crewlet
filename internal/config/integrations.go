@@ -22,36 +22,32 @@ import (
 // integration off. An empty block is not the same thing — `slack: {}` is
 // how Slack is enabled with nothing overridden.
 type Integrations struct {
-	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira admin account and webhook secret. Absent = disabled."`
-	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence admin account. Absent = disabled."`
-	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack transport marker and org-wide behaviour. Absent = disabled."`
+	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Jira delivery. The tracker this build serves is integrations.plane."`
+	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser. The knowledge base this build serves is integrations.plane."`
+	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Slack delivery. The chat surface this build serves is integrations.mattermost."`
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
-	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub webhook config. Absent = disabled."`
+	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."`
 	GitLab     *GitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
 	Plane      *Plane      `yaml:"plane,omitempty" json:"plane,omitempty" desc:"Plane instance, workspace and webhook secret. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
 	// the endpoint rejects every request without it.
-	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" desc:"Forge app id whose invocation tokens the webhook endpoint accepts."`
+	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: the Forge route carries Jira and Confluence Cloud, and neither is wired."`
 }
 
 func (i *Integrations) validate(path string) error {
 	var p problems
-	if i.Jira != nil {
-		p.wrap(i.Jira.validate(at(path, "jira")))
-	}
-	if i.Confluence != nil {
-		p.wrap(i.Confluence.validate(at(path, "confluence")))
-	}
-	if i.Slack != nil {
-		p.wrap(i.Slack.validate(at(path, "slack")))
+
+	// REFUSED FIRST, AND INSTEAD. A block this build cannot serve gets one
+	// error saying so — not that plus "url is required", which would send
+	// an operator off to fix a field on an integration they cannot use
+	// either way. See [unservedIntegrations].
+	if refused := i.refuseUnserved(&p, path); refused {
+		return p.err()
 	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
-	}
-	if i.GitHub != nil {
-		p.wrap(i.GitHub.validate(at(path, "github")))
 	}
 	if i.GitLab != nil {
 		p.wrap(i.GitLab.validate(at(path, "gitlab")))
@@ -60,6 +56,74 @@ func (i *Integrations) validate(path string) error {
 		p.wrap(i.Plane.validate(at(path, "plane")))
 	}
 	return p.err()
+}
+
+// The integrations this build VALIDATES and does not SERVE, with what fills
+// the same role instead.
+//
+// The engine wires exactly three vendors — Mattermost for chat, Plane for the
+// tracker and the knowledge base, GitLab for the code host
+// (rewrite/decisions/701). The other four have config models, webhook routes
+// and generated schema, and no parser, no transport and no searcher behind
+// them: startNotifications builds its parser and prompt lists from those three
+// blocks alone.
+//
+// So a company naming one got a block that validated, appeared in the
+// dashboard, and did nothing. Silently, which is the part that matters —
+// integrations.confluence is how an operator says where the company's
+// knowledge lives, and the answer was an empty "## Relevant knowledge" on
+// every Plan phase.
+//
+// Refusing is what providers.sandbox.type: e2b already does, one layer down,
+// for the same reason. Each entry is deleted by the change that ships that
+// vendor's parser, transport and prompt — a config field ships with the code
+// that reads it.
+var unservedIntegrations = []struct {
+	field string
+	// active reports whether the block is switched on, in that block's own
+	// terms: three of the four are on by their mere presence, and GitHub
+	// carries an Enabled flag.
+	active func(*Integrations) bool
+	// instead names the role and what serves it, because an error a person
+	// reads has to say what to do about it.
+	instead string
+}{
+	{"jira", func(i *Integrations) bool { return i.Jira != nil },
+		"the tracker this build serves is Plane (integrations.plane)"},
+	{"confluence", func(i *Integrations) bool { return i.Confluence != nil },
+		"the knowledge base this build serves is Plane (integrations.plane)"},
+	{"slack", func(i *Integrations) bool { return i.Slack != nil },
+		"the chat surface this build serves is Mattermost (integrations.mattermost)"},
+	{"github", func(i *Integrations) bool { return i.GitHub != nil && i.GitHub.Enabled },
+		"the code host this build serves is GitLab (integrations.gitlab)"},
+}
+
+// refuseUnserved rejects any integration block nothing behind the config
+// reads, and reports whether it found one. See [unservedIntegrations].
+func (i *Integrations) refuseUnserved(p *problems, path string) bool {
+	var unserved bool
+	for _, entry := range unservedIntegrations {
+		if entry.active(i) {
+			unserved = true
+			p.add(at(path, entry.field), ErrUnimplemented,
+				"no parser or transport is wired for it, so a delivery would "+
+					"be verified, stored, and then reach nobody — %s",
+				entry.instead)
+		}
+	}
+	// forge_app_id is the Atlassian CLOUD delivery path for Jira and
+	// Confluence and has no other consumer, so it is inert for exactly the
+	// same reason. Reported only when neither of those was already
+	// reported, so one config does not collect three errors saying one
+	// thing.
+	if i.ForgeAppID != "" && !unserved {
+		p.add(at(path, "forge_app_id"), ErrUnimplemented,
+			"the Forge route carries Jira and Confluence Cloud, and neither "+
+				"is wired in this build, so nothing would read a delivery it "+
+				"accepted")
+		return true
+	}
+	return unserved
 }
 
 // The Atlassian Cloud gateways a cloud id resolves against.
@@ -103,16 +167,6 @@ func (j *Jira) BaseURL() string {
 	return j.URL
 }
 
-func (j *Jira) validate(path string) error {
-	var p problems
-	p.wrap(urlXorCloudID(path, j.URL, j.CloudID, "https://mycompany.atlassian.net"))
-	if strings.TrimSpace(j.Token) == "" {
-		p.add(at(path, "token"), ErrMissing,
-			"the admin account's token — routing needs it to read ticket watchers")
-	}
-	return p.err()
-}
-
 // Confluence is the org-level Confluence admin account.
 //
 // Like Jira, this is the org-wide read account behind webhook routing, not
@@ -148,15 +202,6 @@ func (c *Confluence) ShareableBaseURL() string {
 		return c.SiteURL
 	}
 	return c.URL
-}
-
-func (c *Confluence) validate(path string) error {
-	var p problems
-	p.wrap(urlXorCloudID(path, c.URL, c.CloudID, "https://mycompany.atlassian.net/wiki"))
-	if strings.TrimSpace(c.Token) == "" {
-		p.add(at(path, "token"), ErrMissing, "the admin account's token")
-	}
-	return p.err()
 }
 
 // urlXorCloudID holds the Atlassian addressing rule both blocks share:
@@ -204,16 +249,6 @@ type Slack struct {
 
 	// StatusPhrases replaces the words the indicator shows.
 	StatusPhrases StatusPhrases `yaml:"status_phrases,omitempty" json:"status_phrases,omitzero"`
-}
-
-func (s *Slack) validate(path string) error {
-	var p problems
-	if s.TypingStatus != "" && !oneOf(s.TypingStatus, WorkingStatuses) {
-		p.add(at(path, "typing_status"), ErrUnknownValue, "%q (want %s)",
-			s.TypingStatus, names(WorkingStatuses))
-	}
-	p.wrap(s.StatusPhrases.validate(at(path, "status_phrases")))
-	return p.err()
 }
 
 // Status is the indicator mode, applying the default.
@@ -385,15 +420,6 @@ type GitHub struct {
 	// route with nothing to verify with cannot tell a real delivery from
 	// anyone's POST.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound deliveries."`
-}
-
-func (g *GitHub) validate(path string) error {
-	if g.Enabled && strings.TrimSpace(g.WebhookSecret) == "" {
-		return fault(at(path, "webhook_secret"), ErrMissing,
-			"required when github is enabled — without it the route has "+
-				"nothing to verify a delivery with")
-	}
-	return nil
 }
 
 // GitLabAccessLevel is a service account's membership level.

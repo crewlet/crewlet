@@ -1,6 +1,6 @@
 # Decision Framework (DACI)
 
-Multi-agent systems deadlock when agents disagree and no resolution mechanism exists. Crewlet uses the **DACI framework** (Driver / Approver / Contributor / Informed) as behavioral guidance — decisions happen naturally in Slack using each agent's existing MCP tools.
+Multi-agent systems deadlock when agents disagree and no resolution mechanism exists. Crewlet uses the **DACI framework** (Driver / Approver / Contributor / Informed) as behavioral guidance — decisions happen naturally in the company's chat, using each agent's existing MCP tools.
 
 ---
 
@@ -17,40 +17,40 @@ These roles are implied by the org hierarchy. The driver's manager is the natura
 
 ## How It Works
 
-There is no decision engine or special tooling. Agents use their team's **Slack channel** and their existing **Slack MCP tools** to discuss and decide — just like real employees:
+There is no decision engine or special tooling. Agents use their team's **channel** and their existing **chat MCP tools** to discuss and decide — just like real employees:
 
-1. **Driver posts in the team Slack channel** — states the decision topic, context, and options
+1. **Driver posts in the team channel** — states the decision topic, context, and options
 2. **Contributors reply** — share their perspectives in the thread
 3. **Driver synthesizes** — proposes an outcome based on contributions
 4. **Approver approves or rejects** — replies with the final call
 5. **Informed parties see the thread** — visibility is automatic
 
-The team Slack channel is configured on the OrgUnit:
+The team channel is configured on the OrgUnit. The chat surface this build serves is [Mattermost](../integrations/mattermost.md) — `integrations.slack` and `role.integrations.slack` are [refused](../integrations/slack.md), so a seat's transport identity is its Mattermost bot:
 
 ```yaml
 units:
   - name: Core Engineering
     type: team
     lead: CTO
-    slack_channel: C0123456789    # team's Slack channel
+    channel: core-engineering    # the team's channel on the chat surface
     roles:
       - name: CTO
         integrations:                                  # per-agent transport identity
-          slack:
-            bot_token: "${SLACK_BOT_TOKEN_CTO}"
-            signing_secret: "${SLACK_SIGNING_SECRET_CTO}"
+          mattermost:
+            bot_token: "${MATTERMOST_BOT_TOKEN_CTO}"
         mcp_env:
-          slack:
-            SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_CTO}"   # same token, the Slack MCP
+          mattermost:
+            MATTERMOST_TOKEN: "${MATTERMOST_BOT_TOKEN_CTO}"  # same token, the chat MCP
       - name: Engineer
         integrations:
-          slack:
-            bot_token: "${SLACK_BOT_TOKEN_ENG}"
-            signing_secret: "${SLACK_SIGNING_SECRET_ENG}"
+          mattermost:
+            bot_token: "${MATTERMOST_BOT_TOKEN_ENG}"
         mcp_env:
-          slack:
-            SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_ENG}"
+          mattermost:
+            MATTERMOST_TOKEN: "${MATTERMOST_BOT_TOKEN_ENG}"
 ```
+
+One credential per seat, not two: a Mattermost bot's personal access token covers the websocket, the REST calls and the MCP server, and there is no inbound webhook to verify.
 
 Each agent's system prompt includes their team channel, with guidance to use it for team discussions and decisions.
 
@@ -58,7 +58,7 @@ Each agent's system prompt includes their team channel, with guidance to use it 
 
 ## Why No Decision Engine?
 
-Agents already have Slack MCP tools for posting messages, threading, reading channels, and reacting. The org hierarchy already defines who reports to whom. Adding a separate decision engine with structured tools, internal state machines, and formatted messages would duplicate what Slack and the org chart already provide.
+Agents already have chat MCP tools for posting messages, threading, reading channels, and reacting. The org hierarchy already defines who reports to whom. Adding a separate decision engine with structured tools, internal state machines, and formatted messages would duplicate what the chat surface and the org chart already provide.
 
 The simpler approach: tell agents their team channel and let them communicate naturally. DACI is a behavioral pattern, not a programmatic one.
 
@@ -87,6 +87,6 @@ Engineer proceeds with approved approach.
 
 ---
 
-## Slack Channel Inheritance
+## Channel Inheritance
 
-The `slack_channel` field on OrgUnit is inherited by child units that don't set their own, just like `lead` inheritance. A department-level channel cascades to all teams unless a team specifies its own.
+The `channel` field on OrgUnit is inherited by child units that don't set their own, just like `lead` inheritance. A department-level channel cascades to all teams unless a team specifies its own.

@@ -389,24 +389,37 @@
       "additionalProperties": false,
       "properties": {
         "confluence": {
-          "$ref": "#/$defs/Confluence",
-          "description": "Confluence admin account. Absent = disabled."
+          "description": "NOT IMPLEMENTED in this build: no searcher and no parser. The knowledge base this build serves is integrations.plane.",
+          "not": {}
         },
         "forge_app_id": {
-          "description": "Forge app id whose invocation tokens the webhook endpoint accepts.",
+          "const": "",
+          "description": "NOT IMPLEMENTED in this build: the Forge route carries Jira and Confluence Cloud, and neither is wired.",
           "type": "string"
         },
         "github": {
-          "$ref": "#/$defs/GitHub",
-          "description": "GitHub webhook config. Absent = disabled."
+          "allOf": [
+            {
+              "$ref": "#/$defs/GitHub",
+              "description": "NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."
+            },
+            {
+              "properties": {
+                "enabled": {
+                  "const": false
+                }
+              }
+            }
+          ],
+          "description": "NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."
         },
         "gitlab": {
           "$ref": "#/$defs/GitLab",
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
         },
         "jira": {
-          "$ref": "#/$defs/Jira",
-          "description": "Jira admin account and webhook secret. Absent = disabled."
+          "description": "NOT IMPLEMENTED in this build: no parser routes a Jira delivery. The tracker this build serves is integrations.plane.",
+          "not": {}
         },
         "mattermost": {
           "$ref": "#/$defs/Mattermost",
@@ -417,8 +430,8 @@
           "description": "Plane instance, workspace and webhook secret. Absent = disabled."
         },
         "slack": {
-          "$ref": "#/$defs/Slack",
-          "description": "Slack transport marker and org-wide behaviour. Absent = disabled."
+          "description": "NOT IMPLEMENTED in this build: no parser routes a Slack delivery. The chat surface this build serves is integrations.mattermost.",
+          "not": {}
         }
       },
       "type": "object"
@@ -456,10 +469,8 @@
       "additionalProperties": false,
       "properties": {
         "confluence_spaces": {
-          "description": "Org-wide Confluence read scope. Empty = unscoped.",
-          "items": {
-            "type": "string"
-          },
+          "description": "NOT IMPLEMENTED in this build: no searcher reads a Confluence space, so this would narrow nothing. Scope the knowledge base this build serves with knowledge.plane_projects.",
+          "maxItems": 0,
           "type": "array"
         },
         "plane_projects": {
@@ -1292,12 +1303,12 @@
       "additionalProperties": false,
       "properties": {
         "confluence": {
-          "$ref": "#/$defs/SpaceRef",
-          "description": "The Confluence space this seat owns."
+          "description": "NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use role.integrations.plane.",
+          "not": {}
         },
         "jira": {
-          "$ref": "#/$defs/ProjectRef",
-          "description": "The Jira project this seat owns for webhook routing."
+          "description": "NOT IMPLEMENTED in this build: no parser routes a Jira delivery, so nothing ever consults this routing identity. Use role.integrations.plane.",
+          "not": {}
         },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
@@ -1308,8 +1319,8 @@
           "description": "The Plane project this seat owns."
         },
         "slack": {
-          "$ref": "#/$defs/RoleSlack",
-          "description": "This seat's own Slack app: bot token, signing secret, default channel."
+          "description": "NOT IMPLEMENTED in this build: no parser routes a Slack delivery, so this seat's app would verify deliveries that reach nobody. Use role.integrations.mattermost.",
+          "not": {}
         }
       },
       "type": "object"
@@ -1941,6 +1952,10 @@
     "Unit": {
       "additionalProperties": false,
       "properties": {
+        "channel": {
+          "description": "Unit channel on the company's chat surface; inherited by child units.",
+          "type": "string"
+        },
         "children": {
           "description": "Child units.",
           "items": {
@@ -2001,10 +2016,6 @@
           },
           "type": "array"
         },
-        "slack_channel": {
-          "description": "Unit channel; inherited by child units.",
-          "type": "string"
-        },
         "type": {
           "description": "Informational label: team (default), department, squad, ...",
           "type": "string"
@@ -2019,12 +2030,12 @@
       "additionalProperties": false,
       "properties": {
         "confluence": {
-          "$ref": "#/$defs/SpaceRef",
-          "description": "The Confluence space this unit owns."
+          "description": "NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use unit.integrations.plane.",
+          "not": {}
         },
         "jira": {
-          "$ref": "#/$defs/ProjectRef",
-          "description": "The Jira project this unit owns."
+          "description": "NOT IMPLEMENTED in this build: no parser routes a Jira delivery, so nothing ever consults this routing identity. Use unit.integrations.plane.",
+          "not": {}
         },
         "plane": {
           "$ref": "#/$defs/ProjectRef",
@@ -2038,47 +2049,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "allOf": [
-    {
-      "$comment": "integrations.confluence and an enabled integrations.plane are mutually exclusive.",
-      "not": {
-        "properties": {
-          "integrations": {
-            "allOf": [
-              {
-                "properties": {
-                  "confluence": {
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "confluence"
-                ]
-              },
-              {
-                "properties": {
-                  "plane": {
-                    "properties": {
-                      "enabled": {
-                        "const": true
-                      }
-                    },
-                    "required": [
-                      "enabled"
-                    ]
-                  }
-                },
-                "required": [
-                  "plane"
-                ]
-              }
-            ]
-          }
-        },
-        "required": [
-          "integrations"
-        ]
-      }
-    },
     {
       "$comment": "knowledge.plane_projects requires an enabled integrations.plane.",
       "if": {
@@ -2121,52 +2091,6 @@
         "required": [
           "integrations"
         ]
-      }
-    },
-    {
-      "$comment": "knowledge.confluence_spaces is a Confluence scope; it is refused when Plane is the backend.",
-      "if": {
-        "properties": {
-          "knowledge": {
-            "properties": {
-              "confluence_spaces": {
-                "minItems": 1
-              }
-            },
-            "required": [
-              "confluence_spaces"
-            ]
-          }
-        },
-        "required": [
-          "knowledge"
-        ]
-      },
-      "then": {
-        "not": {
-          "properties": {
-            "integrations": {
-              "properties": {
-                "plane": {
-                  "properties": {
-                    "enabled": {
-                      "const": true
-                    }
-                  },
-                  "required": [
-                    "enabled"
-                  ]
-                }
-              },
-              "required": [
-                "plane"
-              ]
-            }
-          },
-          "required": [
-            "integrations"
-          ]
-        }
       }
     }
   ],

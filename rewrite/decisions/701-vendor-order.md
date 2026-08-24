@@ -66,7 +66,12 @@ tie-breaker.
 
 ## What this does not decide
 
-Whether a SaaS vendor ships in v1 at all. That is a product call and stays open
-— but it is not on the critical path, because a vendor added after the spine is
-a parser, a transport and a prompt, which is the shape Phase 7 is built to
-absorb.
+Whether a SaaS vendor ships in v1 at all. That was a product call and stayed
+open until [`d-703`](703-unserved-integrations.md) answered it: they do not,
+and config refuses their blocks by name rather than accepting them and routing
+nothing.
+
+It was never on the critical path, because a vendor added after the spine is a
+parser, a transport and a prompt, which is the shape Phase 7 is built to
+absorb — and shipping one now also deletes its row from
+`unservedIntegrations`, in the same commit.

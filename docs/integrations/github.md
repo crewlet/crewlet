@@ -1,14 +1,18 @@
 # GitHub Integration
 
-> **v1 status — webhook ingestion only.** This build verifies and stores
-> GitHub deliveries on `POST /webhooks/github`, and agents reach GitHub
-> through the remote MCP server described below. What it does **not** yet
-> have is the routing half: no parser turns a delivery into a notification,
-> so a GitHub event does not wake a seat. The three vendors that route
-> end to end are [Mattermost](mattermost.md) (chat), [Plane](plane.md)
-> (tracker and knowledge) and [GitLab](gitlab.md) (code host). Everything
-> below describes the intended contract; the parts that are live today are
-> the `github:` config block, the webhook endpoint and the MCP surface.
+> **v1 status — `integrations.github` is REFUSED by this build.** There is
+> no parser turning a GitHub delivery into a notification, so the block
+> configured a webhook that verified events and reached nobody. Rather than
+> accept it and do nothing, config validation now rejects it by name and
+> says what serves the role instead: the code host this build routes end to
+> end is [GitLab](gitlab.md).
+>
+> `POST /webhooks/github` still exists and fails closed — with no config
+> able to supply a secret it answers 503, and comes alive in the same change
+> that ships the parser. **Agents still reach GitHub through MCP**, which is
+> unaffected: that is `mcp_servers` plus each seat's `mcp_env.github`, and
+> has nothing to do with the refused block. Everything below describes the
+> intended contract for when the routing half lands.
 
 Crewlet integrates with GitHub via the [remote GitHub MCP server](https://github.com/github/github-mcp-server), declared as a `shared: false` `http` server in `mcp_servers`. Each agent that supplies a GitHub token in `mcp_env.github` gets a per-role instance, giving them access to the full GitHub toolset — issues, PRs, repos, code search, actions. GitHub tools are for **reading, reviewing, and tracking** code (diffs, comments, reviews, PR status); **authoring** code changes goes through the [code sandbox](../concepts/code-sandbox.md). The top-level `github:` block carries only the inbound-webhook config.
 

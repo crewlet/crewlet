@@ -38,16 +38,22 @@ providers:
       api_keys:
         - "${OPENAI_API_KEY}"
 integrations:
-  jira:
-    url: "${JIRA_URL}"
-    token: "${JIRA_TOKEN}"
-  slack:
+  plane:
+    enabled: true
+    url: "${PLANE_URL}"
+    workspace: acme
+    webhook_secret: "${PLANE_WEBHOOK_SECRET}"
+    token: "${PLANE_TOKEN}"
+  mattermost:
+    enabled: true
+    url: https://mm.example.com
+    team: acme
     typing_status: always
 roles:
   - name: Founder
     kind: human
     contact:
-      slack_user_id: U0FOUNDER
+      mattermost_user_id: founder
   - name: CEO
     handle: ceo
     llm: fast
@@ -75,7 +81,9 @@ func TestCompanyRoundTripsThroughYAML(t *testing.T) {
 
 	// A resolved secret in an export is the leak that keeping references
 	// verbatim exists to prevent.
-	for _, ref := range []string{"${ANTHROPIC_API_KEY}", "${JIRA_URL}", "${JIRA_TOKEN}"} {
+	for _, ref := range []string{
+		"${ANTHROPIC_API_KEY}", "${PLANE_URL}", "${PLANE_WEBHOOK_SECRET}", "${PLANE_TOKEN}",
+	} {
 		if !strings.Contains(string(encoded), ref) {
 			t.Fatalf("the export lost %s:\n%s", ref, encoded)
 		}
@@ -92,8 +100,8 @@ func TestCompanyRoundTripsThroughYAML(t *testing.T) {
 	if got := reloaded.Providers.LLM["default"].APIKeys[0]; got != "${ANTHROPIC_API_KEY}" {
 		t.Fatalf("the key was rewritten as %q", got)
 	}
-	if reloaded.Integrations.Slack == nil || reloaded.Integrations.Slack.TypingStatus != StatusAlways {
-		t.Fatalf("an enum did not survive: %+v", reloaded.Integrations.Slack)
+	if reloaded.Integrations.Mattermost == nil || reloaded.Integrations.Mattermost.TypingStatus != StatusAlways {
+		t.Fatalf("an enum did not survive: %+v", reloaded.Integrations.Mattermost)
 	}
 }
 
