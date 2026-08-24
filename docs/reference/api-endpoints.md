@@ -84,54 +84,79 @@ All `/config/*` routes require `Authorization: Bearer <token>` matching one of t
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config` | Active revision (full JSON; `?format=yaml` for YAML) |
-| `GET` | `/config/revisions` | Paginated history (newest first) |
-| `GET` | `/config/revisions/{id}` | Single revision incl. payload |
+| `GET` | `/config` | Active revision, redacted (full JSON; `?format=yaml` for YAML) |
+| `GET` | `/config/revisions` | Paginated history (newest first), metadata only |
+| `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
-| `GET` | `/config/audit?limit=N` | Recent revision metadata (for dashboard / ops scraping) |
+
+The dashboard reads the same four facts over the query channel rather than
+these routes — `config`, `config_audit`, `config_diff` and `config_entities`,
+each operator-gated for the same reason the prefix is.
 
 **Full-document write:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace active revision. Body JSON or `Content-Type: application/yaml`. Requires `X-Summary` header (or top-level `_summary` body key). Optional `If-Match: <revision_id>` for optimistic concurrency (`If-Match: none` for the unconfigured case). |
+| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires an `X-Summary` header. Optional `If-Match: <revision_id>` for optimistic concurrency (`If-Match: none` for the unconfigured case). |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
-**Per-entity convenience CRUD** — all funnel through `RevisionDispatcher.write_entity_patch`; all return `409 company_not_initialised` when the engine is unconfigured:
+**Per-entity write** — four collections, `PUT` only:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config/identity` | Replace `{name, mission, vision, policies}` |
-| `GET`/`POST`/`PUT`/`DELETE` | `/config/roles[/{handle}]` | CRUD root + nested roles. `POST` body may set `unit: <name>` so the role lands inside the named unit at engine build time (inheriting that unit's `mcp_env`). |
-| `GET`/`POST`/`PUT`/`DELETE` | `/config/units[/{name}]` | CRUD nested org units |
-| `GET`/`PUT`/`DELETE` | `/config/llm-providers[/{key}]` | CRUD provider entries |
-| `PUT` | `/config/embeddings` | Replace embedding provider |
-| `GET`/`POST`/`PUT`/`DELETE` | `/config/mcp-servers[/{name}]` | CRUD MCP servers |
-| `PUT` | `/config/integrations/{jira\|confluence\|slack\|mattermost\|github\|gitlab\|plane}` | Replace one integration block. Any other `kind` returns `404 unknown_integration` |
-| `PUT` | `/config/turn-engine` | Replace `TurnEngineConfig` |
-| `PUT` | `/config/learning` | Replace `LearningConfig` |
-| `PUT` | `/config/budgets` | Replace org `token_budget` |
-| `GET`/`POST`/`DELETE` | `/config/extensions[/{name}]` | CRUD extensions |
+| `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth |
+| `PUT` | `/config/units/{name}` | Replace one org unit |
+| `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
+| `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |
+
+Why these exist beside the whole-document write: `PUT /config` makes every edit
+a company-wide one. A founder renaming one seat's goal sends back a document
+carrying every other seat, every provider and every integration, and a
+concurrent edit anywhere in it is theirs to lose. Editing one entity narrows
+what a write *claims* to have changed, which is what makes the revision summary
+mean something.
+
+It is the same write underneath, and that matters more than the convenience:
+an entity `PUT` opens the active revision, splices the entity in, restores the
+masks the read showed against that same revision, **validates the whole
+document**, and stores a new revision. A change that would leave the company
+invalid is refused even when the entity itself is fine — a seat naming a
+provider that no longer exists is exactly the break a per-entity surface
+invites, because the caller never sees the rest of the document.
+
+Three rules follow from that:
+
+- **A `PUT` never creates.** An id nothing carries is `404 no_such_entity`, not
+  a new entity: naming one that is not there is far more often a typo than an
+  intent to add one, and creating through this route would grow the company
+  without the caller ever seeing the document they changed. Add through
+  `PUT /config`, which shows the whole thing.
+- **The id in the path is the identity.** A body that renames the entity is
+  stored as-is under that path's id; the URL is the address, not a rename
+  request.
+- **The same `X-Summary` and `If-Match` rules apply**, and a node with no
+  active revision answers `409 no_active_revision` — there is nothing to splice
+  into, and building a company out of one seat is not what this route is for.
 
 ### Status codes
 
 - `200 OK` — successful read
-- `201 Created` — write produced a new revision; body has `{"revision_id": ..., "summary": ...}`
-- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` if `X-Summary` missing on full PUT
+- `201 Created` — a write produced a new revision; body has `{"revision_id": ..., "epoch": ...}`. A per-entity write returns this too: it changed one entity and created one revision.
+- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` when `X-Summary` is missing on any write
 - `401 Unauthorized` — missing or invalid bearer token (`{"error": "invalid_token"}`)
-- `404 Not Found` — `no_active_revision` (read on unconfigured) or revision not found
-- `409 Conflict` — `revision_advanced` (stale `If-Match` or TOCTOU race with a concurrent writer) or `company_not_initialised` (per-entity write on unconfigured)
+- `404 Not Found` — a revision that is not there, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
+- `409 Conflict` — `revision_advanced` (stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (per-entity write on an unconfigured node)
 - `412 Precondition Failed` — `If-Match` supplied when no revision exists yet
 
-### `GET /config/audit`
+### The `config_audit` query
 
-Recent revision metadata for the dashboard Configuration tab and ops-side audit scraping. Read-only; returns the same revision records as `GET /config/revisions` but in a wrapper object suited to ops tools that key on a top-level shape.
+Recent revision metadata for the dashboard's Configuration room. **A query, not a REST route** — there is no `GET /config/audit` in this build; the room asks the query channel for `config_audit` and gets the same revision records `GET /config/revisions` serves, in a wrapper object.
 
 ```
-GET /config/audit?limit=<N>
+query config_audit { "limit": <N> }
 ```
 
-| Query parameter | Default | Range | Description |
+| Parameter | Default | Range | Description |
 |-----------------|---------|-------|-------------|
 | `limit` | `50` | `1..500` | Number of revisions to return, newest first. Out-of-range returns `400 invalid_limit`. |
 
@@ -462,8 +487,9 @@ REST route calls, so the two surfaces cannot diverge:
 | `integrations` | — | `GET /integrations` |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
-| `config_audit` | `{limit}` | `GET /config/audit` *(operator token required)* |
+| `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | `GET /config/revisions/{id}/diff` *(operator token required)* |
+| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Config room's entity editor, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 ### Wiring
 

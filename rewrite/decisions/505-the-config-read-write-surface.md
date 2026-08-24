@@ -45,6 +45,36 @@ an operator edits.
 not see" are opposite facts, and erasing the difference would let a round trip
 turn the first into the second.
 
+## Four collections are addressable on their own
+
+`PUT /config/{roles|units|llm-providers|mcp-servers}/{id}`, and a
+`config_entities` query for the read half. Not because CRUD is nice to have —
+Python had a much larger version of this and none of it was ported — but
+because the whole-document write makes every edit a company-wide one. A
+founder changing one seat's goal sends back a document carrying every other
+seat, every provider and every integration, and a concurrent edit anywhere in
+it is theirs to lose. Editing one entity narrows what a write CLAIMS to have
+changed, which is what makes the revision summary worth reading.
+
+**It is the same write underneath**, and that is the part that matters: open
+the active revision, splice the entity in, restore masks against that same
+revision, validate the WHOLE document, store. A per-entity surface that
+validated only the entity would be a machine for introducing exactly one bug —
+a seat naming a provider that no longer exists — because the caller never sees
+the rest of the document.
+
+**It never creates.** An id nothing carries is a 404. Naming one that is not
+there is far more often a typo than an intent to add a seat, and adding
+through this route would grow the company without the caller ever seeing the
+document they changed.
+
+Four collections rather than a general grammar, because these are the four the
+dashboard's Config room edits. The room was written against them and shipped
+calling a `config_entities` query nothing answered — every list came back
+`unknown_query` and the editor was dead from the first day. Both sides' tests
+passed. What links them now is a sweep that reads the rooms' own source for
+`query("…")` calls and fails on any name this build does not register.
+
 ## The masked document must be able to come back
 
 Python's answer was to document that the read is not round-trippable and point

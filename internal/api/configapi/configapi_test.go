@@ -59,6 +59,8 @@ type surface struct {
 	mux     *http.ServeMux
 	configs *store.Configs
 	db      *store.DB
+	svc     *configapi.Service
+	cipher  secrets.Cipher
 }
 
 func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
@@ -70,10 +72,32 @@ func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
 	t.Cleanup(func() { _ = db.Close() })
 
 	s := &surface{mux: http.NewServeMux(), configs: db.Configs(), db: db}
-	configapi.New(configapi.Options{
+	s.svc = configapi.New(configapi.Options{
 		Store: db, Cipher: cipher, Now: func() time.Time { return pinned },
-	}).Routes(s.mux)
+	})
+	s.svc.Routes(s.mux)
+	s.cipher = cipher
 	return s
+}
+
+// service is the same object the routes are mounted on, for the reads the
+// query layer makes directly rather than over HTTP.
+func (s *surface) service() *configapi.Service { return s.svc }
+
+// activeDocument is the stored revision as a node applying it would see it:
+// unsealed and UNREDACTED, which is the only view that can prove a mask was
+// resolved rather than stored.
+func (s *surface) activeDocument(t *testing.T) string {
+	t.Helper()
+	revision, found, err := s.configs.Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active revision: %v (found=%v)", err, found)
+	}
+	document, err := secrets.Open(s.cipher, revision.Payload)
+	if err != nil {
+		t.Fatalf("unseal: %v", err)
+	}
+	return string(document)
 }
 
 func (s *surface) do(t *testing.T, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {

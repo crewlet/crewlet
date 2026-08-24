@@ -34,6 +34,47 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 	return company, nil
 }
 
+// configEntities answers one addressable collection of the active revision:
+// the identities in it, or one entity out of it.
+//
+// The read half of the Config room's entity editor, whose write half is
+// PUT /config/{kind}/{id}. Operator-only like every other config answer —
+// this is a slice of the same document, and a per-entity read that was not
+// gated would be a way to fetch the whole company one seat at a time.
+func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
+	kind := p.String("kind")
+	if kind == "" {
+		return nil, fmt.Errorf("%w: config_entities needs a kind (one of %v)",
+			ErrBadParams, configapi.EntityKinds())
+	}
+	if id := p.String("id"); id != "" {
+		entity, err := s.Config.Entity(ctx, kind, id)
+		switch {
+		case errors.Is(err, configapi.ErrNoActiveRevision):
+			return nil, nil
+		case errors.Is(err, configapi.ErrUnknownEntityKind),
+			errors.Is(err, configapi.ErrNoSuchEntity):
+			// A BAD REQUEST, not a server fault: both are things the
+			// caller named, and reporting them as failures would have the
+			// room show "the query failed" for a typo.
+			return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+		case err != nil:
+			return nil, err
+		}
+		return map[string]any{"kind": kind, "id": id, "entity": entity}, nil
+	}
+	ids, err := s.Config.Entities(ctx, kind)
+	switch {
+	case errors.Is(err, configapi.ErrNoActiveRevision):
+		return nil, nil
+	case errors.Is(err, configapi.ErrUnknownEntityKind):
+		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+	case err != nil:
+		return nil, err
+	}
+	return map[string]any{"kind": kind, "ids": ids}, nil
+}
+
 // configAudit answers the revision history.
 func (s Sources) configAudit(ctx context.Context, p Params) (any, error) {
 	limit := Clamp(p.Int("limit", ConfigAuditLimit), ConfigAuditLimit, configapi.MaxPage)

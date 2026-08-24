@@ -98,6 +98,14 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /config/revisions/{id}", s.getRevision)
 	mux.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
 	mux.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
+	// THE ENTITY ROUTES, one per addressable collection rather than a
+	// single {kind} wildcard: a wildcard would also match
+	// /config/revisions/{id}, and a route that answers for a path it was
+	// never meant to serve is worse than four explicit lines. See
+	// entities.go for what a write does.
+	for _, kind := range EntityKinds() {
+		mux.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+	}
 }
 
 // --- reads -----------------------------------------------------------------

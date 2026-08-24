@@ -194,6 +194,7 @@ func Register(r *Registry, s Sources) {
 		r.RegisterOperator("config", s.configDocument)
 		r.RegisterOperator("config_audit", s.configAudit)
 		r.RegisterOperator("config_diff", s.configDiff)
+		r.RegisterOperator("config_entities", s.configEntities)
 	}
 }
 
