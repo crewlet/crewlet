@@ -1,7 +1,7 @@
 # q — what does Release answer for a lease that already lapsed?
 
 Status: **RESOLVED — `(false, nil)`** · Raised by the coordtest port · Decided by
-the contract owner · Contract: `go/internal/coord/coord.go`
+the contract owner · Contract: `internal/coord/coord.go`
 
 ## The ruling
 

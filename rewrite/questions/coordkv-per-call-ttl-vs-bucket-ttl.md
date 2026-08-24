@@ -1,8 +1,8 @@
 # q — coordtest passes three TTLs; a one-TTL-per-bucket backend can accept one
 
-Status: **resolved in `go/internal/coord/kv/` without changing any contract** —
+Status: **resolved in `internal/coord/kv/` without changing any contract** —
 recorded here because the resolution is a real semantic addition and the owner
-of d-201 should rule on it. Raised implementing `go/internal/coord/kv/`.
+of d-201 should rule on it. Raised implementing `internal/coord/kv/`.
 
 ## The collision
 

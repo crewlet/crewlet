@@ -2,7 +2,7 @@
 
 Status: **decided** · Phase: 3 · Spec: `src/crewlet/seat/watchdog.py`,
 `docs/concepts/seat-ownership.md` § The wedged node, and why it leaves ·
-Implementation: `go/internal/seat/watchdog.go`
+Implementation: `internal/seat/watchdog.go`
 
 ## The thing Python was watching does not exist here
 

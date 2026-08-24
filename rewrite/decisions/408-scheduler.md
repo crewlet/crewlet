@@ -2,8 +2,8 @@
 
 Status: **decided** · Phase: 4 · Spec: `src/crewlet/schedule/` (`cron.py`,
 `scheduler.py`, `store.py`), `docs/concepts/scheduling.md` ·
-Implementation: `go/internal/schedule/`, `go/internal/schedule/sqlledger/`,
-`go/internal/schedule/scheduletest/`
+Implementation: `internal/schedule/`, `internal/schedule/sqlledger/`,
+`internal/schedule/scheduletest/`
 
 ## What is unchanged, because it was never idiom
 

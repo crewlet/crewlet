@@ -3,7 +3,7 @@
 Status: **decided** · Phase: 9 · Spec: `.github/workflows/release.yml`,
 `RELEASING.md`, `scripts/release_metadata.py` ·
 Implementation: `.goreleaser.yaml`, `Dockerfile`,
-`.github/workflows/go-release.yml`, `go/internal/version/`
+`.github/workflows/go-release.yml`, `internal/version/`
 
 ## The question
 
@@ -91,7 +91,7 @@ toolchain and a build container.
 
 **Windows ships with a caveat, deliberately.** The local sandbox backend is
 POSIX-only and says so at construction
-(`go/internal/sandbox/process_other.go`): every containment property it
+(`internal/sandbox/process_other.go`): every containment property it
 offers — process groups and `killpg` to reach a coding agent's whole tree,
 `SIGSTOP`/`SIGCONT` for the clarification pause, `/proc` start times for the
 pid-reuse guard — is a POSIX primitive with no equivalent. So a Windows

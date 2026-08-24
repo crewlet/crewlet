@@ -1,7 +1,7 @@
 # d-503 — The inbound webhook edge
 
 **Status:** DECIDED. Written while porting `src/crewlet/api/routes/webhooks.py`
-(1351 lines) to `go/internal/api/webhooks/`, which REWRITE_PLAN §10 specifies as
+(1351 lines) to `internal/api/webhooks/`, which REWRITE_PLAN §10 specifies as
 "seven webhook verifiers … 503+Retry-After when secretless/unconfigured, verify
 BEFORE any persistence".
 

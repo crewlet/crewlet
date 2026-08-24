@@ -1,6 +1,6 @@
-# d-601 — MCP: the tri-state must survive the SDK, and the child is a tree
+# d-602 — MCP: the tri-state must survive the SDK, and the child is a tree
 
-Status: decided · Applies to: `go/internal/mcp`
+Status: decided · Applies to: `internal/mcp`
 Related: `000` (rewrite, not transliteration), `docs/concepts/tool-capabilities.md`
 Spec: `src/crewlet/mcp/`, `src/crewlet/tools/capabilities.py`
 

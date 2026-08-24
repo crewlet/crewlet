@@ -1,7 +1,7 @@
 # q — what do the attachment and subscription verbs do on a STOPPED queue?
 
 Status: **RESOLVED — consistency is the requirement, not any particular answer**
-· Decided by the contract owner · Contract: `go/internal/queue/queue.go`
+· Decided by the contract owner · Contract: `internal/queue/queue.go`
 
 ## The ruling
 

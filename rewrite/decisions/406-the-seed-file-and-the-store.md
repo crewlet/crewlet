@@ -1,7 +1,7 @@
 # d-406 — `-company` names a seed; the store is what a node serves
 
 **Status:** DECIDED. Written while wiring the reconciler
-(`go/internal/engine/reconcile.go`, `go/cmd/crewlet/reconcile.go`).
+(`internal/engine/reconcile.go`, `cmd/crewlet/reconcile.go`).
 Related: `404` (an epoch is published, never mutated), `docs/concepts/control-plane.md`.
 
 ## The question

@@ -20,7 +20,7 @@ to fit and reported success.
 
 Status: **OPEN — shipped at 600, the spec's value** · Raised by the
 `agent/prompts` port · Spec: `src/crewlet/agent/prompts.py` +
-`tests/test_agent/test_prompts.py` · Port: `go/internal/agent/prompts/`
+`tests/test_agent/test_prompts.py` · Port: `internal/agent/prompts/`
 
 ## What happened
 

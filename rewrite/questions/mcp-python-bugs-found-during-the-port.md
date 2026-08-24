@@ -2,9 +2,9 @@
 
 Status: **OPEN — fixed in the Go port, NOT fixed in `src/crewlet/`** · Raised by
 the `mcp` port · Spec: `src/crewlet/mcp/bridge.py`, `src/crewlet/engine.py` ·
-Port: `go/internal/mcp/`
+Port: `internal/mcp/`
 
-The port brief scopes me to `go/internal/mcp/` and `rewrite/`, so these are
+The port brief scopes me to `internal/mcp/` and `rewrite/`, so these are
 raised rather than fixed in the Python tree. All three are live in
 `src/crewlet/` today.
 

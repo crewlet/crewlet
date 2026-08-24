@@ -3,7 +3,7 @@
 Status: **decided** · Phase: 2 · Spec: `src/crewlet/db/leases.py`,
 `config_plane.py`, `turn_completions.py`; suites `tests/test_db/`
 
-The contract is `go/internal/coord/coord.go`. This note records what a reader
+The contract is `internal/coord/coord.go`. This note records what a reader
 should not have to re-derive, and how the SQL semantics map onto a
 compare-and-swap KV (JetStream KV in v1).
 

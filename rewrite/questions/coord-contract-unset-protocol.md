@@ -1,7 +1,7 @@
 # q — what does an unset `AcquireOptions.Protocol` mean?
 
 Status: **RESOLVED** · Raised by the coordtest port · Decided by the contract owner
-· Contract: `go/internal/coord/coord.go`
+· Contract: `internal/coord/coord.go`
 
 ## The question
 

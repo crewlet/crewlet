@@ -3,7 +3,7 @@
 Status: **decided** · Phase: 1 · Spec: `src/crewlet/queue/protocol.py`, `memory.py`,
 `topics.py`; suites `tests/test_queue/test_protocol.py`, `test_topics.py`
 
-The contract lives in `go/internal/queue/queue.go`. This note records the choices a
+The contract lives in `internal/queue/queue.go`. This note records the choices a
 reader of that file should not have to re-derive.
 
 ## 1. Three outcomes, one return value

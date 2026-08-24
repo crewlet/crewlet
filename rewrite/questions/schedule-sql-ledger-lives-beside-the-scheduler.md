@@ -2,7 +2,7 @@
 
 Status: **decided one way and recorded for the store owner to overrule** —
 nothing in either package changes if it moves. Raised implementing
-`go/internal/schedule/`.
+`internal/schedule/`.
 
 ## The collision
 

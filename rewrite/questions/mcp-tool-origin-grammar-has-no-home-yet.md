@@ -1,8 +1,8 @@
 # q — the tool-origin grammar lives in `internal/mcp` because there is no
 # registry package yet
 
-Status: **OPEN — parked in `go/internal/mcp/origin.go`** · Raised by the `mcp`
-port · Spec: `src/crewlet/tools/registry.py` · Port: `go/internal/mcp/origin.go`
+Status: **OPEN — parked in `internal/mcp/origin.go`** · Raised by the `mcp`
+port · Spec: `src/crewlet/tools/registry.py` · Port: `internal/mcp/origin.go`
 
 ## The grammar
 
@@ -17,7 +17,7 @@ its extension failed to load read as a missing builtin.
 It covers four registrants and only one of them is MCP. It belongs beside the
 tool registry — `internal/tools`, which does not exist in the Go tree yet. MCP
 is the only producer that does exist, so the four constants are parked in
-`go/internal/mcp/origin.go` with a note on the file saying where they go.
+`internal/mcp/origin.go` with a note on the file saying where they go.
 
 `internal/mcp` also defines two things a registry would otherwise own, for the
 same reason:

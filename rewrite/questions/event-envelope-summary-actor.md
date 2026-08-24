@@ -1,7 +1,7 @@
 # q — `Summarizer` / `Actorer` cannot see the envelope
 
-Status: **resolved** — the contract was extended; `go/internal/events/event.go` and
-`go/internal/events/types/` both carry the answer. Raised porting
+Status: **resolved** — the contract was extended; `internal/events/event.go` and
+`internal/events/types/` both carry the answer. Raised porting
 `src/crewlet/events/types.py`.
 
 ## What was wrong

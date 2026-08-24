@@ -1,6 +1,6 @@
 # store — two tables in the Python inventory that no list claims
 
-Raised by: Phase 2 `go/internal/store` build · Status: **open**
+Raised by: Phase 2 `internal/store` build · Status: **open**
 
 The store brief enumerates the tables to define, and separately enumerates the
 coordination tables that must NOT be here because they belong to the KV layer
@@ -37,7 +37,7 @@ is `db/`, so it may simply have been missed on both sides.
 ## What I need
 
 One line each: `conversation_sessions` here or elsewhere; `a2a_channels` here or
-in KV. Adding either to `go/internal/store/schema/` afterwards is one file and
+in KV. Adding either to `internal/store/schema/` afterwards is one file and
 its contract test — the schema is consolidated and forward-only, so a new table
 is a new numbered file, not an edit to an existing one.
 

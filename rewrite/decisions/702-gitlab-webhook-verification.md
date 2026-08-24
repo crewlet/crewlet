@@ -2,8 +2,8 @@
 
 Status: **decided, implemented — and it reverses a documented decision, so
 it needs ratification.** Phase: 7 ·
-Implementation: `go/internal/api/webhooks/verify.go`,
-`go/internal/api/webhooks/routes.go` · Docs: `docs/integrations/gitlab.md`
+Implementation: `internal/api/webhooks/verify.go`,
+`internal/api/webhooks/routes.go` · Docs: `docs/integrations/gitlab.md`
 
 ## The measurement
 

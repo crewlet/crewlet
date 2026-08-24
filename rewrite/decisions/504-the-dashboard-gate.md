@@ -70,7 +70,7 @@ a fact recorded in many places can only ever be moved in most of them.
 
 ## Three assertions, because they are three different things
 
-`go/internal/api/dashboardjs_test.go`:
+`internal/api/dashboardjs_test.go`:
 
 1. **`TestTheDashboardPassesItsOwnSuite`** — every `*.test.mjs`, discovered by
    glob rather than listed, run under `node` against `go/static/dashboard` with

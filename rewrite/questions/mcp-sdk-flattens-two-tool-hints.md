@@ -1,8 +1,8 @@
 # q — the official Go MCP SDK cannot represent an unset `readOnlyHint`
 
-Status: **OPEN — worked around in `go/internal/mcp/probe.go`; upstream not yet
+Status: **OPEN — worked around in `internal/mcp/probe.go`; upstream not yet
 filed** · Raised by the `mcp` port · Spec: `src/crewlet/tools/capabilities.py`,
-`docs/concepts/tool-capabilities.md` · Port: `go/internal/mcp/`
+`docs/concepts/tool-capabilities.md` · Port: `internal/mcp/`
 
 ## What
 
@@ -46,7 +46,7 @@ A `Transport` decorator reads the RAW `annotations` object out of each
 `tools/list` result before the SDK's typed decode discards the distinction. It
 is confined to that one question; everything else on the connection passes
 through. The tradeoffs it carries — a lost unexported `sessionUpdated` hook,
-paid for explicitly on the HTTP path — are recorded in `d-601`.
+paid for explicitly on the HTTP path — are recorded in `d-602`.
 
 ## What is being asked
 
