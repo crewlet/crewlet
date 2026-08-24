@@ -71,16 +71,42 @@ type Cipher interface {
 // document is idempotent, and so a redaction pass can recognise ciphertext
 // without attempting to decrypt it.
 func IsEnvelope(value string) bool {
+	_, ok := EnvelopeKeyID(value)
+	return ok
+}
+
+// EnvelopeKeyID reads which keyring key sealed a value.
+//
+// THE ONE PARSE of the envelope's shape, because the key id is denormalised
+// into a column — a rotation sweep finds stale rows by comparing it, without
+// decrypting any of them — and a second reading of the format is how the
+// column and the ciphertext come to disagree about which key opens a row.
+//
+// False for anything that is not a well-formed envelope, which is what
+// [IsEnvelope] is: telling a sealed value from a plaintext one is the same
+// question as "which key sealed it", answered once.
+func EnvelopeKeyID(value string) (string, bool) {
+	id, _, ok := splitEnvelope(value)
+	return id, ok
+}
+
+// splitEnvelope is THE parse of the envelope's shape: prefix, key id,
+// base64 payload. Both the key-id reader above and Decrypt below go through
+// it, because two readings of one format is how a column that says which key
+// opens a row comes to disagree with the ciphertext in it.
+func splitEnvelope(value string) (id string, raw []byte, ok bool) {
 	if !strings.HasPrefix(value, EnvelopePrefix) {
-		return false
+		return "", nil, false
 	}
-	rest := strings.TrimPrefix(value, EnvelopePrefix)
-	id, blob, ok := strings.Cut(rest, ":")
-	if !ok || id == "" || blob == "" {
-		return false
+	id, blob, cut := strings.Cut(strings.TrimPrefix(value, EnvelopePrefix), ":")
+	if !cut || id == "" || blob == "" {
+		return "", nil, false
 	}
-	_, err := base64.StdEncoding.DecodeString(blob)
-	return err == nil
+	decoded, err := base64.StdEncoding.DecodeString(blob)
+	if err != nil {
+		return "", nil, false
+	}
+	return id, decoded, true
 }
 
 // Keyring is a set of named AES-256 keys, one of which is active.
@@ -170,15 +196,8 @@ func (c *keyringCipher) Encrypt(plaintext, aad string) (string, error) {
 
 // Decrypt unseals an envelope under whichever key sealed it.
 func (c *keyringCipher) Decrypt(token, aad string) (string, error) {
-	if !strings.HasPrefix(token, EnvelopePrefix) {
-		return "", ErrDecrypt
-	}
-	id, blob, ok := strings.Cut(strings.TrimPrefix(token, EnvelopePrefix), ":")
-	if !ok || id == "" {
-		return "", ErrDecrypt
-	}
-	raw, err := base64.StdEncoding.DecodeString(blob)
-	if err != nil {
+	id, raw, ok := splitEnvelope(token)
+	if !ok {
 		return "", ErrDecrypt
 	}
 	gcm, err := c.aead(id)
@@ -205,6 +224,14 @@ func GenerateKey() ([]byte, error) {
 	}
 	return key, nil
 }
+
+// EncodeKey renders a key in the form the config's `material` field takes.
+//
+// Base64 of the raw bytes, which is what the loader decodes — so `crewlet
+// secrets keygen` emits something pasteable rather than something to
+// convert, and there is one definition of the encoding rather than one here
+// and one in the loader.
+func EncodeKey(key []byte) string { return base64.StdEncoding.EncodeToString(key) }
 
 // AADForVar is the associated data binding a secret-store value to its
 // variable name, so a ciphertext moved between rows fails to authenticate.

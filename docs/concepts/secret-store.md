@@ -89,17 +89,22 @@ secrets:
 ### From the CLI
 
 ```bash
-crewlet secrets set SLACK_BOT_TOKEN_CEO          # prompts, or reads stdin
+crewlet secrets keygen                           # a fresh key for the keyring
 echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE
+crewlet secrets set SLACK_BOT_TOKEN_CEO          # reads stdin
 crewlet secrets list                             # names + metadata, never values
 crewlet secrets unset STALE_TOKEN
-crewlet secrets get TOKEN --reveal               # break-glass; audited
+crewlet secrets get TOKEN -reveal                # break-glass; logged
 crewlet secrets rekey                            # after a keyring rotation
 ```
 
-The value is read from stdin (or an interactive prompt) by default rather than from `--value`, because an argv value is visible in `ps` and lands in shell history.
+The value is read from **stdin** by default rather than from `-value`, because an argv value is visible in `ps` output and lands in shell history. Exactly one trailing newline is stripped, so `echo "$TOKEN" | ...` does the right thing — and no more than one, because a secret may legitimately end in whitespace and altering it silently is a failure nobody can see.
 
-There is **no HTTP route that returns a secret value**, by design. `crewlet secrets get --reveal` is the only read-back, it refuses without the explicit flag, and it logs the access by name.
+There is **no HTTP route that returns a secret value**, by design. `crewlet secrets get -reveal` is the only read-back: it refuses without the explicit flag and logs the access by name. The refusal points at `list`, because the common need is "is X set and when did it last change" — which the listing answers without putting a credential into a terminal, a scrollback buffer and a screen-share.
+
+`crewlet secrets keygen` needs no config and no store: it is what an operator runs *before* either exists, and it prints the base64 form the keyring's `material` field takes.
+
+Every other command reads the **Tier A** config for its keyring, never the company document. The store holds only ciphertext; the key material lives in the bootstrap file — on disk or in the environment, never in the database it opens.
 
 ### From a provisioner
 
@@ -131,9 +136,9 @@ store is a better home for it than a file someone has to remember to source.
 
 So `crewlet secrets set` on a live engine takes effect at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
 
-**What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. Re-activating an unchanged revision produces a byte-identical payload, so the engine now compares a **resolution fingerprint** alongside it: a digest of what the payload's `${VAR}` references currently resolve to. Same payload *and* same fingerprint is a true no-op; same payload with a moved fingerprint is a rotation, and the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild.
+**What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. So re-activating an unchanged revision has to rebuild them, even though its payload is byte-identical.
 
-The fingerprint is keyed with a per-process random key and never persisted or logged — a bare hash of a short credential would be offline-brute-forceable, which would make the mechanism a leak.
+It does, and the reason is the shape of the control plane rather than a comparison. The activation table is **append-only**, so re-activating a revision mints a new epoch; a node's reconciler skips on the *epoch* it has applied, never on the payload, so a re-activation always applies. `${VAR}` references stay verbatim in the stored revision and are resolved where a provider is **constructed** — and the secret snapshot is re-read immediately before that. There is no payload-equality shortcut for a rotation to slip through.
 
 > One surface this cannot reach: a **running code sandbox** received its credentials in the box's environment at launch, and no engine-side refresh reaches a live box. There the effective bound is the run's duration plus any clarification pause, not seconds. Tear the run down if a rotation is a revocation.
 

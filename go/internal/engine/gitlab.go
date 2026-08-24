@@ -168,7 +168,7 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 	if cfg == nil || !cfg.Enabled {
 		return nil, nil
 	}
-	env := config.EnvOnly()
+	env := e.resolver()
 	url := env.Value(cfg.URL)
 	if url == "" {
 		// A reference that did not resolve. The validator already

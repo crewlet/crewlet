@@ -67,7 +67,7 @@ func (e *Engine) startPlane(c *Company, cfg *config.Plane) (planeParts, error) {
 	// RESOLVED HERE, at construction, exactly as every other credential is:
 	// a ${VAR} stays verbatim in the stored config, which is what makes
 	// re-activating an unchanged revision pick up a rotated token.
-	env := config.EnvOnly()
+	env := e.resolver()
 	url, workspace := env.Value(cfg.URL), env.Value(cfg.Workspace)
 	if url == "" || workspace == "" {
 		// A reference that did not resolve, not a config gap: the
@@ -125,7 +125,7 @@ func (e *Engine) startPlane(c *Company, cfg *config.Plane) (planeParts, error) {
 	if engineClient != nil {
 		parts.searcher = plane.NewSearcher(plane.SearcherOptions{
 			Engine: engineClient, Cache: cache, SkillsProject: skills,
-			ForSeat: seatPlaneClient(url, workspace),
+			ForSeat: seatPlaneClient(e.resolver(), url, workspace),
 		})
 	}
 	// THE SKILL SYNC, on the same credential. It walks once here and is
@@ -264,7 +264,7 @@ func excludedProjects(skills string) []string {
 // safe for it. The clients are CACHED per key: a search happens on the Plan
 // phase's hot path, and minting an HTTP client per turn would build a fresh
 // connection pool each time and throw away every keep-alive.
-func seatPlaneClient(url, workspace string) func(*org.Role) (*plane.Client, bool) {
+func seatPlaneClient(env *config.Resolver, url, workspace string) func(*org.Role) (*plane.Client, bool) {
 	var (
 		mu       sync.Mutex
 		byAPIKey = map[string]*plane.Client{}
@@ -273,7 +273,7 @@ func seatPlaneClient(url, workspace string) func(*org.Role) (*plane.Client, bool
 		if seat == nil {
 			return nil, false
 		}
-		key := strings.TrimSpace(config.EnvOnly().Value(
+		key := strings.TrimSpace(env.Value(
 			seat.MCPEnv[planeSeatEnv][planeSeatKey]))
 		if key == "" {
 			return nil, false

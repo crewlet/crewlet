@@ -352,7 +352,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	}
 
 	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
-	servers := sandboxMCP(company, seat, gate)
+	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		CodingAgent: string(gate.CodingAgent),
 		PauseTTL:    pauseTTL(gate),
@@ -385,7 +385,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
-func sandboxMCP(c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]map[string]any {
+func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]map[string]any {
 	if len(gate.MCP.Servers) == 0 {
 		return nil
 	}
@@ -402,7 +402,7 @@ func sandboxMCP(c *Company, seat *org.Role, gate *config.RoleSandbox) map[string
 	// verbatim.
 	credentials := make(map[string]map[string]string, len(seat.MCPEnv))
 	for name, values := range seat.MCPEnv {
-		resolved, missing := config.EnvOnly().Map("mcp_env."+name, values)
+		resolved, missing := env.Map("mcp_env."+name, values)
 		if len(missing) > 0 {
 			log.Warn("sandbox_mcp_env_unresolved", "seat", seat.Handle(), "server", name,
 				"hint", "the in-box MCP server will not authenticate")
@@ -471,7 +471,7 @@ func (e *Engine) sandboxEnv(c *Company, seat *org.Role, gate *config.RoleSandbox
 	// its references verbatim so an exported revision carries no resolved
 	// secret. Resolving at load as well would double-resolve and mangle any
 	// secret whose real value contains a literal ${...}.
-	resolved, missing := config.EnvOnly().Map("role.sandbox.env", env)
+	resolved, missing := e.resolver().Map("role.sandbox.env", env)
 	if len(missing) > 0 {
 		// KEYS ONLY, never values, which may embed a partial secret. Flagged
 		// per REFERENCE rather than per final value: an embedded form like

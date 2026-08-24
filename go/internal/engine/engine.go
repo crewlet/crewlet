@@ -46,6 +46,26 @@ type Company struct {
 // `validate` command can do, and a constructor that dialled a provider would
 // make config validation depend on the vendor being up.
 func NewCompany(c *config.Company) (*Company, error) {
+	// ENV-ONLY, which is what makes `crewlet validate` work on a laptop:
+	// the secret store lives in a database this path must not need.
+	return NewCompanyWith(c, config.EnvOnly())
+}
+
+// NewCompanyWith is [NewCompany] over a caller-supplied ${VAR} resolver.
+//
+// THE ONE SEAM THE SECRET STORE PLUGS INTO. A running node passes a chain
+// with the store in front of the environment, so a rotated secret wins over
+// a stale `.env` that was exported into the process months ago — which is
+// the whole point of having a store, and is a rule that has to hold for
+// EVERY value, not just the ones whose call site remembered.
+func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
+	if env == nil {
+		env = config.EnvOnly()
+	}
+	return newCompany(c, env)
+}
+
+func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
@@ -64,12 +84,7 @@ func NewCompany(c *config.Company) (*Company, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	// THE TIER B RESOLVER. Its chain is the one seam a secret store plugs
-	// into: today it is the process environment, and a store source goes in
-	// front of it without any other call site changing. Built per epoch
-	// rather than held, because a resolver caches what it has seen and a
-	// long-lived one would keep serving a value the operator has rotated.
-	models, err := buildProviders(c, config.EnvOnly())
+	models, err := buildProviders(c, env)
 	if err != nil {
 		return nil, err
 	}

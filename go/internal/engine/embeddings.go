@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
@@ -43,7 +42,7 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 			"sized at open and an apply cannot resize them — restart the node "+
 			"to change the width", cfg.Width(), opened)
 	}
-	env := config.EnvOnly()
+	env := e.resolver()
 	provider, err := embeddings.New(embeddings.Config{
 		Model:      env.Value(cfg.Model),
 		Dimensions: cfg.Width(),

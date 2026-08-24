@@ -96,14 +96,14 @@ func (e *Engine) Status() *notify.StatusDriver {
 // reconnected.
 func (e *Engine) refreshParties(c *Company) {
 	reg := notify.NewRegistry(c.Org)
-	rec := reg.ReconcileHumanContacts(c.Org, config.EnvOnly().LookupOK)
+	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK)
 
 	// The CODE HOST's seat identities are config-derived, so they are
 	// rebuilt from the new company here rather than carried across. Doing
 	// it before the registry is published means no window where a GitLab
 	// webhook resolves to nobody.
 	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
-		e.notify.gitlab.register(reg, c, config.EnvOnly())
+		e.notify.gitlab.register(reg, c, e.resolver())
 	}
 
 	e.notify.mu.Lock()
@@ -246,7 +246,7 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 
 // startMattermost brings up the chat surface.
 func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Mattermost) (*mattermost.Transport, error) {
-	seats := mattermost.SeatsFrom(c.Org, config.EnvOnly().LookupOK)
+	seats := mattermost.SeatsFrom(c.Org, e.resolver().LookupOK)
 	if len(seats) == 0 {
 		// Enabled with no provisioned seats is a company mid-setup, not
 		// a failure: `crewlet mattermost provision` has not run yet.

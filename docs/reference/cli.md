@@ -22,12 +22,12 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet config diff <UUID> [--against <UUID\|active>]` | Structural diff between two revisions |
 | `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [--dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
-| `crewlet secrets keygen [--key-id ID]` | Generate a fresh encryption-keyring key + the `config.yaml` snippet to install it |
+| `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `config.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment |
 | `crewlet secrets list` | List stored secret names + metadata (never values) |
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
-| `crewlet secrets get <NAME> --reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
-| `crewlet secrets rekey [--dry-run]` | Re-encrypt stored secrets under the active keyring key |
+| `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
+| `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | List the [`cli-agent`](../concepts/subscription-llm-backends.md) LLM providers in a company config and whether each looks logged in |
 | `crewlet llm login <provider>` | Authenticate a subscription CLI backend: adopt the machine's existing login (`--from-host`), broker the vendor's own login, mint a headless token, or drive a credential login |
 | `crewlet llm doctor [provider]` | Verify a CLI backend end to end — binary, version, login, token accounting, and a real smoke completion |
@@ -156,18 +156,17 @@ Rotates the master key: re-encrypts the active revision's config document under 
 ### `crewlet secrets keygen`
 
 ```
-crewlet secrets keygen [--key-id ID]
+crewlet secrets keygen [-key-id ID]
 ```
 
 Prints a fresh base64 32-byte encryption key plus a copy-pasteable `config.yaml` `secrets:` snippet that references it via an environment variable (keeping the raw key out of the file). `--key-id` (default `key-1`) names the key; the id is stamped into every envelope the key seals, so keep it stable across restarts and pick a new id only when rotating. Key generation is always explicit — Crewlet never auto-generates a key, because a silently-generated key that isn't captured makes every backup unrecoverable. See [Secrets](../concepts/configuration.md#secrets).
 
-The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the encrypted `secret_values` table the engine consults ahead of `os.environ` when resolving `${VAR}`. All of them connect to the DB using the DSN from the Tier A bootstrap (`--bootstrap`, default `./config.yaml`) or an explicit `--dsn`, and all of them need a Tier A keyring: the store has no plaintext mode.
+The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the encrypted `secret_values` table the engine consults **ahead of** the process environment when resolving `${VAR}`. All of them open the store named by the Tier A bootstrap (`--config`, default `./config.yaml`), and all of them need a Tier A keyring: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
 ### `crewlet secrets set`
 
 ```
-crewlet secrets set <NAME> [--value V] [--source STR]
-                           [--bootstrap PATH] [--dsn DSN]
+crewlet secrets set <NAME> [-value V] [-source STR] [-config PATH]
 ```
 
 Stores one encrypted secret under `NAME`, which must be a valid environment-variable name — a name outside the `${VAR}` grammar could never be read back, so it is rejected. Existing names are replaced.
@@ -179,7 +178,7 @@ A running engine picks the new value up at its next config activation or restart
 ### `crewlet secrets list`
 
 ```
-crewlet secrets list [--bootstrap PATH] [--dsn DSN]
+crewlet secrets list [-config PATH]
 ```
 
 Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, and source. **Never** prints a value — the record type has no value field, so it cannot. Works without a keyring, so an operator locked out of the key can still take inventory.
@@ -187,7 +186,7 @@ Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp
 ### `crewlet secrets unset`
 
 ```
-crewlet secrets unset <NAME> [--bootstrap PATH] [--dsn DSN]
+crewlet secrets unset <NAME> [-config PATH]
 ```
 
 Removes the row. Exits 1 if the name was not stored. Afterwards `${NAME}` falls back to the environment.
@@ -195,7 +194,7 @@ Removes the row. Exits 1 if the name was not stored. Afterwards `${NAME}` falls 
 ### `crewlet secrets get`
 
 ```
-crewlet secrets get <NAME> --reveal [--bootstrap PATH] [--dsn DSN]
+crewlet secrets get <NAME> -reveal [-config PATH]
 ```
 
 Prints one decrypted value to stdout. `--reveal` is **required** — without it the command refuses and reads nothing. This is the only read-back path in the entire system; there is deliberately no HTTP route that returns a secret value. Access is logged by name. Intended as break-glass for recovering a credential the upstream API will never show again, not as a scripting interface.
@@ -203,7 +202,7 @@ Prints one decrypted value to stdout. `--reveal` is **required** — without it 
 ### `crewlet secrets rekey`
 
 ```
-crewlet secrets rekey [--dry-run] [--bootstrap PATH] [--dsn DSN]
+crewlet secrets rekey [-dry-run] [-config PATH]
 ```
 
 Re-encrypts every stored secret not already sealed under `secrets.active_key_id`. The per-row counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or rows still sealed under it become unreadable. Each row's envelope names its sealing key, so mixed-key states decrypt correctly throughout. `--dry-run` lists what would re-encrypt without writing.

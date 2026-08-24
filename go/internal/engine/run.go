@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Engine is one process running a company.
@@ -66,6 +67,17 @@ type Engine struct {
 	// rather than on an epoch because its redelivery ring is process
 	// state — see learning.Reflector.
 	reflector *learning.Reflector
+
+	// env is this node's ${VAR} resolver: the secret store in front of the
+	// process environment, refreshed on every apply. One per node rather
+	// than one per call site — see secrets.go for why that matters.
+	env atomic.Pointer[*config.Resolver]
+
+	// cipher is the keyring this node seals and opens secret rows with,
+	// nil on a node that has none. Held rather than rebuilt because ONE
+	// cipher per process is what keeps a row this node wrote a row it can
+	// read back.
+	cipher secrets.Cipher
 
 	// profile is what this node declared it does: whether it claims
 	// seats, serves inbound traffic, and runs the fleet's singleton
@@ -179,18 +191,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
-	company, err := NewCompany(opts.Company)
-	if err != nil {
-		return nil, err
-	}
 
 	backends := opts.Backends
 	ownsBackends := false
 	if backends == nil {
-		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company)
+		opened, err := OpenBackends(ctx, opts.Bootstrap, opts.Company)
 		if err != nil {
 			return nil, err
 		}
+		backends = opened
 		ownsBackends = true
 	}
 	// Only what this engine OPENED does it close. A caller that supplied
@@ -205,6 +214,27 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			backends.Close(ctx)
 		}
 		return nil, err
+	}
+
+	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
+	// epoch resolves every ${VAR} it holds as it is built — the provider
+	// keys, the integration tokens, the per-role MCP env. Loading the
+	// snapshot afterwards would give the first epoch environment-only
+	// resolution and every later one the store, so a rotated secret would
+	// work on the second apply and not on boot.
+	//
+	// A node whose keyring is CONFIGURED but broken fails here rather than
+	// resolving everything from the environment and looking healthy.
+	cipher, err := openCipher(opts.Bootstrap)
+	if err != nil {
+		return fail(err)
+	}
+	e.cipher = cipher
+	e.refreshSecrets(ctx)
+
+	company, err := NewCompanyWith(opts.Company, e.resolver())
+	if err != nil {
+		return fail(err)
 	}
 	// BEFORE equip, because equip registers run_sandbox and only a node
 	// with a coordinator can offer it: a tool whose dependency is absent is

@@ -29,12 +29,11 @@ import (
 // RESOLVED, because a value may be a ${VAR} reference: the whole point of
 // the map is to carry deployment facts like a tenant URL into skill prose,
 // and those are exactly the values an operator keeps out of a config file.
-func skillVariables(c *Company) map[string]string {
+func skillVariables(env *config.Resolver, c *Company) map[string]string {
 	declared := c.Config.SkillVariables
 	if len(declared) == 0 {
 		return nil
 	}
-	env := config.EnvOnly()
 	out := make(map[string]string, len(declared))
 	for name, value := range declared {
 		out[name] = env.Value(value)
@@ -49,7 +48,7 @@ func skillVariables(c *Company) map[string]string {
 // against the new map — rather than on that skill's next edit, which might
 // be never.
 func (e *Engine) refreshSkillVariables(c *Company) {
-	e.skills.SetVariables(skillVariables(c))
+	e.skills.SetVariables(skillVariables(e.resolver(), c))
 }
 
 // auditSkills reports every skill whose trigger names a tool this company

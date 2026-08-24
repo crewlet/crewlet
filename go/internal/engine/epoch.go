@@ -72,7 +72,13 @@ func (e *Engine) Company() *Company { return e.epoch.current.Load() }
 // would guard a path that has never had a second writer, and would imply a
 // concurrency story that does not exist.
 func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, error) {
-	next, err := NewCompany(cfg)
+	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
+	// the documented rotation gesture: the payload has not moved, so the
+	// only thing that can have is what its ${VAR} references resolve to.
+	// Rebuilding the epoch without re-reading the store would make that
+	// gesture a no-op and rotation impossible without a restart.
+	e.refreshSecrets(ctx)
+	next, err := NewCompanyWith(cfg, e.resolver())
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the revision was refused before anything changed; "+

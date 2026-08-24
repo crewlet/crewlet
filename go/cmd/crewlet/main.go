@@ -75,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return validateConfigs(rest, stdout, stderr)
 	case "schema":
 		return emitSchema(rest, stdout, stderr)
+	case "secrets":
+		return runSecrets(rest, stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", cmd)
@@ -88,6 +90,7 @@ Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
+  crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet version             Print the version
   crewlet help                Show this message
 
