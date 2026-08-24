@@ -63,7 +63,7 @@ func (s *streamSub) close() {
 // on close, which fails on a Shared subscription with more than one consumer
 // and leaves an orphan pinning events on disk when a browser tab dies
 // uncleanly.
-func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.StreamHandler) (queue.Unsubscribe, error) {
+func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.StreamHandler) (queue.Unsubscribe, error) {
 	if h == nil {
 		return nil, fmt.Errorf("%w: nil handler for stream %s", ErrSubject, pattern)
 	}
@@ -120,7 +120,13 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 	// that registered a dashboard feed inside a request scope must not have
 	// its feed torn down when that request returns. Unsubscribe (or Stop)
 	// is what ends it.
-	ctx, cancel := context.WithCancel(context.Background())
+	//
+	// WithoutCancel rather than a bare Background, so the caller's VALUES —
+	// the trace the feed was opened under, the logging fields — reach the
+	// handler while its cancellation does not. The JetStream backend takes
+	// the same shape, and a stream handler that could not be correlated
+	// with the request that opened it is the one thing this feed is for.
+	consumeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &streamSub{cons: cons, cancel: cancel, done: make(chan struct{}), stopped: make(chan struct{})}
 
 	q.mu.Lock()
@@ -129,7 +135,7 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 
 	go func() {
 		defer close(s.done)
-		q.runStream(ctx, s, pattern, h)
+		q.runStream(consumeCtx, s, pattern, h)
 	}()
 
 	return func(context.Context) error {

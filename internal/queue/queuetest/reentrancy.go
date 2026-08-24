@@ -32,16 +32,18 @@ import (
 // So this group is not testing a feature. It is pinning the reason a guard was
 // not written, in the one place a backend change would break it.
 func (s *suite) runReentrancy(t *testing.T) {
+	ctx := t.Context()
+
 	t.Run("a_handler_that_publishes_to_its_own_subscription_is_not_re_entered", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
 
 		var mu sync.Mutex
 		var depth, maxDepth int
 		var publishErr error
 
-		subscribeBatch(t, q, "t.reentry", "g",
+		subscribeBatch(ctx, t, q, "t.reentry", "g",
 			func(hctx context.Context, evs []*events.Event) queue.Result {
 				mu.Lock()
 				depth++
@@ -74,7 +76,7 @@ func (s *suite) runReentrancy(t *testing.T) {
 			},
 			queue.DefaultBatchOptions())
 
-		publish(t, q, "t.reentry", newConvEvent("first", "c1"))
+		publish(ctx, t, q, "t.reentry", newConvEvent("first", "c1"))
 
 		batches.await(t, "both events handled", func(got [][]string) bool {
 			n := 0
@@ -105,13 +107,13 @@ func (s *suite) runReentrancy(t *testing.T) {
 		// the nested publish block until the earlier handler drained —
 		// which on the in-process twin means blocking the turn on
 		// itself, the deadlock this whole group exists to rule out.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
 
 		var mu sync.Mutex
 		var published, returned bool
 
-		subscribeBatch(t, q, "t.reentry.nb", "g",
+		subscribeBatch(ctx, t, q, "t.reentry.nb", "g",
 			func(hctx context.Context, evs []*events.Event) queue.Result {
 				mu.Lock()
 				already := published
@@ -130,7 +132,7 @@ func (s *suite) runReentrancy(t *testing.T) {
 			},
 			queue.DefaultBatchOptions())
 
-		publish(t, q, "t.reentry.nb", newConvEvent("first", "c1"))
+		publish(ctx, t, q, "t.reentry.nb", newConvEvent("first", "c1"))
 
 		batches.await(t, "both events handled", func(got [][]string) bool {
 			n := 0

@@ -26,6 +26,7 @@ type MessageSent struct {
 	Content string `json:"content"`
 }
 
+// EventType is the "message_sent" wire type.
 func (MessageSent) EventType() string { return "message_sent" }
 
 // SummaryFor prefers the message's own sender: a message published by the
@@ -107,12 +108,22 @@ type ExternalNotification struct {
 	Messages []CoalescedMessage `json:"messages,omitempty"`
 }
 
+// EventType is the "external_notification" wire type.
 func (ExternalNotification) EventType() string { return "external_notification" }
 
+// AgentID is the seat the notification was routed to. It is the chain's last
+// resort here, since Actor already answers with the human who sent it.
 func (e ExternalNotification) AgentID() string { return e.Agent }
 
-func (e ExternalNotification) Integration() string          { return e.NotificationSource }
-func (e ExternalNotification) IntegrationSender() string    { return e.Sender }
+// Integration is the system the message came from, and the string the dashboard
+// builds its branded badge out of.
+func (e ExternalNotification) Integration() string { return e.NotificationSource }
+
+// IntegrationSender is the human the integration identified, when it did.
+func (e ExternalNotification) IntegrationSender() string { return e.Sender }
+
+// IntegrationEventType is the integration's own name for what happened —
+// "message", "issue_commented" — not one of this catalogue's type strings.
 func (e ExternalNotification) IntegrationEventType() string { return e.SourceEventType }
 
 // Actor is the person who sent it.
@@ -161,10 +172,15 @@ type TurnTriggerSkipped struct {
 	Reason      string `json:"reason"`
 }
 
+// EventType is the "turn_trigger_skipped" wire type.
 func (TurnTriggerSkipped) EventType() string { return "turn_trigger_skipped" }
 
+// AgentID is the seat that did NOT run a turn for this trigger.
 func (e TurnTriggerSkipped) AgentID() string { return e.Agent }
 
+// Summary fills in both blanks it can have. A skip whose type or reason went
+// unstated is the case an operator most needs to read, so neither is allowed to
+// render as a gap in the sentence.
 func (e TurnTriggerSkipped) Summary() string {
 	kind := e.TriggerType
 	if kind == "" {
@@ -192,12 +208,22 @@ type NotificationsCoalesced struct {
 	LastAt  string `json:"last_at"`
 }
 
+// EventType is the "notifications_coalesced" wire type.
 func (NotificationsCoalesced) EventType() string { return "notifications_coalesced" }
 
-func (e NotificationsCoalesced) Integration() string          { return e.NotificationSource }
-func (e NotificationsCoalesced) IntegrationSender() string    { return "" }
+// Integration is the system whose notifications were merged.
+func (e NotificationsCoalesced) Integration() string { return e.NotificationSource }
+
+// IntegrationSender is always empty: a merge spans constituents that may come
+// from several senders, so naming one would misattribute the rest.
+func (e NotificationsCoalesced) IntegrationSender() string { return "" }
+
+// IntegrationEventType is always empty: the merge is the engine's own doing,
+// not something the integration reported.
 func (e NotificationsCoalesced) IntegrationEventType() string { return "" }
 
+// Summary names the conversation key, which is what the coalescing keyed on —
+// without it two merges for the same seat are indistinguishable.
 func (e NotificationsCoalesced) Summary() string {
 	return fmt.Sprintf("%d notifications coalesced for %s (%s)",
 		e.Count, e.AgentHandle, e.ConversationKey)
@@ -210,12 +236,22 @@ type NotificationSkipped struct {
 	NotificationSource string `json:"notification_source"`
 }
 
+// EventType is the "notification_skipped" wire type.
 func (NotificationSkipped) EventType() string { return "notification_skipped" }
 
-func (e NotificationSkipped) Integration() string          { return e.NotificationSource }
-func (e NotificationSkipped) IntegrationSender() string    { return "" }
+// Integration is the system whose notification was dropped.
+func (e NotificationSkipped) Integration() string { return e.NotificationSource }
+
+// IntegrationSender is always empty: a drop is decided before a sender is
+// resolved, so this event never learns one.
+func (e NotificationSkipped) IntegrationSender() string { return "" }
+
+// IntegrationEventType is always empty, for the same reason as
+// IntegrationSender.
 func (e NotificationSkipped) IntegrationEventType() string { return "" }
 
+// Summary always states the reason. A dropped notification with no explanation
+// is indistinguishable from one that never arrived.
 func (e NotificationSkipped) Summary() string {
 	if e.Handle != "" {
 		return "Skipped for " + e.Handle + ": " + e.Reason

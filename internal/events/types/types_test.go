@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/events"
 )
 
 // catalogue is every payload this package registers, one prototype each. It is

@@ -382,12 +382,32 @@ func markerFor(v string) string {
 func constStrings(t *testing.T, dir string) map[string]string {
 	t.Helper()
 
+	// The directory is read and parsed file by file rather than through
+	// go/parser's ParseDir: that helper cannot see build tags, so it
+	// groups files into packages by name alone, and it is deprecated for
+	// exactly that reason. Nothing here needs the grouping — every
+	// non-test file in this ONE directory holds grammar, and a file that
+	// stopped being parsed would silently shrink the marker set this
+	// guard searches for, which is the failure that reads as a pass.
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parsing the topics package at %s: %v", dir, err)
+		t.Fatalf("reading the topics package at %s: %v", dir, err)
+	}
+	var files []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", filepath.Join(dir, name), err)
+		}
+		files = append(files, file)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no non-test Go files under %s; the guard would derive no markers", dir)
 	}
 
 	type binding struct {
@@ -395,22 +415,20 @@ func constStrings(t *testing.T, dir string) map[string]string {
 		expr ast.Expr
 	}
 	var bindings []binding
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				gen, ok := decl.(*ast.GenDecl)
-				if !ok || gen.Tok != token.CONST {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				for _, spec := range gen.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
-					for i, name := range vs.Names {
-						if i < len(vs.Values) {
-							bindings = append(bindings, binding{name.Name, vs.Values[i]})
-						}
+				for i, name := range vs.Names {
+					if i < len(vs.Values) {
+						bindings = append(bindings, binding{name.Name, vs.Values[i]})
 					}
 				}
 			}

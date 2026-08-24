@@ -26,6 +26,7 @@ type TaskCreated struct {
 	TargetRole string `json:"target_role"`
 }
 
+// EventType is the "task_created" wire type.
 func (TaskCreated) EventType() string { return "task_created" }
 
 // SummaryFor names the creator, who rides on the envelope's source: this event
@@ -49,11 +50,18 @@ type TaskAssigned struct {
 	RoleName string `json:"role"`
 }
 
+// EventType is the "task_assigned" wire type. It is also an inbox WAKE: this
+// is what the scheduler and the delegation path publish to start a turn.
 func (TaskAssigned) EventType() string { return "task_assigned" }
 
-func (e TaskAssigned) Role() string    { return e.RoleName }
+// Role is the seat the task was handed to.
+func (e TaskAssigned) Role() string { return e.RoleName }
+
+// AgentID is the instance holding that seat.
 func (e TaskAssigned) AgentID() string { return e.Agent }
 
+// SummaryFor names the task id when there is one; a task with no id is real
+// enough to report, it just cannot be linked to.
 func (e TaskAssigned) SummaryFor(actor string) string {
 	if e.TaskID != "" {
 		return lead(actor, "was assigned task "+e.TaskID)
@@ -68,11 +76,16 @@ type TaskStarted struct {
 	RoleName string `json:"role"`
 }
 
+// EventType is the "task_started" wire type.
 func (TaskStarted) EventType() string { return "task_started" }
 
-func (e TaskStarted) Role() string    { return e.RoleName }
+// Role is the seat that picked the work up.
+func (e TaskStarted) Role() string { return e.RoleName }
+
+// AgentID is the instance now working it.
 func (e TaskStarted) AgentID() string { return e.Agent }
 
+// SummaryFor names the task id when there is one.
 func (e TaskStarted) SummaryFor(actor string) string {
 	if e.TaskID != "" {
 		return lead(actor, "started working on "+e.TaskID)
@@ -88,11 +101,17 @@ type TaskCompleted struct {
 	RoleName string `json:"role"`
 }
 
+// EventType is the "task_completed" wire type.
 func (TaskCompleted) EventType() string { return "task_completed" }
 
-func (e TaskCompleted) Role() string    { return e.RoleName }
+// Role is the seat that finished the work.
+func (e TaskCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance that finished it.
 func (e TaskCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor names the task id and deliberately not the result: a result is a
+// whole answer, and a one-line feed entry is not where it belongs.
 func (e TaskCompleted) SummaryFor(actor string) string {
 	if e.TaskID != "" {
 		return lead(actor, "completed task "+e.TaskID)
@@ -109,11 +128,19 @@ type TaskFailed struct {
 	RoleName string `json:"role"`
 }
 
+// EventType is the "task_failed" wire type, and one of the four names in
+// FailureEventTypes.
 func (TaskFailed) EventType() string { return "task_failed" }
 
-func (e TaskFailed) Role() string    { return e.RoleName }
+// Role is the seat the failure is attributed to.
+func (e TaskFailed) Role() string { return e.RoleName }
+
+// AgentID is the instance that failed it.
 func (e TaskFailed) AgentID() string { return e.Agent }
 
+// SummaryFor appends the error, unlike TaskCompleted with its result: a failure
+// line that does not say why sends the reader to the logs for the one fact the
+// event already holds.
 func (e TaskFailed) SummaryFor(actor string) string {
 	line := lead(actor, "failed a task")
 	if e.TaskID != "" {
@@ -132,8 +159,12 @@ type TaskDelegated struct {
 	TargetRole   string `json:"target_role"`
 }
 
+// EventType is the "task_delegated" wire type.
 func (TaskDelegated) EventType() string { return "task_delegated" }
 
+// SummaryFor names the delegator as the actor and the target role as the
+// destination. The event carries no role of its own, so the actor resolves from
+// the envelope's source — which is the manager doing the delegating.
 func (e TaskDelegated) SummaryFor(actor string) string {
 	if e.TargetRole != "" {
 		return lead(actor, "delegated a subtask to "+e.TargetRole)

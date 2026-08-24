@@ -18,29 +18,29 @@ import (
 // mailbox, redelivery and its dead-letter floor, and the graceful-drain
 // protocol.
 func (s *suite) runCore(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("publish_subscribe", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "topic.a", "grp1", recordingHandler(j))
+		subscribe(ctx, t, q, "topic.a", "grp1", recordingHandler(j))
 
 		ev := newEvent("test_event")
-		publish(t, q, "topic.a", ev)
+		publish(ctx, t, q, "topic.a", ev)
 
 		j.awaitLabels(t, "the published event", "test_event")
 	})
 
 	t.Run("multiple_subscribers_different_topics", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		a, b := newJournal(), newJournal()
-		subscribe(t, q, "topic.a", "g", recordingHandler(a))
-		subscribe(t, q, "topic.b", "g", recordingHandler(b))
+		subscribe(ctx, t, q, "topic.a", "g", recordingHandler(a))
+		subscribe(ctx, t, q, "topic.b", "g", recordingHandler(b))
 
-		publish(t, q, "topic.a", newEvent("a"))
-		publish(t, q, "topic.b", newEvent("b"))
+		publish(ctx, t, q, "topic.a", newEvent("a"))
+		publish(ctx, t, q, "topic.b", newEvent("b"))
 
 		a.awaitLabels(t, "topic.a's subscriber", "a")
 		b.awaitLabels(t, "topic.b's subscriber", "b")
@@ -48,12 +48,12 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("multiple_groups_receive_same_event", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		g1, g2 := newJournal(), newJournal()
-		subscribe(t, q, "topic.y", "g1", recordingHandler(g1))
-		subscribe(t, q, "topic.y", "g2", recordingHandler(g2))
+		subscribe(ctx, t, q, "topic.y", "g1", recordingHandler(g1))
+		subscribe(ctx, t, q, "topic.y", "g2", recordingHandler(g2))
 
-		publish(t, q, "topic.y", newEvent("t"))
+		publish(ctx, t, q, "topic.y", newEvent("t"))
 
 		// A copy each: competition happens BETWEEN the members of one
 		// group, never across groups.
@@ -80,7 +80,7 @@ func (s *suite) runCore(t *testing.T) {
 		// it has to refuse a linger it cannot honour — and this skips if it
 		// does. What it may not do is accept two distinct pairs and quietly
 		// alias them.
-		q := s.start(t)
+		q := s.start(ctx, t)
 
 		// Topic side: one group, two topics differing only by . vs _.
 		dotted, under := newJournal(), newJournal()
@@ -90,8 +90,8 @@ func (s *suite) runCore(t *testing.T) {
 		if err := q.Subscribe(ctx, "coll.a_b", "g", recordingHandler(under)); err != nil {
 			t.Skipf("backend refuses the topic name coll.a_b: %v", err)
 		}
-		publish(t, q, "coll.a.b", newEvent("to-dotted"))
-		publish(t, q, "coll.a_b", newEvent("to-under"))
+		publish(ctx, t, q, "coll.a.b", newEvent("to-dotted"))
+		publish(ctx, t, q, "coll.a_b", newEvent("to-under"))
 
 		dotted.awaitLabels(t, "the dotted topic's own event", "to-dotted")
 		under.awaitLabels(t, "the underscored topic's own event", "to-under")
@@ -107,7 +107,7 @@ func (s *suite) runCore(t *testing.T) {
 		if err := q.Subscribe(ctx, "coll.shared", "h_i", recordingHandler(gu)); err != nil {
 			t.Skipf("backend refuses the group name h_i: %v", err)
 		}
-		publish(t, q, "coll.shared", newEvent("fanout"))
+		publish(ctx, t, q, "coll.shared", newEvent("fanout"))
 
 		gd.awaitLabels(t, "the dotted group's copy", "fanout")
 		gu.awaitLabels(t, "the underscored group's copy", "fanout")
@@ -115,12 +115,12 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("consumer_group_competing", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		shared := newJournal()
-		subscribe(t, q, "topic.x", "grp", recordingHandler(shared))
-		subscribe(t, q, "topic.x", "grp", recordingHandler(shared))
+		subscribe(ctx, t, q, "topic.x", "grp", recordingHandler(shared))
+		subscribe(ctx, t, q, "topic.x", "grp", recordingHandler(shared))
 
-		publish(t, q, "topic.x", newEvent("t"))
+		publish(ctx, t, q, "topic.x", newEvent("t"))
 
 		shared.await(t, "exactly one member to take the event",
 			func(seen []string) bool { return len(seen) == 1 })
@@ -129,7 +129,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("members_of_a_group_compete", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		// Each member journals its own name, so the sequence records WHO
 		// was chosen. Delivering always to the first-registered member
 		// made a double-attach split-brain invisible: two nodes consuming
@@ -138,14 +138,14 @@ func (s *suite) runCore(t *testing.T) {
 		// interleaved turn streams.
 		by := newJournal()
 		for _, who := range []string{"a", "b"} {
-			subscribe(t, q, "topic", "grp", func(_ context.Context, ev *events.Event) queue.Result {
+			subscribe(ctx, t, q, "topic", "grp", func(_ context.Context, ev *events.Event) queue.Result {
 				by.record(who + "|" + labelOf(ev))
 				return queue.Ack()
 			})
 		}
 
 		for i := range 4 {
-			publish(t, q, "topic", newEvent("e"+string(rune('0'+i))))
+			publish(ctx, t, q, "topic", newEvent("e"+string(rune('0'+i))))
 		}
 
 		if s.caps.StrictRoundRobin {
@@ -184,10 +184,10 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("subscribe_after_start", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "topic.late", "grp", recordingHandler(j))
-		publish(t, q, "topic.late", newEvent("late"))
+		subscribe(ctx, t, q, "topic.late", "grp", recordingHandler(j))
+		publish(ctx, t, q, "topic.late", newEvent("late"))
 		j.awaitLabels(t, "a subscription added after start", "late")
 	})
 
@@ -197,7 +197,7 @@ func (s *suite) runCore(t *testing.T) {
 		// nothing attached retains what is published to it and replays it
 		// on attach; without this a seat between owners loses every event
 		// published in the gap.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		const topic, group = "crewlet.agent.alice.inbox", "agent-alice"
 		created, err := q.EnsureSubscription(ctx, topic, group)
 		if err != nil {
@@ -207,7 +207,7 @@ func (s *suite) runCore(t *testing.T) {
 			t.Fatalf("EnsureSubscription reported the subscription already existed")
 		}
 		for _, label := range []string{"e0", "e1", "e2"} {
-			publish(t, q, topic, newEvent(label))
+			publish(ctx, t, q, topic, newEvent(label))
 		}
 		if backlog := s.caps.Backlog; backlog != nil {
 			awaitState(t, "three retained events", func() bool {
@@ -216,7 +216,7 @@ func (s *suite) runCore(t *testing.T) {
 		}
 
 		j := newJournal()
-		subscribe(t, q, topic, group, recordingHandler(j))
+		subscribe(ctx, t, q, topic, group, recordingHandler(j))
 		j.awaitLabels(t, "the retained mail to replay in order", "e0", "e1", "e2")
 	})
 
@@ -224,8 +224,8 @@ func (s *suite) runCore(t *testing.T) {
 		t.Parallel()
 		// Which is exactly why EnsureSubscription exists.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
-		publish(t, q, "nobody.listening", newEvent("lost"))
+		q := s.start(ctx, t)
+		publish(ctx, t, q, "nobody.listening", newEvent("lost"))
 		if got := backlog(q, "nobody.listening", "grp"); len(got) != 0 {
 			t.Fatalf("a topic with no subscription retained %v", labelsOf(got))
 		}
@@ -233,7 +233,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("ensure_subscription_reports_creation", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		created, err := q.EnsureSubscription(ctx, "topic.ensure", "grp")
 		if err != nil || !created {
 			t.Fatalf("first EnsureSubscription = (%v, %v), want (true, nil)", created, err)
@@ -253,11 +253,11 @@ func (s *suite) runCore(t *testing.T) {
 		// require a local consumer — role removal cannot depend on which
 		// node happened to run the seat.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 		if _, err := q.EnsureSubscription(ctx, "topic.gone", "grp"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		publish(t, q, "topic.gone", newEvent("e1"))
+		publish(ctx, t, q, "topic.gone", newEvent("e1"))
 		awaitState(t, "the event to be retained", func() bool {
 			return len(backlog(q, "topic.gone", "grp")) == 1
 		})
@@ -270,7 +270,7 @@ func (s *suite) runCore(t *testing.T) {
 			t.Fatalf("deleting the subscription left %v behind", labelsOf(got))
 		}
 
-		publish(t, q, "topic.gone", newEvent("e2"))
+		publish(ctx, t, q, "topic.gone", newEvent("e2"))
 		if got := backlog(q, "topic.gone", "grp"); len(got) != 0 {
 			t.Fatalf("publishing into a deleted subscription retained %v", labelsOf(got))
 		}
@@ -283,10 +283,10 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("handler_failure_triggers_redelivery", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
 		var attempts int
-		subscribe(t, q, "topic.flaky", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic.flaky", "grp", func(context.Context, *events.Event) queue.Result {
 			attempts++
 			j.record("attempt")
 			if attempts < 3 {
@@ -295,7 +295,7 @@ func (s *suite) runCore(t *testing.T) {
 			return queue.Ack()
 		})
 
-		publish(t, q, "topic.flaky", newEvent("t"))
+		publish(ctx, t, q, "topic.flaky", newEvent("t"))
 
 		j.await(t, "two failures and a success", func(seen []string) bool { return len(seen) == 3 })
 		j.staysAt(t, 3, "an acknowledged event")
@@ -306,10 +306,10 @@ func (s *suite) runCore(t *testing.T) {
 		if !s.caps.HeadReplayOnNak {
 			t.Skip("backend redelivers behind never-delivered events")
 		}
-		q := s.start(t)
+		q := s.start(ctx, t)
 		seen := newJournal()
 		var failed bool
-		subscribe(t, q, "topic.head", "grp", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic.head", "grp", func(_ context.Context, ev *events.Event) queue.Result {
 			seen.record(labelOf(ev))
 			if !failed {
 				failed = true
@@ -324,8 +324,8 @@ func (s *suite) runCore(t *testing.T) {
 		if err := q.PauseTopic(ctx, "topic.head", "grp", "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
-		publish(t, q, "topic.head", newEvent("e1"))
-		publish(t, q, "topic.head", newEvent("e2"))
+		publish(ctx, t, q, "topic.head", newEvent("e1"))
+		publish(ctx, t, q, "topic.head", newEvent("e2"))
 		if err := q.ResumeTopic(ctx, "topic.head", "grp", "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
@@ -335,18 +335,18 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("redelivery_rotates_across_members", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		by := newJournal()
-		subscribe(t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
 			by.record("a")
 			return queue.Nak(errors.New("fail"))
 		})
-		subscribe(t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
 			by.record("b")
 			return queue.Ack()
 		})
 
-		publish(t, q, "topic", newEvent("t"))
+		publish(ctx, t, q, "topic", newEvent("t"))
 
 		if s.caps.StrictRoundRobin {
 			// First delivery goes to member 0 (fails); the redelivery
@@ -376,14 +376,14 @@ func (s *suite) runCore(t *testing.T) {
 		deadLetters := s.needDeadLetters(t)
 		backlog := s.needBacklog(t)
 		// Three attempts total, however this backend's broker counts them.
-		q := startQueue(t, newQueueWithAttempts(t, 3))
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		j := newJournal()
-		subscribe(t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic", "grp", func(context.Context, *events.Event) queue.Result {
 			j.record("attempt")
 			return queue.Nak(errors.New("permanent failure"))
 		})
-		publish(t, q, "topic", newEvent("t"))
+		publish(ctx, t, q, "topic", newEvent("t"))
 
 		j.await(t, "the configured number of delivery attempts",
 			func(seen []string) bool { return len(seen) == 3 })
@@ -407,15 +407,15 @@ func (s *suite) runCore(t *testing.T) {
 		// dead-letter budget (nak).
 		backlog := s.needBacklog(t)
 		deadLetters := s.needDeadLetters(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 
 		j := newJournal()
-		subscribe(t, q, "topic.d", "grp", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic.d", "grp", func(_ context.Context, ev *events.Event) queue.Result {
 			j.record(labelOf(ev))
 			return queue.Defer("lease moved")
 		})
-		publish(t, q, "topic.d", newEvent("e1"))
-		publish(t, q, "topic.d", newEvent("e2"))
+		publish(ctx, t, q, "topic.d", newEvent("e1"))
+		publish(ctx, t, q, "topic.d", newEvent("e2"))
 
 		j.awaitLabels(t, "the first delivery", "e1")
 		j.staysAt(t, 1, "a deferral must stop the attachment taking new work")
@@ -430,18 +430,18 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("pause_topic_buffers_then_resume_flushes", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		a, b := newJournal(), newJournal()
-		subscribe(t, q, "topic.a", "grp", recordingHandler(a))
-		subscribe(t, q, "topic.b", "grp", recordingHandler(b))
+		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(a))
+		subscribe(ctx, t, q, "topic.b", "grp", recordingHandler(b))
 
 		if err := q.PauseTopic(ctx, "topic.a", "grp", "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
-		publish(t, q, "topic.a", newEvent("a1"))
-		publish(t, q, "topic.a", newEvent("a2"))
+		publish(ctx, t, q, "topic.a", newEvent("a1"))
+		publish(ctx, t, q, "topic.a", newEvent("a2"))
 		// A different topic is unaffected while topic.a is held.
-		publish(t, q, "topic.b", newEvent("b1"))
+		publish(ctx, t, q, "topic.b", newEvent("b1"))
 
 		b.awaitLabels(t, "an unpaused topic to keep flowing", "b1")
 		a.staysAt(t, 0, "a paused topic buffers rather than delivering")
@@ -458,16 +458,16 @@ func (s *suite) runCore(t *testing.T) {
 		// busy gate and the config-divergence shed. With one flat hold the
 		// sandbox resuming its own run would un-gate a node serving a
 		// stale company, on a completely ordinary code path.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "seat.inbox", "grp", recordingHandler(j))
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 
 		for _, reason := range []string{"sandbox", "config-divergence"} {
 			if err := q.PauseTopic(ctx, "seat.inbox", "grp", reason); err != nil {
 				t.Fatalf("PauseTopic(%s): %v", reason, err)
 			}
 		}
-		publish(t, q, "seat.inbox", newEvent("work"))
+		publish(ctx, t, q, "seat.inbox", newEvent("work"))
 
 		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
@@ -485,15 +485,15 @@ func (s *suite) runCore(t *testing.T) {
 		// Keyed by topic alone, a hold gated every group on a shared
 		// subject like crewlet.events.* — one seat's sandbox pause
 		// silenced the fleet's routing.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		held, free := newJournal(), newJournal()
-		subscribe(t, q, "crewlet.events.task_created", "held-grp", recordingHandler(held))
-		subscribe(t, q, "crewlet.events.task_created", "free-grp", recordingHandler(free))
+		subscribe(ctx, t, q, "crewlet.events.task_created", "held-grp", recordingHandler(held))
+		subscribe(ctx, t, q, "crewlet.events.task_created", "free-grp", recordingHandler(free))
 
 		if err := q.PauseTopic(ctx, "crewlet.events.task_created", "held-grp", "sandbox"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
-		publish(t, q, "crewlet.events.task_created", newEvent("t"))
+		publish(ctx, t, q, "crewlet.events.task_created", newEvent("t"))
 
 		free.awaitLabels(t, "the unheld group's copy", "t")
 		held.staysAt(t, 0, "the held group")
@@ -501,7 +501,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("resume_topic_unpaused_is_noop", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		// Releasing a hold that was never taken must not error.
 		if err := q.ResumeTopic(ctx, "never.paused", "grp", "test"); err != nil {
 			t.Fatalf("ResumeTopic on an unpaused subscription: %v", err)
@@ -513,17 +513,17 @@ func (s *suite) runCore(t *testing.T) {
 		// The graceful-shutdown contract: no new turns start (handlers
 		// are paused) while in-flight ones complete and emit their
 		// terminal events (publish still works).
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "topic.p", "grp", recordingHandler(j))
+		subscribe(ctx, t, q, "topic.p", "grp", recordingHandler(j))
 
-		publish(t, q, "topic.p", newEvent("before_pause"))
+		publish(ctx, t, q, "topic.p", newEvent("before_pause"))
 		j.awaitLabels(t, "the pre-pause delivery", "before_pause")
 
 		if err := q.PauseDelivery(ctx); err != nil {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
-		publish(t, q, "topic.p", newEvent("after_pause"))
+		publish(ctx, t, q, "topic.p", newEvent("after_pause"))
 		j.staysAt(t, 1, "a paused queue dispatched")
 
 		if history := s.caps.History; history != nil {
@@ -543,7 +543,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("pause_is_idempotent", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		if err := q.PauseDelivery(ctx); err != nil {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
@@ -557,7 +557,7 @@ func (s *suite) runCore(t *testing.T) {
 		if !s.caps.Restartable {
 			t.Skip("backend treats Stop as terminal; a restart needs a fresh queue")
 		}
-		q := s.start(t)
+		q := s.start(ctx, t)
 		if err := q.PauseDelivery(ctx); err != nil {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
@@ -569,8 +569,8 @@ func (s *suite) runCore(t *testing.T) {
 			t.Fatalf("restart: %v", err)
 		}
 		j := newJournal()
-		subscribe(t, q, "topic.r", "grp", recordingHandler(j))
-		publish(t, q, "topic.r", newEvent("resumed"))
+		subscribe(ctx, t, q, "topic.r", "grp", recordingHandler(j))
+		publish(ctx, t, q, "topic.r", newEvent("resumed"))
 		j.awaitLabels(t, "a restarted queue to deliver again", "resumed")
 	})
 
@@ -590,7 +590,7 @@ func (s *suite) runCore(t *testing.T) {
 		// the hold survived, and the restarted seat was silently deaf while
 		// reporting itself running, which is the incident Stop's own doc
 		// exists to prevent, reached from the other side.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		if err := q.Stop(ctx); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
@@ -605,14 +605,14 @@ func (s *suite) runCore(t *testing.T) {
 		}
 
 		j := newJournal()
-		subscribe(t, q, "seat.restart", "grp", recordingHandler(j))
-		publish(t, q, "seat.restart", newEvent("work"))
+		subscribe(ctx, t, q, "seat.restart", "grp", recordingHandler(j))
+		publish(ctx, t, q, "seat.restart", newEvent("work"))
 		j.awaitLabels(t, "a restarted queue to serve rather than stay gated", "work")
 	})
 
 	t.Run("wait_for_handlers_no_op_when_idle", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		// quietFor here is only "a timeout that is not zero": an idle queue
 		// returns without consuming any of it, so this assertion does not
 		// depend on the length. It is not the positive-half dependency that
@@ -644,9 +644,9 @@ func (s *suite) runCore(t *testing.T) {
 		// on everything, a WaitGroup implementation reports a data race on
 		// itself here. Without -race it still exercises the interleaving
 		// and asserts the counts stay sane.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		var handled atomic.Int64
-		subscribe(t, q, "topic.overlap", "grp",
+		subscribe(ctx, t, q, "topic.overlap", "grp",
 			func(context.Context, *events.Event) queue.Result {
 				handled.Add(1)
 				return queue.Ack()
@@ -692,11 +692,11 @@ func (s *suite) runCore(t *testing.T) {
 		// The drain protocol an operator watches converge: pause, then
 		// wait. A non-zero return is a timeout, not an error — the caller
 		// owns any "too long" policy.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		entered := make(chan struct{})
 		release := make(chan struct{})
 		var once bool
-		subscribe(t, q, "topic.drain", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic.drain", "grp", func(context.Context, *events.Event) queue.Result {
 			if !once {
 				once = true
 				close(entered)
@@ -780,7 +780,7 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("backend_name_is_stable_and_lowercase", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		name := q.Backend()
 		if name == "" {
 			t.Fatalf("Backend() is empty; operators have nothing to display")
@@ -794,15 +794,15 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("publish_listener_sees_every_publish", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		seen := newJournal()
 		q.AddPublishListener(func(_ context.Context, topic string, ev *events.Event) {
 			seen.record(topic + "/" + labelOf(ev))
 		})
-		publish(t, q, "topic.listen", newEvent("e1"))
+		publish(ctx, t, q, "topic.listen", newEvent("e1"))
 		// A topic with no subscription still reaches listeners: the event
 		// store must record what was published, not what was consumed.
-		publish(t, q, "nobody.listening", newEvent("e2"))
+		publish(ctx, t, q, "nobody.listening", newEvent("e2"))
 
 		seen.awaitLabels(t, "the listener to see both publishes",
 			"topic.listen/e1", "nobody.listening/e2")
@@ -810,13 +810,13 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("publish_listener_failure_does_not_prevent_delivery", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
 		q.AddPublishListener(func(context.Context, string, *events.Event) {
 			panic("listener crashed")
 		})
-		subscribe(t, q, "topic.listen", "grp", recordingHandler(j))
-		publish(t, q, "topic.listen", newEvent("e1"))
+		subscribe(ctx, t, q, "topic.listen", "grp", recordingHandler(j))
+		publish(ctx, t, q, "topic.listen", newEvent("e1"))
 
 		j.awaitLabels(t, "delivery to survive a broken listener", "e1")
 	})

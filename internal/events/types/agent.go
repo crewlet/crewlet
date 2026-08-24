@@ -31,6 +31,10 @@ func init() {
 // build does not know must survive rather than fail.
 type Phase string
 
+// The phases a turn can report. The first three are the legs of the loop itself,
+// in the order they run; PhaseSubagent, PhaseAuxiliary and PhaseJudge are nested
+// calls made under one of those, and never appear without a host phase around
+// them.
 const (
 	PhasePlan     Phase = "plan"
 	PhaseExecute  Phase = "execute"
@@ -45,6 +49,10 @@ const (
 // ExecuteBackend names where an Execute phase actually ran.
 type ExecuteBackend string
 
+// The two places an Execute phase can run. BackendNative is the engine's own
+// tool loop; BackendSandbox is a detached coding run. Neither is Go's zero
+// value, so a publisher states which one — see the Backend field on
+// AgentPhaseCompleted.
 const (
 	BackendNative  ExecuteBackend = "native"
 	BackendSandbox ExecuteBackend = "sandbox"
@@ -53,11 +61,11 @@ const (
 // PlanDecision is the planner's top-level verdict.
 type PlanDecision string
 
+// The three verdicts a planner can reach. PlanDecisionPlan produced a plan for
+// Execute to work through; PlanDecisionDirect skips planning and acts;
+// PlanDecisionSkip opts the turn out entirely — the planner decided the trigger
+// was not for this agent, which is why learning short-circuits on it.
 const (
-	// PlanDecisionPlan produced a plan for Execute to work through;
-	// PlanDecisionDirect skips planning and acts; PlanDecisionSkip opts the
-	// turn out entirely — the planner decided the trigger was not for this
-	// agent, which is why learning short-circuits on it.
 	PlanDecisionPlan   PlanDecision = "plan"
 	PlanDecisionDirect PlanDecision = "direct"
 	PlanDecisionSkip   PlanDecision = "skip"
@@ -123,11 +131,21 @@ type AgentTurnCompleted struct {
 	ConversationKey string `json:"conversation_key"`
 }
 
+// EventType is the "agent_turn_completed" wire type. Not to be confused with
+// TurnCompleted's "turn_completed": both describe the same turn, for two
+// different consumers.
 func (AgentTurnCompleted) EventType() string { return "agent_turn_completed" }
 
-func (e AgentTurnCompleted) Role() string    { return e.RoleName }
+// Role is the seat the turn and its tokens belong to. Every token figure on
+// this event is attributed through it.
+func (e AgentTurnCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance that ran the turn.
 func (e AgentTurnCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor renders a failed turn as failed, with the error KIND rather than
+// the message: the kind is short enough for a line and is what an operator
+// scans a feed for. A2A turns keep their channel tag either way.
 func (e AgentTurnCompleted) SummaryFor(actor string) string {
 	tag := a2aTag(e.A2AContext)
 	if e.Failed {
@@ -189,11 +207,19 @@ type TurnCompleted struct {
 	ConversationKey string `json:"conversation_key"`
 }
 
+// EventType is the "turn_completed" wire type, the learning subsystem's
+// Plan/Execute/Review-shaped record.
 func (TurnCompleted) EventType() string { return "turn_completed" }
 
-func (e TurnCompleted) Role() string    { return e.RoleName }
+// Role is the seat whose episode this becomes.
+func (e TurnCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance whose diary and profiles the learning workers write
+// against — it keys every per-agent row.
 func (e TurnCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor names the review outcome (done, self_iterate), which is the one
+// thing that distinguishes two turns of the same seat in a feed.
 func (e TurnCompleted) SummaryFor(actor string) string {
 	if e.ReviewOutcome != "" {
 		return lead(actor, "completed turn ("+e.ReviewOutcome+")")
@@ -221,11 +247,19 @@ type AgentPhaseStarted struct {
 	Trigger Trigger `json:"trigger"`
 }
 
+// EventType is the "agent_phase_started" wire type.
 func (AgentPhaseStarted) EventType() string { return "agent_phase_started" }
 
-func (e AgentPhaseStarted) Role() string    { return e.RoleName }
+// Role is the seat entering the phase; it is what a live view keys the
+// current-phase marker on.
+func (e AgentPhaseStarted) Role() string { return e.RoleName }
+
+// AgentID is the instance entering the phase.
 func (e AgentPhaseStarted) AgentID() string { return e.Agent }
 
+// SummaryFor names the iteration as well as the phase, because a self-iterate
+// turn emits the same phase several times and the number is what tells them
+// apart.
 func (e AgentPhaseStarted) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("started %s (iter %d)", e.Phase, e.Iteration))
 }
@@ -313,11 +347,19 @@ type AgentPhaseCompleted struct {
 	ConversationKey string `json:"conversation_key"`
 }
 
+// EventType is the "agent_phase_completed" wire type.
 func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
 
-func (e AgentPhaseCompleted) Role() string    { return e.RoleName }
+// Role is the seat the phase ran for — including for a judge or auxiliary
+// phase, which is nested work done on that seat's behalf.
+func (e AgentPhaseCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance that ran the phase.
 func (e AgentPhaseCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor assembles the line from the parts that are present rather than
+// from a fixed template: a phase can have failed, decided, run in a sandbox or
+// none of the three, and a template would leave gaps for the absent ones.
 func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 	var parts []string
 	if head := upperFirst(subject(actor, e.Phase)); head != "" {
@@ -378,19 +420,33 @@ type AgentTurnProgress struct {
 	A2AContext     map[string]any  `json:"a2a_context,omitempty"`
 }
 
+// EventType is the "agent_turn_progress" wire type. Live only — nothing
+// persists it, so it never appears in a history query.
 func (AgentTurnProgress) EventType() string { return "agent_turn_progress" }
 
-func (e AgentTurnProgress) Role() string    { return e.RoleName }
+// Role is the seat currently working; the live projection keys its row on it.
+func (e AgentTurnProgress) Role() string { return e.RoleName }
+
+// AgentID is the instance mid-phase.
 func (e AgentTurnProgress) AgentID() string { return e.Agent }
 
+// SummaryFor degrades to a bare "working" when neither phase nor round is set:
+// the round-by-round bits are context for a line whose real content is that the
+// seat is still alive.
 func (e AgentTurnProgress) SummaryFor(actor string) string {
 	tag := a2aTag(e.A2AContext)
 	var bits []string
 	if e.Phase != "" {
 		bits = append(bits, string(e.Phase))
 	}
-	if e.RoundNum != 0 {
-		bits = append(bits, fmt.Sprintf("round %d", e.RoundNum))
+	// RoundNum is 0-based and -1 before the first provider call, so the line
+	// renders RoundNum+1 — "rounds so far", the reading every other consumer
+	// takes. Testing it against 0 rendered the sentinel verbatim ("round -1")
+	// on the opening update every phase publishes, and suppressed the clause on
+	// round 0, which is the first real round: the two cases that matter were
+	// exactly the two it got wrong.
+	if e.RoundNum >= 0 {
+		bits = append(bits, fmt.Sprintf("round %d", e.RoundNum+1))
 	}
 	if len(bits) > 0 {
 		return lead(actor, "working ("+strings.Join(bits, ", ")+")"+tag)
@@ -408,8 +464,12 @@ type SubagentBatched struct {
 	TotalTokens  int    `json:"total_tokens"`
 }
 
+// EventType is the "subagent_batched" wire type.
 func (SubagentBatched) EventType() string { return "subagent_batched" }
 
+// SummaryFor gives the whole batch in one line — count, successes, failures,
+// tokens — because a pathological batch is only recognisable from the ratio,
+// and this event carries no role for a dashboard to group the parts under.
 func (e SubagentBatched) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("batched %d sub-agents (%d ok, %d failed, %d tokens)",
 		e.TaskCount, e.Successes, e.Failures, e.TotalTokens))

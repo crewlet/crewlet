@@ -36,13 +36,13 @@ func init() { events.Register[carried]() }
 // survives the trip intact, decoded into this build's types, in a copy nobody
 // else holds.
 func (s *suite) runWire(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("a_typed_payload_arrives_as_the_pointer_form", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		got := make(chan *carried, 1)
-		subscribe(t, q, "wire.typed", "g", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "wire.typed", "g", func(_ context.Context, ev *events.Event) queue.Result {
 			p, ok := events.DataAs[*carried](ev)
 			if !ok {
 				// Not Fatalf: this runs on a dispatch goroutine.
@@ -54,7 +54,7 @@ func (s *suite) runWire(t *testing.T) {
 			return queue.Ack()
 		})
 
-		publish(t, q, "wire.typed", events.New(carried{Work: "w", Count: 3}, events.TraceContext{}))
+		publish(ctx, t, q, "wire.typed", events.New(carried{Work: "w", Count: 3}, events.TraceContext{}))
 
 		select {
 		case p := <-got:
@@ -91,9 +91,9 @@ func (s *suite) runWire(t *testing.T) {
 		// boundary, it is arranging not to look at it: a backend that
 		// silently DROPS a value it cannot encode passed every case here
 		// before this one.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		seen := make(chan *events.Event, 1)
-		subscribe(t, q, "wire.freeform", "g", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "wire.freeform", "g", func(_ context.Context, ev *events.Event) queue.Result {
 			seen <- ev
 			return queue.Ack()
 		})
@@ -108,7 +108,7 @@ func (s *suite) runWire(t *testing.T) {
 			"conv":     "c1",
 		}
 		want := canonicalJSON(t, sent.Payload)
-		publish(t, q, "wire.freeform", sent)
+		publish(ctx, t, q, "wire.freeform", sent)
 
 		select {
 		case got := <-seen:
@@ -122,9 +122,9 @@ func (s *suite) runWire(t *testing.T) {
 
 	t.Run("the_envelope_survives_the_trip", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		seen := make(chan *events.Event, 1)
-		subscribe(t, q, "wire.envelope", "g", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "wire.envelope", "g", func(_ context.Context, ev *events.Event) queue.Result {
 			seen <- ev
 			return queue.Ack()
 		})
@@ -135,7 +135,7 @@ func (s *suite) runWire(t *testing.T) {
 		sent.DelegationDepth = 2
 		sent.DelegationChain = []string{"ceo", "cto"}
 		sent.Payload = map[string]any{"conv": "c1"}
-		publish(t, q, "wire.envelope", sent)
+		publish(ctx, t, q, "wire.envelope", sent)
 
 		select {
 		case got := <-seen:
@@ -170,7 +170,7 @@ func (s *suite) runWire(t *testing.T) {
 
 	t.Run("each_group_gets_its_own_copy", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 
 		// Two groups on one topic, the first of which mutates what it was
 		// handed. A backend that fans out one pointer lets the first
@@ -181,7 +181,7 @@ func (s *suite) runWire(t *testing.T) {
 		var first, second *carried
 		done := make(chan struct{}, 2)
 
-		subscribe(t, q, "wire.shared", "g1", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "wire.shared", "g1", func(_ context.Context, ev *events.Event) queue.Result {
 			if p, ok := events.DataAs[*carried](ev); ok {
 				p.Work = "mutated-by-g1"
 				ev.Source = "mutated-by-g1"
@@ -192,7 +192,7 @@ func (s *suite) runWire(t *testing.T) {
 			done <- struct{}{}
 			return queue.Ack()
 		})
-		subscribe(t, q, "wire.shared", "g2", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "wire.shared", "g2", func(_ context.Context, ev *events.Event) queue.Result {
 			if p, ok := events.DataAs[*carried](ev); ok {
 				mu.Lock()
 				second = p
@@ -207,7 +207,7 @@ func (s *suite) runWire(t *testing.T) {
 
 		ev := events.New(carried{Work: "original"}, events.TraceContext{})
 		ev.Source = "publisher"
-		publish(t, q, "wire.shared", ev)
+		publish(ctx, t, q, "wire.shared", ev)
 
 		for range 2 {
 			select {
@@ -232,15 +232,15 @@ func (s *suite) runWire(t *testing.T) {
 
 	t.Run("the_publishers_event_is_not_the_delivered_one", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		seen := make(chan *events.Event, 1)
-		subscribe(t, q, "wire.isolation", "g", func(_ context.Context, ev *events.Event) queue.Result {
+		subscribe(ctx, t, q, "wire.isolation", "g", func(_ context.Context, ev *events.Event) queue.Result {
 			seen <- ev
 			return queue.Ack()
 		})
 
 		sent := events.New(carried{Work: "sent"}, events.TraceContext{})
-		publish(t, q, "wire.isolation", sent)
+		publish(ctx, t, q, "wire.isolation", sent)
 
 		select {
 		case got := <-seen:
@@ -261,6 +261,5 @@ func (s *suite) runWire(t *testing.T) {
 		case <-t.Context().Done():
 			t.Fatal("no delivery")
 		}
-		_ = ctx
 	})
 }

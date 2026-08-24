@@ -14,16 +14,16 @@ import (
 // the seat and the mail, unquiesce is its reversible inverse, detach drops the
 // consumer and keeps the mail, and only DeleteSubscription destroys anything.
 func (s *suite) runAttachment(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("detach_stops_delivery_for_group", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		mine, other := newJournal(), newJournal()
-		subscribe(t, q, "topic.a", "grp", recordingHandler(mine))
-		subscribe(t, q, "topic.a", "other-grp", recordingHandler(other))
+		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(mine))
+		subscribe(ctx, t, q, "topic.a", "other-grp", recordingHandler(other))
 
-		publish(t, q, "topic.a", newEvent("e1"))
+		publish(ctx, t, q, "topic.a", newEvent("e1"))
 		mine.awaitLabels(t, "the first delivery", "e1")
 		other.awaitLabels(t, "the other group's copy", "e1")
 
@@ -32,7 +32,7 @@ func (s *suite) runAttachment(t *testing.T) {
 			t.Fatalf("Detach = (%v, %v), want (true, nil)", detached, err)
 		}
 
-		publish(t, q, "topic.a", newEvent("e2"))
+		publish(ctx, t, q, "topic.a", newEvent("e2"))
 		other.awaitLabels(t, "an untouched group to keep receiving", "e1", "e2")
 		mine.staysAt(t, 1, "a detached pair kept receiving")
 
@@ -45,7 +45,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		}
 
 		// Re-attaching replays it: a seat that comes back finds its mail.
-		subscribe(t, q, "topic.a", "grp", recordingHandler(mine))
+		subscribe(ctx, t, q, "topic.a", "grp", recordingHandler(mine))
 		mine.awaitLabels(t, "the retained mail to replay on re-attach", "e1", "e2")
 
 		// Idempotent, and it reports whether an attachment existed.
@@ -62,18 +62,18 @@ func (s *suite) runAttachment(t *testing.T) {
 
 	t.Run("detach_removes_batch_subscription", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "topic.b", "grp", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "topic.b", "grp", recordingBatchHandler(batches),
 			queue.NewBatchOptions(0, 10))
 
-		publish(t, q, "topic.b", newConvEvent("e1", "k"))
+		publish(ctx, t, q, "topic.b", newConvEvent("e1", "k"))
 		batches.await(t, "the first batch", func(got [][]string) bool { return len(got) == 1 })
 
 		if _, err := q.Detach(ctx, "topic.b", "grp"); err != nil {
 			t.Fatalf("Detach: %v", err)
 		}
-		publish(t, q, "topic.b", newConvEvent("e2", "k"))
+		publish(ctx, t, q, "topic.b", newConvEvent("e2", "k"))
 		batches.staysAt(t, 1, "a detached batch consumer kept receiving")
 
 		if backlog := s.caps.Backlog; backlog != nil {
@@ -88,9 +88,9 @@ func (s *suite) runAttachment(t *testing.T) {
 		// A hold is state about ONE attachment. One that outlived a
 		// detach would leave a node that re-attached later silently deaf,
 		// with nothing left to release it.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "seat.inbox", "grp", recordingHandler(j))
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 		if err := q.PauseTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
@@ -103,18 +103,18 @@ func (s *suite) runAttachment(t *testing.T) {
 			}
 		}
 
-		subscribe(t, q, "seat.inbox", "grp", recordingHandler(j))
-		publish(t, q, "seat.inbox", newEvent("after-reattach"))
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
+		publish(ctx, t, q, "seat.inbox", newEvent("after-reattach"))
 		j.awaitLabels(t, "a re-attached seat to receive again", "after-reattach")
 	})
 
 	t.Run("quiesce_reports_whether_an_attachment_existed", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		if quiesced, err := q.Quiesce(ctx, "seat.inbox", "grp"); err != nil || quiesced {
 			t.Fatalf("Quiesce with nothing attached = (%v, %v), want (false, nil)", quiesced, err)
 		}
-		subscribe(t, q, "seat.inbox", "grp", recordingHandler(newJournal()))
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(newJournal()))
 		for range 2 {
 			quiesced, err := q.Quiesce(ctx, "seat.inbox", "grp")
 			if err != nil || !quiesced {
@@ -130,14 +130,14 @@ func (s *suite) runAttachment(t *testing.T) {
 		// of ownership lapsed. Without an inverse it would come back
 		// healthy and never read from them again — owned, attached, and
 		// permanently deaf.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "seat.inbox", "grp", recordingHandler(j))
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 		if quiesced, err := q.Quiesce(ctx, "seat.inbox", "grp"); err != nil || !quiesced {
 			t.Fatalf("Quiesce = (%v, %v), want (true, nil)", quiesced, err)
 		}
 
-		publish(t, q, "seat.inbox", newEvent("held"))
+		publish(ctx, t, q, "seat.inbox", newEvent("held"))
 		j.staysAt(t, 0, "a quiesced attachment took new work")
 		if backlog := s.caps.Backlog; backlog != nil {
 			awaitState(t, "the held event to stay in the mailbox", func() bool {
@@ -163,9 +163,9 @@ func (s *suite) runAttachment(t *testing.T) {
 		// A seat resuming from a stale-renew window may still be
 		// legitimately paused for a running sandbox; lifting that would
 		// deliver into a suspended turn.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		j := newJournal()
-		subscribe(t, q, "seat.inbox", "grp", recordingHandler(j))
+		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 		if err := q.PauseTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
@@ -173,7 +173,7 @@ func (s *suite) runAttachment(t *testing.T) {
 			t.Fatalf("Quiesce: %v", err)
 		}
 
-		publish(t, q, "seat.inbox", newEvent("held"))
+		publish(ctx, t, q, "seat.inbox", newEvent("held"))
 		if _, err := q.Unquiesce(ctx, "seat.inbox", "grp"); err != nil {
 			t.Fatalf("Unquiesce: %v", err)
 		}
@@ -196,11 +196,11 @@ func (s *suite) runAttachment(t *testing.T) {
 		// left to un-quiesce it, so the seat's next owner attaches to a
 		// subscription that never hands it anything.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 
 		entered := make(chan struct{})
 		release := make(chan struct{})
-		subscribe(t, q, "topic.q", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic.q", "grp", func(context.Context, *events.Event) queue.Result {
 			close(entered)
 			<-release
 			return queue.Defer("lease moved while this handler was running")
@@ -251,8 +251,8 @@ func (s *suite) runAttachment(t *testing.T) {
 		})
 
 		j := newJournal()
-		subscribe(t, q, "topic.q", "grp", recordingHandler(j))
-		publish(t, q, "topic.q", newEvent("e1"))
+		subscribe(ctx, t, q, "topic.q", "grp", recordingHandler(j))
+		publish(ctx, t, q, "topic.q", newEvent("e1"))
 		// IN ANY ORDER. The subject here is that the re-attached seat is
 		// deliverable at all — both events arrive — and the deferred one
 		// is a REDELIVERY, which [Caps.HeadReplayOnNak] says the backends
@@ -275,7 +275,7 @@ func (s *suite) runAttachment(t *testing.T) {
 // conflation is invisible; for two it inverts the property seat ownership
 // rests on.
 func (s *suite) runFleet(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("a_clients_detach_leaves_its_peers_attached", func(t *testing.T) {
 		t.Parallel()
@@ -283,12 +283,12 @@ func (s *suite) runFleet(t *testing.T) {
 		if s.caps.Attachments == nil {
 			t.Skip("backend cannot report which pairs a client is attached to")
 		}
-		a := s.start(t)
-		b := startQueue(t, peer(t, a))
+		a := s.start(ctx, t)
+		b := startQueue(ctx, t, peer(t, a))
 
 		gotA, gotB := newJournal(), newJournal()
-		subscribe(t, a, "seat.inbox", "grp", recordingHandler(gotA))
-		subscribe(t, b, "seat.inbox", "grp", recordingHandler(gotB))
+		subscribe(ctx, t, a, "seat.inbox", "grp", recordingHandler(gotA))
+		subscribe(ctx, t, b, "seat.inbox", "grp", recordingHandler(gotB))
 		assertAttached(t, s.caps.Attachments(a), "seat.inbox", "grp")
 		assertAttached(t, s.caps.Attachments(b), "seat.inbox", "grp")
 
@@ -300,7 +300,7 @@ func (s *suite) runFleet(t *testing.T) {
 		}
 		assertAttached(t, s.caps.Attachments(b), "seat.inbox", "grp")
 
-		publish(t, a, "seat.inbox", newEvent("after"))
+		publish(ctx, t, a, "seat.inbox", newEvent("after"))
 		gotB.awaitLabels(t, "the surviving peer to keep serving the seat", "after")
 		gotA.staysAt(t, 0, "the detached client kept receiving")
 	})
@@ -311,15 +311,15 @@ func (s *suite) runFleet(t *testing.T) {
 		// instead would let one node's sandbox pause — or one node's
 		// shutdown — stop a peer from serving the seat it owns.
 		peer := s.needPeer(t)
-		a := s.start(t)
-		b := startQueue(t, peer(t, a))
+		a := s.start(ctx, t)
+		b := startQueue(ctx, t, peer(t, a))
 
 		gotB := newJournal()
-		subscribe(t, a, "seat.inbox", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, a, "seat.inbox", "grp", func(context.Context, *events.Event) queue.Result {
 			t.Errorf("delivered to a paused attachment")
 			return queue.Ack()
 		})
-		subscribe(t, b, "seat.inbox", "grp", recordingHandler(gotB))
+		subscribe(ctx, t, b, "seat.inbox", "grp", recordingHandler(gotB))
 		if err := a.PauseTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
@@ -334,7 +334,7 @@ func (s *suite) runFleet(t *testing.T) {
 		}
 
 		for range 4 {
-			publish(t, b, "seat.inbox", newEvent("work"))
+			publish(ctx, t, b, "seat.inbox", newEvent("work"))
 		}
 		gotB.awaitLabels(t, "the unpaused peer to take the whole round robin",
 			"work", "work", "work", "work")
@@ -343,16 +343,16 @@ func (s *suite) runFleet(t *testing.T) {
 	t.Run("stopping_one_client_leaves_the_broker_and_its_peers", func(t *testing.T) {
 		t.Parallel()
 		peer := s.needPeer(t)
-		a := s.start(t)
-		b := startQueue(t, peer(t, a))
+		a := s.start(ctx, t)
+		b := startQueue(ctx, t, peer(t, a))
 
 		gotB := newJournal()
-		subscribe(t, b, "seat.inbox", "grp", recordingHandler(gotB))
+		subscribe(ctx, t, b, "seat.inbox", "grp", recordingHandler(gotB))
 		if err := a.Stop(ctx); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
 
-		publish(t, b, "seat.inbox", newEvent("still-serving"))
+		publish(ctx, t, b, "seat.inbox", newEvent("still-serving"))
 		gotB.awaitLabels(t, "a peer to keep serving after another node stopped", "still-serving")
 	})
 
@@ -363,12 +363,12 @@ func (s *suite) runFleet(t *testing.T) {
 		// or half the fleet's traffic is invisible on every screen —
 		// and invisible in a way that looks exactly like a quiet company.
 		peer := s.needPeer(t)
-		a := s.start(t)
-		b := startQueue(t, peer(t, a))
+		a := s.start(ctx, t)
+		b := startQueue(ctx, t, peer(t, a))
 
 		watching := newJournal()
-		streamTo(t, a, "crewlet.events.>", watching)
-		publish(t, b, "crewlet.events.task_created", newEvent("task_created"))
+		streamTo(ctx, t, a, "crewlet.events.>", watching)
+		publish(ctx, t, b, "crewlet.events.task_created", newEvent("task_created"))
 
 		watching.awaitLabels(t, "a peer's publish to reach the stream",
 			"crewlet.events.task_created/task_created")
@@ -380,13 +380,13 @@ func (s *suite) runFleet(t *testing.T) {
 		// to run the seat.
 		peer := s.needPeer(t)
 		backlog := s.needBacklog(t)
-		a := s.start(t)
-		b := startQueue(t, peer(t, a))
+		a := s.start(ctx, t)
+		b := startQueue(ctx, t, peer(t, a))
 
 		if _, err := a.EnsureSubscription(ctx, "seat.gone", "grp"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		publish(t, a, "seat.gone", newEvent("e1"))
+		publish(ctx, t, a, "seat.gone", newEvent("e1"))
 		awaitState(t, "the event to be retained", func() bool {
 			return len(backlog(a, "seat.gone", "grp")) == 1
 		})

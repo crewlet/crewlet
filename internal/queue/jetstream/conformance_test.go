@@ -62,8 +62,8 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 		t.Fatalf("Client: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
-			t.Errorf("Stop: %v", err)
+		if stopErr := q.Stop(context.WithoutCancel(t.Context())); stopErr != nil {
+			t.Errorf("Stop: %v", stopErr)
 		}
 	})
 

@@ -136,6 +136,22 @@ func TestSummaries(t *testing.T) {
 		payload: ConfigRevisionApplied{RevisionID: "r-2", Status: ApplyError, Error: "bad dsn"},
 		want:    "Config revision r-2 failed: bad dsn",
 	}, {
+		// RoundNum is 0-based, and -1 on the opening update every phase
+		// publishes before its first provider call. Both were rendered wrong:
+		// the sentinel reached the line as "round -1", and the first real round
+		// printed no round at all.
+		name:    "the opening update reports no round yet",
+		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhaseExecute, RoundNum: -1},
+		want:    "Dev working (execute)",
+	}, {
+		name:    "the first completed round is round 1",
+		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhaseExecute, RoundNum: 0},
+		want:    "Dev working (execute, round 1)",
+	}, {
+		name:    "later rounds count on from there",
+		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhasePlan, RoundNum: 2},
+		want:    "Dev working (plan, round 3)",
+	}, {
 		name:    "a compaction pass names the seat it ran for",
 		payload: CompactionCompleted{SkippedReason: CompactionAlreadyRunning},
 		source:  "eng",

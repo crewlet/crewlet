@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,14 +84,19 @@ func runSignalProbe() {
 
 func TestTheEmbeddedBrokerDoesNotHijackTheProcessSignals(t *testing.T) {
 	// Not parallel: it forks a process that signals itself.
-	cmd := exec.Command(os.Args[0], "-test.run=TestTheEmbeddedBrokerDoesNotHijackTheProcessSignals")
+	cmd := exec.CommandContext(t.Context(),
+		os.Args[0], "-test.run=TestTheEmbeddedBrokerDoesNotHijackTheProcessSignals")
 	cmd.Env = append(os.Environ(), signalProbeEnv+"=1")
 	out, err := cmd.CombinedOutput()
 
 	code := 0
 	if err != nil {
-		exit, ok := err.(*exec.ExitError)
-		if !ok {
+		// errors.As, not a bare assertion: the probe's own exit code is
+		// the assertion below, and a wrapped ExitError read as "could
+		// not run the probe" would report a passing child as a broken
+		// harness.
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
 			t.Fatalf("running the probe: %v (output %s)", err, out)
 		}
 		code = exit.ExitCode()

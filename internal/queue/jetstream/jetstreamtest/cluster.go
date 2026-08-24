@@ -101,8 +101,9 @@ func freePorts(t *testing.T, n int) []int {
 	// time can hand out the same port twice.
 	listeners := make([]net.Listener, 0, n)
 	ports := make([]int, 0, n)
+	var lc net.ListenConfig
 	for range n {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
+		l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("reserve a port: %v", err)
 		}

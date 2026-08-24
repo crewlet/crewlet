@@ -40,10 +40,14 @@ type LLMUnavailable struct {
 func (LLMUnavailable) EventType() string { return "llm_unavailable" }
 
 // Role is the seat whose provider chain ran out — the seat that goes AFK.
-func (e LLMUnavailable) Role() string    { return e.RoleName }
+func (e LLMUnavailable) Role() string { return e.RoleName }
+
 // AgentID is the instance whose turn terminates as failed.
 func (e LLMUnavailable) AgentID() string { return e.Agent }
 
+// SummaryFor counts the providers that were tried. The chain itself is on the
+// payload; the count is what says whether one flaky provider or a whole
+// misconfigured chain took the seat down.
 func (e LLMUnavailable) SummaryFor(actor string) string {
 	tried := fmt.Sprintf("(%d providers tried)", len(e.ProviderChain))
 	if actor == "" {

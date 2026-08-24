@@ -15,19 +15,19 @@ import (
 // stop early — a mid-batch quiesce and the linger window closing on a paused
 // attachment.
 func (s *suite) runBatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("zero_linger_dispatches_inline_single_event_batches", func(t *testing.T) {
 		t.Parallel()
 		if !s.caps.InlineDispatch {
 			t.Skip("backend has fetch latency, so batch boundaries are not deterministic")
 		}
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches), queue.DefaultBatchOptions())
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches), queue.DefaultBatchOptions())
 
-		publish(t, q, "t", newConvEvent("a", "c1"))
-		publish(t, q, "t", newConvEvent("b", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
 
 		// Zero linger keeps publishes synchronous: each event arrives as
 		// its own one-element batch, before Publish returns.
@@ -49,12 +49,12 @@ func (s *suite) runBatch(t *testing.T) {
 		// it, which is exactly why the contract clamps and why a backend that
 		// forwards the raw value should be caught here rather than in
 		// production.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t.neg", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t.neg", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(-5, 20))
 
-		publish(t, q, "t.neg", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t.neg", newConvEvent("a", "c1"))
 		batches.await(t, "delivery under a negative linger",
 			func(got [][]string) bool { return len(got) == 1 && equalStrings(got[0], []string{"a"}) })
 	})
@@ -63,13 +63,13 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// The property inbox batching exists for: events that queued
 		// while an agent was busy must arrive as ONE turn, not N.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
-		publish(t, q, "t", newConvEvent("a", "c1"))
-		publish(t, q, "t", newConvEvent("b", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
 
 		batches.await(t, "one coalesced batch", func(got [][]string) bool {
 			return len(got) == 1 && equalStrings(got[0], []string{"a", "b"})
@@ -78,14 +78,14 @@ func (s *suite) runBatch(t *testing.T) {
 
 	t.Run("linger_partitions_by_key_preserving_arrival_order", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
-		publish(t, q, "t", newConvEvent("a", "c1"))
-		publish(t, q, "t", newConvEvent("b", "c2"))
-		publish(t, q, "t", newConvEvent("c", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("b", "c2"))
+		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
 
 		// Two partitions, dispatched oldest-constituent-first (here the
 		// same as first arrival, since timestamps follow publish order),
@@ -101,13 +101,13 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// A pathological backlog is delivered as successive capped
 		// batches rather than one unbounded one.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(lingerFor.Seconds(), 2))
 
 		for i := range 5 {
-			publish(t, q, "t", newConvEvent(string(rune('0'+i)), "c1"))
+			publish(ctx, t, q, "t", newConvEvent(string(rune('0'+i)), "c1"))
 		}
 		batches.awaitSizes(t, "the backlog to arrive as capped batches", 2, 2, 1)
 	})
@@ -118,7 +118,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// the other conversation from the same flush.
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(t, newQueueWithAttempts(t, 3))
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 3))
 
 		attempts := newJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
@@ -133,8 +133,8 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		publish(t, q, "t", newConvEvent("a", "c1"))
-		publish(t, q, "t", newConvEvent("b", "c2"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("b", "c2"))
 
 		attempts.await(t, "c1 to exhaust its budget while c2 runs once", func(seen []string) bool {
 			var c1, c2 int
@@ -158,7 +158,7 @@ func (s *suite) runBatch(t *testing.T) {
 		t.Parallel()
 		// Key derivation must never block delivery — a key function that
 		// blows up degrades to per-event partitions.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		if err := q.SubscribeBatch(ctx, "t", "g",
 			func(_ context.Context, evs []*events.Event) queue.Result {
@@ -170,8 +170,8 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		publish(t, q, "t", newEvent("a"))
-		publish(t, q, "t", newEvent("b"))
+		publish(ctx, t, q, "t", newEvent("a"))
+		publish(ctx, t, q, "t", newEvent("b"))
 
 		batches.awaitSizes(t, "each event to become its own partition", 1, 1)
 	})
@@ -181,30 +181,30 @@ func (s *suite) runBatch(t *testing.T) {
 		// A hot config reload changes linger and batch size with no
 		// re-subscription: the consume loop re-reads the options every
 		// cycle.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		opts := queue.NewBatchOptions(0, 20)
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches), opts)
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches), opts)
 
-		publish(t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		batches.awaitSizes(t, "the un-lingered first event", 1)
 
 		opts.Set(lingerFor.Seconds(), 20)
-		publish(t, q, "t", newConvEvent("b", "c1"))
-		publish(t, q, "t", newConvEvent("c", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("b", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("c", "c1"))
 		batches.awaitSizes(t, "the next cycle to honour the new linger", 1, 2)
 	})
 
 	t.Run("stop_cancels_pending_lingered_flush", func(t *testing.T) {
 		t.Parallel()
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(5.0, 20))
 
 		setup := time.Now()
-		publish(t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		if err := q.Stop(ctx); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
@@ -224,16 +224,16 @@ func (s *suite) runBatch(t *testing.T) {
 		// Dropping them meant a graceful drain silently destroyed
 		// whatever was mid-window.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(racingWindow.Seconds(), 20))
 
 		// The window must be OPEN when the pause lands and must EXPIRE while
 		// it is held — no ordering removes that, so this case buys slack with
 		// a longer window rather than pretending the race is gone.
 		setup := time.Now()
-		publish(t, q, "t", newConvEvent("a", "c1"))
+		publish(ctx, t, q, "t", newConvEvent("a", "c1"))
 		if err := q.PauseDelivery(ctx); err != nil {
 			t.Fatalf("PauseDelivery: %v", err)
 		}
@@ -262,13 +262,13 @@ func (s *suite) runBatch(t *testing.T) {
 		// accumulates — which is why it survived: every other assertion
 		// about holds pauses BEFORE anything is in the window, and the
 		// single-event path answers the same condition correctly.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t.hold", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t.hold", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(racingWindow.Seconds(), 20))
 
 		// Open the window, then take the hold while it is open.
-		publish(t, q, "t.hold", newConvEvent("during", "c1"))
+		publish(ctx, t, q, "t.hold", newConvEvent("during", "c1"))
 		if err := q.PauseTopic(ctx, "t.hold", "g", "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
@@ -282,7 +282,7 @@ func (s *suite) runBatch(t *testing.T) {
 
 		// And the attachment is still ALIVE, not merely flushed once:
 		// something published after the resume must arrive too.
-		publish(t, q, "t.hold", newConvEvent("after", "c1"))
+		publish(ctx, t, q, "t.hold", newConvEvent("after", "c1"))
 		batches.awaitSizes(t, "an event published after the hold lifted", 1, 1)
 	})
 
@@ -305,9 +305,9 @@ func (s *suite) runBatch(t *testing.T) {
 		// ARRIVES first and the quiet one is OLDER. Measured, a backend
 		// that partitions correctly and dispatches in receive order passes
 		// the whole suite without this case.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "topic.age", "grp", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "topic.age", "grp", recordingBatchHandler(batches),
 			queue.DefaultBatchOptions())
 
 		now := time.Now().UTC()
@@ -321,8 +321,8 @@ func (s *suite) runBatch(t *testing.T) {
 		if err := q.PauseTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
-		publish(t, q, "topic.age", hot)
-		publish(t, q, "topic.age", quiet)
+		publish(ctx, t, q, "topic.age", hot)
+		publish(ctx, t, q, "topic.age", quiet)
 		if err := q.ResumeTopic(ctx, "topic.age", "grp", "queuetest-fill"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
@@ -347,9 +347,9 @@ func (s *suite) runBatch(t *testing.T) {
 		// delivery order. This subtest is what certifies a backend
 		// against its own replay semantics, so it makes arrival order and
 		// timestamp order deliberately disagree.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
-		subscribeBatch(t, q, "t", "g", recordingBatchHandler(batches),
+		subscribeBatch(ctx, t, q, "t", "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(lingerFor.Seconds(), 20))
 
 		t0 := time.Now().UTC()
@@ -360,8 +360,8 @@ func (s *suite) runBatch(t *testing.T) {
 
 		// Published newest-first: arrival order is the reverse of
 		// chronological order.
-		publish(t, q, "t", late)
-		publish(t, q, "t", early)
+		publish(ctx, t, q, "t", late)
+		publish(ctx, t, q, "t", early)
 
 		batches.await(t, "the conversation to arrive in timestamp order", func(got [][]string) bool {
 			return len(got) == 1 && equalStrings(got[0], []string{"early", "late"})
@@ -374,7 +374,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// while a newer one from the same conversation is already
 		// waiting. Whichever end of the mailbox the backend returns it to,
 		// the handler must see them oldest-first.
-		q := s.start(t)
+		q := s.start(ctx, t)
 		batches := newBatchJournal()
 		var deliveries int
 		if err := q.SubscribeBatch(ctx, "t", "g",
@@ -397,7 +397,7 @@ func (s *suite) runBatch(t *testing.T) {
 
 		older := newConvEvent("older", "c1")
 		older.Timestamp = time.Now().UTC()
-		publish(t, q, "t", older)
+		publish(ctx, t, q, "t", older)
 
 		batches.await(t, "the redelivered event to lead its conversation", func(got [][]string) bool {
 			return len(got) >= 1 && equalStrings(got[0], []string{"older", "newer"})
@@ -414,7 +414,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// the mail came back in REVERSE partition order. That is the
 		// exact reordering a deferral exists to prevent.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 
 		seen := newJournal()
 		if err := q.SubscribeBatch(ctx, "topic.b", "grp",
@@ -450,7 +450,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// to the front, so the order distinguishes a split (which is
 		// timing) from partitions handled past a deferral (which is the
 		// ordering defect this case exists to catch).
-		fillOneBatch(t, q, "topic.b", "grp", "a", "b", "c")
+		fillOneBatch(ctx, t, q, "topic.b", "grp", "a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		seen.staysAt(t, 1, "the deferral did not stop the batch")
@@ -470,7 +470,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// over-count and the splice lands inside the pre-existing tail,
 		// reordering the very partitions the guard protects.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 
 		seen := newJournal()
 		var grown bool
@@ -495,7 +495,7 @@ func (s *suite) runBatch(t *testing.T) {
 			t.Fatalf("SubscribeBatch: %v", err)
 		}
 
-		fillOneBatch(t, q, "topic.c", "grp", "a", "b", "c")
+		fillOneBatch(ctx, t, q, "topic.c", "grp", "a", "b", "c")
 
 		seen.awaitLabels(t, "only the first partition to be handled", "a")
 		awaitState(t, "the undispatched partitions to be spliced after the deferred one", func() bool {
@@ -522,14 +522,13 @@ func (s *suite) runBatch(t *testing.T) {
 // asynchronous backend as "did not contradict" rather than "certified", and if
 // that distinction ever needs closing it needs an observable the contract does
 // not currently have — how many partitions a delivery was drawn from.
-func fillOneBatch(t *testing.T, q queue.EventQueue, topic, group string, convs ...string) {
+func fillOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, convs ...string) {
 	t.Helper()
-	ctx := context.Background()
 	if err := q.PauseTopic(ctx, topic, group, "queuetest-fill"); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
 	for _, conv := range convs {
-		publish(t, q, topic, newConvEvent(conv, conv))
+		publish(ctx, t, q, topic, newConvEvent(conv, conv))
 	}
 	if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)

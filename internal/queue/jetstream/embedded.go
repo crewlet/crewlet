@@ -311,7 +311,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 	if err != nil {
 		return nil, err
 	}
-	if err := q.ensureStream(ctx, spec); err != nil {
+	if err = q.ensureStream(ctx, spec); err != nil {
 		return nil, err
 	}
 	stream := spec.name
@@ -345,8 +345,8 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 			return
 		}
 		var ev events.Event
-		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
-			q.log.Warn("stream_decode_failed", "pattern", pattern, "error", err.Error())
+		if decodeErr := json.Unmarshal(msg.Data(), &ev); decodeErr != nil {
+			q.log.Warn("stream_decode_failed", "pattern", pattern, "error", decodeErr.Error())
 			return
 		}
 		q.runStreamHandler(consCtx, h, msg.Subject(), &ev)

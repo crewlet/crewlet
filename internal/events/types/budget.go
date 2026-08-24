@@ -41,7 +41,8 @@ func (BudgetExhausted) EventType() string { return "budget_exhausted" }
 
 // Role is the seat whose charge was refused, which is the seat a dashboard
 // shows the exhaustion against even for an org-scoped cap.
-func (e BudgetExhausted) Role() string    { return e.RoleName }
+func (e BudgetExhausted) Role() string { return e.RoleName }
+
 // AgentID is the instance that made the refused call.
 func (e BudgetExhausted) AgentID() string { return e.Agent }
 

@@ -23,16 +23,18 @@ func init() {
 type GuardKind string
 
 const (
-	// GuardDepthCap: delegation depth reached its limit.
+	// GuardDepthCap means delegation depth reached its limit.
 	GuardDepthCap GuardKind = "depth_cap"
-	// GuardStall: two self-iterate rounds produced an unchanged artifact hash.
+	// GuardStall means two self-iterate rounds produced an unchanged artifact
+	// hash.
 	GuardStall GuardKind = "stall"
-	// GuardMaxIter: the loop exhausted its iteration cap without finishing.
+	// GuardMaxIter means the loop exhausted its iteration cap without finishing.
 	GuardMaxIter GuardKind = "max_iter"
-	// GuardUnhandledException: an uncaught failure escaped the turn body,
-	// published before it propagates.
+	// GuardUnhandledException means an uncaught failure escaped the turn body.
+	// The breach is published before that failure propagates, so the record
+	// survives even when the turn does not.
 	GuardUnhandledException GuardKind = "unhandled_exception"
-	// GuardScheduledTimeout: a scheduled turn exceeded its wall-clock cap.
+	// GuardScheduledTimeout means a scheduled turn exceeded its wall-clock cap.
 	GuardScheduledTimeout GuardKind = "scheduled_timeout"
 )
 
@@ -45,11 +47,20 @@ type ExecuteMissingTool struct {
 	PlanTools []string `json:"plan_tools,omitempty"`
 }
 
+// EventType is the "execute.missing_tool" wire type. The dotted spelling is
+// this file's convention for turn-engine telemetry, and it is what the store
+// and the dashboard filter on — it is not interchangeable with an underscore.
 func (ExecuteMissingTool) EventType() string { return "execute.missing_tool" }
 
-func (e ExecuteMissingTool) Role() string    { return e.RoleName }
+// Role is the seat whose Execute phase asked for the tool.
+func (e ExecuteMissingTool) Role() string { return e.RoleName }
+
+// AgentID is the instance running that phase.
 func (e ExecuteMissingTool) AgentID() string { return e.Agent }
 
+// SummaryFor names the tool that was missing, not the plan's tool list: the
+// list is on the payload for whoever is diagnosing, and it is far too long for
+// a feed line.
 func (e ExecuteMissingTool) SummaryFor(actor string) string {
 	return lead(actor, "asked for unknown tool '"+e.ToolName+"'")
 }
@@ -70,11 +81,18 @@ type PhaseToolActivated struct {
 	Iteration int    `json:"iteration"`
 }
 
+// EventType is the "phase.tool_activated" wire type.
 func (PhaseToolActivated) EventType() string { return "phase.tool_activated" }
 
-func (e PhaseToolActivated) Role() string    { return e.RoleName }
+// Role is the seat whose phase promoted the tool.
+func (e PhaseToolActivated) Role() string { return e.RoleName }
+
+// AgentID is the instance running that phase.
 func (e PhaseToolActivated) AgentID() string { return e.Agent }
 
+// SummaryFor leads with actor AND phase, because which phase activated the tool
+// is the whole signal: on Plan it is routine recon, on Execute it means the
+// plan was incomplete.
 func (e PhaseToolActivated) SummaryFor(actor string) string {
 	return lead(subject(actor, e.Phase), "activated '"+e.ToolName+"'")
 }
@@ -96,11 +114,17 @@ type ToolSkillGuardBlocked struct {
 	Iteration int      `json:"iteration"`
 }
 
+// EventType is the "phase.tool_skill_blocked" wire type.
 func (ToolSkillGuardBlocked) EventType() string { return "phase.tool_skill_blocked" }
 
-func (e ToolSkillGuardBlocked) Role() string    { return e.RoleName }
+// Role is the seat whose call was refused.
+func (e ToolSkillGuardBlocked) Role() string { return e.RoleName }
+
+// AgentID is the instance that made the refused call.
 func (e ToolSkillGuardBlocked) AgentID() string { return e.Agent }
 
+// SummaryFor lists the skill keys, which are the actionable half: they name
+// what the agent has to load before the call will go through.
 func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 	return lead(subject(actor, e.Phase),
 		fmt.Sprintf("call to '%s' blocked pending required skill(s): %s",
@@ -118,11 +142,18 @@ type PromptSize struct {
 	UserChars         int    `json:"user_chars"`
 }
 
+// EventType is the "prompt.size" wire type.
 func (PromptSize) EventType() string { return "prompt.size" }
 
-func (e PromptSize) Role() string    { return e.RoleName }
+// Role is the seat whose prompt was measured.
+func (e PromptSize) Role() string { return e.RoleName }
+
+// AgentID is the instance the measurement belongs to.
 func (e PromptSize) AgentID() string { return e.Agent }
 
+// SummaryFor reports the approximate token count and leaves the character
+// splits on the payload — the split is for someone comparing builds, not for a
+// feed.
 func (e PromptSize) SummaryFor(actor string) string {
 	return lead(subject(actor, e.Phase),
 		fmt.Sprintf("prompt ~%d tokens", e.ApproximateTokens))
@@ -140,11 +171,18 @@ type TurnGuardBreach struct {
 	TurnID   string    `json:"turn_id"`
 }
 
+// EventType is the "turn.guard_breach" wire type, and one of the four names in
+// FailureEventTypes.
 func (TurnGuardBreach) EventType() string { return "turn.guard_breach" }
 
-func (e TurnGuardBreach) Role() string    { return e.RoleName }
+// Role is the seat whose turn breached the invariant.
+func (e TurnGuardBreach) Role() string { return e.RoleName }
+
+// AgentID is the instance running that turn.
 func (e TurnGuardBreach) AgentID() string { return e.Agent }
 
+// SummaryFor carries both the guard kind and its detail: the kind says which
+// invariant, and only the detail says what tripped it.
 func (e TurnGuardBreach) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("guard %s: %s", e.Kind, e.Detail))
 }

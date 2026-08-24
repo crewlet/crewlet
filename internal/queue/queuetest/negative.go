@@ -55,19 +55,19 @@ import (
 // "resets the cursor, so unusable", which is the same conclusion case A reaches
 // from the other direction.
 func (s *suite) runNegativePaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail", func(t *testing.T) {
 		t.Parallel()
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 		const topic, group = "crewlet.agent.bob.inbox", "agent-bob"
 
 		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		publish(t, q, topic, newEvent("e0"))
-		publish(t, q, topic, newEvent("e1"))
+		publish(ctx, t, q, topic, newEvent("e0"))
+		publish(ctx, t, q, topic, newEvent("e1"))
 		awaitState(t, "the mail to be retained", func() bool {
 			return len(backlog(q, topic, group)) == 2
 		})
@@ -87,7 +87,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 	t.Run("delete_subscription_leaves_a_neighbouring_group_untouched", func(t *testing.T) {
 		t.Parallel()
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 		const topic = "crewlet.events.task_created"
 		const doomed, neighbour = "doomed-grp", "neighbour-grp"
 
@@ -96,7 +96,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 				t.Fatalf("EnsureSubscription(%s): %v", group, err)
 			}
 		}
-		publish(t, q, topic, newEvent("e0"))
+		publish(ctx, t, q, topic, newEvent("e0"))
 		awaitState(t, "both groups to retain a copy", func() bool {
 			return len(backlog(q, topic, doomed)) == 1 && len(backlog(q, topic, neighbour)) == 1
 		})
@@ -131,7 +131,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// PauseTopic minted the subscription and every event published to that
 		// topic was then retained for a role that no longer existed.
 		backlog := s.needBacklog(t)
-		q := s.start(t)
+		q := s.start(ctx, t)
 		const topic, group = "seat.decommissioned", "grp"
 
 		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
@@ -145,7 +145,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			// Refusing a hold on a pair it does not know is a fine answer.
 			t.Skipf("backend refuses a hold on an unknown pair: %v", err)
 		}
-		publish(t, q, topic, newEvent("after-decommission"))
+		publish(ctx, t, q, topic, newEvent("after-decommission"))
 
 		if got := backlog(q, topic, group); len(got) != 0 {
 			t.Fatalf("a hold resurrected a deleted subscription; it retained %v", labelsOf(got))
@@ -175,11 +175,11 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)
-		q := startQueue(t, newQueueWithAttempts(t, 2))
+		q := startQueue(ctx, t, newQueueWithAttempts(t, 2))
 
 		naks := newJournal()
 		var deferred bool
-		subscribe(t, q, "topic.budget", "grp", func(context.Context, *events.Event) queue.Result {
+		subscribe(ctx, t, q, "topic.budget", "grp", func(context.Context, *events.Event) queue.Result {
 			if !deferred {
 				deferred = true
 				return queue.Defer("lease moved")
@@ -188,7 +188,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			return queue.Nak(errors.New("still failing"))
 		})
 
-		publish(t, q, "topic.budget", newEvent("e0"))
+		publish(ctx, t, q, "topic.budget", newEvent("e0"))
 		// Wait for the QUIESCE, not for the backlog.
 		//
 		// The backlog is 1 from the moment the publish is acked — before the
@@ -222,13 +222,13 @@ func (s *suite) runNegativePaths(t *testing.T) {
 
 	t.Run("quiesce_with_no_attachment_changes_nothing", func(t *testing.T) {
 		t.Parallel()
-		q := s.start(t)
+		q := s.start(ctx, t)
 		const topic, group = "seat.unowned", "grp"
 
 		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		publish(t, q, topic, newEvent("e0"))
+		publish(ctx, t, q, topic, newEvent("e0"))
 		before := s.snapshot(q, topic, group)
 
 		quiesced, err := q.Quiesce(ctx, topic, group)
@@ -241,7 +241,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// attaches: a stale quiesce leaves a seat that is owned, attached
 		// and permanently silent.
 		j := newJournal()
-		subscribe(t, q, topic, group, recordingHandler(j))
+		subscribe(ctx, t, q, topic, group, recordingHandler(j))
 		j.awaitLabels(t, "the retained mail to reach a new consumer", "e0")
 	})
 }
@@ -332,13 +332,4 @@ func (s *suite) assertUntouched(t *testing.T, q queue.EventQueue, topic, group s
 		t.Errorf("%s changed whether (%s, %s) is attached: %v -> %v",
 			what, topic, group, before.attached, after.attached)
 	}
-}
-
-// backlog reads a subscription's retained mail through the capability, for the
-// cases that have already established it is available.
-func backlog(s *suite, q queue.EventQueue, topic, group string) []*events.Event {
-	if s.caps.Backlog == nil {
-		return nil
-	}
-	return s.caps.Backlog(q, topic, group)
 }

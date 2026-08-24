@@ -381,17 +381,22 @@ type suite struct {
 }
 
 // start returns a started queue whose Stop is already registered as cleanup.
-func (s *suite) start(t *testing.T) queue.EventQueue {
+func (s *suite) start(ctx context.Context, t *testing.T) queue.EventQueue {
 	t.Helper()
-	return startQueue(t, s.newQueue(t))
+	return startQueue(ctx, t, s.newQueue(t))
 }
 
-func startQueue(t *testing.T, q queue.EventQueue) queue.EventQueue {
+func startQueue(ctx context.Context, t *testing.T, q queue.EventQueue) queue.EventQueue {
 	t.Helper()
-	if err := q.Start(context.Background()); err != nil {
+	if err := q.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	// WithoutCancel because the case's context is cancelled BEFORE its
+	// cleanups run: a Stop handed the cancelled one would skip the very
+	// teardown this cleanup exists to perform, and a queue left running
+	// past its case leaks a consumer into the next one.
+	stopCtx := context.WithoutCancel(ctx)
+	t.Cleanup(func() { _ = q.Stop(stopCtx) })
 	return q
 }
 
@@ -538,12 +543,6 @@ func (j *journal) all() []string {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return append([]string(nil), j.seen...)
-}
-
-func (j *journal) count() int {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return len(j.seen)
 }
 
 // await blocks until cond accepts what has been recorded, failing the test
@@ -1024,27 +1023,34 @@ func equalInts(a, b []int) bool {
 // satisfies the property just as well as accepting the event and not matching
 // it. Making those fatal would test the backend's subject topology rather
 // than its wildcard matching.
-func tryPublish(q queue.EventQueue, topic string, ev *events.Event) {
-	_ = q.Publish(context.Background(), topic, ev)
+func tryPublish(ctx context.Context, q queue.EventQueue, topic string, ev *events.Event) {
+	_ = q.Publish(ctx, topic, ev)
 }
 
-func publish(t *testing.T, q queue.EventQueue, topic string, ev *events.Event) {
+func publish(ctx context.Context, t *testing.T, q queue.EventQueue, topic string, ev *events.Event) {
 	t.Helper()
-	if err := q.Publish(context.Background(), topic, ev); err != nil {
+	if err := q.Publish(ctx, topic, ev); err != nil {
 		t.Fatalf("Publish(%s, %s): %v", topic, ev.Type, err)
 	}
 }
 
-func subscribe(t *testing.T, q queue.EventQueue, topic, group string, h queue.Handler) {
+func subscribe(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string, h queue.Handler) {
 	t.Helper()
-	if err := q.Subscribe(context.Background(), topic, group, h); err != nil {
+	if err := q.Subscribe(ctx, topic, group, h); err != nil {
 		t.Fatalf("Subscribe(%s, %s): %v", topic, group, err)
 	}
 }
 
-func subscribeBatch(t *testing.T, q queue.EventQueue, topic, group string, h queue.BatchHandler, opts *queue.BatchOptions) {
+func subscribeBatch(
+	ctx context.Context,
+	t *testing.T,
+	q queue.EventQueue,
+	topic, group string,
+	h queue.BatchHandler,
+	opts *queue.BatchOptions,
+) {
 	t.Helper()
-	if err := q.SubscribeBatch(context.Background(), topic, group, h, convKey, opts); err != nil {
+	if err := q.SubscribeBatch(ctx, topic, group, h, convKey, opts); err != nil {
 		t.Fatalf("SubscribeBatch(%s, %s): %v", topic, group, err)
 	}
 }

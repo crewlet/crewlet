@@ -31,22 +31,22 @@ const (
 	AgentControlSuffix = ".control"
 
 	// AgentGroupPrefix prefixes every per-seat durable consumer group.
-	// AgentControlGroupSuffix distinguishes the control group from the
-	// inbox group of the same seat.
 	//
 	// Named rather than written inline because the group grammar is a
 	// wire name like any other: the two functions below were the only
 	// place in this package that built part of a name from a bare
 	// literal, which is precisely the duplication the package exists to
 	// remove.
+	AgentGroupPrefix = "agent-"
+	// AgentControlGroupSuffix distinguishes a seat's sandbox-control
+	// consumer group from the inbox group of that same seat.
 	//
-	// These two do NOT make a group name unique on its own — a seat
-	// handled `a-control` mints the same group as seat `a`'s control
-	// group, because a hyphen is legal inside a handle. That is safe only
-	// because a subscription is keyed on the (topic, group) PAIR by every
-	// backend, and the two pairs differ in their topic. See
+	// It and AgentGroupPrefix do NOT make a group name unique on their
+	// own — a seat handled `a-control` mints the same group as seat `a`'s
+	// control group, because a hyphen is legal inside a handle. That is
+	// safe only because a subscription is keyed on the (topic, group)
+	// PAIR by every backend, and the two pairs differ in their topic. See
 	// TestGroupNamesAreNotUniqueOnTheirOwn.
-	AgentGroupPrefix        = "agent-"
 	AgentControlGroupSuffix = "-control"
 
 	// EventsPrefix prefixes the engine's fleet-wide routing subjects.

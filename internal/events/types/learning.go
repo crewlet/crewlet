@@ -33,6 +33,8 @@ func init() {
 // MemoryScope is whose memory a persisted reflection belongs to.
 type MemoryScope string
 
+// The two memories a reflection can land in: the writing agent's own diary, or
+// the unit's shared memory, which its whole team reads back.
 const (
 	MemoryScopeAgent MemoryScope = "agent"
 	MemoryScopeUnit  MemoryScope = "unit"
@@ -41,11 +43,11 @@ const (
 // PersistClassification is the decider's tier for one reflection.
 type PersistClassification string
 
+// The four tiers the decider can reach. PersistLong is a durable memory;
+// PersistShort is one with a TTL; PersistDoc is a standing rule that belongs in
+// a document rather than in memory; PersistNOOP is the common case — the
+// decider is deliberately conservative.
 const (
-	// PersistLong is a durable memory; PersistShort is one with a TTL;
-	// PersistDoc is a standing rule that belongs in a document rather than in
-	// memory; PersistNOOP is the common case — the decider is deliberately
-	// conservative.
 	PersistLong  PersistClassification = "LONG"
 	PersistShort PersistClassification = "SHORT"
 	PersistDoc   PersistClassification = "DOC"
@@ -58,6 +60,7 @@ const (
 // is the only record a registry skill was ever loaded.
 type SkillSourceKind string
 
+// The two places a loaded skill can have come from.
 const (
 	SkillSourceSynthesized SkillSourceKind = "synthesized"
 	SkillSourceRegistry    SkillSourceKind = "registry"
@@ -67,6 +70,8 @@ const (
 // or the scheduled pass that consolidated a cluster of them.
 type SynthesisTrigger string
 
+// The two synthesis paths. ClusterSize on SkillSynthesized is 1 for the first
+// and N for the second, which is how a consolidation is told from a one-off.
 const (
 	SynthesisSingleTurn SynthesisTrigger = "single_turn"
 	SynthesisClustered  SynthesisTrigger = "clustered"
@@ -77,6 +82,9 @@ const (
 // can restore one by hand.
 type SkillState string
 
+// The three states, in the order the curator walks them: active until idle past
+// the stale threshold, stale until idle past the archive threshold. Use moves a
+// skill back to active from either.
 const (
 	SkillStateActive   SkillState = "active"
 	SkillStateStale    SkillState = "stale"
@@ -87,6 +95,9 @@ const (
 // it actually ran.
 type CompactionSkipReason string
 
+// Why a lifecycle pass did nothing. The first two are missing wiring — nothing
+// to compact into, or no auxiliary model to compact with — and the third is the
+// worker's own per-agent dedup refusing an overlapping pass.
 const (
 	CompactionNoDatabase     CompactionSkipReason = "no_database"
 	CompactionNoAuxProvider  CompactionSkipReason = "no_aux_provider"
@@ -106,11 +117,17 @@ type EpisodeWritten struct {
 	ToolCount     int    `json:"tool_count"`
 }
 
+// EventType is the "episode_written" wire type.
 func (EpisodeWritten) EventType() string { return "episode_written" }
 
-func (e EpisodeWritten) Role() string    { return e.RoleName }
+// Role is the seat whose episode was written.
+func (e EpisodeWritten) Role() string { return e.RoleName }
+
+// AgentID is the instance the episode row is keyed by.
 func (e EpisodeWritten) AgentID() string { return e.Agent }
 
+// SummaryFor names the review outcome the episode captured — the one field
+// that says whether there is anything worth recalling in it.
 func (e EpisodeWritten) SummaryFor(actor string) string {
 	return lead(actor, "wrote episode ("+e.ReviewOutcome+")")
 }
@@ -136,11 +153,19 @@ type PersistDeciderCompleted struct {
 	ReviewOutcome string `json:"review_outcome"`
 }
 
+// EventType is the "persist_decider_completed" wire type.
 func (PersistDeciderCompleted) EventType() string { return "persist_decider_completed" }
 
-func (e PersistDeciderCompleted) Role() string    { return e.RoleName }
+// Role is the seat whose reflection was decided on.
+func (e PersistDeciderCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance whose memory the write would land in.
 func (e PersistDeciderCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor distinguishes all three outcomes rather than just persisted or
+// not: a DOC classification means the decider found a standing rule and
+// deliberately kept it out of memory, which reads nothing like having found
+// nothing at all.
 func (e PersistDeciderCompleted) SummaryFor(actor string) string {
 	switch {
 	case e.Persisted:
@@ -170,11 +195,17 @@ type SkillUsed struct {
 	FileLoaded string `json:"file_loaded"`
 }
 
+// EventType is the "skill_used" wire type.
 func (SkillUsed) EventType() string { return "skill_used" }
 
-func (e SkillUsed) Role() string    { return e.RoleName }
+// Role is the seat that loaded the skill.
+func (e SkillUsed) Role() string { return e.RoleName }
+
+// AgentID is the instance that loaded it.
 func (e SkillUsed) AgentID() string { return e.Agent }
 
+// SummaryFor names the source kind, because a synthesized skill being reused is
+// the measurement this event exists for and a registry load is not.
 func (e SkillUsed) SummaryFor(actor string) string {
 	return lead(actor, "used skill '"+e.SkillName+"' ("+string(e.SourceKind)+")")
 }
@@ -214,11 +245,19 @@ type PlanPrefetchSummary struct {
 	TriggerRequiresRecon bool `json:"trigger_requires_recon"`
 }
 
+// EventType is the "plan_prefetch_summary" wire type.
 func (PlanPrefetchSummary) EventType() string { return "plan_prefetch_summary" }
 
-func (e PlanPrefetchSummary) Role() string    { return e.RoleName }
+// Role is the seat whose Plan phase the prefetches ran for; per-block hit rate
+// is plotted per role.
+func (e PlanPrefetchSummary) Role() string { return e.RoleName }
+
+// AgentID is the instance whose stores were searched.
 func (e PlanPrefetchSummary) AgentID() string { return e.Agent }
 
+// SummaryFor counts hits out of six and flags a gated turn separately: without
+// the flag, a thin trigger and a genuinely empty set of stores produce the same
+// "0/6" and lead an operator to look in the wrong place.
 func (e PlanPrefetchSummary) SummaryFor(actor string) string {
 	hits := 0
 	for _, hit := range []bool{
@@ -262,11 +301,18 @@ type RelevantKnowledgeRefetched struct {
 	SelectionCount int `json:"selection_count"`
 }
 
+// EventType is the "relevant_knowledge_refetched" wire type.
 func (RelevantKnowledgeRefetched) EventType() string { return "relevant_knowledge_refetched" }
 
-func (e RelevantKnowledgeRefetched) Role() string    { return e.RoleName }
+// Role is the seat whose post-Plan re-fetch ran.
+func (e RelevantKnowledgeRefetched) Role() string { return e.RoleName }
+
+// AgentID is the instance the recovered block was assembled for.
 func (e RelevantKnowledgeRefetched) AgentID() string { return e.Agent }
 
+// SummaryFor reports both the selection count and the byte size, which is what
+// separates a filter that rendered picks from one that rendered only the empty
+// hint.
 func (e RelevantKnowledgeRefetched) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf(
 		"re-fetched relevant knowledge post-Plan: %d doc(s), %dB",
@@ -287,10 +333,18 @@ type CounterpartyProfileUpdated struct {
 	TraitsPatched     int    `json:"traits_patched"`
 }
 
+// EventType is the "counterparty_profile_updated" wire type.
 func (CounterpartyProfileUpdated) EventType() string { return "counterparty_profile_updated" }
 
+// Role is the OBSERVER's seat, never the subject's: the profile is one seat's
+// view of a counterparty, and attributing it to the person observed would file
+// it under the wrong party. There is no AgentID — the profile is keyed by
+// observer handle, which the payload carries in its own field.
 func (e CounterpartyProfileUpdated) Role() string { return e.RoleName }
 
+// SummaryFor falls all the way through to "(unknown)" rather than rendering a
+// blank subject: an observation of someone the engine could not name still
+// happened, and a line ending mid-sentence would read as a bug.
 func (e CounterpartyProfileUpdated) SummaryFor(actor string) string {
 	subject := e.SubjectName
 	if subject == "" {
@@ -323,11 +377,17 @@ type SkillSynthesized struct {
 	ToolCount   int `json:"tool_count"`
 }
 
+// EventType is the "skill_synthesized" wire type.
 func (SkillSynthesized) EventType() string { return "skill_synthesized" }
 
-func (e SkillSynthesized) Role() string    { return e.RoleName }
+// Role is the seat the new skill belongs to.
+func (e SkillSynthesized) Role() string { return e.RoleName }
+
+// AgentID is the instance that owns the synthesized row.
 func (e SkillSynthesized) AgentID() string { return e.Agent }
 
+// SummaryFor names the synthesis path, which is the difference between one turn
+// that warranted a skill and a scheduled pass that consolidated a cluster.
 func (e SkillSynthesized) SummaryFor(actor string) string {
 	return lead(actor, "synthesised skill '"+e.SkillName+"' ("+string(e.Trigger)+")")
 }
@@ -349,11 +409,18 @@ type SkillRefined struct {
 	RefinementKind string `json:"refinement_kind"`
 }
 
+// EventType is the "skill_refined" wire type.
 func (SkillRefined) EventType() string { return "skill_refined" }
 
-func (e SkillRefined) Role() string    { return e.RoleName }
+// Role is the seat whose skill was refined.
+func (e SkillRefined) Role() string { return e.RoleName }
+
+// AgentID is the instance that owns the refined row.
 func (e SkillRefined) AgentID() string { return e.Agent }
 
+// SummaryFor carries the version and the refinement kind: the version is what
+// makes successive refinements distinguishable, and the kind tells a success
+// annotation from a counter-example.
 func (e SkillRefined) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("refined '%s' v%d (%s)",
 		e.SkillName, e.SkillVersion, e.RefinementKind))
@@ -379,10 +446,16 @@ type SkillPromoted struct {
 	DistinctAgents int `json:"distinct_agents"`
 }
 
+// EventType is the "skill_promoted" wire type.
 func (SkillPromoted) EventType() string { return "skill_promoted" }
 
+// Role is a REPRESENTATIVE role for the unit, not the author: a promotion
+// distils several agents' skills, so no single seat authored it.
 func (e SkillPromoted) Role() string { return e.RoleName }
 
+// Summary is unit-led rather than actor-led, matching what the event is about,
+// and reports the distinct-agent count: one agent repeating itself and five
+// agents converging are different findings for whoever reviews the draft.
 func (e SkillPromoted) Summary() string {
 	return fmt.Sprintf(
 		"unit '%s' drafted '%s' in the team knowledge base from %d agent(s)",
@@ -401,6 +474,9 @@ type SkillStaled struct {
 	TransitionedAt string `json:"transitioned_at"`
 }
 
+// EventType is the "skill_staled" wire type. No summary method: the envelope's
+// type-derived fallback ("Skill Staled") is the whole line, and the skill name
+// belongs to the operator view that lists these, not to a feed.
 func (SkillStaled) EventType() string { return "skill_staled" }
 
 // SkillArchived fires when a stale skill goes idle past its archive threshold.
@@ -414,6 +490,7 @@ type SkillArchived struct {
 	TransitionedAt string `json:"transitioned_at"`
 }
 
+// EventType is the "skill_archived" wire type.
 func (SkillArchived) EventType() string { return "skill_archived" }
 
 // SkillRevived fires when a previously stale skill is used again. Distinct from
@@ -429,6 +506,7 @@ type SkillRevived struct {
 	TransitionedAt string     `json:"transitioned_at"`
 }
 
+// EventType is the "skill_revived" wire type.
 func (SkillRevived) EventType() string { return "skill_revived" }
 
 // SkillTelemetryWriteFailed fires when bumping a skill's use counters failed
@@ -445,6 +523,9 @@ type SkillTelemetryWriteFailed struct {
 	Error string `json:"error"`
 }
 
+// EventType is the "skill_telemetry_write_failed" wire type. Deliberately NOT
+// in FailureEventTypes: the counter write failed, the turn that used the skill
+// did not.
 func (SkillTelemetryWriteFailed) EventType() string { return "skill_telemetry_write_failed" }
 
 // CompactionRequested is published when an agent's raw episode count crosses
@@ -461,8 +542,11 @@ type CompactionRequested struct {
 	Threshold int `json:"threshold"`
 }
 
+// EventType is the "compaction_requested" wire type.
 func (CompactionRequested) EventType() string { return "compaction_requested" }
 
+// SummaryFor states the count and the threshold it crossed, so the line says
+// why the request fired rather than only that it did.
 func (e CompactionRequested) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("requested episode compaction (raw_count=%d > threshold=%d)",
 		e.RawCount, e.Threshold))
@@ -482,8 +566,12 @@ type CompactionCompleted struct {
 	SkippedReason CompactionSkipReason `json:"skipped_reason"`
 }
 
+// EventType is the "compaction_completed" wire type.
 func (CompactionCompleted) EventType() string { return "compaction_completed" }
 
+// SummaryFor reports the skip reason when there is one and the per-action counts
+// otherwise. A pass that short-circuited and a pass that ran and found nothing
+// to do both end with zeroes, and only the reason separates them.
 func (e CompactionCompleted) SummaryFor(actor string) string {
 	if e.SkippedReason != "" {
 		return lead(actor, "compaction skipped ("+string(e.SkippedReason)+")")
@@ -509,11 +597,19 @@ type ReflectionCompleted struct {
 	ReviewOutcome string `json:"review_outcome"`
 }
 
+// EventType is the "reflection_completed" wire type.
 func (ReflectionCompleted) EventType() string { return "reflection_completed" }
 
-func (e ReflectionCompleted) Role() string    { return e.RoleName }
+// Role is the seat the pass reflected for. This is the event that flips that
+// seat back to idle, so the projection needs the role to know whose.
+func (e ReflectionCompleted) Role() string { return e.RoleName }
+
+// AgentID is the instance whose learning workers have finished.
 func (e ReflectionCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor counts the workers that ran and nothing else: each worker's own
+// outcome has its own event, and duplicating them here would give two places to
+// read the same result from.
 func (e ReflectionCompleted) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("finished reflecting (%d worker(s))", e.WorkersRun))
 }

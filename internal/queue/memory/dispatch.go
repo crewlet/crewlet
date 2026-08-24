@@ -88,7 +88,7 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 				// fixed from the first waiting event, not sliding: later
 				// publishes join this mailbox without resetting it, so a
 				// steady trickle cannot delay dispatch unboundedly.
-				b.openWindowLocked(sub, m, linger)
+				b.openWindowLocked(ctx, sub, m, linger)
 				b.mu.Unlock()
 				return
 			}
@@ -390,16 +390,20 @@ type lingerWindow struct {
 	closed bool
 }
 
-func (b *Broker) openWindowLocked(sub *subscription, m *consumer, linger time.Duration) {
+func (b *Broker) openWindowLocked(ctx context.Context, sub *subscription, m *consumer, linger time.Duration) {
 	if m.window != nil {
 		return
 	}
 	w := &lingerWindow{}
 	m.window = w
 	// The window fires outside any caller's context — the publish that
-	// opened it has long returned — so the flush runs on a background
-	// context rather than one that may already be cancelled.
-	w.timer = time.AfterFunc(linger, func() { b.flushWindow(sub, m, w) })
+	// opened it has long returned — so the flush must not inherit that
+	// caller's cancellation, or a returned request would cancel a delivery
+	// it has nothing more to do with. It DOES inherit the caller's values,
+	// so the trace and the logging fields the batch belongs to survive the
+	// timer hop; a bare Background would drop them.
+	flushCtx := context.WithoutCancel(ctx)
+	w.timer = time.AfterFunc(linger, func() { b.flushWindow(flushCtx, sub, m, w) })
 }
 
 // closeWindowLocked cancels an open window without delivering. What it was
@@ -415,7 +419,7 @@ func (m *consumer) closeWindowLocked() {
 	w.timer.Stop()
 }
 
-func (b *Broker) flushWindow(sub *subscription, m *consumer, w *lingerWindow) {
+func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer, w *lingerWindow) {
 	b.mu.Lock()
 	if w.closed || m.window != w {
 		b.mu.Unlock()
@@ -436,7 +440,7 @@ func (b *Broker) flushWindow(sub *subscription, m *consumer, w *lingerWindow) {
 	}
 	// Bypass the linger check that would otherwise re-open the window
 	// immediately on the events this one collected.
-	b.drain(context.Background(), sub, true)
+	b.drain(ctx, sub, true)
 }
 
 // --- small helpers --------------------------------------------------------

@@ -33,7 +33,8 @@ func (SandboxRunStarted) EventType() string { return "sandbox_run_started" }
 
 // Role is the seat the detached job belongs to; it stays busy until the run
 // reports back.
-func (e SandboxRunStarted) Role() string    { return e.RoleName }
+func (e SandboxRunStarted) Role() string { return e.RoleName }
+
 // AgentID is the instance that launched the run.
 func (e SandboxRunStarted) AgentID() string { return e.Agent }
 
@@ -65,7 +66,8 @@ type SandboxRunCompleted struct {
 func (SandboxRunCompleted) EventType() string { return "sandbox_run_completed" }
 
 // Role is the seat waiting on the run — the seat this signal releases.
-func (e SandboxRunCompleted) Role() string    { return e.RoleName }
+func (e SandboxRunCompleted) Role() string { return e.RoleName }
+
 // AgentID is the instance whose suspended turn resumes.
 func (e SandboxRunCompleted) AgentID() string { return e.Agent }
 
@@ -107,7 +109,8 @@ func (SandboxClarificationRequested) EventType() string {
 
 // Role is the seat the question is posted as — the sandbox never speaks in its
 // own name.
-func (e SandboxClarificationRequested) Role() string    { return e.RoleName }
+func (e SandboxClarificationRequested) Role() string { return e.RoleName }
+
 // AgentID is the instance whose run asked.
 func (e SandboxClarificationRequested) AgentID() string { return e.Agent }
 
