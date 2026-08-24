@@ -52,6 +52,24 @@ type TokenSink interface {
 	// write-through one has nothing to do and says so.
 	Flush(ctx context.Context) error
 
+	// Holds reports whether this sink already carries a value for a
+	// variable.
+	//
+	// # It is what makes a re-run safe to run
+	//
+	// A vendor that serves a credential once — which is all of them — gives
+	// a provisioner no way to check that the value it recorded last time
+	// still matches. So the only alternative to asking this is to mint a
+	// fresh one every run, and that is an outage: the engine is running
+	// with the OLD value, and rotating it revokes the credential every
+	// agent is currently authenticating with. An operator adding one seat
+	// would take the other nine down.
+	//
+	// A sink that persists nothing answers false, which is correct rather
+	// than a degradation: nothing was kept, so the operator needs the
+	// value again.
+	Holds(ctx context.Context, name string) (bool, error)
+
 	// Describe names where the values went, for the run's report. It is
 	// what tells an operator whether to go looking in a file or in the
 	// store.

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/plane"
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
@@ -130,7 +131,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// uses. A --dry-run that re-derived it separately would be a second
 	// implementation that can disagree with the real one about what it
 	// was going to do.
-	printPlan(stdout, plan)
+	printPlan(stdout, plan, "a GitLab credential (mcp_env."+gitlab.SeatEnv+"."+gitlab.CredentialKeys[0]+")")
 	if *dryRun {
 		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, minted or registered.")
 		return nil
@@ -178,10 +179,12 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 }
 
 // printPlan renders what a run intends to do.
-func printPlan(w io.Writer, plan *provision.Plan) {
+// The `what` names the credential a seat would have to reference, because
+// an empty plan is almost always a config that names none — and "nothing to
+// do" without saying what was looked for sends an operator to the vendor.
+func printPlan(w io.Writer, plan *provision.Plan, what string) {
 	if plan.Empty() {
-		fmt.Fprintln(w, "No seat references a code-host credential, so there "+
-			"is nothing to provision.")
+		fmt.Fprintf(w, "No seat references %s, so there is nothing to provision.\n", what)
 	} else {
 		fmt.Fprintf(w, "%d seat(s) to provision:\n", len(plan.Seats))
 		for _, seat := range plan.Seats {
@@ -235,6 +238,8 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 		return runGitLabProvision(rest, stdout, stderr)
 	case vendor == "mattermost" && sub == "provision":
 		return runMattermostProvision(rest, stdout, stderr)
+	case vendor == "plane" && sub == "provision":
+		return runPlaneProvision(rest, stdout, stderr)
 	case sub == "" || sub == "help":
 		fmt.Fprintf(stderr, "usage: crewlet %s provision <company.yaml>\n", vendor)
 		return flag.ErrHelp
@@ -282,7 +287,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	printPlan(stdout, plan)
+	printPlan(stdout, plan, "a Mattermost bot token (its role's mattermost.bot_token)")
 	if *dryRun {
 		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, joined or minted.")
 		return nil
@@ -357,4 +362,182 @@ func sortedKeys(m map[string][]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// runPlaneProvision is `crewlet plane provision`.
+func runPlaneProvision(args []string, stdout, stderr io.Writer) error {
+	companyPath, args := splitSubject(args)
+
+	fs := flag.NewFlagSet("plane provision", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	sinks := addSinkFlags(fs)
+	adminToken := fs.String("admin-token", "",
+		"a Plane API key for a workspace administrator; empty reads PLANE_ADMIN_TOKEN")
+	publicURL := fs.String("public-url", "",
+		"this deployment's public base URL, for registering the workspace webhook")
+	rotate := fs.Bool("rotate", false,
+		"mint a fresh credential for every seat, including seats whose "+
+			"current one still works (the engine has to be restarted after)")
+	decommission := fs.Bool("decommission", false,
+		"delete managed service accounts whose seats have left the config")
+	createProjects := fs.Bool("create-projects", false,
+		"create configured projects the workspace does not have")
+	recreateWebhook := fs.Bool("recreate-webhook", false,
+		"delete and remake the workspace webhook to mint a fresh secret; "+
+			"invalidates the secret every other deployment holds")
+	expiryDays := fs.Int("token-expiry-days", 0,
+		"override provisioning.token_expiry_days for this run; 0 means the "+
+			"token never expires")
+	dryRun := fs.Bool("dry-run", false,
+		"print what the run would do and touch nothing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	// PASSED ONLY WHEN THE OPERATOR TYPED IT. Zero is a meaningful value
+	// here — it means never-expires — so the flag's default cannot be
+	// told from a choice without asking which flags were actually set.
+	var expiry *int
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "token-expiry-days" {
+			expiry = expiryDays
+		}
+	})
+	tail := fs.Args()
+	if companyPath == "" && len(tail) == 1 {
+		companyPath, tail = tail[0], nil
+	}
+	if companyPath == "" || len(tail) > 0 {
+		fmt.Fprintln(stderr,
+			"usage: crewlet plane provision <company.yaml> "+
+				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
+				"[-rotate] [-decommission] [-create-projects] "+
+				"[-recreate-webhook] [-token-expiry-days N] [-dry-run]")
+		return errors.New("name exactly one company document")
+	}
+	if expiry != nil && *expiry < 0 {
+		return errors.New(
+			"-token-expiry-days must not be negative: it would silently mean " +
+				"0, which is the inverse of a shorter expiry. Use 0 for a " +
+				"token that never expires")
+	}
+
+	company, err := config.LoadCompany(companyPath)
+	if err != nil {
+		return err
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		return err
+	}
+	cfg := company.Integrations.Plane
+	plan, err := plane.PlanFor(organization, cfg)
+	if err != nil {
+		return err
+	}
+
+	printPlan(stdout, plan, "a Plane API key (mcp_env."+plane.SeatEnv+"."+plane.SeatKey+")")
+	if *dryRun {
+		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, joined, minted or registered.")
+		return nil
+	}
+	if plan.Empty() {
+		return nil
+	}
+
+	ctx := context.Background()
+	stdoutForPrintSink = stdout
+	sink, closeSink, err := sinks.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeSink()
+
+	env := config.EnvOnly()
+	token := strings.TrimSpace(*adminToken)
+	if token == "" {
+		token = strings.TrimSpace(env.Lookup("PLANE_ADMIN_TOKEN"))
+	}
+	if token == "" {
+		return errors.New(
+			"no administrator key: pass -admin-token or export PLANE_ADMIN_TOKEN. " +
+				"The seats' own keys are what this run MINTS, so it cannot " +
+				"bootstrap itself from them")
+	}
+	client, err := plane.NewClient(plane.ClientOptions{
+		URL: env.Value(cfg.URL), Workspace: env.Value(cfg.Workspace), APIKey: token,
+	})
+	if err != nil {
+		return err
+	}
+
+	res, err := plane.Reconcile(ctx, plane.Options{
+		Client: client, Config: cfg, Plan: plan, Sink: sink,
+		Org: organization, WebhookBase: *publicURL,
+		Rotate: *rotate, Decommission: *decommission,
+		CreateProjects: *createProjects, RecreateWebhook: *recreateWebhook,
+		ExpiryDays: expiry,
+	})
+	if err != nil {
+		return err
+	}
+	printTrackerResult(stdout, res, sink.Describe())
+	return nil
+}
+
+// printTrackerResult renders what a Plane run did.
+func printTrackerResult(w io.Writer, res *plane.Result, where string) {
+	fmt.Fprintf(w, "\nRecorded in %s.\n", where)
+	if len(res.Created) > 0 {
+		fmt.Fprintf(w, "Created %d service account(s): %s\n",
+			len(res.Created), strings.Join(res.Created, ", "))
+	}
+	if len(res.Rotated) > 0 {
+		fmt.Fprintf(w, "Minted a token for %d seat(s): %s\n",
+			len(res.Rotated), strings.Join(res.Rotated, ", "))
+	}
+	if len(res.Kept) > 0 {
+		// SAID OUT LOUD, because it is the successful outcome of a
+		// re-run and a silent report reads as a run that did nothing.
+		fmt.Fprintf(w, "Left %d seat(s) alone — their credential still "+
+			"works and rotating it would revoke what the running engine "+
+			"is using: %s\n  (pass -rotate to mint fresh ones, and restart "+
+			"the engine after)\n",
+			len(res.Kept), strings.Join(res.Kept, ", "))
+	}
+	if len(res.Decommissioned) > 0 {
+		fmt.Fprintf(w, "Deleted %d account(s) whose seats have left: %s\n",
+			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
+	}
+	if len(res.Joined) > 0 {
+		fmt.Fprintf(w, "Joined to project(s): %s\n", strings.Join(res.Joined, ", "))
+	}
+	if res.Hooked != "" {
+		fmt.Fprintf(w, "Webhook registered at %s\n", res.Hooked)
+	}
+	printNotes(w, res.Notes)
+	printMembers(w, res.Members)
+}
+
+// printMembers ends the report with the workspace member table.
+//
+// LAST, and after the notes that point at it: the ids are what a founder
+// copies into `contact.plane_user_id` for their human seats, and Plane's own
+// UI does not show them anywhere. Sorted by username so a re-run's output
+// diffs cleanly against the last one.
+func printMembers(w io.Writer, members []plane.Account) {
+	if len(members) == 0 {
+		return
+	}
+	sort.Slice(members, func(i, j int) bool {
+		return members[i].Username < members[j].Username
+	})
+	fmt.Fprintf(w, "\nWorkspace members (%d) — the id column is what "+
+		"contact.plane_user_id takes:\n", len(members))
+	for _, m := range members {
+		kind := "person"
+		if m.IsBot {
+			kind = "service"
+		}
+		fmt.Fprintf(w, "  %-24s %-38s %-7s %s\n", m.Username, m.ID, kind, m.Email)
+	}
 }

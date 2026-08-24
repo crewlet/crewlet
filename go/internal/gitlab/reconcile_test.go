@@ -227,6 +227,14 @@ func (s *recordingSink) Discard(context.Context) error {
 	return nil
 }
 
+// Holds implements the sink contract: this fixture starts empty, so
+// nothing is held until this run records it.
+func (s *recordingSink) Holds(_ context.Context, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.values[name] != "", nil
+}
+
 func (s *recordingSink) Flush(context.Context) error { return nil }
 func (s *recordingSink) Describe() string            { return "a test sink" }
 
@@ -521,6 +529,8 @@ type cancellingSink struct {
 	cancel    context.CancelFunc
 	discarded bool
 }
+
+func (s *cancellingSink) Holds(context.Context, string) (bool, error) { return false, nil }
 
 func (s *cancellingSink) Record(context.Context, string, string) error {
 	s.cancel()

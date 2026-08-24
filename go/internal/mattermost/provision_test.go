@@ -246,6 +246,15 @@ func (s *chatSink) Discard(context.Context) error {
 	s.values = map[string]string{}
 	return nil
 }
+
+// Holds implements the sink contract: this fixture starts empty, so
+// nothing is held until this run records it.
+func (s *chatSink) Holds(_ context.Context, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.values[name] != "", nil
+}
+
 func (s *chatSink) Flush(context.Context) error { return nil }
 func (s *chatSink) Describe() string            { return "a test sink" }
 

@@ -48,6 +48,26 @@ func (s *SecretStoreSink) Record(ctx context.Context, name, value string) error 
 	return nil
 }
 
+// Holds implements [TokenSink].
+//
+// A row this run wrote counts too, and deliberately: a value recorded a
+// moment ago is held, and a caller asking twice must get the same answer
+// whether or not the row existed before the run started.
+func (s *SecretStoreSink) Holds(ctx context.Context, name string) (bool, error) {
+	value, err := s.values.Get(ctx, name)
+	switch {
+	case errors.Is(err, store.ErrSecretNotFound):
+		return false, nil
+	case err != nil:
+		// UNREADABLE IS NOT ABSENT. A store that cannot be read would
+		// otherwise make every credential look missing, and the caller
+		// would rotate the lot — which is the outage this exists to
+		// prevent, arriving through the failure path instead.
+		return false, err
+	}
+	return strings.TrimSpace(value) != "", nil
+}
+
 // Discard implements [TokenSink].
 //
 // BEST EFFORT AND IT REPORTS WHAT IT MISSED. A sink that cannot be reached
@@ -138,6 +158,13 @@ func NewEnvFileSink(path string) (*EnvFileSink, error) {
 		return nil, fmt.Errorf("provision: %s: %w", path, err)
 	}
 	return s, nil
+}
+
+// Holds implements [TokenSink], from what the file carries.
+func (s *EnvFileSink) Holds(_ context.Context, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.TrimSpace(s.values[name]) != "", nil
 }
 
 // Record implements [TokenSink], rewriting the file each time.
@@ -248,6 +275,15 @@ type PrintSink struct {
 
 // NewPrintSink builds the sink.
 func NewPrintSink(w io.Writer) *PrintSink { return &PrintSink{w: w} }
+
+// Holds implements [TokenSink]: never.
+//
+// This sink persists NOTHING — the value went to a terminal and this
+// process has no idea what became of it. Answering false is the correct
+// answer rather than a degradation: an operator who chose -print is asking
+// to be handed the credentials, and one that was not minted cannot be
+// pasted anywhere.
+func (s *PrintSink) Holds(context.Context, string) (bool, error) { return false, nil }
 
 // Record implements [TokenSink].
 func (s *PrintSink) Record(_ context.Context, name, value string) error {

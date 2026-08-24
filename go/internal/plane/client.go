@@ -96,8 +96,10 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("plane: %s: %d: %s", path, resp.StatusCode,
-			strings.TrimSpace(string(detail)))
+		return &APIError{
+			Method: http.MethodGet, Path: path, Status: resp.StatusCode,
+			Detail: strings.TrimSpace(string(detail)),
+		}
 	}
 	if out == nil {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
