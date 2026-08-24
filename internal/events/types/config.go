@@ -31,8 +31,12 @@ type ConfigRevisionActivated struct {
 	CreatedBy       string `json:"created_by"`
 }
 
+// EventType is the "config_revision_activated" wire type.
 func (ConfigRevisionActivated) EventType() string { return "config_revision_activated" }
 
+// Summary prefers the author's own revision summary and falls back to the id:
+// an operator reading the feed wants to know WHAT changed, and the id alone
+// never says.
 func (e ConfigRevisionActivated) Summary() string {
 	if e.RevisionSummary != "" {
 		return "Config revision activated: " + e.RevisionSummary
@@ -48,6 +52,9 @@ func (e ConfigRevisionActivated) Summary() string {
 // must never be counted as one.
 type ApplyStatus string
 
+// The three outcomes an apply can report. There is no fourth for "still
+// going": a node publishes this once it has finished, and silence is what a
+// convergence check reads as not-yet-applied.
 const (
 	ApplyOK       ApplyStatus = "ok"
 	ApplyError    ApplyStatus = "error"
@@ -69,8 +76,13 @@ type ConfigRevisionApplied struct {
 	Error             string      `json:"error"`
 }
 
+// EventType is the "config_revision_applied" wire type.
 func (ConfigRevisionApplied) EventType() string { return "config_revision_applied" }
 
+// Summary reads as a failure for every status other than ApplyOK, degraded
+// included: a node that could not finish an apply has not converged, and a line
+// that hedged would let the fleet look healthier than it is. The envelope's
+// source names which node — this line does not repeat it.
 func (e ConfigRevisionApplied) Summary() string {
 	if e.Status == ApplyOK {
 		return "Config revision " + e.RevisionID + " applied"

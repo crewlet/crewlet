@@ -21,6 +21,20 @@
 // would let sixty of them re-derive the chain: the moment two disagree, one
 // turn reads differently on two surfaces.
 //
+// Every payload in the catalogue implements the same small method set, so the
+// comment on each one carries only what is specific to that event:
+//
+//   - EventType is the wire type string, and the registry key. It is the one
+//     place that literal appears, which is why each method's comment quotes it
+//     — godoc shows the comment, never the one-line body.
+//   - Role and AgentID contribute the seat and the instance to the envelope's
+//     actor chain (events.Roler, events.AgentIdentified). What they MEAN is per
+//     event: the seat that spent the tokens, the seat whose budget ran out, the
+//     seat being torn down.
+//   - Summary or SummaryFor renders the "who did what" line every trace view
+//     shows. SummaryFor is handed the already-resolved actor; Summary is for
+//     the events that name their own subject and never lead with an actor.
+//
 // Four conventions the whole catalogue follows:
 //
 //   - Slices and maps carry omitempty, scalars do not. Pydantic emits every
@@ -190,6 +204,8 @@ func (t Trigger) Map() map[string]any {
 	return descriptor
 }
 
+// MarshalJSON writes the descriptor through Map, so the JSON a node publishes
+// and the map an API handler hands the dashboard cannot drift apart.
 func (t Trigger) MarshalJSON() ([]byte, error) { return json.Marshal(t.Map()) }
 
 // triggerWire mirrors the map form for decoding. Every key is optional: a

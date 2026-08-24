@@ -48,8 +48,12 @@ type A2AChannelOpened struct {
 	Participants []string `json:"participants,omitempty"`
 }
 
+// EventType is the "a2a_channel_opened" wire type.
 func (A2AChannelOpened) EventType() string { return "a2a_channel_opened" }
 
+// Summary leads with the requester the payload names, not the resolved actor:
+// the publisher is the A2A service, and attributing the ask to it would hide
+// which colleague actually asked.
 func (e A2AChannelOpened) Summary() string {
 	return lead(e.Requester, "opened A2A channel with "+e.Target)
 }
@@ -66,6 +70,8 @@ type A2AMessageSent struct {
 	Content    string `json:"content"`
 }
 
+// EventType is the "a2a_message_sent" wire type. Distinct from A2AMessageType,
+// which is the inbox WAKE — this is the audit record of the same message.
 func (A2AMessageSent) EventType() string { return "a2a_message_sent" }
 
 // SummaryFor prefers the message's own sender, for the same reason MessageSent
@@ -91,8 +97,11 @@ type A2AMessageDelivered struct {
 	TotalContentLength int    `json:"total_content_length"`
 }
 
+// EventType is the "a2a_message_delivered" wire type.
 func (A2AMessageDelivered) EventType() string { return "a2a_message_delivered" }
 
+// Summary leads with the recipient, because delivery is something that happened
+// TO a seat: it is the read, not the send.
 func (e A2AMessageDelivered) Summary() string {
 	return lead(e.Recipient, fmt.Sprintf("received %d A2A message(s) from %s on %s",
 		e.MessageCount, e.Sender, e.ChannelID))
@@ -108,8 +117,11 @@ type A2AChannelClosed struct {
 	DurationMS   float64  `json:"duration_ms"`
 }
 
+// EventType is the "a2a_channel_closed" wire type.
 func (A2AChannelClosed) EventType() string { return "a2a_channel_closed" }
 
+// Summary names who closed the channel, falling back to the engine itself for
+// the idle sweep — see the branch below.
 func (e A2AChannelClosed) Summary() string {
 	who := e.ClosedBy
 	if who == "" {

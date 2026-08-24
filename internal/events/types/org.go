@@ -33,8 +33,11 @@ type OrgStarted struct {
 	OrgName string `json:"org_name"`
 }
 
+// EventType is the "org_started" wire type.
 func (OrgStarted) EventType() string { return "org_started" }
 
+// SummaryFor names the organization rather than the actor: at start-up no seat
+// exists yet to attribute the line to.
 func (e OrgStarted) SummaryFor(actor string) string {
 	return "Organization '" + orgName(e.OrgName, actor) + "' started"
 }
@@ -44,8 +47,11 @@ type OrgStopped struct {
 	OrgName string `json:"org_name"`
 }
 
+// EventType is the "org_stopped" wire type.
 func (OrgStopped) EventType() string { return "org_stopped" }
 
+// SummaryFor names the organization rather than the actor, mirroring
+// OrgStarted so a shutdown reads as the counterpart of the start-up line.
 func (e OrgStopped) SummaryFor(actor string) string {
 	return "Organization '" + orgName(e.OrgName, actor) + "' stopped"
 }
@@ -56,11 +62,16 @@ type AgentSpawned struct {
 	RoleName string `json:"role"`
 }
 
+// EventType is the "agent_spawned" wire type.
 func (AgentSpawned) EventType() string { return "agent_spawned" }
 
-func (e AgentSpawned) Role() string    { return e.RoleName }
+// Role is the seat that was filled.
+func (e AgentSpawned) Role() string { return e.RoleName }
+
+// AgentID is the instance now holding the seat.
 func (e AgentSpawned) AgentID() string { return e.Agent }
 
+// SummaryFor leads with the seat, which the actor chain resolves from Role.
 func (e AgentSpawned) SummaryFor(actor string) string { return lead(actor, "joined the organization") }
 
 // AgentTerminated marks a seat's instance being torn down.
@@ -70,11 +81,17 @@ type AgentTerminated struct {
 	Reason   string `json:"reason"`
 }
 
+// EventType is the "agent_terminated" wire type.
 func (AgentTerminated) EventType() string { return "agent_terminated" }
 
-func (e AgentTerminated) Role() string    { return e.RoleName }
+// Role is the seat being emptied.
+func (e AgentTerminated) Role() string { return e.RoleName }
+
+// AgentID is the instance being torn down.
 func (e AgentTerminated) AgentID() string { return e.Agent }
 
+// SummaryFor appends the reason when one was given: a seat that went away
+// deliberately and one that was killed read identically without it.
 func (e AgentTerminated) SummaryFor(actor string) string {
 	line := lead(actor, "was terminated")
 	if e.Reason != "" {
@@ -92,10 +109,15 @@ type AgentReassigned struct {
 	NewManager string `json:"new_manager"`
 }
 
+// EventType is the "agent_reassigned" wire type.
 func (AgentReassigned) EventType() string { return "agent_reassigned" }
 
+// AgentID is the instance that moved. There is no Role: the move spans two
+// of them, and picking either as THE role would misattribute the event.
 func (e AgentReassigned) AgentID() string { return e.Agent }
 
+// Summary names both roles instead of leading with an actor — the sentence is
+// about the move, and the old role is half of what it says.
 func (e AgentReassigned) Summary() string {
 	return "Agent reassigned from " + e.OldRole + " to " + e.NewRole
 }
@@ -108,9 +130,14 @@ type RoleUpdated struct {
 	ChangedFields []string `json:"changed_fields,omitempty"`
 }
 
+// EventType is the "role_updated" wire type.
 func (RoleUpdated) EventType() string { return "role_updated" }
 
-func (e RoleUpdated) Role() string    { return e.RoleName }
+// Role is the seat whose definition changed.
+func (e RoleUpdated) Role() string { return e.RoleName }
+
+// AgentID is the instance holding that seat across the change — the seat
+// survives a config reload, only what it is changes.
 func (e RoleUpdated) AgentID() string { return e.Agent }
 
 // SummaryFor is possessive ("Engineer's role updated"), so it spells the actor

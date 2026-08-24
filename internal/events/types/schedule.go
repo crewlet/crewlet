@@ -9,6 +9,9 @@ func init() {
 // ScheduleScope is what a recurring schedule is attached to.
 type ScheduleScope string
 
+// The two things a schedule can hang off. A role schedule has exactly one runner
+// — the seat itself. A unit schedule resolves its runners from the unit and its
+// target, so one tick can dispatch several times.
 const (
 	ScheduleScopeRole ScheduleScope = "role"
 	ScheduleScopeUnit ScheduleScope = "unit"
@@ -30,8 +33,12 @@ type ScheduledTaskFired struct {
 	ScheduledAt string `json:"scheduled_at"`
 }
 
+// EventType is the "scheduled_task_fired" wire type.
 func (ScheduledTaskFired) EventType() string { return "scheduled_task_fired" }
 
+// Summary names the seat the run was dispatched to, falling back to the scope
+// id: a unit schedule fires once per runner, so the handle is what tells two
+// dispatches of the same tick apart.
 func (e ScheduledTaskFired) Summary() string {
 	who := e.TargetHandle
 	if who == "" {

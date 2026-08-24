@@ -28,11 +28,17 @@ type SandboxRunStarted struct {
 	Task string `json:"task"`
 }
 
+// EventType is the "sandbox_run_started" wire type.
 func (SandboxRunStarted) EventType() string { return "sandbox_run_started" }
 
+// Role is the seat the detached job belongs to; it stays busy until the run
+// reports back.
 func (e SandboxRunStarted) Role() string    { return e.RoleName }
+// AgentID is the instance that launched the run.
 func (e SandboxRunStarted) AgentID() string { return e.Agent }
 
+// SummaryFor names the coding agent, which is the one thing distinguishing two
+// otherwise identical sandbox jobs on the same seat.
 func (e SandboxRunStarted) SummaryFor(actor string) string {
 	return lead(actor, "started a sandbox job ("+e.CodingAgent+")")
 }
@@ -55,11 +61,17 @@ type SandboxRunCompleted struct {
 	CodingAgent string `json:"coding_agent"`
 }
 
+// EventType is the "sandbox_run_completed" wire type.
 func (SandboxRunCompleted) EventType() string { return "sandbox_run_completed" }
 
+// Role is the seat waiting on the run — the seat this signal releases.
 func (e SandboxRunCompleted) Role() string    { return e.RoleName }
+// AgentID is the instance whose suspended turn resumes.
 func (e SandboxRunCompleted) AgentID() string { return e.Agent }
 
+// SummaryFor is possessive ("Engineer's sandbox job completed"), so it spells
+// the actor into the line rather than going through lead: the job finished, and
+// the seat did not do the finishing.
 func (e SandboxRunCompleted) SummaryFor(actor string) string {
 	if actor == "" {
 		return "Sandbox job completed"
@@ -88,13 +100,20 @@ type SandboxClarificationRequested struct {
 	ConversationKey string `json:"conversation_key"`
 }
 
+// EventType is the "sandbox_clarification_requested" wire type.
 func (SandboxClarificationRequested) EventType() string {
 	return "sandbox_clarification_requested"
 }
 
+// Role is the seat the question is posted as — the sandbox never speaks in its
+// own name.
 func (e SandboxClarificationRequested) Role() string    { return e.RoleName }
+// AgentID is the instance whose run asked.
 func (e SandboxClarificationRequested) AgentID() string { return e.Agent }
 
+// SummaryFor names the audience, falling back to "someone": an unrouted
+// question is still a question, and a line reading "asked  a question" would
+// hide that the audience was missing.
 func (e SandboxClarificationRequested) SummaryFor(actor string) string {
 	audience := e.Audience
 	if audience == "" {

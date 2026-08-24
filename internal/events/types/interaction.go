@@ -17,6 +17,9 @@ package types
 // does not classify the channel should set ChannelUnknown explicitly.
 type ChannelKind string
 
+// The surfaces an inbound message can arrive on. Coarse on purpose: a new
+// platform maps onto one of these rather than adding a value, because nothing
+// branches on the answer and a longer list would only invite something to start.
 const (
 	ChannelDM       ChannelKind = "dm"
 	ChannelGroup    ChannelKind = "group"

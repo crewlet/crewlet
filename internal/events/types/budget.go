@@ -16,6 +16,9 @@ func init() {
 // BudgetScope is whose budget a figure belongs to.
 type BudgetScope string
 
+// The two levels a token cap is kept at: one seat's own allowance, and the
+// company-wide pool every seat charges against. A call is checked against both,
+// so either can be the scope that refuses it.
 const (
 	BudgetScopeAgent BudgetScope = "agent"
 	BudgetScopeOrg   BudgetScope = "org"
@@ -32,11 +35,18 @@ type BudgetExhausted struct {
 	MaxTokens  int         `json:"max_tokens"`
 }
 
+// EventType is the "budget_exhausted" wire type, and one of the four names in
+// FailureEventTypes.
 func (BudgetExhausted) EventType() string { return "budget_exhausted" }
 
+// Role is the seat whose charge was refused, which is the seat a dashboard
+// shows the exhaustion against even for an org-scoped cap.
 func (e BudgetExhausted) Role() string    { return e.RoleName }
+// AgentID is the instance that made the refused call.
 func (e BudgetExhausted) AgentID() string { return e.Agent }
 
+// SummaryFor names the scope, since an org cap and a per-seat cap are refused
+// on the same seat and read identically otherwise.
 func (e BudgetExhausted) SummaryFor(actor string) string {
 	return lead(actor, "exhausted "+string(e.BudgetType)+" token budget")
 }
@@ -92,8 +102,11 @@ type BudgetReported struct {
 	Agents        []BudgetMeter `json:"agents,omitempty"`
 }
 
+// EventType is the "budget_reported" wire type.
 func (BudgetReported) EventType() string { return "budget_reported" }
 
+// Summary counts the metered seats rather than leading with an actor: the
+// snapshot is the engine's, not any one seat's.
 func (e BudgetReported) Summary() string {
 	return fmt.Sprintf("Token meters reported for %d agents", len(e.Agents))
 }

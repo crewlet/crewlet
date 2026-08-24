@@ -35,9 +35,13 @@ type LLMUnavailable struct {
 	TurnID        string   `json:"turn_id"`
 }
 
+// EventType is the "llm_unavailable" wire type, and one of the four names in
+// FailureEventTypes.
 func (LLMUnavailable) EventType() string { return "llm_unavailable" }
 
+// Role is the seat whose provider chain ran out — the seat that goes AFK.
 func (e LLMUnavailable) Role() string    { return e.RoleName }
+// AgentID is the instance whose turn terminates as failed.
 func (e LLMUnavailable) AgentID() string { return e.Agent }
 
 func (e LLMUnavailable) SummaryFor(actor string) string {
@@ -62,6 +66,7 @@ type ProviderFallback struct {
 	ErrorKind       string `json:"error_kind"`
 }
 
+// EventType is the "provider_fallback" wire type.
 func (ProviderFallback) EventType() string { return "provider_fallback" }
 
 // SummaryFor is handed the publisher as its actor: this event carries a handle
