@@ -554,6 +554,12 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		ShuttingDown: host.Draining(),
 		Seats:        host.Held(),
 		StartedAt:    r.engine.StartedAt().Format(time.RFC3339),
+		// Which integrations have a PARSER, which is the only thing that
+		// makes a verified delivery reach an agent. Read from the notify
+		// service rather than from a list kept here: a hand-maintained
+		// one is exactly what drifts, and it would drift towards
+		// claiming more than the build does.
+		RoutedSources: r.engine.RoutedSources(),
 	}
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached

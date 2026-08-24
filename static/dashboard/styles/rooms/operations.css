@@ -153,40 +153,6 @@ tr.is-refused td {
   font-size: var(--text-2xs);
 }
 
-/* The routing funnel. Every segment prints its count in the legend: a
-   proportion with no absolute figure cannot tell "40% skipped of ten"
-   from "40% skipped of ten thousand". */
-.fn-bar {
-  display: flex;
-  height: 5px;
-  border-radius: 3px;
-  overflow: hidden;
-  background: var(--bg-inset);
-  gap: 1px;
-}
-.fn-seg {
-  display: block;
-}
-.fn-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-  font-size: var(--text-2xs);
-  color: var(--text-muted);
-}
-.fn-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.fn-legend i {
-  width: 7px;
-  height: 7px;
-  border-radius: 2px;
-  display: inline-block;
-}
-
 /* ---- Fleet ---- */
 
 .fleet-alert {

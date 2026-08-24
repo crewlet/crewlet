@@ -139,6 +139,12 @@ func New(opts Options) *App {
 	if sources.State == nil {
 		sources.State = state
 	}
+	// Only a co-located engine knows which parsers registered. Left nil on
+	// a standalone API, which is the honest answer rather than a confident
+	// empty list.
+	if sources.Routed == nil && opts.Runtime != nil {
+		sources.Routed = func() []string { return opts.Runtime.Snapshot().RoutedSources }
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 

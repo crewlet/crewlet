@@ -230,7 +230,7 @@ test("integrations: silence is reported as silence, never as health", async () =
     {
       integrations: {
         traffic_known: true,
-        window_hours: 24,
+        traffic_since: null,
         integrations: [
           {
             key: "gitlab",
@@ -239,19 +239,17 @@ test("integrations: silence is reported as silence, never as health", async () =
             inbound_kind: "webhook",
             inbound_path: "/webhooks/gitlab",
             secret_present: true,
+            routes: true,
             seats: ["swe"],
             inbound: 0,
-            routed: 0,
-            skipped: 0,
-            coalesced: 0,
-            last_at: "",
+            last_at: null,
           },
         ],
       },
     },
     ({ view }) => {
       const html = view.render(state());
-      assert.match(html, /no traffic seen in 24h/);
+      assert.match(html, /nothing has arrived/);
       assert.match(html, /not the same as broken/);
     },
   );
@@ -265,7 +263,7 @@ test("integrations: a missing signing secret is a finding", async () => {
     {
       integrations: {
         traffic_known: true,
-        window_hours: 24,
+        traffic_since: null,
         integrations: [
           {
             key: "github",
@@ -274,12 +272,10 @@ test("integrations: a missing signing secret is a finding", async () => {
             inbound_kind: "webhook",
             inbound_path: "/webhooks/github",
             secret_present: false,
+            routes: false,
             seats: [],
             inbound: 0,
-            routed: 0,
-            skipped: 0,
-            coalesced: 0,
-            last_at: "",
+            last_at: null,
           },
         ],
       },
@@ -524,6 +520,79 @@ test("mission: a teardown that just failed once is not called stuck", () => {
                       seats: { unproven: ["ceo"], unproven_seconds: { ceo: 4 } } } }),
   );
   assert.ok(!/teardown never confirmed/.test(html), "a 4-second retry was called stranded");
+});
+
+
+test("integrations: an ingest-only surface is not a working one", async () => {
+  // Verifying and storing a delivery is the first half; a parser turning it
+  // into a notification is the second, and a vendor can have one without the
+  // other. Everywhere else those look identical — configured, secret
+  // present, deliveries arriving — so this row is the only place an operator
+  // can see a surface ingesting into a void.
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: "2026-08-20T09:00:00Z",
+        integrations: [
+          {
+            key: "github",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/github",
+            secret_present: true,
+            routes: false,
+            seats: [],
+            inbound: 42,
+            last_at: "2026-08-24T09:00:00Z",
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /ingest only/);
+      assert.match(html, /wake nobody/);
+      // The traffic line must still read as traffic: 42 deliveries arrived,
+      // and the finding is what happened to them, not that nothing came.
+      assert.match(html, /42 inbound/);
+    },
+  );
+});
+
+test("integrations: an API with no engine says so rather than 'no'", async () => {
+  // routes === null is "this process cannot see an engine", which is the
+  // honest answer from a standalone API and must never render as a finding.
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: null,
+        integrations: [
+          {
+            key: "gitlab",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/gitlab",
+            secret_present: true,
+            routes: null,
+            seats: [],
+            inbound: 0,
+            last_at: null,
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /not visible from this process/);
+      assert.doesNotMatch(html, /ingest only/);
+    },
+  );
 });
 
 await run();

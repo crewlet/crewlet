@@ -41,43 +41,41 @@ export function createIntegrationsView({ query, refresh }) {
     if (!disposed) refresh();
   }
 
-  // The routing funnel as one bar: what arrived, and what the notification
-  // service did with it. Every segment prints its own count, because a
-  // proportion with no absolute figure cannot tell "40% skipped of ten"
-  // from "40% skipped of ten thousand".
-  function funnel(row) {
-    const routed = row.routed || 0;
-    const skipped = row.skipped || 0;
-    const coalesced = row.coalesced || 0;
-    const total = routed + skipped + coalesced;
-    if (!total) return "";
-    const seg = (n, hue, label) =>
-      n
-        ? `<span class="fn-seg" style="flex:${n};background:color-mix(in srgb, var(--${hue}) 55%, transparent)"
-                 title="${esc(label)}: ${esc(fmtNum(n))}"></span>`
-        : "";
-    return `
-      <div class="fn-bar">
-        ${seg(routed, "green", "routed")}
-        ${seg(skipped, "amber", "skipped")}
-        ${seg(coalesced, "cyan", "coalesced")}
-      </div>
-      <div class="fn-legend">
-        ${routed ? `<span><i style="background:var(--green)"></i>${esc(fmtNum(routed))} routed</span>` : ""}
-        ${skipped ? `<span><i style="background:var(--amber)"></i>${esc(fmtNum(skipped))} skipped</span>` : ""}
-        ${coalesced ? `<span><i style="background:var(--cyan)"></i>${esc(fmtNum(coalesced))} coalesced</span>` : ""}
-      </div>`;
-  }
-
   // What the traffic figures are allowed to claim.
-  function trafficLine(row, known, windowHours) {
+  //
+  // `since` rather than a fixed window: the count is over the most recent
+  // page of deliveries, not the last N hours, so naming a window would be a
+  // number the server never measured.
+  function trafficLine(row, known, since) {
     if (!known) {
       return `<span class="int-quiet">no event store — traffic cannot be counted</span>`;
     }
     if (row.last_at) {
-      return `<span class="int-live">${esc(fmtNum(row.inbound))} inbound in ${windowHours}h · last ${esc(relTime(row.last_at))}</span>`;
+      const span = since ? ` since ${esc(relTime(since))}` : "";
+      return `<span class="int-live">${esc(fmtNum(row.inbound))} inbound${span} · last ${esc(relTime(row.last_at))}</span>`;
     }
-    return `<span class="int-quiet">no traffic seen in ${windowHours}h — which is not the same as broken</span>`;
+    return `<span class="int-quiet">nothing has arrived — which is not the same as broken</span>`;
+  }
+
+  // Whether a delivery from this surface can WAKE A SEAT.
+  //
+  // Verifying and storing a delivery is the first half; a parser turning it
+  // into a notification is the second, and a vendor can have one without the
+  // other. Those render identically everywhere else — configured, secret
+  // present, deliveries arriving — so this is the only place an operator can
+  // see that a surface is ingesting into a void.
+  //
+  // Null means the server could not say (a standalone API has no engine to
+  // ask), which must not render as "no".
+  function routingRow(row) {
+    if (row.routes === null || row.routes === undefined) {
+      return `<div class="int-kv"><span>Routing</span><span class="zero">not visible from this process</span></div>`;
+    }
+    return `<div class="int-kv"><span>Routing</span>${
+      row.routes
+        ? `<span>wakes the seats it concerns</span>`
+        : `<span class="warn-ink">ingest only — deliveries are verified and stored, and wake nobody</span>`
+    }</div>`;
   }
 
   function secretRow(row) {
@@ -92,7 +90,7 @@ export function createIntegrationsView({ query, refresh }) {
     }</div>`;
   }
 
-  function card(row, known, windowHours) {
+  function card(row, known, since) {
     const meta = integrationMeta(row.key);
     return `
       <div class="int-card ${row.configured ? "" : "is-off"}" data-k="int:${escAttr(row.key)}">
@@ -108,9 +106,8 @@ export function createIntegrationsView({ query, refresh }) {
               : `<span class="badge">not configured</span>`
           }
           <span style="flex:1"></span>
-          ${row.configured ? trafficLine(row, known, windowHours) : ""}
+          ${row.configured ? trafficLine(row, known, since) : ""}
         </div>
-        ${row.configured ? funnel(row) : ""}
         ${
           row.configured
             ? `<div class="int-body">
@@ -120,6 +117,7 @@ export function createIntegrationsView({ query, refresh }) {
                      : esc(row.inbound_path)
                  }</span></div>
                  ${secretRow(row)}
+                 ${routingRow(row)}
                  ${row.url ? `<div class="int-kv"><span>Host</span><span class="mono">${esc(row.url)}</span></div>` : ""}
                  ${row.workspace ? `<div class="int-kv"><span>Workspace</span><span class="mono">${esc(row.workspace)}</span></div>` : ""}
                  <div class="int-kv"><span>Seats</span><span>${
@@ -177,13 +175,13 @@ export function createIntegrationsView({ query, refresh }) {
       return `
         ${sectionHead("globe", "Connected", configured.length)}
         <div class="int-grid">${configured
-          .map((r) => card(r, data.traffic_known, data.window_hours))
+          .map((r) => card(r, data.traffic_known, data.traffic_since))
           .join("")}</div>
         ${
           rest.length
             ? sectionHead("plug", "Available", rest.length) +
               `<div class="int-grid">${rest
-                .map((r) => card(r, data.traffic_known, data.window_hours))
+                .map((r) => card(r, data.traffic_known, data.traffic_since))
                 .join("")}</div>`
             : ""
         }`;

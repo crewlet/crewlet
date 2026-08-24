@@ -3,7 +3,9 @@ package queries
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/config"
@@ -91,24 +93,73 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 // answers is what is configured, whether the credential this node needs is
 // present, and how many deliveries arrived; a reader draws their own
 // conclusion from those.
+//
+// # Configured is not routed
+//
+// `routes` is the one thing here that is a property of the BUILD rather than
+// of the config, and it is the difference between an integration that works
+// and one that only looks like it does. A vendor's webhook route verifies and
+// stores its deliveries as soon as its block is present; whether one then
+// wakes a seat needs a parser, and four vendors have the first half and not
+// the second. Without this field they render identically — configured, secret
+// present, deliveries arriving — so a company whose tracker is ingesting
+// hundreds of events that reach nobody looks exactly like one that is working.
+//
+// THREE-VALUED, like secret_present and for the same reason: null is "this
+// process cannot say", which is what a standalone API honestly answers, and
+// is not the same claim as false.
 func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	company := s.Company()
 	if company == nil {
 		return map[string]any{"integrations": []any{}}, nil
 	}
-	counts := s.deliveryCounts(ctx)
+	seen := s.deliveryTraffic(ctx)
 	in := company.Integrations
 
+	// Nil when no engine is co-located; an empty-but-non-nil list is a real
+	// answer meaning nothing routes, so the two must not collapse.
+	var routed []string
+	known := s.Routed != nil
+	if known {
+		routed = s.Routed()
+		known = routed != nil
+	}
+
 	out := []map[string]any{}
-	add := func(kind string, configured bool, secret *bool, detail map[string]any) {
+	// CONFIGURED and ENABLED are different facts and the answer sends both.
+	// A block present with `enabled: false` is a deliberate pause an operator
+	// can see; an absent block is an integration nobody set up. Folding them
+	// left a paused integration looking unconfigured, which is the state most
+	// likely to be mistaken for a mistake.
+	add := func(kind string, enabled bool, secret *bool, detail map[string]any) {
 		row := map[string]any{
-			"kind": kind, "configured": configured,
-			"events": counts[kind],
+			"key":          kind,
+			"configured":   true,
+			"enabled":      enabled,
+			"inbound":      seen.count[kind],
+			"inbound_kind": map[bool]string{true: "websocket", false: "webhook"}[kind == "mattermost"],
+			"inbound_path": inboundPath(kind),
+		}
+		// Rendered as a relative time, so an absent one has to be absent
+		// rather than the zero instant — which would print as 1970.
+		if at, ok := seen.last[kind]; ok {
+			row["last_at"] = at.UTC().Format(time.RFC3339)
+		} else {
+			row["last_at"] = nil
+		}
+		if known {
+			row["routes"] = slices.Contains(routed, kind)
+		} else {
+			row["routes"] = nil
 		}
 		// THREE-VALUED, and the third value is the point: null means this
 		// surface uses no secret at all, false means a route is refusing
 		// every delivery, and only an operator can tell those apart.
 		row["secret_present"] = secret
+		// Every row carries seats, so the view never reads undefined.
+		// An empty list is a real answer — nobody holds credentials of
+		// their own for this surface — and it is not the same as absent.
+		row["seats"] = seatsFor(company, kind)
 		for key, value := range detail {
 			row[key] = value
 		}
@@ -122,7 +173,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// block answers webhooks and sends nothing; one with the block and no
 	// apps refuses every delivery.
 	if seats := slackSeats(company); in.Slack != nil || seats > 0 {
-		add("slack", in.Slack != nil, boolPtr(seats > 0), map[string]any{"seats": seats})
+		add("slack", in.Slack != nil, boolPtr(seats > 0), nil)
 	}
 	if in.Mattermost != nil {
 		add("mattermost", true, nil, map[string]any{"url": in.Mattermost.URL})
@@ -153,39 +204,127 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("forge", true, nil, map[string]any{"app_id": in.ForgeAppID})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i]["kind"].(string) < out[j]["kind"].(string)
+		return out[i]["key"].(string) < out[j]["key"].(string)
 	})
-	return map[string]any{"integrations": out}, nil
+	body := map[string]any{
+		"integrations": out,
+		// Whether the counts above are a MEASUREMENT. Without this a
+		// store that could not be read reports every integration at zero
+		// inbound, which reads as "nothing is arriving" — the alarming
+		// answer — when the truth is "nobody looked".
+		"traffic_known": seen.known,
+		// The oldest delivery counted, so a count means something. The
+		// page is capped rather than time-bounded, so there is no fixed
+		// window to name; null when nothing was counted.
+		"traffic_since": nil,
+	}
+	if !seen.since.IsZero() {
+		body["traffic_since"] = seen.since.UTC().Format(time.RFC3339)
+	}
+	return body, nil
 }
 
-// deliveryCounts is how many webhook rows each source wrote, grouped BY THE
-// STORE rather than by a live counter.
+// inboundPath is where a vendor's deliveries arrive, so an operator can check
+// what they pasted into the vendor's settings page against what this engine
+// actually serves. Static per vendor — these are the routes webhooks.go
+// registers, and a disagreement between the two is a route nothing reaches.
+func inboundPath(kind string) string {
+	switch kind {
+	case "mattermost":
+		return "" // one outbound websocket per seat; nothing arrives here
+	case "slack":
+		return "/webhooks/slack/{handle}"
+	case "forge":
+		return "/webhooks/forge"
+	default:
+		return "/webhooks/" + kind
+	}
+}
+
+// traffic is what the event store can say about inbound deliveries.
 //
-// A live counter resets with the process, and the question an operator asks —
-// "is anything arriving from GitLab" — is about the last day rather than since
-// this pod started.
-func (s Sources) deliveryCounts(ctx context.Context) map[string]int {
+// Grouped BY THE STORE rather than by a live counter: a live counter resets
+// with the process, and the question an operator asks — "is anything arriving
+// from GitLab" — is about recent history rather than about this pod's uptime.
+//
+// `known` is the load-bearing field. A store that cannot be read and a store
+// with nothing in it are opposite facts, and a count of 0 expresses both — so
+// the counts are reported ONLY alongside a flag saying they were measured.
+type traffic struct {
+	known bool
+	count map[string]int
+	last  map[string]time.Time
+
+	// since is the timestamp of the OLDEST delivery counted, which is what
+	// makes the counts mean something. The page is capped rather than time
+	// bounded, so "42 inbound" alone could span an hour or a year; "42
+	// since Tuesday" is a measurement. Zero when nothing was counted.
+	since time.Time
+}
+
+func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 	if s.Events == nil {
-		return nil
+		return traffic{}
 	}
 	rows, err := s.Events.List(ctx, store.ListQuery{
 		Category: "webhook", Limit: MaxEventPage,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
-		return nil
+		return traffic{}
 	}
-	counts := map[string]int{}
+	out := traffic{known: true, count: map[string]int{}, last: map[string]time.Time{}}
 	for _, row := range rows {
-		counts[row.Source]++
+		out.count[row.Source]++
+		if row.Time.After(out.last[row.Source]) {
+			out.last[row.Source] = row.Time
+		}
+		if out.since.IsZero() || row.Time.Before(out.since) {
+			out.since = row.Time
+		}
 	}
-	return counts
+	return out
+}
+
+// seatsFor lists the handles that carry this surface in their own config.
+//
+// LISTED rather than counted, because the number alone answers a question
+// nobody asks. "Which seats reach GitLab" is followed immediately by "which
+// ones", and a count sends the reader to the org page to work it out — while
+// the answer is already in the config this function is reading.
+//
+// What counts as carrying a surface is that seat's OWN field for it: a Slack
+// app, a Mattermost identity, a per-seat project or space. A seat with none
+// of them is served by the company-wide account, not by one of its own.
+func seatsFor(company *config.Company, kind string) []string {
+	out := []string{}
+	for i := range company.Roles {
+		r := &company.Roles[i]
+		var carries bool
+		switch kind {
+		case "slack":
+			carries = r.Integrations.Slack != nil
+		case "mattermost":
+			carries = r.Integrations.Mattermost != nil
+		case "jira":
+			carries = r.Integrations.Jira != nil
+		case "confluence":
+			carries = r.Integrations.Confluence != nil
+		case "plane":
+			carries = r.Integrations.Plane != nil
+		}
+		if carries {
+			out = append(out, r.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // slackSeats counts the per-seat Slack apps this company configures.
 //
-// Counted rather than listed: the number is what says whether the route can
-// verify anything at all, and the handles are already on the org surface.
+// Counted as well as listed: the COUNT is what says whether the route can
+// verify anything at all, since a Slack app with no signing secret cannot.
 func slackSeats(company *config.Company) int {
 	n := 0
 	for i := range company.Roles {

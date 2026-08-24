@@ -48,6 +48,17 @@ type RuntimeState struct {
 	// any fleet, and one previously answerable only by reading three
 	// processes' logs at debug level.
 	Seats []string
+
+	// RoutedSources names the integrations whose deliveries can actually
+	// wake a seat — the ones with a parser, not the ones with a config
+	// block.
+	//
+	// Nil means "cannot say", never "none route": a standalone API has no
+	// engine to ask, and a co-located one mid-boot has not started
+	// notifications yet. The two are the same answer for a reader, and
+	// both are the opposite of an empty slice, which is a real claim that
+	// nothing routes.
+	RoutedSources []string
 }
 
 // NodeRuntime is the seam for facts only a co-located engine can answer.

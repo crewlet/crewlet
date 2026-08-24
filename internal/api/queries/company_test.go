@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -194,7 +197,7 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	byKind := map[string]map[string]any{}
 	for _, row := range rows {
 		entry, _ := row.(map[string]any)
-		byKind[entry["kind"].(string)] = entry
+		byKind[entry["key"].(string)] = entry
 	}
 	for _, kind := range []string{"github", "gitlab", "slack"} {
 		if _, present := byKind[kind]; !present {
@@ -204,7 +207,10 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 	if _, present := byKind["plane"]; present {
 		t.Error("an integration the company does not configure was reported")
 	}
-	if byKind["slack"] == nil || byKind["slack"]["seats"] != float64(1) {
+	// LISTED rather than counted: "which seats reach Slack" is the question
+	// that follows "how many", and the answer is already in the config.
+	seats, _ := byKind["slack"]["seats"].([]any)
+	if len(seats) != 1 || seats[0] != "CEO" {
 		t.Errorf("slack seats = %v, want the one seat with an app", byKind["slack"]["seats"])
 	}
 }
@@ -223,7 +229,7 @@ func TestAMissingSecretIsReportedAsFalseNotAsAbsent(t *testing.T) {
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
 		entry, _ := row.(map[string]any)
-		if entry["kind"] != "github" {
+		if entry["key"] != "github" {
 			continue
 		}
 		present, ok := entry["secret_present"]
@@ -253,7 +259,7 @@ func TestASurfaceWithNoSecretReportsNull(t *testing.T) {
 	rows, _ := body["integrations"].([]any)
 	for _, row := range rows {
 		entry, _ := row.(map[string]any)
-		if entry["kind"] != "forge" {
+		if entry["key"] != "forge" {
 			continue
 		}
 		value, present := entry["secret_present"]
@@ -751,5 +757,154 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 	}
 	if _, present := b["posture"]; present {
 		t.Errorf("a node that published no status reported a posture: %v", b)
+	}
+}
+
+// CONFIGURED IS NOT ROUTED, and the answer says which.
+//
+// A vendor's webhook route verifies and stores deliveries as soon as its
+// config block is present; whether one then wakes a seat needs a parser, and
+// this build has parsers for three of the seven. Without this field the two
+// render identically — configured, secret present, deliveries arriving — so
+// a tracker ingesting hundreds of events that reach nobody looks exactly like
+// one that works.
+func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// Only gitlab has a parser in this fixture.
+		Routed: func() []string { return []string{"gitlab"} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	byKind := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+	if got := byKind["gitlab"]["routes"]; got != true {
+		t.Errorf("gitlab routes = %v, want true", got)
+	}
+	if got := byKind["github"]["routes"]; got != false {
+		t.Errorf("github routes = %v, want false — it ingests and wakes "+
+			"nobody, and that is the whole point of the field", got)
+	}
+}
+
+// NOT KNOWING IS NOT KNOWING NOTHING.
+//
+// A standalone API has no co-located engine to ask which parsers registered,
+// so it answers null rather than false. Reporting false would tell an
+// operator their integrations are broken on the one deployment shape that
+// cannot see them.
+func TestAnApiWithNoEngineCannotSayWhatRoutes(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		// No Routed: the standalone shape.
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		routes, present := entry["routes"]
+		if !present {
+			t.Fatalf("%v omits routes entirely; null and absent are different "+
+				"to a client, and this must be null", entry["key"])
+		}
+		if routes != nil {
+			t.Fatalf("%v routes = %v, want null — this process cannot see an "+
+				"engine, which is not the same as nothing routing",
+				entry["key"], routes)
+		}
+	}
+}
+
+// AN ENGINE THAT ROUTES NOTHING SAYS SO, rather than reading as unknown.
+//
+// The empty-but-not-nil case: notifications started and no vendor registered.
+// That is a real measurement and must not collapse into "cannot say".
+func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Routed:  func() []string { return []string{} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if got := entry["routes"]; got != false {
+			t.Fatalf("%v routes = %v, want false — the engine answered, and "+
+				"its answer was that nothing routes", entry["key"], got)
+		}
+	}
+}
+
+// THE ROOM READS WHAT THIS ANSWER SENDS.
+//
+// Nothing linked the two. The Integrations room was written against a payload
+// of `key` / `enabled` / `inbound_path` / `last_at` and a top-level
+// `traffic_known`, and the server sent `kind` / `configured` / `events` —
+// so every card rendered an unbranded badge, a permanent "disabled" chip and
+// a blank inbound path, and both sides' tests passed, because each was
+// checked against its own idea of the other.
+//
+// This reads the FIELD NAMES out of the room's own source and asserts the
+// answer carries each. It is the cheap half of the gate `internal/e2e` gives
+// the push protocol; the query channel had none at all.
+func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile(filepath.Join(
+		"..", "..", "..", "static", "dashboard", "js", "views", "integrations.js"))
+	if err != nil {
+		t.Skipf("the dashboard tree is not in this checkout: %v", err)
+	}
+
+	// EVERY vendor, because the per-vendor detail fields (url, workspace)
+	// only appear on the rows that have them — a fixture missing one reports
+	// its field as a mismatch that is really a gap in the fixture.
+	cfg := company(t)
+	cfg.Integrations.Plane = &config.Plane{
+		Enabled: true, URL: "https://plane.example.com", Workspace: "acme",
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+		Routed:  func() []string { return []string{"gitlab"} },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	if len(rows) == 0 {
+		t.Fatal("the answer carried no integrations, so this proves nothing")
+	}
+	// Across every row, not just the first: `url`, `workspace` and `seats`
+	// are per-vendor detail, so a field carried by ANY row is a field the
+	// answer knows how to send.
+	sent := map[string]bool{}
+	for _, r := range rows {
+		entry, _ := r.(map[string]any)
+		for field := range entry {
+			sent[field] = true
+		}
+	}
+
+	// Every `row.<field>` and `data.<field>` the view reads.
+	rowFields := regexp.MustCompile(`\brow\.([a-z_]+)`)
+	dataFields := regexp.MustCompile(`\bdata\.([a-z_]+)`)
+
+	for _, m := range rowFields.FindAllStringSubmatch(string(source), -1) {
+		if !sent[m[1]] {
+			t.Errorf("the room reads row.%s and the answer never sends it — "+
+				"that field renders as undefined on every card", m[1])
+		}
+	}
+	for _, m := range dataFields.FindAllStringSubmatch(string(source), -1) {
+		// `integrations` is the row list itself.
+		if _, ok := body[m[1]]; !ok {
+			t.Errorf("the room reads data.%s and the answer never sends it", m[1])
+		}
 	}
 }

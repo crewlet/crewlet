@@ -96,6 +96,13 @@ type Sources struct {
 	// operator-gated: reading the document exposes the whole company.
 	Config *configapi.Service
 
+	// Routed names the integrations whose deliveries can wake a seat, or
+	// nil when this process cannot say — a standalone API has no engine to
+	// ask. The app populates it from its NodeRuntime; nil here is not an
+	// error and not "none route", and the integrations answer keeps those
+	// three apart rather than folding them into a boolean.
+	Routed func() []string
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
 	NodeID string

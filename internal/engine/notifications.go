@@ -63,6 +63,31 @@ func (e *Engine) Registry() *notify.Registry {
 	return e.notify.registry
 }
 
+// RoutedSources lists the integrations whose deliveries can actually wake a
+// seat on this node, sorted.
+//
+// NOT the integrations that are CONFIGURED, which is the distinction the
+// whole method exists for. A vendor's webhook route verifies and stores its
+// deliveries as soon as its block is present; whether one then reaches an
+// agent depends on a parser existing, and four vendors have the first half
+// and not the second. On every operator surface those look identical —
+// configured, secret present, deliveries arriving — so an integration that
+// ingests and routes nothing renders exactly like one that works.
+//
+// Nil when notifications have not started, which is the honest answer for
+// "cannot say" and is why this is a separate return rather than an empty
+// slice: an empty one means "nothing routes", and a company mid-boot has
+// not established that.
+func (e *Engine) RoutedSources() []string {
+	e.notify.mu.Lock()
+	svc := e.notify.service
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return nil
+	}
+	return svc.Sources()
+}
+
 // Status is the working-indicator driver for chat-triggered turns.
 //
 // NEVER NIL, like the registry and for the same reason: a company with no
