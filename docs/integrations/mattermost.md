@@ -820,7 +820,7 @@ crewlet mattermost doctor mm-company.yaml
 
 # 6. Boot — one websocket per agent seat
 export ANTHROPIC_API_KEY=sk-ant-...
-crewlet run examples/nimbus.config.yaml --import-company mm-company.yaml
+crewlet run -config examples/nimbus.config.yaml -company mm-company.yaml
 ```
 
 Step 3 prints one line per seat — handle, bot username, and the variables it
@@ -841,7 +841,7 @@ should follow, in order:
    without mentioning anyone — it answers again, because it is now following
    the thread.
 3. The engine's dashboard shows the turn. Start the API with
-   `crewlet run … --api-port 8000` and open <http://localhost:8000> —
+   `crewlet run … -api-port 8000` and open <http://localhost:8000> —
    Activity shows the inbound notification with a Mattermost badge, and the
    agent's LLM calls are on its Agents page.
 

@@ -1,49 +1,61 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docs.crewlet.ai/schema/bootstrap.schema.json",
   "$defs": {
-    "ApiAuthConfig": {
+    "API": {
       "additionalProperties": false,
-      "description": "Bearer-token auth policy for the API.\n\nWrites and the whole ``/config`` surface always require a token.\nReads are governed by :attr:`allow_anonymous_read`, which defaults\nto open \u2014 reading is what a dashboard does, and the page that would\nprompt for a token is itself served unauthenticated, so requiring\none by default puts a modal in front of every first load.\n\nExempt from auth entirely, because they authenticate by other means\nor must be reachable to obtain a token at all: ``/health``,\n``/ready``, the dashboard shell and its static assets,\n``/webhooks/*`` (HMAC-verified per source) and ``/otlp/*`` (signed\nper-run token).",
       "properties": {
-        "tokens": {
-          "items": {
-            "$ref": "#/$defs/ApiAuthTokenConfig"
-          },
-          "title": "Tokens",
-          "type": "array"
+        "auth": {
+          "$ref": "#/$defs/APIAuth"
         },
-        "disabled": {
-          "default": false,
-          "title": "Disabled",
-          "type": "boolean"
+        "host": {
+          "description": "Bind address for the HTTP surface.",
+          "type": "string"
         },
+        "port": {
+          "description": "Bind port; 0 disables the HTTP surface entirely.",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "APIAuth": {
+      "additionalProperties": false,
+      "properties": {
         "allow_anonymous_read": {
-          "default": true,
-          "title": "Allow Anonymous Read",
+          "description": "Serve reads without a token (default true).",
           "type": "boolean"
         },
         "allowed_origins": {
+          "description": "CORS origins. Empty = same-origin only.",
           "items": {
             "type": "string"
           },
-          "title": "Allowed Origins",
+          "type": "array"
+        },
+        "disabled": {
+          "description": "Local-dev only: serve every route unauthenticated.",
+          "type": "boolean"
+        },
+        "tokens": {
+          "description": "Accepted bearer tokens. Empty refuses every write.",
+          "items": {
+            "$ref": "#/$defs/APIToken"
+          },
           "type": "array"
         }
       },
-      "title": "ApiAuthConfig",
       "type": "object"
     },
-    "ApiAuthTokenConfig": {
+    "APIToken": {
       "additionalProperties": false,
-      "description": "One bearer token gating ``/config/*`` access.",
       "properties": {
         "id": {
-          "title": "Id",
+          "description": "Short label recorded as the author of writes made with this token.",
           "type": "string"
         },
         "token": {
-          "title": "Token",
+          "description": "Token value or ${VAR} reference.",
           "type": "string"
         }
       },
@@ -51,193 +63,95 @@
         "id",
         "token"
       ],
-      "title": "ApiAuthTokenConfig",
       "type": "object"
     },
-    "ApiConfig": {
+    "Coordination": {
       "additionalProperties": false,
-      "description": "Tier A API process settings \u2014 host, port, auth.",
       "properties": {
-        "host": {
-          "default": "0.0.0.0",
-          "title": "Host",
+        "lease_ttl_seconds": {
+          "description": "Lease TTL; 0 takes the measured default.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "nats": {
+          "$ref": "#/$defs/CoordinationNATS"
+        },
+        "type": {
+          "description": "local (single node, default) or embedded-kv (a fleet).",
+          "enum": [
+            "local",
+            "embedded-kv"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CoordinationNATS": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "$ref": "#/$defs/StreamCluster"
+        },
+        "credentials": {
+          "description": "Path to a NATS credentials file for an external server.",
           "type": "string"
         },
-        "port": {
-          "default": 0,
-          "title": "Port",
+        "replicas": {
+          "description": "Lease bucket replica count: 1 solo, 3 in a fleet.",
+          "minimum": 0,
           "type": "integer"
         },
-        "auth": {
-          "$ref": "#/$defs/ApiAuthConfig",
-          "default": {
-            "tokens": [],
-            "disabled": false,
-            "allow_anonymous_read": true,
-            "allowed_origins": []
-          }
-        }
-      },
-      "title": "ApiConfig",
-      "type": "object"
-    },
-    "BootstrapProvidersConfig": {
-      "additionalProperties": false,
-      "description": "Tier A provider settings \u2014 queue, database, knowledge.\n\nEverything the engine needs to talk to its own infrastructure\nbefore reading the founder-owned Tier B config from the DB.",
-      "properties": {
-        "queue": {
-          "$ref": "#/$defs/QueueConfig",
-          "default": {
-            "type": "pulsar",
-            "url": "pulsar://localhost:6650",
-            "admin_url": "",
-            "tenant": "public",
-            "namespace": "default",
-            "auth_token": "",
-            "tls_trust_certs_path": ""
-          }
+        "store_dir": {
+          "description": "Embedded lease persistence directory. Empty = in-memory (a restart sheds this node's seats).",
+          "type": "string"
         },
-        "database": {
-          "$ref": "#/$defs/DatabaseConfig",
-          "default": {
-            "dsn": ""
-          }
+        "token": {
+          "description": "Bearer token for an external server; ${VAR} supported.",
+          "type": "string"
         },
-        "knowledge": {
-          "$ref": "#/$defs/KnowledgeStoreConfig",
-          "default": {
-            "type": "pgvector"
-          }
-        }
-      },
-      "title": "BootstrapProvidersConfig",
-      "type": "object"
-    },
-    "DatabaseConfig": {
-      "additionalProperties": false,
-      "description": "Configuration for the PostgreSQL database.",
-      "properties": {
-        "dsn": {
-          "default": "",
-          "title": "Dsn",
+        "url": {
+          "description": "External NATS URL for leases; empty embeds a member instead.",
           "type": "string"
         }
       },
-      "title": "DatabaseConfig",
       "type": "object"
     },
-    "KnowledgeStoreConfig": {
+    "Node": {
       "additionalProperties": false,
-      "description": "Configuration for the knowledge store backend (Tier A \u2014 bound to DB).",
-      "properties": {
-        "type": {
-          "default": "pgvector",
-          "enum": [
-            "pgvector",
-            "memory"
-          ],
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "title": "KnowledgeStoreConfig",
-      "type": "object"
-    },
-    "NodeConfig": {
-      "additionalProperties": false,
-      "description": "Tier A identity of THIS process within the company.\n\nEvery Crewlet process has one.  Today it labels every log line and\nthe ``/health`` payload \u2014 already the difference between \"a config\napply failed\" and \"the config apply failed on node-2\" once more than\none process runs, and the only way a caller behind a load balancer\ncan tell which process answered.  It is also the identity every\ncross-process mechanism is keyed on (lease owner, per-node\nsubscription name, per-node config apply status); see\n``docs/concepts/scaling.md``.\n\n**It must be stable across restarts**, which is why it comes from the\ndeployment rather than being generated.  A fresh value per boot would\norphan whatever the previous incarnation registered under the old one\n\u2014 the failure the ``hook-{id(callback)}`` subscription naming already\ndemonstrates.  In Kubernetes use the pod name (a StatefulSet ordinal\nis ideal); under systemd, the host name.",
       "properties": {
         "id": {
-          "default": "",
-          "title": "Id",
+          "description": "Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
           "type": "string"
-        },
-        "roles": {
-          "items": {
-            "$ref": "#/$defs/NodeRole"
-          },
-          "title": "Roles",
-          "type": "array"
         },
         "labels": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Labels",
+          "description": "Free-form node facts a seat's placement selector matches on.",
           "type": "object"
+        },
+        "roles": {
+          "description": "What this node does: ingress, seats, workers. Omit for all three.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
-      "title": "NodeConfig",
       "type": "object"
     },
-    "NodeRole": {
-      "description": "What a process is willing to do for the company.\n\nA node declares a subset; the default is all three, which is the\nsingle-process deployment and the shape every existing config\nalready has.",
-      "enum": [
-        "ingress",
-        "seats",
-        "workers"
-      ],
-      "title": "NodeRole",
-      "type": "string"
-    },
-    "QueueConfig": {
+    "SecretKey": {
       "additionalProperties": false,
-      "description": "Configuration for the event queue backend.",
-      "properties": {
-        "type": {
-          "const": "pulsar",
-          "default": "pulsar",
-          "title": "Type",
-          "type": "string"
-        },
-        "url": {
-          "default": "pulsar://localhost:6650",
-          "title": "Url",
-          "type": "string"
-        },
-        "admin_url": {
-          "default": "",
-          "title": "Admin Url",
-          "type": "string"
-        },
-        "tenant": {
-          "default": "public",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-          "title": "Tenant",
-          "type": "string"
-        },
-        "namespace": {
-          "default": "default",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-          "title": "Namespace",
-          "type": "string"
-        },
-        "auth_token": {
-          "default": "",
-          "title": "Auth Token",
-          "type": "string"
-        },
-        "tls_trust_certs_path": {
-          "default": "",
-          "title": "Tls Trust Certs Path",
-          "type": "string"
-        }
-      },
-      "title": "QueueConfig",
-      "type": "object"
-    },
-    "SecretKeyConfig": {
-      "additionalProperties": false,
-      "description": "One key in the Tier A encryption keyring.\n\n``material`` is a base64-encoded 32-byte key (or a ``${VAR}``\nreference, resolved from the environment at bootstrap load time like\nevery Tier A value). Generate one with ``crewlet secrets keygen``.\nSee ``docs/concepts/configuration.md`` \u00a7 Secrets.",
       "properties": {
         "id": {
-          "minLength": 1,
+          "description": "Stable key id, colon-free so the envelope parses.",
           "pattern": "^[A-Za-z0-9._-]+$",
-          "title": "Id",
           "type": "string"
         },
         "material": {
-          "title": "Material",
+          "description": "base64(32 bytes), or a ${VAR} reference to it.",
           "type": "string"
         }
       },
@@ -245,91 +159,338 @@
         "id",
         "material"
       ],
-      "title": "SecretKeyConfig",
       "type": "object"
     },
-    "SecretsConfig": {
+    "Secrets": {
       "additionalProperties": false,
-      "description": "Tier A encryption keyring for company-config secrets at rest.\n\nThe keyring is the sole root of trust: the database holds only\nciphertext, and the key material lives here (on disk / in env),\nnever in the DB. Empty (the default) means secret encryption is\ndisabled \u2014 the engine then fails closed only if the active revision\nactually contains sealed values.\n\nSee ``docs/concepts/configuration.md`` \u00a7 Secrets.",
       "properties": {
         "active_key_id": {
-          "default": "",
-          "title": "Active Key Id",
+          "description": "Which key seals new writes.",
           "type": "string"
         },
         "keys": {
+          "description": "The keyring; several entries support online rotation.",
           "items": {
-            "$ref": "#/$defs/SecretKeyConfig"
+            "$ref": "#/$defs/SecretKey"
           },
-          "title": "Keys",
           "type": "array"
         }
       },
-      "title": "SecretsConfig",
+      "type": "object"
+    },
+    "Store": {
+      "additionalProperties": false,
+      "properties": {
+        "busy_timeout_seconds": {
+          "description": "Lock wait before a statement fails; 0 takes the store default.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "driver": {
+          "description": "turso (default) or sqlite.",
+          "enum": [
+            "turso",
+            "sqlite"
+          ],
+          "type": "string"
+        },
+        "max_open_conns": {
+          "description": "Connection pool bound; 0 takes the store default.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Local database file this node owns exclusively.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Stream": {
+      "additionalProperties": false,
+      "properties": {
+        "admin_url": {
+          "description": "Pulsar admin HTTP endpoint; empty derives it from url.",
+          "type": "string"
+        },
+        "cluster": {
+          "$ref": "#/$defs/StreamCluster"
+        },
+        "credentials": {
+          "description": "Path to a NATS credentials file for an external server.",
+          "type": "string"
+        },
+        "event_retention_hours": {
+          "description": "Event stream retention; 0 takes the queue default.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "namespace": {
+          "description": "Pulsar namespace under the tenant.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "type": "string"
+        },
+        "replicas": {
+          "description": "Stream replica count: 1 solo, 3 in a fleet.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "store_dir": {
+          "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
+          "type": "string"
+        },
+        "tenant": {
+          "description": "Pulsar tenant holding this company's topics.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "type": "string"
+        },
+        "tls_trust_certs": {
+          "description": "CA bundle path for a pulsar+ssl broker.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Bearer token for an external server; ${VAR} supported.",
+          "type": "string"
+        },
+        "type": {
+          "description": "embedded (default), nats, or pulsar.",
+          "enum": [
+            "embedded",
+            "nats",
+            "pulsar"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "description": "External broker URL. Required for nats/pulsar, refused for embedded.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StreamCluster": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Cluster name shared by every member.",
+          "type": "string"
+        },
+        "peers": {
+          "description": "Route URLs of the other members.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "port": {
+          "description": "Route port for cluster traffic.",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     }
   },
+  "$id": "https://docs.crewlet.ai/schema/bootstrap.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Tier A \u2014 ops-owned, on-disk, restart-only.\n\nCarries only the keys the engine needs to bring up its\ninfrastructure (DB, Pulsar, API socket, auth, logging) plus the\nsecret-encryption keyring (the root of trust for Tier B secrets at\nrest).  Everything else lives in the versioned ``company_config``\ntable and is delivered to the engine via :meth:`Engine.apply_config`.\n\nSee ``docs/concepts/configuration.md``.",
+  "allOf": [
+    {
+      "$comment": "local coordination cannot serve a fleet: use coordination.type embedded-kv.",
+      "if": {
+        "not": {
+          "properties": {
+            "coordination": {
+              "properties": {
+                "type": {
+                  "const": "embedded-kv"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "coordination"
+          ]
+        }
+      },
+      "then": {
+        "properties": {
+          "stream": {
+            "properties": {
+              "cluster": {
+                "properties": {
+                  "peers": {
+                    "maxItems": 0
+                  }
+                }
+              },
+              "type": {
+                "const": "embedded"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "a two-node fleet has no coordination quorum: run one node or three or more.",
+      "if": {
+        "properties": {
+          "coordination": {
+            "properties": {
+              "type": {
+                "const": "embedded-kv"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "required": [
+          "coordination"
+        ]
+      },
+      "then": {
+        "not": {
+          "properties": {
+            "stream": {
+              "properties": {
+                "cluster": {
+                  "properties": {
+                    "peers": {
+                      "maxItems": 1,
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "peers"
+                  ]
+                }
+              },
+              "required": [
+                "cluster"
+              ]
+            }
+          },
+          "required": [
+            "stream"
+          ]
+        }
+      }
+    },
+    {
+      "$comment": "stream.replicas \u003e 1 needs peers to replicate to.",
+      "if": {
+        "properties": {
+          "stream": {
+            "properties": {
+              "replicas": {
+                "minimum": 2
+              }
+            },
+            "required": [
+              "replicas"
+            ]
+          }
+        },
+        "required": [
+          "stream"
+        ]
+      },
+      "then": {
+        "properties": {
+          "stream": {
+            "properties": {
+              "cluster": {
+                "properties": {
+                  "peers": {
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "peers"
+                ]
+              }
+            },
+            "required": [
+              "cluster"
+            ]
+          }
+        },
+        "required": [
+          "stream"
+        ]
+      }
+    },
+    {
+      "$comment": "an external stream needs a URL to dial.",
+      "if": {
+        "properties": {
+          "stream": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "nats",
+                  "pulsar"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "required": [
+          "stream"
+        ]
+      },
+      "then": {
+        "properties": {
+          "stream": {
+            "properties": {
+              "url": {
+                "minLength": 1
+              }
+            },
+            "required": [
+              "url"
+            ]
+          }
+        },
+        "required": [
+          "stream"
+        ]
+      }
+    }
+  ],
   "properties": {
-    "providers": {
-      "$ref": "#/$defs/BootstrapProvidersConfig",
-      "default": {
-        "queue": {
-          "admin_url": "",
-          "auth_token": "",
-          "namespace": "default",
-          "tenant": "public",
-          "tls_trust_certs_path": "",
-          "type": "pulsar",
-          "url": "pulsar://localhost:6650"
-        },
-        "database": {
-          "dsn": ""
-        },
-        "knowledge": {
-          "type": "pgvector"
-        }
-      }
-    },
     "api": {
-      "$ref": "#/$defs/ApiConfig",
-      "default": {
-        "host": "0.0.0.0",
-        "port": 0,
-        "auth": {
-          "allow_anonymous_read": true,
-          "allowed_origins": [],
-          "disabled": false,
-          "tokens": []
-        }
-      }
+      "$ref": "#/$defs/API"
     },
-    "secrets": {
-      "$ref": "#/$defs/SecretsConfig",
-      "default": {
-        "active_key_id": "",
-        "keys": []
-      }
-    },
-    "node": {
-      "$ref": "#/$defs/NodeConfig",
-      "default": {
-        "id": "",
-        "roles": [
-          "ingress",
-          "seats",
-          "workers"
-        ],
-        "labels": {}
-      }
+    "coordination": {
+      "$ref": "#/$defs/Coordination"
     },
     "debug": {
-      "default": false,
-      "title": "Debug",
       "type": "boolean"
+    },
+    "node": {
+      "$ref": "#/$defs/Node"
+    },
+    "secrets": {
+      "$ref": "#/$defs/Secrets"
+    },
+    "store": {
+      "$ref": "#/$defs/Store"
+    },
+    "stream": {
+      "$ref": "#/$defs/Stream"
     }
   },
-  "title": "BootstrapConfig",
+  "title": "Crewlet bootstrap config (Tier A)",
   "type": "object"
 }

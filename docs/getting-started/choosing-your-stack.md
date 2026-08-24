@@ -304,7 +304,7 @@ Plane + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible LLM, with a
 fully-local loop: `docker compose --profile plane --profile mattermost up -d`,
 then `scripts/plane-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
 then
-`crewlet run examples/nimbus.config.yaml --import-company
+`crewlet run -config examples/nimbus.config.yaml -company
 examples/nimbus.company.yaml`. Reading it top to bottom is the fastest way to
 see every choice on this page made concretely — each block carries the
 rationale in comments.

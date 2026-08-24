@@ -1,12 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -136,27 +138,73 @@ func TestQuickstartExportsEveryVariableItReferences(t *testing.T) {
 	}
 }
 
-// The Python-era Tier A file names a Pulsar broker and a PostgreSQL DSN
-// under a `providers:` block. This engine runs on neither — the stream is
-// an embedded broker and the store is one local file — so that shape is
-// deliberately refused rather than silently half-accepted.
+// THE SHIPPED EXAMPLE LOADS, which is the whole point of shipping one.
 //
-// This test exists so the break is a decision with a name on it, not a
-// surprise the first time someone points `crewlet run` at the old file.
-// The example itself has to be rewritten to the new shape; see
-// rewrite/questions/config-tier-a-shape.md.
-func TestPythonEraBootstrapIsRefusedByName(t *testing.T) {
+// It was the Python-era shape for the length of the rewrite — a `providers:`
+// block naming a Pulsar broker and a PostgreSQL DSN, which this engine runs
+// on neither — and the test here pinned the refusal so the break was a
+// decision with a name on it. The file is now the Go shape, so what is
+// pinned is that it stays loadable: it is what the quickstart, both
+// bootstrap scripts and every integration walkthrough tell a founder to run,
+// and nothing else notices when it stops working.
+func TestBootstrapExampleLoads(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile(filepath.Join(repoRoot, "examples", "nimbus.config.yaml"))
 	if err != nil {
 		t.Skipf("the example tree is not in this checkout: %v", err)
 	}
-	_, err = ParseBootstrap(data, EnvOnly())
-	if err == nil {
-		t.Fatal("the Python-era Tier A shape should not load unchanged")
+	// EVERY REFERENCE ANSWERED, so what is under test is the SHAPE rather
+	// than whose shell happens to have the variables exported. A file that
+	// only loads on a machine with the right environment is not a shipped
+	// example.
+	answers := MapSource{}
+	for _, name := range envref.Names(string(data)) {
+		answers[name] = "set-for-this-test"
 	}
-	if !strings.Contains(err.Error(), "providers") {
-		t.Fatalf("the refusal should name the moved key; got:\n%v", err)
+	cfg, err := ParseBootstrap(data, NewResolver(answers))
+	if err != nil {
+		t.Fatalf("the shipped Tier A example does not load: %v", err)
+	}
+	// The single-binary defaults it exists to demonstrate: no broker to
+	// operate and no DSN to point anywhere.
+	if cfg.Stream.Type != StreamEmbedded {
+		t.Errorf("stream = %q, want the embedded default", cfg.Stream.Type)
+	}
+	if cfg.Stream.StoreDir == "" {
+		t.Error("the embedded stream has no store_dir, so nothing published " +
+			"survives a restart — not what a shipped example should show")
+	}
+	if cfg.Store.Path == "" {
+		t.Error("no store path")
+	}
+	if cfg.Coordination.Type != CoordinationLocal {
+		t.Errorf("coordination = %q, want local for a single node", cfg.Coordination.Type)
+	}
+}
+
+// THE COMMITTED SCHEMAS ARE WHAT THESE MODELS EMIT.
+//
+// `schema/*.json` is what an editor validates a config against, through the
+// `# yaml-language-server:` modeline the examples carry — so a stale file
+// flags a correct config as wrong, on the exact key the author just learned
+// about. Nothing else compares them: the generator is a CLI command an
+// author runs by hand, and forgetting is silent.
+func TestTheCommittedSchemasMatchTheModels(t *testing.T) {
+	t.Parallel()
+	for _, tier := range []Tier{TierBootstrap, TierCompany} {
+		name := filepath.Join(repoRoot, "schema", string(tier)+".schema.json")
+		committed, err := os.ReadFile(name)
+		if err != nil {
+			t.Skipf("the schema tree is not in this checkout: %v", err)
+		}
+		generated, err := Schema(tier)
+		if err != nil {
+			t.Fatalf("generating the %s schema: %v", tier, err)
+		}
+		if !bytes.Equal(bytes.TrimSpace(committed), bytes.TrimSpace(generated)) {
+			t.Errorf("schema/%s.schema.json is stale; regenerate it with "+
+				"`crewlet schema %s -o schema/%s.schema.json`", tier, tier, tier)
+		}
 	}
 }
 

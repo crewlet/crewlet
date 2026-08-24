@@ -929,7 +929,7 @@ Webhook senders enforce delivery deadlines and abort requests that respond too s
 ## Running
 
 ```bash
-crewlet run config.yaml --roles ingress --api-host 0.0.0.0 --api-port 8000
+crewlet run -config config.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
 The API is read-only against the database and publishes commands/notifications to Pulsar. It does not run agents — the engine process handles that.

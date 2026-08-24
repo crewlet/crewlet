@@ -1,6 +1,7 @@
 # config — Tier A no longer has the Python shape, and the shipped example is now invalid
 
-Status: **decision made, needs ratification + a follow-up edit outside `go/internal/config/`**
+Status: **RESOLVED.** The key names stand, and all three follow-up edits
+are done — the example, the quickstart and both generated schemas.
 Raised by: the config-layer executor · Affects: `examples/nimbus.config.yaml`,
 `docs/getting-started/quickstart.md`, `schema/bootstrap.schema.json`
 
@@ -43,27 +44,38 @@ call for, each with a named reason: a fleet on `local` coordination, a
 **two-node** fleet (no quorum), Pulsar filling the coordination slot, and
 `replicas > 1` with no peers. `internal/config/bootstrap_test.go` covers each.
 
-## What this leaves broken, outside my remit
+## What was left broken, and how it was closed
 
-1. **`examples/nimbus.config.yaml` no longer loads.** Its `providers:` key is
-   now an unknown field, which is a clean single error rather than a silent
-   half-load — `TestPythonEraBootstrapIsRefusedByName` pins that on purpose,
-   so the break is a decision with a name on it rather than a surprise. The
-   file needs rewriting to the shape above (a worked example is in
-   `TestBootstrapExampleShapeLoads`).
-2. **The quickstart's Tier A block** is the same shape and needs the same edit.
-   Its Tier B block is unaffected and is covered by `TestQuickstartCompanyLoads`.
-3. **`schema/bootstrap.schema.json`** is generated from the Python models.
-   `config.Schema(config.TierBootstrap)` now emits the Go one; whoever owns
-   the `crewlet schema` command should regenerate both files.
+All three were found again from the other end, by pointing the binary at the
+shipped example and watching it refuse — which is what a gate is for.
 
-## The question for the architect
+1. **`examples/nimbus.config.yaml`** is rewritten to the shape above, and
+   `TestPythonEraBootstrapIsRefusedByName` is replaced by
+   `TestBootstrapExampleLoads`: what needs pinning is no longer that the old
+   shape is refused but that the shipped one keeps working, since it is what
+   the quickstart, both bootstrap scripts and every integration walkthrough
+   tell a founder to run.
+2. **The quickstart's Tier A block** is rewritten with it, along with the
+   `crewlet run` invocations across the docs — the Go CLI takes `-config` and
+   `-company` rather than a positional path and `--import-company`.
+3. **Both generated schemas** are regenerated from the Go models, and
+   `TestTheCommittedSchemasMatchTheModels` compares them on every run. They
+   matter more than a build artifact usually would: the examples carry a
+   `# yaml-language-server:` modeline, so a stale schema flags a correct
+   config as wrong on the exact key the author just learned about.
+
+## The question for the architect — settled
 
 Only whether the **key names** are right, since they become a public surface
 the moment a doc references them. Specifically: top-level `store` / `stream` /
-`coordination` rather than keeping a `providers:` envelope. I chose flat
-because "providers" in Tier B means *model* providers, and one word meaning
-two things across the tiers is exactly the kind of drift the tier split exists
-to avoid.
+`coordination` rather than keeping a `providers:` envelope. Flat, because
+"providers" in Tier B means *model* providers, and one word meaning two things
+across the tiers is exactly the kind of drift the tier split exists to avoid.
+
+**Kept.** The names are now in the shipped example, the quickstart, both
+generated schemas and the guides, and reading them back in that setting they
+say what they are: `stream` is where the durable log lives, `store` is this
+node's own file, `coordination` is where seat leases live. A `providers:`
+envelope would have said none of that twice.
 
 Nothing about the validation rules is in question; those follow from D5/D6.

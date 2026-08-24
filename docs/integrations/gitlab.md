@@ -334,7 +334,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
 5. **Run the engine** with the minted tokens sourced (add your base runtime `config.yaml` — providers, queue, DB — per the [quickstart](../getting-started/quickstart.md)). With `api.port: 80` in that Tier A file, the engine's **embedded API** receives the GitLab webhooks and serves the dashboard — one process is the whole stack; binding 80 needs privileged-port access on Linux (see the example config's `api` comment). (Do *not* also start a second, ingress-only node here — the two would fight over the port; splitting ingress off is for [fleets](../guides/fleet.md) only):
    ```bash
    source .env.gitlab
-   crewlet run config.yaml --import-company nimbus.local.company.yaml
+   crewlet run -config config.yaml -company nimbus.local.company.yaml
    ```
 6. **Drive the loop in the UI** (`http://gitlab.local:8929`): create an issue in `nimbus-hq/nimbuscore` and **assign** it to an agent's service account (their handle appears in the assignee list). The assignment webhook wakes that agent, which reads the issue via its own `glab` MCP tools and acts as itself.
 

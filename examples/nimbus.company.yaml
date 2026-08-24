@@ -96,27 +96,42 @@ providers:
   # role.llm_sandbox at it (otherwise the sandbox run fails credential
   # validation — SandboxCredentialError — at launch).
   sandbox:
-    # Needs the e2b SDK: `pip install 'crewlet[sandbox]'` (or, from a
-    # checkout, `uv sync --extra sandbox`). Don't want sandboxing? Set
-    # ``type: none`` here and the engineers fall back to native Execute.
+    # THE ENGINE HOST IS THE BACKEND. `type: local` runs each coding job as
+    # a process tree on the machine running `crewlet run` — no remote
+    # account, no API key, nothing to provision. Don't want code work at
+    # all? Set ``type: none`` and the engineers fall back to native
+    # Execute. (``type: fake`` is in-process stubs for tests — it runs no
+    # real coding agent and no real MCP.)
     #
-    # Running on E2B cloud: export E2B_API_KEY (from https://e2b.dev/dashboard)
-    # — the SDK sends it as an X-API-KEY header on every call. With no
-    # ``domain`` set, the SDK talks to e2b.dev cloud; make sure E2B_DOMAIN is
-    # NOT exported in the environment (the SDK reads it directly, so a leftover
-    # value would route to a self-hosted cluster instead of cloud). To run
-    # against self-hosted / local E2B instead, add ``domain: "${E2B_DOMAIN}"``
-    # below — that cluster still needs its own E2B_API_KEY. (``type: fake`` is
-    # in-process stubs for tests — it does NOT run real MCP/coding.)
-    type: e2b                                    # e2b | fake | none (omit = disabled)
-    api_key: "${E2B_API_KEY}"                    # REQUIRED — from e2b.dev (sent as X-API-KEY header)
+    # PREREQUISITE: the coding agent named below must be installed on that
+    # machine, since `direct` runs it as a child process. `opencode` here;
+    # `claude-code` is the other supported one.
+    type: local                                  # local | fake | none (omit = disabled)
+    local:
+      # `direct` isolates STATE, not the host: each box gets its own HOME,
+      # XDG directories and an allowlisted environment (never the engine's
+      # own tokens), and writes outside the box are refused — but the
+      # agent runs as the engine's user with the engine's filesystem
+      # access. That is the right trade for a company running on your own
+      # machine against your own checkouts, and the wrong one for anything
+      # shared.
+      #
+      # For host isolation use `container`, which needs an image carrying
+      # the coding-agent CLI and is where a local box is SIZED (run_args
+      # takes --cpus/--memory, mirroring how a remote box is sized by its
+      # template):
+      #
+      #   containment: container
+      #   image: "your-registry/coding-agent:latest"
+      #   runtime: auto                          # auto | docker | podman
+      #   run_args: ["--cpus", "2", "--memory", "4g"]
+      containment: direct
+      state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
+                                                 #   and orphans from a crashed engine are
+                                                 #   reaped on the next create
     default_coding_agent: opencode               # provider-agnostic → reuses the openai-compatible LLM above
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
-    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); E2B holds a paused box forever and bills for the snapshot, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed.
-    # NB: vCPU / RAM / disk are NOT set here — they belong to the sandbox
-    # TEMPLATE, fixed when it is built (`e2b template build --cpu-count N
-    # --memory-mb M`); the sandbox-create API takes no resource arguments.
-    # For bigger boxes, build your own template and name it in `template:`.
+    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed.
     # ENGINE-WIDE setup steps — applied to every sandbox-enabled seat's box
     # before each role's own role.sandbox.setup extras.  Put anything shared
     # by ALL seats here exactly once; keep stack-specific provisioning

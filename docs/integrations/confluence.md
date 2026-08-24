@@ -313,9 +313,9 @@ crewlet confluence import <company.yaml> examples/nimbus-docs --update
 - **`--update` is required to overwrite existing pages.** Without it, pages that already exist are skipped and only new pages are created.
 - Credentials referenced as `${VAR}` in the `confluence:` block are resolved from the process environment. The command loads a `.env` next to the company YAML (falling back to `./.env`) first — just like `crewlet run` — so credentials kept only in `.env` work; real environment variables win over `.env`.
 - Add `--dry-run` to preview, or `--create-space` to auto-create any missing target space (needs space-admin on the tenant).
-- Add `--prune` to garbage-collect orphans: after publishing, it deletes import-managed skill pages whose source `.md` is gone (e.g. a renamed or removed bundled skill). It only touches pages the importer itself published — never user-authored pages or knowledge docs — and pairs with `--dry-run` to preview. `crewlet run --import-confluence` exposes the same behaviour as `--prune-confluence`.
+- Add `--prune` to garbage-collect orphans: after publishing, it deletes import-managed skill pages whose source `.md` is gone (e.g. a renamed or removed bundled skill). It only touches pages the importer itself published — never user-authored pages or knowledge docs — and pairs with `--dry-run` to preview.
 
-The same publish can be bundled into engine start with `crewlet run --import-company <company.yaml> --import-confluence <path> --update-confluence`. That import runs **before** the Tier A bootstrap is loaded — it needs only `--import-company`, so it publishes even when `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to start serving afterward). For a publish-only workflow, prefer the standalone `crewlet confluence import`.
+Publish first, then start the engine — two commands, in that order. The importer reads its credentials from the **Tier B company YAML**, so it works before a node is configured at all, and running it first means the engine's boot-time sync finds the pages already there.
 
 ---
 

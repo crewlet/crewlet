@@ -270,17 +270,19 @@ Useful flags (see the [CLI reference](../reference/cli.md) for the full per-comm
 - `--space TS` (Confluence) / `--project TS` (Plane) — target a different Tool Skills container than the default `TS` (skill files only; knowledge docs take their container from their parent directory).
 - `--create-space` — Confluence only: auto-create any target space that doesn't exist (requires space-admin on the bot account). The Plane importer never creates projects — a missing project fails the pre-flight with remediation.
 
-### Combined deploy (engine + seed in one command)
+### Publishing before the engine starts
 
+Publish, then run — two commands, in that order:
+
+```bash
+crewlet plane import company.yaml ./skills/     # publish the pages
+crewlet run -config crewlet.yaml -company company.yaml
 ```
-crewlet run [config.yaml] --import-confluence [PATH] --import-company company.yaml
-            [--update-confluence] [--create-confluence-space] [--prune-confluence]
 
-crewlet run [config.yaml] --import-plane [PATH] --import-company company.yaml
-            [--update-plane] [--prune-plane]
-```
-
-Runs the same import step first, *then* starts the engine. `--import-company` is required alongside either import flag — the backend credentials come from the Tier B company YAML, not the Tier A bootstrap passed as the positional `config` — and the two import flags are mutually exclusive (one knowledge backend per run). Use this when bringing up a fresh deployment so the engine's own boot-time sync picks up the just-imported skill pages. `--prune-confluence` / `--prune-plane` mirror `--prune` on the standalone importers.
+The importer reads the backend's credentials from the **Tier B company
+YAML**, not from the Tier A bootstrap, so it works before a node is
+configured at all. Running it first on a fresh deployment means the
+engine's own boot-time sync picks up the pages that are already there.
 
 ### Edit at runtime
 
@@ -350,6 +352,6 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 
 - [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into `TurnEngine`.
 - [Turn Engine](turn-engine.md) — phase contracts; how `plan.tools_needed` is resolved.
-- [CLI Reference](../reference/cli.md) — full flag reference for `crewlet confluence` / `crewlet plane` and `crewlet run --import-confluence` / `--import-plane`.
+- [CLI Reference](../reference/cli.md) — full flag reference for `crewlet plane import` / `crewlet plane resync`.
 - [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE`, `CREWLET_TOOL_SKILLS_PROJECT` (the `crewlet plane import` default; the engine reads `integrations.plane.skills_project`).
 - [Plane integration](../integrations/plane.md) — the Plane knowledge backend: search, import, sync, promotion.

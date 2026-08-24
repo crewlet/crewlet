@@ -178,7 +178,7 @@ company config yet, the run stops before the `vector(N)` migrations rather
 than guessing the width — see
 [the CLI reference](../reference/cli.md#the-embedding-width-and-why-a-run-can-stop-early).
 
-Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned company YAML is imported into the database separately (`crewlet config import` or `crewlet run --import-company`).
+Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
 - **`--roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`--roles ingress`** serves the REST API — receives webhooks (Slack, Plane, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue

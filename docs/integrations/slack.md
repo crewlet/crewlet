@@ -111,7 +111,7 @@ That's the last manual token handling. Rotation is expiry-aware: the persisted a
 Run the API server **before** provisioning, publicly reachable at `--base-url`:
 
 ```bash
-crewlet run config.yaml --roles ingress --api-host 0.0.0.0 --api-port 8080   # unconfigured is fine
+crewlet run -config config.yaml -roles ingress -api-host 0.0.0.0 -api-port 8080   # unconfigured is fine
 ```
 
 Slack verifies each app's events **Request URL** with a `url_verification` challenge; the API answers it unconditionally — no engine, company config, or credentials needed. If an app's Request URL still shows *unverified* in its **App Manifest** settings page (Slack does not always re-verify on manifest updates), click **Verify** there — the endpoint answers automatically. The same server renders the OAuth landing page; if it isn't up yet during the install step, copy the `code=` value straight from the browser's address bar instead (the prompt accepts the full URL).

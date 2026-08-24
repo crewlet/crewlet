@@ -4,45 +4,91 @@
 # Pairs with examples/nimbus.company.yaml (Tier B).  Run the pair
 # end-to-end with:
 #
-#     export CREWLET_DATABASE_DSN="postgresql://crewlet:crewlet@localhost:5432/crewlet"
-#     export CREWLET_PULSAR_URL="pulsar://localhost:6650"
 #     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 #     export LLM_BASE_URL="https://api.your-llm-provider.example/v1/"  # any OpenAI-compatible endpoint
 #     export LLM_MODEL="your-provider/model-id"
 #     export LLM_API_KEY="<your-llm-provider-key>"
 #     export OPENAI_API_KEY="<for-embeddings>"
 #     # optional — only if you enable the `secrets:` keyring below.
-#     # `crewlet secrets keygen --key-id 2026-01` prints the export line + snippet:
+#     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
 #     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
 #
-#     crewlet run examples/nimbus.config.yaml \
-#         --import-company examples/nimbus.company.yaml
+#     crewlet run -config examples/nimbus.config.yaml \
+#                 -company examples/nimbus.company.yaml
+#
+# THERE ARE NO EXTERNAL SERVICES HERE.  The stream is a NATS JetStream
+# server embedded in this process and the store is one local file, so a
+# single binary in an empty directory is a working company — no broker to
+# operate, no database to provision, nothing to point a DSN at.  Both
+# slots take an external address when a deployment outgrows that; see
+# docs/guides/deployment.md and docs/guides/fleet.md.
 #
 # Restart-only Tier A fields only:
-#   - providers.queue   : Pulsar connection
-#   - providers.database: PostgreSQL connection
-#   - providers.knowledge: pgvector | memory
-#   - api               : host / port / bearer-auth tokens
-#   - secrets           : optional encryption keyring — encrypts the whole
-#                         Tier B company config at rest (see below)
-#   - debug             : verbose logging
+#   - stream      : where the durable event log lives
+#   - store       : this node's local materialized index
+#   - coordination: where seat leases live (a fleet needs the shared slot)
+#   - node        : this process's identity, roles and labels
+#   - api         : host / port / bearer-auth tokens
+#   - secrets     : optional encryption keyring — encrypts the whole
+#                   Tier B company config at rest (see below)
+#   - debug       : verbose logging
 #
 # Everything else (roles, LLMs, MCP servers, integrations, policies,
-# budgets) lives in the Tier B company YAML — versioned in
-# ``company_config`` and live-editable via the ``/config/*`` REST API.
+# budgets) lives in the Tier B company YAML — versioned in the store and
+# live-editable via the ``/config/*`` REST API.
 
 debug: false
 
-providers:
-  queue:
-    type: pulsar
-    url: "${CREWLET_PULSAR_URL}"
-    # tenant: public                  # optional — must already exist; the engine
-    # namespace: default              #   never creates tenants/namespaces itself
-  database:
-    dsn: "${CREWLET_DATABASE_DSN}"
-  knowledge:
-    type: pgvector
+# ── The durable event log ─────────────────────────────────────────────
+#
+# `embedded` runs a NATS JetStream server inside this process: no
+# listener, no port, no service to operate.  In the solo case there is no
+# socket at all, so the broker cannot be reached from outside the
+# process.
+#
+# store_dir is NOT optional for a real company.  Leaving it empty selects
+# an in-memory server — right for a test, and a company that expects to
+# survive a restart must not leave it unset, because nothing published
+# outlives the process.
+#
+# `type: nats` dials an external cluster and `type: pulsar` an external
+# estate; the client code is the same either way.
+stream:
+  type: embedded
+  store_dir: "./nimbus-data/stream"
+  replicas: 1                     # 1 solo; 3 in a fleet, where it is what
+                                  #   makes a publish quorum-durable
+
+# ── This node's local database ────────────────────────────────────────
+#
+# One FILE, owned exclusively by this process for the life of the
+# process.  It is not a shared database and there is no DSN: two engines
+# pointed at one file corrupt it.  A fleet's nodes each keep their own
+# rebuildable copy — the stream is the truth, this is the cache.
+store:
+  path: "./nimbus-data/nimbus.db"
+  # driver: turso                 # turso (default) or sqlite; CREWLET_STORE_DRIVER
+                                  #   selects it when this is unset
+
+# ── Seat ownership ────────────────────────────────────────────────────
+#
+# `local` is a single node holding its own leases in its own store.  A
+# fleet needs `embedded-kv`, where every node embeds a member of one NATS
+# cluster and the leases live there — which is what stops two processes
+# running the same seat.  See docs/guides/fleet.md.
+coordination:
+  type: local
+
+# ── This process's identity ───────────────────────────────────────────
+#
+# The id is the STICKINESS hint a lease claim carries, so a restarted node
+# tends to get its own seats back.  Empty reads CREWLET_NODE_ID and then
+# defaults to node-0 — fine for one node, and a fleet must give each
+# member a distinct, stable one.
+node:
+  id: "${CREWLET_NODE_ID}"
+  # roles: [ingress, seats, workers]   # omit for all three
+  # labels: {zone: eu-west}            # what a role's placement selector matches
 
 api:
   host: "0.0.0.0"
@@ -56,12 +102,10 @@ api:
   # privileged-port access — `sudo sysctl net.ipv4.ip_unprivileged_port_start=80`
   # (persist in /etc/sysctl.d/) or grant CAP_NET_BIND_SERVICE; (b) the
   # host's port 80 must be free — keep Plane's PLANE_LISTEN_PORT at its
-  # 8091 default.  Do NOT also start the standalone `crewlet run api`
-  # with this file: that command binds the same port and the two
-  # processes would fight over it.  The standalone API is for SPLIT
-  # deployments only — set this to 0 there so the engine's embedded
-  # server stays off (see docs/guides/deployment.md).  (8080 is Pulsar's
-  # admin port in this repo's compose — never use that one.)
+  # 8091 default.  In a SPLIT deployment the ingress node serves this and
+  # the others set port 0 so only one process binds it (see
+  # docs/guides/deployment.md).  (8080 is Pulsar's admin port in this
+  # repo's compose — never use that one.)
   port: 80
   auth:
     tokens:
@@ -71,17 +115,18 @@ api:
 # ── Secret encryption at rest (OPTIONAL) ──────────────────────────────
 #
 # Uncomment to encrypt the ENTIRE Tier B company config at rest. With a
-# keyring configured, the whole `company_config` payload is stored as one
-# opaque AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org chart,
-# policies, model choices, and every secret are ciphertext in the DB. The
-# keyring below is the sole root of trust: it lives here in Tier A / the
-# environment, never in the database.
+# keyring configured, the whole company payload is stored as one opaque
+# AES-256-GCM blob (`{"__encrypted__": "enc:v1:…"}`) — org chart,
+# policies, model choices, and every secret are ciphertext in the store.
+# The keyring below is the sole root of trust: it lives here in Tier A /
+# the environment, never in the store.
 #
-# Without this block (the default), Tier B is stored verbatim — secrets are
-# `${VAR}` references resolved from the environment at construction time.
+# Without this block (the default), Tier B is stored verbatim — secrets
+# are `${VAR}` references resolved from the environment at construction
+# time.
 #
 # Enable it:
-#   1. Mint a key + snippet:   crewlet secrets keygen --key-id 2026-01
+#   1. Mint a key + snippet:   crewlet secrets keygen -key-id 2026-01
 #   2. Export the printed key:  export CREWLET_SECRET_KEY_2026_01=<base64>
 #   3. Uncomment the block, then encrypt the active revision once:
 #        crewlet config seal

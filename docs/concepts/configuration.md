@@ -124,7 +124,7 @@ The engine boots in this order:
 
 ```bash
 crewlet config import company.yaml   # one-shot bootstrap of Tier B
-crewlet run                          # boots from ./config.yaml + DB
+crewlet run                          # boots from ./crewlet.yaml + the store
 ```
 
 **Option 2 — run first, configure over the API:**
@@ -140,7 +140,7 @@ curl -X PUT https://crewlet.example.com/config \
 # company in place — no restart needed.
 ```
 
-`crewlet run` defaults its config path to `./config.yaml` in the current working directory; passing an explicit path is only needed when the file lives elsewhere.
+`crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere.
 
 ---
 
@@ -356,7 +356,7 @@ secrets:
 
 The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
 
-- **Encrypt on write.** Every write path (`PUT /config`, per-entity `PATCH`, `crewlet config import`, `crewlet run --import-company`) encrypts the whole document before the payload reaches the DB.
+- **Encrypt on write.** Every write path (`PUT /config`, per-entity `PATCH`, `crewlet config import`, `crewlet run -company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`load_config`) into the plaintext structure before use — the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.

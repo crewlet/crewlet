@@ -86,7 +86,7 @@ export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
 ### 6. Run it
 
 ```bash
-crewlet run config.yaml --import-company company.yaml
+crewlet run -config config.yaml -company company.yaml
 ```
 
 ### 7. Watch the first turn
