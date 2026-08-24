@@ -110,7 +110,7 @@ Conventions used by the [Mattermost integration](../integrations/mattermost.md) 
 
 ## GitLab
 
-Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart from the operator credentials (read directly by the CLI), these are `${VAR}` references in the company YAML — [`crewlet gitlab provision`](cli.md#crewlet-gitlab-provision) mints the PAT values into `.env.gitlab`.
+Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart from the operator credential — read from the environment only, and never from the secret store — these are `${VAR}` references in the company YAML, resolved through the [secret store first and the environment behind it](../concepts/secret-store.md). [`crewlet gitlab provision`](cli.md#crewlet-gitlab-provision) mints the PAT values into whichever sink you name.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
