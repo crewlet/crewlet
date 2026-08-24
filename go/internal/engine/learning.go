@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/schedule"
 )
 
 // The learning WRITE side, wired.
@@ -209,6 +208,13 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	if db == nil {
 		return
 	}
+	if !e.profile.RunsWorkers() {
+		// The operator said this node runs no singleton duties. The duty
+		// gate would refuse every tick anyway; not arming the loops at
+		// all is the same answer without two goroutines waking hourly to
+		// be told no.
+		return
+	}
 	company := e.Company()
 	if company == nil || !company.Config.Learning.On() {
 		return
@@ -253,22 +259,13 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		Seats:             func() []string { return e.seatHandles() },
 		Publish:           e.publishLearning,
 		CuratorInterval:   hours(cfg.SkillCurator.IntervalHours),
-		ClaimDuty:         e.learningDuty(skillCuratorDutyName),
+		ClaimDuty:         e.workerDuty(skillCuratorDutyName, learningDutyTTL),
 		LifecycleInterval: 0,
 	})
 	// Detached, for the same reason the node's loops are: a loop bound to
 	// a signal context stops at SIGTERM, which would make its lifetime
 	// differ from every other loop's for no reason a reader could find.
 	e.learning.Start(context.WithoutCancel(ctx))
-}
-
-// learningDuty claims a named fleet singleton for one tick.
-func (e *Engine) learningDuty(name string) func(context.Context) (bool, error) {
-	if e.backends == nil || e.node == nil {
-		return nil
-	}
-	return schedule.ClaimNamedDuty(e.backends.Coord, name,
-		e.node.Owner(), e.node.ID(), learningDutyTTL)
 }
 
 // learningDutyTTL is how long a background duty survives without a re-claim.

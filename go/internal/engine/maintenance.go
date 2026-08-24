@@ -7,7 +7,6 @@ import (
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 )
 
@@ -52,9 +51,8 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 
 	e.maintenance = maintenance.New(maintenance.Options{
 		Jobs: jobs,
-		ClaimDuty: maintenance.DutyFunc(schedule.ClaimNamedDuty(
-			e.backends.Coord, maintenanceDutyName,
-			e.node.Owner(), e.node.ID(), maintenanceDutyTTL)),
+		ClaimDuty: maintenance.DutyFunc(
+			e.workerDuty(maintenanceDutyName, maintenanceDutyTTL)),
 	})
 	// Detached, for the same reason the node's loops are: a sweep loop
 	// bound to a signal context stops at SIGTERM, which is harmless here

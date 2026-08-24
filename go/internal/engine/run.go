@@ -67,6 +67,12 @@ type Engine struct {
 	// state — see learning.Reflector.
 	reflector *learning.Reflector
 
+	// profile is what this node declared it does: whether it claims
+	// seats, serves inbound traffic, and runs the fleet's singleton
+	// duties. Held because the duty gate reads it on every claim — see
+	// duty.go for why the lease alone is not the whole answer.
+	profile placement.NodeProfile
+
 	// learning is the two background passes no turn drives: episode
 	// compaction and skill ageing. On the ENGINE for the same reason the
 	// sandbox waiter is — they are loops this PROCESS runs, and rebuilding
@@ -220,6 +226,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err != nil {
 		return fail(fmt.Errorf("engine: node identity: %w", err))
 	}
+	// SET BEFORE the node, because the node is handed this exact value —
+	// two constructions of it would be two places to disagree about what
+	// this node does.
+	e.profile = placement.NodeProfile{
+		ID:     nodeID,
+		Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
+		Labels: opts.Bootstrap.Node.Labels,
+	}
 	n, err := node.New(node.Config{
 		Queue: backends.Queue,
 		Coord: backends.Coord,
@@ -235,13 +249,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// deleted role no longer has and never claim a new one. The
 		// host's own doc asks for exactly this and the binding did the
 		// opposite.
-		Seats: func() []placement.Seat { return e.Company().Seats() },
-		Profile: placement.NodeProfile{
-			ID:     nodeID,
-			Roles:  nodeRoles(opts.Bootstrap.Node.Roles),
-			Labels: opts.Bootstrap.Node.Labels,
-		},
-		Turn: e.Dispatch,
+		Seats:   func() []placement.Seat { return e.Company().Seats() },
+		Profile: e.profile,
+		Turn:    e.Dispatch,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -530,21 +540,4 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// leaves it there until the seat happens to take another turn.
 	e.publishTurnCompleted(ctx, tel, req.WorkKey, r.Spend(), res, err)
 	return res, err
-}
-
-// nodeRoles turns the configured role names into a set.
-//
-// An EMPTY list means every role, which is the single-process default and the
-// shape every company starts as. Reading it as "no roles" would produce a node
-// that claims no seats, runs no workers and hears no webhook — a process that
-// starts cleanly and does nothing at all.
-func nodeRoles(names []string) placement.RoleSet {
-	if len(names) == 0 {
-		return placement.DefaultRoles()
-	}
-	roles := make([]placement.NodeRole, 0, len(names))
-	for _, name := range names {
-		roles = append(roles, placement.NodeRole(name))
-	}
-	return placement.Roles(roles...)
 }

@@ -608,8 +608,7 @@ func (e *Engine) waiterDuty() schedule.DutyFunc {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil
 	}
-	return schedule.ClaimNamedDuty(e.backends.Coord, waiterDutyName,
-		e.node.Owner(), e.node.ID(), waiterDutyTTL)
+	return e.workerDuty(waiterDutyName, waiterDutyTTL)
 }
 
 // waiterDutyTTL is how long the waiter duty survives without a re-claim.

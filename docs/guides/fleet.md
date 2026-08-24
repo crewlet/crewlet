@@ -75,6 +75,23 @@ A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
 other node's share and strand the difference.
 
+### How `workers` is enforced
+
+Two independent things decide who runs a singleton duty, and both are
+needed:
+
+- **The `worker:{duty}` lease** decides *which* node among the ones asking.
+  Without it, two willing nodes both run the sweep.
+- **The `workers` role** decides *whether this node asks at all*. Without
+  it, a node explicitly configured `roles: [seats]` competes for every
+  duty — and wins some of them.
+
+A node without the role **refuses** the duty rather than abstaining from
+the claim, which is a distinction with teeth: internally, "no duty gate"
+means "there is no fleet, so this is always mine" — the single-node case.
+An ingress-only node that abstained would therefore run every duty. The
+refusal is silent, because the node is doing exactly what it was told to.
+
 ### Common shapes
 
 ```yaml
