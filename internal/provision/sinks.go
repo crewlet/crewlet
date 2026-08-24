@@ -275,8 +275,22 @@ type PrintSink struct {
 	written []string
 }
 
-// NewPrintSink builds the sink.
-func NewPrintSink(w io.Writer) *PrintSink { return &PrintSink{w: w} }
+// NewPrintSink builds the sink, refusing a nil stream.
+//
+// Refused rather than defaulted, because of WHEN a nil one fails: nothing
+// notices until Record writes the first credential, which is after the run
+// has already minted it against the vendor. The operator is then handed a
+// panic in place of the token that now exists in GitLab and nowhere else.
+// A sink with nowhere to write is not a sink, so it is refused at the point
+// the caller can still do something about it — the same shape
+// [NewEnvFileSink] takes for the same reason.
+func NewPrintSink(w io.Writer) (*PrintSink, error) {
+	if w == nil {
+		return nil, errors.New("provision: the print sink has no stream to " +
+			"write to, so a minted credential would be destroyed on the way out")
+	}
+	return &PrintSink{w: w}, nil
+}
 
 // Value implements [TokenSink]: nothing is ever held.
 //

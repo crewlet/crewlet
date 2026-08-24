@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/plane"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 const gitlabCompanyDoc = `
@@ -121,6 +124,61 @@ func TestTwoSinksAreRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exactly one") {
 		t.Errorf("the refusal is unclear: %v", err)
+	}
+}
+
+// THE PRINT SINK'S DESTINATION IS PER RUN, NOT PER PROCESS.
+//
+// It used to be per process: each provision command assigned the writer to a
+// package variable just before opening its sink, and open read it back. Two
+// runs in one process therefore shared one destination and raced on the
+// pointer getting there, which is what the race detector reported once the
+// CLI's own tests started running in parallel. Opening two sinks here is the
+// whole assertion — under the old shape neither would have had a writer at
+// all, because nothing outside a command ever set the variable.
+func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
+	t.Parallel()
+	openPrintSink := func(t *testing.T, w io.Writer) provision.TokenSink {
+		t.Helper()
+		fs := flag.NewFlagSet("provision", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		sinks := addSinkFlags(fs)
+		if err := fs.Parse([]string{"-print"}); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		sink, closeSink, err := sinks.open(t.Context(), w)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(closeSink)
+		return sink
+	}
+
+	var first, second bytes.Buffer
+	runs := []struct {
+		out  *bytes.Buffer
+		sink provision.TokenSink
+		name string
+	}{
+		{out: &first, sink: openPrintSink(t, &first), name: "CREWLET_GITLAB_TOKEN_CEO"},
+		{out: &second, sink: openPrintSink(t, &second), name: "CREWLET_GITLAB_TOKEN_CTO"},
+	}
+	for _, run := range runs {
+		if err := run.sink.Record(t.Context(), run.name, "glpat-"+run.name); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+	}
+
+	for i, run := range runs {
+		other := runs[1-i]
+		if !strings.Contains(run.out.String(), run.name) {
+			t.Errorf("the run's own credential did not reach its writer: %q", run.out.String())
+		}
+		if strings.Contains(run.out.String(), other.name) {
+			t.Errorf("one run's credential was printed into the other run's "+
+				"output, so an operator is handed a secret they did not mint: %q",
+				run.out.String())
+		}
 	}
 }
 

@@ -49,7 +49,13 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 }
 
 // open builds the chosen sink, refusing an ambiguous or absent choice.
-func (s sinkFlags) open(ctx context.Context) (provision.TokenSink, func(), error) {
+//
+// stdout is threaded through rather than read from a package variable, and
+// that is not tidiness: the variable it replaced was written by each of the
+// three provision commands just before this call, so two running at once
+// raced on it — which the race detector caught the moment the CLI's tests
+// ran in parallel. A writer is an argument the caller already has.
+func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenSink, func(), error) {
 	chosen := 0
 	for _, on := range []bool{*s.secretStore, *s.envFile != "", *s.print} {
 		if on {
@@ -70,7 +76,8 @@ func (s sinkFlags) open(ctx context.Context) (provision.TokenSink, func(), error
 
 	switch {
 	case *s.print:
-		return provision.NewPrintSink(stdoutForPrintSink), func() {}, nil
+		sink, err := provision.NewPrintSink(stdout)
+		return sink, func() {}, err
 	case *s.envFile != "":
 		sink, err := provision.NewEnvFileSink(*s.envFile)
 		return sink, func() {}, err
@@ -82,10 +89,6 @@ func (s sinkFlags) open(ctx context.Context) (provision.TokenSink, func(), error
 	}
 	return provision.NewSecretStoreSink(sv, currentOperator()), closeStore, nil
 }
-
-// stdoutForPrintSink is set by the command so the sink writes where the
-// command was told to write.
-var stdoutForPrintSink io.Writer
 
 // runGitLabProvision is `crewlet gitlab provision`.
 func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
@@ -162,8 +165,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	stdoutForPrintSink = stdout
-	sink, closeSink, err := sinks.open(ctx)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}
@@ -376,8 +378,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	stdoutForPrintSink = stdout
-	sink, closeSink, err := sinks.open(ctx)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}
@@ -524,8 +525,7 @@ func runPlaneProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	stdoutForPrintSink = stdout
-	sink, closeSink, err := sinks.open(ctx)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}

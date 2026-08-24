@@ -275,7 +275,10 @@ func TestAnUnwritableValueIsRefusedWithoutTouchingTheFile(t *testing.T) {
 func TestThePrintSinkAnnouncesARollback(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	sink := provision.NewPrintSink(&out)
+	sink, err := provision.NewPrintSink(&out)
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
 	if err := sink.Record(t.Context(), "TOKEN_A", "a"); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -291,6 +294,24 @@ func TestThePrintSinkAnnouncesARollback(t *testing.T) {
 	}
 }
 
+// A SINK WITH NOWHERE TO WRITE IS REFUSED BEFORE ANYTHING IS MINTED.
+//
+// The failure a nil stream produces is otherwise the worst-timed one there
+// is: the run reaches the vendor, mints a live credential, and only then
+// discovers it has nothing to print it to — leaving a token that exists in
+// GitLab and in no operator's hands.
+func TestAPrintSinkWithNoStreamIsRefused(t *testing.T) {
+	t.Parallel()
+	sink, err := provision.NewPrintSink(nil)
+	if err == nil {
+		t.Fatal("a sink with no stream was built, so the first minted " +
+			"credential would be destroyed on its way out")
+	}
+	if sink != nil {
+		t.Errorf("a refused sink came back usable: %v", sink)
+	}
+}
+
 // EVERY SINK SAYS WHERE THE VALUES WENT, which is what tells an operator
 // whether to go looking in a file or in the store.
 func TestEverySinkDescribesItself(t *testing.T) {
@@ -301,7 +322,11 @@ func TestEverySinkDescribesItself(t *testing.T) {
 			t.Errorf("%s describes itself as nothing", tc.name)
 		}
 	}
-	if strings.TrimSpace(provision.NewPrintSink(&bytes.Buffer{}).Describe()) == "" {
+	described, err := provision.NewPrintSink(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
+	if strings.TrimSpace(described.Describe()) == "" {
 		t.Error("the print sink describes itself as nothing")
 	}
 }
