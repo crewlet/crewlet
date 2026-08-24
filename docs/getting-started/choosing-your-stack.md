@@ -54,14 +54,24 @@ provider the engine still runs; learning features degrade gracefully.
 
 ---
 
-## Core infrastructure (required)
+## Core infrastructure
 
-**Apache Pulsar** and **PostgreSQL (TimescaleDB + pgvector)**. Local: the
-bundled `docker-compose.yml` (see [Installation](installation.md)). Production:
-any Pulsar cluster and PostgreSQL server you operate — including a dedicated
-Pulsar tenant/namespace with token auth when Crewlet shares a cluster with
-your other workloads. See [Deployment](../guides/deployment.md) for sizing
-and broker authentication.
+**There is none to choose.** The engine is one binary: its event stream is a
+NATS JetStream server it embeds, and its store is a local file it creates and
+owns exclusively. A single host runs a whole company with nothing else
+installed, in development and in production alike.
+
+Two slots take an external address once a deployment outgrows one node:
+
+| Slot | Options |
+|---|---|
+| **Stream** | `embedded` (default, and clusterable across nodes) · an external **NATS** server · **Apache Pulsar**, including a dedicated tenant/namespace with token auth when Crewlet shares a cluster |
+| **Coordination** | `local` (one node) · `embedded-kv` (a fleet — one node or three; two has no quorum and is refused by name) |
+
+The **store** is never one of them: it stays one file per node, which is why
+everything genuinely shared lives in coordination instead. See
+[Running a Fleet](../guides/fleet.md) and
+[Deployment](../guides/deployment.md) for sizing and broker authentication.
 
 ---
 

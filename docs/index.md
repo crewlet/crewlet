@@ -22,7 +22,7 @@ author it — see
 
 ## Getting Started
 
-- **[Installation](getting-started/installation.md)** — Prerequisites, install extras, and the local Pulsar + PostgreSQL stack
+- **[Installation](getting-started/installation.md)** — Install the binary; why there is no infrastructure to bring up, and what the compose profiles are for
 - **[Quickstart](getting-started/quickstart.md)** — Build a four-agent company and watch its first turn, with LLM provider options (Anthropic / OpenAI / any OpenAI-compatible)
 - **[Choosing Your Stack](getting-started/choosing-your-stack.md)** — The decision guide for every external dependency: the tracker and knowledge base, the code host, the code sandbox, chat, email — what each path sets up for you, and what you must create manually
 - **[Authoring with an AI Assistant](getting-started/ai-authoring.md)** — Let an AI write your company config: a step-by-step walkthrough, the `company-architect` skill, `crewlet schema` for editor autocomplete, and the `crewlet validate --json` fix loop
@@ -33,7 +33,7 @@ author it — see
 How the engine works, one subsystem per page:
 
 - **[Overview](concepts/overview.md)** — The org chart as execution graph, design principles, high-level architecture
-- **[Configuration](concepts/configuration.md)** — Two-tier config (ops-owned `config.yaml` + founder-owned versioned PostgreSQL), bootstrap sequence, unconfigured state, live propagation, auth, snapshot/rollback, whole-config encryption at rest
+- **[Configuration](concepts/configuration.md)** — Two-tier config (ops-owned `config.yaml` + a founder-owned revision in the store), bootstrap sequence, unconfigured state, live propagation, auth, snapshot/rollback, whole-config encryption at rest
 - **[Scaling Out](concepts/scaling.md)** — Why one node is the design's degenerate case rather than a lesser path, what a node is (`ingress` / `seats` / `workers`), the five kinds of coupling that had to be resolved and which one a lock actually fixes, what the fleet shares in PostgreSQL versus what stays per-process, the measured broker numbers the lease TTL and prefetch cap come from, and what the design does not promise
 - **[Seat Ownership](concepts/seat-ownership.md)** — How a fleet decides which node runs which seat, and why no two ever run the same one: TTL leases with epoch fencing, fair-share placement with give-back, the two release modes, freshness-based admission, owner-only inbox and sandbox-control attachment, the durable subscription that holds an unowned seat's mail, the broker settings that must not delete it, and why a wedged-but-alive node ends its own process
 - **[Control Plane](concepts/control-plane.md)** — How every node converges on one company config: the append-only activation epoch log, the reconcile poll, per-node apply status (`ok` / `error` / `degraded`), the posture a lagging node takes (`serve` / `wait` / `shed` / `isolated` / `stuck`), what a running turn sees through a live apply, and what `/health` and `/ready` report
@@ -72,7 +72,7 @@ Connecting the external surfaces agents work on:
 
 - **[Tools & MCP](guides/tools-and-mcp.md)** — Built-in tools, MCP integration, tool registry
 - **[Extensions](guides/extensions.md)** — Extension system, hooks, writing extensions
-- **[Deployment](guides/deployment.md)** — Docker, Pulsar sizing & auth, TimescaleDB observability, tracing
+- **[Deployment](guides/deployment.md)** — The single host, the compose profiles, Pulsar sizing & auth, the event store, tracing
 - **[Running a Fleet](guides/fleet.md)** — When to run more than one node, node roles, seat placement, draining and rolling upgrades
 - **[Running One Agent Somewhere Else](guides/satellite-nodes.md)** — Put a single seat on a host that can reach what it needs — an internal API, a licensed binary, a GPU, a lab network — without moving the company: what a satellite is, what moves with the seat (its MCP servers above all), what the node still needs outbound, and what a pin costs when the host is down
 - **[Configure via API](guides/configure-via-api.md)** — End-to-end curl recipes for bootstrapping a company through `/config/*`

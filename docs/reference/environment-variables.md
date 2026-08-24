@@ -11,8 +11,7 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `CREWLET_NODE_ID` | This process's identity, when `node.id` is unset in the Tier A file. Labels every log line, health payload, and config-apply event. Must be **stable across restarts**; defaults to `node-0` | Your orchestrator (Kubernetes pod name / StatefulSet ordinal, or the host name) |
-| `CREWLET_DATABASE_DSN` | PostgreSQL DSN the example Tier A configs reference (`providers.database.dsn`) | Your database (`postgresql://crewlet:crewlet@localhost:5432/crewlet` for the bundled compose) |
-| `CREWLET_PULSAR_URL` | Pulsar broker URL the example Tier A configs reference (`providers.queue.url`) | `pulsar://localhost:6650` for the bundled compose |
+| `CREWLET_STORE_DRIVER` | Which certified driver opens the store file — `turso` (the default) or `sqlite`. Overridden by `store.driver` in the Tier A file | Leave unset unless you are exercising the fallback driver |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |
 | `LLM_API_KEY` | API key for your LLM provider (`providers.llm.default.api_keys`) | Your LLM provider dashboard |
 | `LLM_MODEL` | Model id served by your OpenAI-compatible endpoint (`providers.llm.default.model` in the example) | Your LLM provider docs |
@@ -131,17 +130,26 @@ Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart f
 
 ---
 
-## Database
+## The store
 
-There is no dedicated database environment variable: the PostgreSQL DSN lives in the Tier A bootstrap YAML (`providers.database.dsn`), which — like every YAML string — may reference an environment variable of your choosing:
+**There is no database environment variable, because there is no database
+server.** The store is a local file, named by `store.path` in the Tier A
+bootstrap YAML:
 
 ```yaml
-providers:
-  database:
-    dsn: "${CREWLET_DATABASE_DSN}"   # the conventional name the examples use — or inline: "postgresql://crewlet:crewlet@localhost:5432/crewlet"
+store:
+  path: "/var/lib/crewlet/company.db"
 ```
 
-The bundled `docker-compose.yml` uses the `timescale/timescaledb:latest-pg18` image, which ships with the TimescaleDB and pgvector extensions preloaded. The event store (`crewlet_events` hypertable) lives in the same database as the rest of Crewlet's state — there is no separate observability DB to configure.
+That file is owned **exclusively** by one engine process. It is not a shared
+database and there is no DSN to point anywhere; two engines opening one file
+corrupt it. Everything that genuinely has to be shared between nodes — seat
+leases, config activations, the completion ledger, dedupe and the rate
+valves — lives in the `coordination` slot instead.
+
+`CREWLET_STORE_DRIVER` picks which certified driver opens it (see Core above).
+The event store is a table in that same file, created by the engine's own
+migrations — there is no separate observability database to configure.
 
 ---
 
@@ -166,12 +174,12 @@ The keyring lives in Tier A (`config.yaml`) and is the sole root of trust — th
 
 A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `<ROLE>_JIRA_TOKEN`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
 
-- **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted `secret_values` table (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults that table **ahead of** `os.environ`, so a name it answers no longer needs to be exported at all. Rotation is an update of one row.
+- **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted `secret_values` table (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults that table **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is an update of one row.
 - **Literal values in the encrypted config** — set them via `PUT /config` or import a `company.yaml` with literals. Simpler, but every rotation writes a new immutable revision that archives the superseded secret, and one credential referenced from two places (a Slack bot token is both `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`) becomes two literals that must change together.
 
 Either way, `${VAR}` references that remain unanswered by the store still resolve from the environment.
 
-**Two variables can never move into the store**, no matter how it is configured: the database DSN and `CREWLET_SECRET_KEY_<ID>` itself. Tier A is what opens and decrypts the store, so it is always env/file-sourced.
+**Nothing in Tier A can move into the store**, no matter how it is configured — `CREWLET_SECRET_KEY_<ID>` above all. Tier A is what locates and decrypts the store, so it is always env- or file-sourced; it resolves with the store deliberately switched off.
 
 ---
 
@@ -220,6 +228,6 @@ providers:
     api_key: "${OPENAI_API_KEY}"  # embeddings still take a single scalar
 ```
 
-Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (when one is configured and holds the name), then `os.environ`. An unanswered reference resolves to the empty string.
+Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (when one is configured and holds the name), then the process environment. An unanswered reference resolves to the empty string.
 
 Only the braced identifier form is substituted — `${NAME}` where `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`. Bare `$NAME` and shell parameter expansions (`${1:-x}`, `${line#host=}`) are left untouched, so config-authored script content — a sandbox setup step's helper script, say — survives intact.

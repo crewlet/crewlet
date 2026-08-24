@@ -4,21 +4,44 @@ Key architectural choices in Crewlet and why they were made.
 
 ---
 
-## Apache Pulsar for Messaging
+## One Queue Contract, Several Backends
 
-Apache Pulsar is the sole external infrastructure for messaging:
+Messaging is a contract, not a product. One interface with three certified
+backends — an in-memory twin, an **embedded NATS JetStream** server (the
+default: it runs inside the engine process, so a company needs no broker at
+all), and **Apache Pulsar** for a fleet that wants one. A backend the
+conformance suite has not certified does not exist as far as the engine is
+concerned, and **nothing above the queue package may branch on which one is
+running** — that rule is what keeps the twin honest and the default
+operable.
 
-- **Persistent topics** (Pulsar): each internal subject (`crewlet.agent.*.inbox`, `crewlet.notifications.*`) maps to a persistent topic `persistent://{tenant}/{namespace}/{subject}` (default `public/default`; configurable via `providers.queue.tenant` / `.namespace`). Tenants and namespaces are never auto-created, so a custom pair is created out-of-band by the operator; the engine calls the admin REST API only for subscription lifecycle, where both create and delete must work with no consumer attached (see [Seat ownership](../concepts/seat-ownership.md#the-unowned-seat)). Each durable subscription's undelivered backlog survives engine restarts; time-based retention of already-acknowledged messages is an optional namespace retention/TTL policy (off by default in a standalone broker).
+What the contract demands of any backend:
+
+- A **durable subscription is a seat's mailbox**: it exists without a
+  consumer, retains what is published while nothing is attached, and replays
+  in order when someone attaches. Publishing to a subject with no
+  subscription drops the event silently, which is why creating one is an
+  explicit step rather than a side effect of subscribing.
+- Handlers have **three outcomes, not two** — ack, nak, and *defer* (leave it
+  unacked and stop consuming), which is how a node hands a seat back without
+  losing its mail.
+- Attachment has **four verbs of differing destructiveness** — quiesce,
+  unquiesce, detach, delete-subscription. A single `unsubscribe` never said
+  which one it was, and the difference is whether a seat's mail survives.
+
+On Pulsar specifically:
+
+- **Persistent topics**: each internal subject (`crewlet.agent.*.inbox`, `crewlet.notifications.*`) maps to a persistent topic `persistent://{tenant}/{namespace}/{subject}` (default `public/default`; configurable via `stream.tenant` / `stream.namespace`). Tenants and namespaces are never auto-created, so a custom pair is created out-of-band by the operator; the engine calls the admin REST API only for subscription lifecycle, where both create and delete must work with no consumer attached (see [Seat ownership](../concepts/seat-ownership.md#the-unowned-seat)). Each durable subscription's undelivered backlog survives engine restarts; time-based retention of already-acknowledged messages is an optional namespace retention/TTL policy (off by default in a standalone broker).
 - **Competing consumers** (per-agent inboxes, notification fan-out) map to **Shared subscriptions** — one shared cursor per consumer group, so each message reaches exactly one member. **Broadcast** stream consumers (dashboards) map to per-caller **regex topic-pattern subscriptions**. Poison-message redelivery is capped by Pulsar's **dead-letter policy**.
-- **A2A channels** ride the same agent inbox topics as everything else: the ask wakes the target's seat, the answer wakes the asker's. They used to be an in-memory `asyncio.Queue` per channel on the premise that all agent threads share one Engine process — which stopped being true the moment a fleet ran more than one node. The queue lived on the node that opened the channel while the wake was delivered to whichever node owned the target's seat, so the target woke to an empty channel. Channel *state* (participants, open/closed) lives in Postgres for the same reason: every authorization decision reads it, and the two parties are usually on different nodes.
+**A2A channels** ride the same agent inbox subjects as everything else: the ask wakes the target's seat, the answer wakes the asker's. They used to be an in-memory queue per channel, on the premise that every agent shares one process — which stopped being true the moment a fleet ran more than one node. The queue lived on the node that opened the channel while the wake was delivered to whichever node owned the target's seat, so the target woke to an empty channel. Channel *state* (participants, open/closed) is durable for the same reason: every authorization decision reads it, and the two parties are usually on different nodes.
 
-**Infrastructure footprint**: Pulsar + PostgreSQL. Pulsar buys durable per-subscription cursors, dead-letter queues, and configurable retention/TTL policies; for local work its `standalone` mode bundles the broker, BookKeeper, and the metadata store into a single container.
+**Infrastructure footprint**: none by default. The embedded stream and the local store file mean a company runs on one binary; Pulsar is what a deployment adds when it wants durable per-subscription cursors, dead-letter queues and namespace retention policies across a fleet.
 
 ---
 
-## Agent Threads: `asyncio.Task`
+## Goroutines for Concurrency
 
-The entire codebase is async (LLM calls via httpx, MCP via async SDK, storage via async drivers). `asyncio.Task` is lightweight (~500 bytes per task vs ~8MB per OS thread) and sufficient. If a blocking MCP server is encountered, wrap with `asyncio.to_thread()` on a case-by-case basis.
+Everything concurrent is a goroutine whose lifetime belongs to whoever started it, and every one has a way to stop. This is real parallelism rather than one cooperative loop, which is the single biggest behavioural change from the engine's first implementation: every "atomic because it is single-threaded" assumption became something to prove, so CI runs the whole suite under `-race`. A blocking MCP server needs no special handling — a goroutine blocking on I/O costs nothing.
 
 ---
 
@@ -32,11 +55,11 @@ Every persisted event can carry versioning. Schema changes must be **additive on
 
 A running company takes a new configuration without a restart. **Which** revision is current is a fleet-wide fact; **applying** it is a per-node act.
 
-Within one process, applying a revision is shared-memory work: the engine swaps the `Organization` object, cancels removed agents' handlers and publishes `AgentTerminated`, spawns new ones onto their inbox subscriptions, and updates a modified `AgentDefinition` in place so the agent picks it up on its next turn. Every agent handler is an `asyncio` task on one event loop, so they all read the same objects with no data races and nothing to propagate.
+Within one process, applying a revision is shared-memory work: the engine swaps the `Organization` object, cancels removed agents' handlers and publishes `AgentTerminated`, spawns new ones onto their inbox subscriptions, and updates a modified `AgentDefinition` in place so the agent picks it up on its next turn. Every agent handler is a goroutine in that process, so the swap has nothing to propagate — but they run in genuine parallel, so what they share is guarded rather than assumed safe, and the race detector is what holds that.
 
 Across processes that is not enough, and the way it failed is worth naming: activation used to be delivered over a competing-consumer subscription, which means **exactly one replica applied a revision and every other node went on running the previous company indefinitely** — with no error anywhere, because from each node's point of view nothing had happened.
 
-So the fleet-wide half is an **append-only activation epoch** in PostgreSQL that every node polls and reconciles against, recording its own outcome (`ok` / `error` / `degraded`) so a stalled rollout is visible rather than silent. The in-process steps above are what a node does once it decides to move. See [Control Plane](../concepts/control-plane.md).
+So the fleet-wide half is an **append-only activation epoch** that every node polls and reconciles against, recording its own outcome (`ok` / `error` / `degraded`) so a stalled rollout is visible rather than silent. The in-process steps above are what a node does once it decides to move. See [Control Plane](../concepts/control-plane.md).
 
 The log is append-only rather than a pointer row for a specific reason: **re-activating an unchanged revision is the documented credential-rotation gesture**, so "the payload did not change" cannot be treated as "nothing to do".
 
@@ -79,7 +102,7 @@ Engine-detected failures (stall, max-iter exhaustion, depth cap, unhandled excep
 
 ## Provider Abstraction via Protocols
 
-All external dependencies (LLM, embeddings, storage) are behind `Protocol` interfaces. No vendor SDK lock-in. This enables:
+All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs — there is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:
 
 - Different roles using different LLM providers/models
 - Configurable embedding providers for the agent-learning subsystem (e.g., OpenAI, or any compatible endpoint)

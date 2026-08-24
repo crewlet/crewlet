@@ -31,7 +31,7 @@ not a request handler you can route, it is a place where things run:
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
 | **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | The scheduler tick, the retention sweep, the sandbox waiter, skill clustering and curation |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
-| Its sandbox launches, if the role is sandboxed | The company config, the leases, the ledgers (all shared, in PostgreSQL) |
+| Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
 The MCP row is the one that makes this feature what it is. A seat's
 stdio MCP servers are children of the process holding its lease, so
@@ -50,19 +50,19 @@ flowchart LR
     subgraph core["Core network"]
         C1["node-a<br/><i>ingress · seats · workers</i>"]
         C2["node-b<br/><i>ingress · seats · workers</i>"]
-        PG[("PostgreSQL")]
-        MQ[("Pulsar")]
+        KV[("Coordination<br/>leases · ledgers")]
+        MQ[("Event stream")]
     end
     subgraph zone["Restricted network"]
         S["sat-eu<br/><i>seats</i> · zone=eu"]
         API["internal API<br/>only reachable here"]
         S -->|its MCP server| API
     end
-    C1 --- PG
-    C2 --- PG
+    C1 --- KV
+    C2 --- KV
     C1 --- MQ
     C2 --- MQ
-    S -->|outbound only| PG
+    S -->|outbound only| KV
     S -->|outbound only| MQ
 ```
 
@@ -171,9 +171,11 @@ Two failures to know by sight:
 It is a full engine process with roles subtracted, so be honest about
 the dependency surface before choosing a host for it:
 
-- **Outbound reach to PostgreSQL and to the broker.** Seat leases,
-  config, the ledgers and the seat's inbox all live there. A network so
-  restricted that neither is reachable cannot host a satellite.
+- **Outbound reach to the coordination slot and to the stream.** Seat
+  leases, the activation pointer, the ledgers and the seat's inbox all
+  live there. A network so restricted that neither is reachable cannot
+  host a satellite. Its own store file is local, so that one costs
+  nothing.
 - **Whatever its LLM provider needs.** Usually outbound HTTPS to the
   provider. A network with no egress at all can still work if the role
   uses a [subscription CLI backend](../concepts/subscription-llm-backends.md)
