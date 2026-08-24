@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net"
@@ -480,4 +483,79 @@ func parseOverrides(t *testing.T, args []string) (*flag.FlagSet, string, string,
 		t.Fatalf("parse %v: %v", args, err)
 	}
 	return fs, *roles, *host, *port
+}
+
+// EVERY COMMAND THE BINARY DISPATCHES IS ADVERTISED BY ITS USAGE.
+//
+// Nothing connects the switch in run() to the text in usage(), so a command
+// added to one and not the other works perfectly and is discoverable only by
+// reading the source. `crewlet plane` shipped that way for the whole of the
+// rewrite: provisioning, import and resync all worked, and the only list of
+// commands an operator ever sees named GitLab and Mattermost.
+//
+// The dispatch is read out of the source rather than exercised, because a
+// switch's cases cannot be enumerated at runtime — which is the same reason
+// the drift is invisible in the first place.
+func TestUsageAdvertisesEveryDispatchedCommand(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := run([]string{"help"}, &out, &out); err == nil {
+		t.Fatal("help returned no sentinel")
+	}
+	help := out.String()
+
+	for _, cmd := range dispatchedCommands(t) {
+		// The flag spellings of two commands. `crewlet --version` is a
+		// convention rather than a command, and a usage list naming both
+		// forms of each is noise.
+		if strings.HasPrefix(cmd, "-") {
+			continue
+		}
+		if !strings.Contains(help, "crewlet "+cmd) {
+			t.Errorf("run() dispatches %q but usage never names it, so it "+
+				"can only be found by reading the source:\n%s", cmd, help)
+		}
+	}
+}
+
+// dispatchedCommands returns the case values of the command switch in run().
+func dispatchedCommands(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	var commands []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "run" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			clause, ok := n.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, expr := range clause.List {
+				lit, ok := expr.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				value, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unquoting %s: %v", lit.Value, err)
+				}
+				commands = append(commands, value)
+			}
+			return true
+		})
+		return false
+	})
+
+	if len(commands) == 0 {
+		t.Fatal("found no command cases in run(), so this test proves nothing")
+	}
+	return commands
 }

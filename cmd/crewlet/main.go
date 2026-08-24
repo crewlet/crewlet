@@ -114,8 +114,9 @@ Usage:
   crewlet budgets <cmd>       Show or reset the durable token counters
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
-  crewlet gitlab provision    Reconcile the company's seats into a GitLab instance
-  crewlet mattermost provision  Reconcile the company's seats into a Mattermost team
+  crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
+  crewlet plane <cmd>         Reconcile Plane, and publish knowledge and skills
+  crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one
   crewlet version             Print the version
   crewlet help                Show this message
 
