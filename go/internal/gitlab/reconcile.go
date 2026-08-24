@@ -2,6 +2,8 @@ package gitlab
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -78,10 +80,20 @@ type Options struct {
 	// the deliveries go somewhere nobody is looking.
 	WebhookBase string
 
-	// SigningSecret is the value the hook is registered with. It is read
-	// from the resolved config rather than minted, because the engine has
-	// to verify with the same one.
+	// SigningSecret is the value the hook is registered with, resolved.
+	//
+	// Empty means the config's ${VAR} answered nothing, and the run MINTS
+	// one — see [mintSigningSecret]. GitLab's signing token is
+	// caller-supplied and write-only: it is never returned, so a hook
+	// registered with an empty one verifies nothing and there is no way
+	// to read back what it should have been.
 	SigningSecret string
+
+	// SigningSecretVar is the variable the minted secret is recorded
+	// under, empty when the config's signing_secret is not a whole ${VAR}
+	// reference. Mirrors the seat tokens' mint-into-${VAR} contract: the
+	// config's reference is what says where the value belongs.
+	SigningSecretVar string
 
 	// Decommission deletes managed service accounts whose seats have left
 	// the config. Off by default: it is the one destructive direction,
@@ -258,6 +270,14 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if target := webhookTarget(opts.WebhookBase); target != "" {
+		secret, note, err := signingSecret(ctx, opts)
+		if err != nil {
+			return nil, rollback(ctx, opts, minted, err)
+		}
+		if note != "" {
+			res.Notes = append(res.Notes, note)
+		}
+		opts.SigningSecret = secret
 		hooked, notes, err := ensureHooks(ctx, opts, group.ID, projects, target)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
@@ -469,6 +489,77 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 		removed = append(removed, member.Username)
 	}
 	return removed, notes, nil
+}
+
+// signingSecret is what the hook is registered with, minting one when the
+// config's reference answered nothing.
+//
+// # Why an empty one cannot just be registered
+//
+// GitLab's signing token is CALLER-SUPPLIED and write-only: the instance
+// never returns it. A hook registered with an empty one is accepted, shows
+// as healthy in the settings page, and signs every delivery with nothing —
+// which the engine then refuses. Measured against a real instance: the
+// issue was created, the hook fired, and the only trace was one
+// `webhook_signature_invalid` line in a log nobody was watching.
+//
+// So an empty resolution is not passed through. It is either minted — into
+// the variable the config's ${VAR} names, the same mint-into-${VAR} contract
+// the seat tokens follow — or refused, because a literal has nowhere to
+// record it and half-configuring is the failure above.
+func signingSecret(ctx context.Context, opts Options) (string, string, error) {
+	if secret := strings.TrimSpace(opts.SigningSecret); secret != "" {
+		return secret, "", nil
+	}
+	if opts.SigningSecretVar == "" {
+		return "", "", errors.New(
+			"gitlab: integrations.gitlab.signing_secret resolved to nothing " +
+				"and is not a whole ${VAR} reference, so there is nowhere to " +
+				"record a minted one. Point it at a variable, export a " +
+				"whsec_ value yourself, or drop -public-url and register the " +
+				"hook by hand")
+	}
+	secret, err := MintSigningSecret()
+	if err != nil {
+		return "", "", err
+	}
+	if err := opts.Sink.Record(ctx, opts.SigningSecretVar, secret); err != nil {
+		return "", "", fmt.Errorf("gitlab: record %s: %w", opts.SigningSecretVar, err)
+	}
+	return secret, fmt.Sprintf(
+		"minted a webhook signing secret into %s — source the sink into the "+
+			"engine's environment, or it will refuse every delivery this hook "+
+			"sends", opts.SigningSecretVar), nil
+}
+
+// SigningSecretPrefix is what GitLab's Standard-Webhooks implementation
+// expects a signing token to start with.
+const SigningSecretPrefix = "whsec_"
+
+// MintSigningSecret generates a Standard-Webhooks signing secret.
+//
+// 32 bytes, which is the HMAC-SHA256 block-equivalent strength the signature
+// scheme gets its security from — more is not stronger and less is the only
+// way to get this wrong.
+//
+// # The encoding is load-bearing
+//
+// The `whsec_` prefix means the payload is base64 and the HMAC KEY is those
+// DECODED bytes, not the printable form. So the encoding here has to be the
+// one the verifier decodes with — STANDARD base64, padded, per the spec.
+//
+// Getting it wrong is silent. A URL-safe payload usually fails a standard
+// decode, and the verifier's fallback then keys on the printable string
+// verbatim — deliberately, so a hand-written secret still works — while
+// GitLab keys on the decoded bytes. Every delivery is then refused with a
+// signature mismatch and nothing anywhere names the encoding. Measured:
+// that is exactly what the first version of this did.
+func MintSigningSecret() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("gitlab: generate a signing secret: %w", err)
+	}
+	return SigningSecretPrefix + base64.StdEncoding.EncodeToString(raw), nil
 }
 
 // ensureHooks registers this deployment's webhook, at ONE level.

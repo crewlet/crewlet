@@ -2,6 +2,7 @@ package gitlab_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1501,5 +1502,138 @@ func TestAForbiddenProjectIsNotSilentlySkipped(t *testing.T) {
 		})
 	if err == nil {
 		t.Fatal("a forbidden project was treated as merely absent")
+	}
+}
+
+// --- the webhook signing secret -------------------------------------------
+
+// A HOOK IS NEVER REGISTERED WITH AN EMPTY SIGNING TOKEN.
+//
+// GitLab's token is caller-supplied and write-only: the instance never
+// returns it. A hook registered with an empty one is accepted, shows healthy
+// in the settings page, and signs every delivery with nothing — which the
+// engine then refuses. Measured against a real instance: the issue was
+// created, the hook fired, and the only trace was one
+// `webhook_signature_invalid` line in a log nobody was watching.
+func TestAnUnsetSigningSecretIsMintedAndRecorded(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+
+	res, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.SigningSecret = ""
+			o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+		})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	minted := sink.value("GITLAB_SIGNING_SECRET")
+	if !strings.HasPrefix(minted, gitlab.SigningSecretPrefix) {
+		t.Fatalf("recorded %q, want a %s secret", minted, gitlab.SigningSecretPrefix)
+	}
+	// THE HOOK CARRIES THE SAME VALUE. Recording one and stamping another
+	// is the same outage with an extra step.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got := f.hookBodies[0]["token"]; got != minted {
+		t.Errorf("the hook was stamped with %q, not the recorded %q", got, minted)
+	}
+	// AND IT SAYS SO, with what to do about it: the value is useless to
+	// the engine until it is in the engine's environment.
+	if !strings.Contains(strings.Join(res.Notes, "\n"), "GITLAB_SIGNING_SECRET") {
+		t.Errorf("the run did not say it minted one: %v", res.Notes)
+	}
+}
+
+// THE KEY IS FULL STRENGTH. HMAC-SHA256 draws its security from the key, and
+// a short one is invisible: every signature still verifies, so nothing fails
+// until somebody brute-forces it.
+func TestAMintedSecretCarriesAFullStrengthKey(t *testing.T) {
+	t.Parallel()
+	secret, err := gitlab.MintSigningSecret()
+	if err != nil {
+		t.Fatalf("MintSigningSecret: %v", err)
+	}
+	payload, found := strings.CutPrefix(secret, gitlab.SigningSecretPrefix)
+	if !found {
+		t.Fatalf("%q carries no %s prefix", secret, gitlab.SigningSecretPrefix)
+	}
+	key, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("the payload is not standard base64: %v", err)
+	}
+	if len(key) != 32 {
+		t.Errorf("key is %d bytes, want 32 — the SHA-256 block-equivalent "+
+			"strength the scheme rests on", len(key))
+	}
+}
+
+// A LITERAL HAS NOWHERE TO RECORD ONE, so the run refuses rather than
+// registering a hook that verifies nothing.
+func TestAnUnsetLiteralSigningSecretIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.SigningSecret = ""
+			o.SigningSecretVar = ""
+		})
+	if err == nil {
+		t.Fatal("a hook was registered with no signing secret")
+	}
+	if !strings.Contains(err.Error(), "signing_secret") {
+		t.Errorf("the refusal does not name the field: %v", err)
+	}
+	if len(f.hooks) != 0 {
+		t.Errorf("a hook was registered anyway: %+v", f.hooks)
+	}
+}
+
+// A SECRET THAT RESOLVED IS USED AS IS. Minting over an operator's own
+// value would invalidate the one every other deployment of this company
+// holds — the same outage -rotate exists to make deliberate.
+func TestAResolvedSigningSecretIsNotReminted(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.SigningSecret = "whsec_operators-own"
+			o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+		}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := sink.value("GITLAB_SIGNING_SECRET"); got != "" {
+		t.Errorf("it minted over a working secret and recorded %q", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if got := f.hookBodies[0]["token"]; got != "whsec_operators-own" {
+		t.Errorf("the hook carries %q, not the operator's value", got)
+	}
+}
+
+// EVERY MINT IS DIFFERENT. A deterministic secret is not a secret, and the
+// failure is invisible: the hook works.
+func TestMintedSigningSecretsDiffer(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for range 8 {
+		f := newAdminInstance()
+		sink := newRecordingSink()
+		if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+			func(o *gitlab.Options) {
+				o.SigningSecret = ""
+				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+			}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		got := sink.value("GITLAB_SIGNING_SECRET")
+		if seen[got] {
+			t.Fatalf("two runs minted the same secret: %q", got)
+		}
+		seen[got] = true
 	}
 }

@@ -191,7 +191,12 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
 		WebhookBase:   *publicURL,
 		SigningSecret: env.Value(cfg.SigningSecret),
-		Rotate:        *rotate, Decommission: *decommission, ExpiryDays: expiry,
+		// WHERE a minted secret belongs, from the config's own
+		// reference — the same mint-into-${VAR} contract the seat
+		// tokens follow. Empty when signing_secret is a literal, which
+		// the reconcile refuses rather than half-configuring.
+		SigningSecretVar: soleVarOf(cfg.SigningSecret),
+		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
 	})
 	if err != nil {
 		return err
@@ -308,6 +313,15 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 	default:
 		return fmt.Errorf("unknown %s command %q", vendor, sub)
 	}
+}
+
+// soleVarOf is the variable a whole ${VAR} reference names, or empty.
+func soleVarOf(value string) string {
+	name, ok := provision.SoleVar(value)
+	if !ok {
+		return ""
+	}
+	return name
 }
 
 // runMattermostProvision is `crewlet mattermost provision`.
