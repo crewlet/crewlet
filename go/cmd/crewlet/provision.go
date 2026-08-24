@@ -237,7 +237,16 @@ func printResult(w io.Writer, res *gitlab.Result, where string) {
 			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
 	}
 	if res.Hooked != "" {
-		fmt.Fprintf(w, "Webhook registered at %s\n", res.Hooked)
+		// WHERE, not just whether. A group hook covers every project in
+		// the group including ones added later; a set of project hooks
+		// covers exactly what was listed, and the difference only shows
+		// up the day somebody adds a repository.
+		where := "on the group"
+		if len(res.HookedOn) != 1 || res.HookedOn[0] != "group" {
+			where = fmt.Sprintf("on %d project(s): %s",
+				len(res.HookedOn), strings.Join(res.HookedOn, ", "))
+		}
+		fmt.Fprintf(w, "Webhook registered at %s %s\n", res.Hooked, where)
 	}
 	printNotes(w, res.Notes)
 }
@@ -572,21 +581,37 @@ func printTrackerResult(w io.Writer, res *plane.Result, where string) {
 // copies into `contact.plane_user_id` for their human seats, and Plane's own
 // UI does not show them anywhere. Sorted by username so a re-run's output
 // diffs cleanly against the last one.
+// printMembers reports the PEOPLE in the workspace, with their ids.
+//
+// # People, and a count that is not the workspace's
+//
+// The table exists for one thing: a human seat is reached by the UUID in
+// `contact.plane_user_id`, nobody can guess it, and Plane's own UI does not
+// show it. Service accounts are not in that answer — the run manages those,
+// and the lines above already name every one it created or kept.
+//
+// It is also the table as the run FOUND it, before it created anything,
+// which is exactly right for people (a run never creates one) and exactly
+// wrong as a workspace census. Printing "Workspace members (2)" under a line
+// saying eight accounts were created reads as a run that half-failed; it was
+// the pre-run snapshot all along.
 func printMembers(w io.Writer, members []plane.Account) {
-	if len(members) == 0 {
+	people := make([]plane.Account, 0, len(members))
+	for _, m := range members {
+		if !m.IsBot {
+			people = append(people, m)
+		}
+	}
+	if len(people) == 0 {
 		return
 	}
-	sort.Slice(members, func(i, j int) bool {
-		return members[i].Username < members[j].Username
+	sort.Slice(people, func(i, j int) bool {
+		return people[i].Username < people[j].Username
 	})
-	fmt.Fprintf(w, "\nWorkspace members (%d) — the id column is what "+
-		"contact.plane_user_id takes:\n", len(members))
-	for _, m := range members {
-		kind := "person"
-		if m.IsBot {
-			kind = "service"
-		}
-		fmt.Fprintf(w, "  %-24s %-38s %-7s %s\n", m.Username, m.ID, kind, m.Email)
+	fmt.Fprintf(w, "\nPeople in this workspace (%d) — the id column is what "+
+		"contact.plane_user_id takes:\n", len(people))
+	for _, m := range people {
+		fmt.Fprintf(w, "  %-24s %-38s %s\n", m.Username, m.ID, m.Email)
 	}
 }
 

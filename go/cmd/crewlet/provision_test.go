@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/plane"
 )
 
 const gitlabCompanyDoc = `
@@ -217,5 +219,46 @@ func TestTheMattermostCommandSharesTheProvisioningRules(t *testing.T) {
 		t.Fatal("a run with no administrator token was accepted")
 	} else if !strings.Contains(err.Error(), "MATTERMOST_ADMIN_TOKEN") {
 		t.Errorf("the refusal does not name the variable: %v", err)
+	}
+}
+
+// --- the Plane report's people table --------------------------------------
+
+// THE TABLE IS FOR PEOPLE, and its count must not read as a workspace
+// census.
+//
+// It is the member list as the run FOUND it, before it created anything —
+// right for people, because a run never creates one, and wrong as a total:
+// printed under a line saying eight service accounts were created, a
+// "Workspace members (2)" reads as a run that half-failed. Measured against
+// a real instance whose API reported ten.
+func TestThePeopleTableLeavesOutTheServiceAccounts(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printMembers(&out, []plane.Account{
+		{Username: "founder", ID: "912601e1", Email: "founder@example.com"},
+		{Username: "bot_user_c168db5c", ID: "f455f222", Email: "bot@example.com", IsBot: true},
+	})
+
+	text := out.String()
+	if !strings.Contains(text, "(1)") {
+		t.Errorf("the count includes the service accounts:\n%s", text)
+	}
+	if strings.Contains(text, "bot_user_c168db5c") {
+		t.Errorf("a service account reached the people table:\n%s", text)
+	}
+	if !strings.Contains(text, "912601e1") {
+		t.Errorf("the person's id — the whole point of the table — is missing:\n%s", text)
+	}
+}
+
+// A WORKSPACE WITH NO PEOPLE PRINTS NO TABLE, rather than a heading over
+// nothing.
+func TestThePeopleTableIsSkippedWhenThereAreNone(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printMembers(&out, []plane.Account{{Username: "bot", ID: "x", IsBot: true}})
+	if out.Len() != 0 {
+		t.Errorf("printed a table with no people in it:\n%s", out.String())
 	}
 }
