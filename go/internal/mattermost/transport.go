@@ -180,6 +180,13 @@ func (t *Transport) lookup(handle string) (Seat, bool) {
 // is an ordinary state — an operator rotating credentials one at a time —
 // and refusing to start the company over it would turn a one-seat problem
 // into a whole-company outage. The failure is reported per seat.
+// URL is the instance this transport talks to, resolved.
+//
+// Exported for the same reason [Client.URL] is: a caller diagnosing a chat
+// surface needs the address actually in use, which is not the string the
+// config holds — that one is usually a ${VAR}.
+func (t *Transport) URL() string { return t.cfg.URL }
+
 func (t *Transport) Start(ctx context.Context) error {
 	if len(t.cfg.Seats) == 0 {
 		log.Info("mattermost_no_seats_configured")

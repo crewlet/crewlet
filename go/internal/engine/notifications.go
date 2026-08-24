@@ -244,18 +244,48 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 	return nil
 }
 
+// Mattermost is the running chat transport, or nil when the company has no
+// chat surface. Beside [Engine.Registry] and [Engine.Status]: the facts only
+// a co-located engine can answer about what it actually built.
+func (e *Engine) Mattermost() *mattermost.Transport {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return e.notify.mattermost
+}
+
 // startMattermost brings up the chat surface.
 func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Mattermost) (*mattermost.Transport, error) {
+	// RESOLVED HERE, at construction, exactly as the tracker and the code
+	// host resolve theirs: a ${VAR} stays verbatim in the stored config,
+	// which is what makes re-activating an unchanged revision pick up a
+	// rotated value. Passing cfg.URL through raw handed every seat the
+	// literal "${MATTERMOST_URL}" and failed all seven at the URL parse,
+	// with the company running "without its chat surface" — measured
+	// against a real instance whose address was exported correctly.
+	env := e.resolver()
+	url, team := env.Value(cfg.URL), env.Value(cfg.Team)
+	if url == "" {
+		// FOR THE MESSAGE, not for the outcome: NewClient refuses an
+		// empty address on its own, so removing this changes nothing
+		// about what gets built. What it changes is what an operator
+		// reads — "no instance url" sends them to the config, which is
+		// fine, while naming the reference sends them to the variable
+		// that answered nothing, which is where the fix is. The
+		// validator already refused an enabled Mattermost with no url,
+		// so empty here can only be an unresolved ${VAR}.
+		return nil, fmt.Errorf("engine: mattermost: url resolved empty (%q)", cfg.URL)
+	}
+
 	seats := mattermost.SeatsFrom(c.Org, e.resolver().LookupOK)
 	if len(seats) == 0 {
 		// Enabled with no provisioned seats is a company mid-setup, not
 		// a failure: `crewlet mattermost provision` has not run yet.
-		log.Info("mattermost_enabled_with_no_seats", "url", cfg.URL)
+		log.Info("mattermost_enabled_with_no_seats", "url", url)
 		return nil, nil
 	}
 	transport, err := mattermost.NewTransport(mattermost.TransportOptions{
 		Config: mattermost.Config{
-			URL: cfg.URL, Team: cfg.Team,
+			URL: url, Team: team,
 			Status: notify.StatusMode(cfg.Status()),
 			Seats:  seats,
 		},

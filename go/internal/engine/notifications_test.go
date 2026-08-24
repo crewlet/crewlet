@@ -148,3 +148,99 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 		t.Fatalf("the applied cap is %d, want 5", got)
 	}
 }
+
+// AN INTEGRATION'S ADDRESS IS RESOLVED, and every integration resolves it.
+//
+// A ${VAR} stays verbatim in the stored config — that is what makes
+// re-activating an unchanged revision pick up a rotated value — so every
+// consumer resolves at construction. Three wirings do that, and one of them
+// forgot: Mattermost handed each seat the literal "${MATTERMOST_URL}", all
+// seven failed at the URL parse, and the engine reported the company running
+// "without its chat surface" on a host where the address was exported
+// correctly.
+//
+// It is a class, not a typo, so this checks all three at once: the failure
+// is silent per-integration, and a fourth vendor would repeat it.
+func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
+	// NOT parallel: the addresses come from the process environment.
+	t.Setenv("TEST_MM_URL", "http://127.0.0.1:1")
+	t.Setenv("TEST_GL_URL", "http://127.0.0.1:2")
+	t.Setenv("TEST_PLANE_URL", "http://127.0.0.1:3")
+	t.Setenv("MM_CEO_TOKEN", "tok-ceo")
+
+	doc := strings.Replace(companyDoc, `  - name: CEO
+    handle: ceo
+    llm: zulu`, `  - name: CEO
+    handle: ceo
+    llm: zulu
+    integrations:
+      mattermost:
+        bot_token: ${MM_CEO_TOKEN}`, 1) + `
+integrations:
+  mattermost:
+    enabled: true
+    url: ${TEST_MM_URL}
+    team: eng
+  gitlab:
+    enabled: true
+    url: ${TEST_GL_URL}
+    signing_secret: whsec-test
+  plane:
+    enabled: true
+    url: ${TEST_PLANE_URL}
+    workspace: acme
+    webhook_secret: plane-secret
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if e.Company() == nil {
+		t.Fatal("the company did not start")
+	}
+
+	// The addresses are unreachable on purpose: what is under test is the
+	// string each wiring BUILT, not whether the vendor answered.
+	mm := e.Mattermost()
+	if mm == nil {
+		t.Fatal("no chat transport was built")
+	}
+	if got := mm.URL(); got != "http://127.0.0.1:1" {
+		t.Errorf("mattermost url = %q, want the resolved address", got)
+	}
+	// The tracker's client is only built when its token resolves, and
+	// this company declares none — but a url that failed to resolve is
+	// refused outright, so reaching a live company at all is the
+	// assertion for those two.
+	if e.Company() == nil {
+		t.Error("the company stopped, which is what an unresolved tracker url does")
+	}
+}
+
+// AN ADDRESS THAT RESOLVED TO NOTHING IS REFUSED, and the refusal names the
+// reference.
+//
+// The validator already rejected an enabled Mattermost with no url, so an
+// empty one here is a ${VAR} that answered nothing — a different problem
+// with a different fix. Starting anyway builds clients pointed at "" and
+// fails at every call with a message that names neither.
+func TestAnUnresolvedChatAddressIsRefusedByName(t *testing.T) {
+	// NOT parallel: it depends on a variable NOT being in the environment.
+	t.Setenv("MM_CEO_TOKEN", "tok-ceo")
+	doc := strings.Replace(companyDoc, `  - name: CEO
+    handle: ceo
+    llm: zulu`, `  - name: CEO
+    handle: ceo
+    llm: zulu
+    integrations:
+      mattermost:
+        bot_token: ${MM_CEO_TOKEN}`, 1) + `
+integrations:
+  mattermost:
+    enabled: true
+    url: ${TEST_MM_URL_THAT_IS_NEVER_SET}
+    team: eng
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if mm := e.Mattermost(); mm != nil {
+		t.Errorf("a chat transport was built for an address that resolved to "+
+			"nothing: %q", mm.URL())
+	}
+}
