@@ -391,8 +391,12 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 
+	// THE SERVER'S OWN CLIENT, whose transport belongs to this server and
+	// dies with it. A client over http.DefaultTransport shares one
+	// connection pool with every other parallel test, so one server's
+	// Close breaks a request in flight against another.
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
-		URL: srv.URL, Token: adminToken,
+		URL: srv.URL, Token: adminToken, HTTP: srv.Client(),
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

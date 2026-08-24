@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/mattermost"
@@ -277,8 +278,17 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 		return runMattermostProvision(rest, stdout, stderr)
 	case vendor == "plane" && sub == "provision":
 		return runPlaneProvision(rest, stdout, stderr)
+	case vendor == "plane" && sub == "import":
+		return runPlaneImport(rest, stdout, stderr)
+	case vendor == "plane" && sub == "resync":
+		return runPlaneResync(rest, stdout, stderr)
 	case sub == "" || sub == "help":
 		fmt.Fprintf(stderr, "usage: crewlet %s provision <company.yaml>\n", vendor)
+		if vendor == "plane" {
+			fmt.Fprintln(stderr,
+				"       crewlet plane import <company.yaml> <directory>\n"+
+					"       crewlet plane resync <company.yaml>")
+		}
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown %s command %q", vendor, sub)
@@ -572,4 +582,222 @@ func printMembers(w io.Writer, members []plane.Account) {
 		}
 		fmt.Fprintf(w, "  %-24s %-38s %-7s %s\n", m.Username, m.ID, kind, m.Email)
 	}
+}
+
+// runPlaneImport is `crewlet plane import`.
+func runPlaneImport(args []string, stdout, stderr io.Writer) error {
+	companyPath, args := splitSubject(args)
+	root, args := splitSubject(args)
+
+	fs := flag.NewFlagSet("plane import", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	apiKey := fs.String("token", "",
+		"a Plane API key that may write the target projects; empty reads PLANE_TOKEN")
+	prune := fs.Bool("prune", false,
+		"delete published tool-skill pages whose key no local file publishes")
+	dryRun := fs.Bool("dry-run", false,
+		"print what would be published and write nothing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	tail := fs.Args()
+	for _, extra := range tail {
+		switch {
+		case companyPath == "":
+			companyPath = extra
+		case root == "":
+			root = extra
+		default:
+			root = "" // too many positionals; fall through to the usage
+		}
+	}
+	if companyPath == "" || root == "" {
+		fmt.Fprintln(stderr,
+			"usage: crewlet plane import <company.yaml> <directory> "+
+				"[-token KEY] [-prune] [-dry-run]")
+		return errors.New("name a company document and a directory")
+	}
+
+	company, err := config.LoadCompany(companyPath)
+	if err != nil {
+		return err
+	}
+	cfg := company.Integrations.Plane
+	plan, err := plane.Walk(root, cfg)
+	if err != nil {
+		return err
+	}
+	printImportPlan(stdout, plan)
+	if *dryRun {
+		fmt.Fprintln(stdout, "\n-dry-run: nothing was published or deleted.")
+		return nil
+	}
+	if len(plan.Items) == 0 {
+		return nil
+	}
+
+	env := config.EnvOnly()
+	key := strings.TrimSpace(*apiKey)
+	if key == "" {
+		key = strings.TrimSpace(env.Lookup("PLANE_TOKEN"))
+	}
+	if key == "" {
+		key = strings.TrimSpace(env.Value(cfg.Token))
+	}
+	if key == "" {
+		return errors.New(
+			"no API key: pass -token, export PLANE_TOKEN, or set " +
+				"integrations.plane.token to a variable this shell has")
+	}
+	client, err := plane.NewClient(plane.ClientOptions{
+		URL: env.Value(cfg.URL), Workspace: env.Value(cfg.Workspace), APIKey: key,
+	})
+	if err != nil {
+		return err
+	}
+
+	res, err := plane.Publish(context.Background(), plane.PublishOptions{
+		Client: client, Config: cfg, Plan: plan, Prune: *prune,
+	})
+	if err != nil {
+		return err
+	}
+	printImportResult(stdout, res)
+	if len(res.Failed) > 0 {
+		// THE EXIT CODE CARRIES THE TRUTH. Page failures are isolated so
+		// one locked page does not cost the other forty, but a run that
+		// exited 0 with pages missing would be reported as a successful
+		// import by whatever ran it.
+		return fmt.Errorf("%d page(s) could not be published", len(res.Failed))
+	}
+	return nil
+}
+
+// printImportPlan renders what an import intends to publish.
+func printImportPlan(w io.Writer, plan *plane.Plan) {
+	if len(plan.Items) == 0 {
+		fmt.Fprintln(w, "Nothing to publish.")
+	} else {
+		fmt.Fprintf(w, "%d page(s) to publish:\n", len(plan.Items))
+		for _, item := range plan.Items {
+			kind := "doc"
+			if item.Skill {
+				kind = "skill"
+			}
+			fmt.Fprintf(w, "  %-5s %-10s %s\n", kind, item.Container, item.Title)
+		}
+	}
+	printNotes(w, plan.Notes)
+}
+
+// printImportResult renders what an import did.
+func printImportResult(w io.Writer, res *plane.PublishResult) {
+	fmt.Fprintln(w)
+	if len(res.Created) > 0 {
+		fmt.Fprintf(w, "Published %d new page(s): %s\n",
+			len(res.Created), strings.Join(res.Created, ", "))
+	}
+	if len(res.Updated) > 0 {
+		fmt.Fprintf(w, "Updated %d page(s): %s\n",
+			len(res.Updated), strings.Join(res.Updated, ", "))
+	}
+	if len(res.Pruned) > 0 {
+		fmt.Fprintf(w, "Deleted %d orphaned skill page(s): %s\n",
+			len(res.Pruned), strings.Join(res.Pruned, ", "))
+	}
+	if len(res.Failed) > 0 {
+		fmt.Fprintf(w, "\n%d page(s) FAILED:\n", len(res.Failed))
+		for _, failure := range res.Failed {
+			fmt.Fprintf(w, "  - %s\n", failure)
+		}
+	}
+	printNotes(w, res.Notes)
+}
+
+// runPlaneResync is `crewlet plane resync`.
+//
+// # It reports, it does not reach into a running engine
+//
+// A live engine receives Plane page webhooks directly, so its registry is
+// already current. This re-runs the SAME walk and the SAME admission
+// against a throwaway registry and prints what loaded — which is the answer
+// to "why is this skill not being applied", and it is a read-only question.
+// Restart the engine, or wait for the next webhook, to change what it holds.
+func runPlaneResync(args []string, stdout, stderr io.Writer) error {
+	companyPath, args := splitSubject(args)
+
+	fs := flag.NewFlagSet("plane resync", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	apiKey := fs.String("token", "",
+		"a Plane API key that may read the skills project; empty reads PLANE_TOKEN")
+	project := fs.String("project", "",
+		"the skills project identifier; empty takes integrations.plane.skills_project")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	tail := fs.Args()
+	if companyPath == "" && len(tail) == 1 {
+		companyPath, tail = tail[0], nil
+	}
+	if companyPath == "" || len(tail) > 0 {
+		fmt.Fprintln(stderr,
+			"usage: crewlet plane resync <company.yaml> [-token KEY] [-project ID]")
+		return errors.New("name exactly one company document")
+	}
+
+	company, err := config.LoadCompany(companyPath)
+	if err != nil {
+		return err
+	}
+	cfg := company.Integrations.Plane
+	if cfg == nil || !cfg.Enabled {
+		return errors.New("plane: the company config does not enable plane")
+	}
+	env := config.EnvOnly()
+	key := strings.TrimSpace(*apiKey)
+	if key == "" {
+		key = strings.TrimSpace(env.Lookup("PLANE_TOKEN"))
+	}
+	if key == "" {
+		key = strings.TrimSpace(env.Value(cfg.Token))
+	}
+	if key == "" {
+		return errors.New(
+			"no API key: pass -token, export PLANE_TOKEN, or set " +
+				"integrations.plane.token to a variable this shell has")
+	}
+	client, err := plane.NewClient(plane.ClientOptions{
+		URL: env.Value(cfg.URL), Workspace: env.Value(cfg.Workspace), APIKey: key,
+	})
+	if err != nil {
+		return err
+	}
+
+	identifier := strings.TrimSpace(*project)
+	if identifier == "" {
+		identifier = cfg.SkillsProjectKey()
+	}
+	pages, err := plane.SkillPages(context.Background(), client, identifier)
+	if err != nil {
+		return err
+	}
+	loaded, report := skills.Admit(pages)
+	fmt.Fprintf(stdout, "%s holds %d page(s): %d skill(s), %d ordinary page(s).\n",
+		identifier, report.Pages, len(loaded), report.Ordinary)
+	for _, skill := range loaded {
+		fmt.Fprintf(stdout, "  %-28s %s\n", skill.Key, skill.Title)
+	}
+	if len(report.Undecodable) > 0 {
+		// A PAGE THAT LOOKS LIKE A SKILL AND DOES NOT PARSE is the case
+		// worth printing: somebody wrote a trigger and got the rest
+		// wrong, and the only other symptom is guidance that never
+		// appears.
+		fmt.Fprintf(stdout, "\n%d page(s) declare a trigger and did not parse:\n",
+			len(report.Undecodable))
+		for _, title := range report.Undecodable {
+			fmt.Fprintf(stdout, "  - %s\n", title)
+		}
+		return fmt.Errorf("%d page(s) could not be decoded", len(report.Undecodable))
+	}
+	return nil
 }

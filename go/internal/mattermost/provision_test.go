@@ -360,8 +360,12 @@ func reconcileChatWith(t *testing.T, srv *chatServer, sink provision.TokenSink,
 	t.Helper()
 	http := httptest.NewServer(http.HandlerFunc(srv.serve))
 	t.Cleanup(http.Close)
+	// THE SERVER'S OWN CLIENT, whose transport belongs to this server and
+	// dies with it. A client over http.DefaultTransport shares one
+	// connection pool with every other parallel test, so one server's
+	// Close breaks a request in flight against another.
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: http.URL, Token: adminToken,
+		URL: http.URL, Token: adminToken, HTTP: http.Client(),
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

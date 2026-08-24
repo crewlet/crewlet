@@ -98,44 +98,12 @@ func (e *Engine) Skills() *skills.Registry { return e.skills }
 // It takes rendered page text rather than a backend client, so the walk
 // belongs to whoever owns the backend and this stays the one place that
 // decides what a skill is.
-func (e *Engine) SyncSkills(pages []Page) {
-	admitted := make([]skills.Skill, 0, len(pages))
-	var skipped int
-	for _, page := range pages {
-		if !skills.IsSkill(page.Text) {
-			// An ordinary page in the same container — a project home
-			// page, an operator's notes. Expected, and not a failure.
-			skipped++
-			continue
-		}
-		skill, err := skills.Parse(page.Text,
-			skills.Source{PageID: page.ID, Version: page.Version})
-		if err != nil {
-			// A page that LOOKS like a skill and does not parse IS worth
-			// a line: somebody wrote a trigger and got the rest wrong,
-			// and the only symptom otherwise is guidance that never
-			// appears.
-			log.Warn("skill_page_undecodable", "page", page.ID,
-				"title", page.Title, "error", err.Error())
-			continue
-		}
-		admitted = append(admitted, skill)
-	}
+func (e *Engine) SyncSkills(pages []skills.Page) {
+	admitted, report := skills.Admit(pages)
 	e.skills.Replace(admitted)
 	log.Info("tool_skills_synced", "skills", len(admitted),
-		"pages", len(pages), "not_skills", skipped)
-}
-
-// Page is one knowledge-base page, as the skill sync reads it.
-//
-// Backend-neutral: a backend with no version concept stamps zero, and the
-// text is already flattened to what a model reads. Neither the registry nor
-// this file knows whether it came from a wiki or a tracker.
-type Page struct {
-	ID      string
-	Title   string
-	Version int
-	Text    string
+		"pages", report.Pages, "not_skills", report.Ordinary,
+		"undecodable", len(report.Undecodable))
 }
 
 // syncSkillsFrom walks the configured skills container and replaces the
@@ -144,7 +112,7 @@ type Page struct {
 // Best effort and LOUD on failure: a company whose skills did not load runs
 // with agents that do not know its conventions, which looks from the outside
 // like models that stopped following instructions.
-func (e *Engine) syncSkillsFrom(ctx context.Context, c *Company, walk func(context.Context, string) ([]Page, error)) {
+func (e *Engine) syncSkillsFrom(ctx context.Context, c *Company, walk func(context.Context, string) ([]skills.Page, error)) {
 	project := e.SkillsProject(c)
 	if project == "" || walk == nil {
 		return
@@ -178,13 +146,13 @@ func (e *Engine) startSkillSync(ctx context.Context, c *Company) {
 	if project == "" || client == nil {
 		return
 	}
-	go e.syncSkillsFrom(ctx, c, func(ctx context.Context, project string) ([]Page, error) {
+	go e.syncSkillsFrom(ctx, c, func(ctx context.Context, project string) ([]skills.Page, error) {
 		return planePages(ctx, client, project)
 	})
 }
 
 // planePages resolves the container's identifier and reads its pages.
-func planePages(ctx context.Context, client *plane.Client, project string) ([]Page, error) {
+func planePages(ctx context.Context, client *plane.Client, project string) ([]skills.Page, error) {
 	// The walk is PROJECT-SCOPED and the endpoint takes a UUID, so the
 	// operator's identifier has to be resolved first — and a project that
 	// does not resolve is a configuration problem rather than an empty
@@ -208,9 +176,9 @@ func planePages(ctx context.Context, client *plane.Client, project string) ([]Pa
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Page, 0, len(rows))
+	out := make([]skills.Page, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, Page{
+		out = append(out, skills.Page{
 			ID: row.ID, Title: row.Name,
 			// The DECODED text, so this package stays the one place that
 			// decides what a skill is and the backend stays the one place

@@ -38,8 +38,8 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet llm import <provider>` | Restore a credential bundle onto this host |
 | `crewlet confluence import <company.yaml> [PATH]` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into Confluence (`trigger:` ⇒ skill; otherwise ⇒ doc in its parent-directory space) |
 | `crewlet confluence resync <company.yaml>` | Re-fetch the Tool Skills space and print loaded keys |
-| `crewlet plane import <company.yaml> [PATH]` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) (`trigger:` ⇒ skill in the Tool Skills project; otherwise ⇒ doc in its parent-directory project) |
-| `crewlet plane resync <company.yaml>` | Re-fetch the Tool Skills project and print loaded keys |
+| `crewlet plane import <company.yaml> <directory>` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) — `trigger:` ⇒ skill in the Tool Skills project, otherwise ⇒ doc in its parent-directory project. Idempotent by `external_id`; `-prune` removes orphaned skill pages. |
+| `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
 | `crewlet slack provision <company.yaml> --base-url URL` | Create/update one Slack app per Slack-enabled agent via Slack's App Manifest APIs, run the OAuth installs, write tokens into `.env` or the [secret store](../concepts/secret-store.md) |
@@ -71,14 +71,8 @@ Reads Tier A bootstrap (`./config.yaml` by default) and starts the agent engine.
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
 
 The three overrides are the fields whose right value depends on *where the process is running* rather than on what the company is. Everything else in Tier A belongs in the file, where it can be reviewed.
-| `--import-company PATH` | Before booting, import the Tier B company YAML at `PATH` as the first revision **if no active revision exists** — a one-command bootstrap (`crewlet run config.yaml --import-company company.yaml`). Idempotent: a no-op once a revision is active (use `crewlet config import --force` to overwrite). The file's embedding dimensions size the pgvector columns on first migrate. A missing/invalid file aborts before any DB work. |
-| `--import-confluence [PATH]` | Before booting the engine, run the same publish as `crewlet confluence import` against `PATH` (defaults to `examples/` when given without a value; walked recursively). Publishes both [Tool Skills](../concepts/tool-skills.md) and [knowledge docs](../concepts/knowledge-system.md#publishing-knowledge-docs), routed by frontmatter. Requires `--import-company`: the Confluence credentials come from the Tier B company YAML's `confluence:` block, not the Tier A bootstrap. The import runs **before** the Tier A bootstrap is loaded — it depends only on `--import-company`, so it publishes even when the positional `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to actually start afterward). Failures abort engine start. Mutually exclusive with `--import-plane`. |
-| `--update-confluence` | With `--import-confluence`: overwrite existing pages instead of skipping them. |
-| `--create-confluence-space` | With `--import-confluence`: auto-create any target Confluence space that doesn't exist (needs Confluence space-admin permission on the bot account). |
-| `--prune-confluence` | With `--import-confluence`: after publishing, delete import-managed skill pages whose local source `.md` was removed (orphans). Only touches pages the importer published, never user-authored pages or knowledge docs. |
-| `--import-plane [PATH]` | Before booting the engine, run the same publish as `crewlet plane import` against `PATH` (defaults to `examples/` when given without a value; walked recursively). Publishes both [Tool Skills](../concepts/tool-skills.md) and [knowledge docs](../concepts/knowledge-system.md#publishing-knowledge-docs), routed by frontmatter. **Requires `--import-company`** — the Plane credentials come from the Tier B company YAML's `integrations.plane` block, not the Tier A bootstrap — and is **mutually exclusive with `--import-confluence`** (argparse rejects both; one knowledge backend per run). Like the Confluence variant, the import runs *before* the Tier A bootstrap is loaded and a failure aborts engine start. |
-| `--update-plane` | With `--import-plane`: overwrite existing pages instead of skipping them. |
-| `--prune-plane` | With `--import-plane`: after publishing, archive+delete import-managed skill pages whose local source `.md` was removed (orphans). Only touches pages the importer published (`external_source="crewlet"`), never user-authored pages or knowledge docs. |
+
+Publishing knowledge and tool skills is its own command rather than a flag on `run`: an engine that published on every boot would rewrite a company's knowledge base from whatever tree the deploying machine happened to have. Use [`crewlet plane import`](#crewlet-plane-import), and [`crewlet config import`](#crewlet-config-import) to load the first company revision.
 
 Press `Ctrl+C` for graceful shutdown — signals escalate in three tiers:
 
@@ -638,36 +632,38 @@ Re-runs the boot-time full populate of the Tool Skills registry against a *tempo
 ## `crewlet plane import`
 
 ```
-crewlet plane import my_company.yaml [PATH]
-                                     [--project ID] [--update] [--dry-run]
-                                     [--prune]
+crewlet plane import <company.yaml> <directory> [-token KEY]
+                                               [-prune] [-dry-run]
 ```
 
-The Plane analog of [`crewlet confluence import`](#crewlet-confluence-import). The positional argument is the **Tier B company YAML** — the Plane credentials are read from its `integrations.plane` block (the block must be present and enabled). Walks every `.md` file under `PATH` recursively (defaults to `examples/`) and **routes each file by frontmatter**:
+The unified publisher. The first positional is the **Tier B company YAML** — the Plane credentials come from its `integrations.plane` block — and the second is the directory to walk. Every `.md` beneath it is routed **by what the file declares**:
 
-- `trigger:` ⇒ a [Tool Skill](../concepts/tool-skills.md) page (leading YAML code block) in the Tool Skills project.
-- **otherwise** ⇒ a [knowledge doc](../concepts/knowledge-system.md#publishing-knowledge-docs) (clean prose). Its **project is the file's parent directory name** (identifier, matched case-insensitively) and its **title is the first `# H1`** (frontmatter is optional, only for `title` / `parent` overrides; `labels` is ignored — Plane pages have no free-form labels).
+- `trigger:` ⇒ a [Tool Skill](../concepts/tool-skills.md) page (a leading YAML code block the engine parses back out) in the Tool Skills project, `integrations.plane.skills_project`. **Its directory is ignored**: a skill is what it declares, and publishing one as prose would put an instruction meant for one phase of one turn into a planner's context.
+- otherwise ⇒ a [knowledge doc](../concepts/knowledge-system.md#publishing-knowledge-docs) as clean prose, in the project named by its **parent directory**, titled by its first `# H1`.
 
-**Idempotency is the fork's `external_id` contract**: every published page is stamped `external_source="crewlet"` + `external_id="skill:<key>"` / `"doc:<title>"`, so re-runs match by external identity (retitling a page in Plane never orphans it) with an exact-title fallback that adopts pre-existing unmarked pages. A frontmatter `parent:` resolves against the project's pages **including those published earlier in the same run**. A skill file with malformed frontmatter, or a doc with no determinable title, is skipped with a log line. Every distinct target project must already exist — a missing project fails the run **before any page is written**, naming the identifiers to create; the importer never creates projects. Page-write failures (a locked page, a page-level 403) are isolated per page: the rest of the run publishes, then the command **exits non-zero naming the failed files** (only a 401 or an enumeration failure aborts outright). See [Plane § Publishing docs + skills](../integrations/plane.md#publishing-docs--skills--crewlet-plane-import) for the full contract.
+The title comes from the H1 rather than the filename because it is the page name *and* half the idempotency key — a rename would orphan the published page and leave a second one beside it. Frontmatter may override the title (`title:`) and the container (`project:` / `space:`), and nothing else. A file with no determinable title, or two files that would publish as one page, **stop the walk** naming the fix: both are things an operator corrects in their editor, and a run that skipped them would report success with a skill silently unpublished.
+
+**Idempotency is the fork's `external_id` contract**: every published page is stamped `external_source="crewlet"` and `external_id="skill:<key>"` / `"doc:<title>"`, so re-runs match by identity and retitling a page in Plane never orphans it. A re-import always writes — this is a publisher, and skipping existing pages would mean an edited file never reaching the workspace. A page created by hand under the same title is adopted and stamped, but **only** if it carries no external identity at all: one that does belongs to whoever set it. Where two unclaimed pages share a title the lowest page id wins, because Plane guarantees no enumeration order and the alternative is a coin flip.
+
+Every distinct target project must already exist; a missing one fails the run **before any page is written**, naming what the workspace has. The importer never creates projects — that is [`crewlet plane provision -create-projects`](#crewlet-plane-provision). Page-write failures are isolated per page: the rest of the run publishes, then the command **exits non-zero naming the failures**.
 
 | Flag | Description |
 |------|-------------|
-| `--project ID` | Tool Skills project identifier for **skill** files. Default: `$CREWLET_TOOL_SKILLS_PROJECT` or `TS` — the same env var the engine's sync worker reads. Knowledge docs take their project from their parent directory. |
-| `--update` | Overwrite existing pages (also stamps the external identity onto pages adopted via the title fallback). |
-| `--dry-run` | Log what would be created/updated (and, with `--prune`, deleted) without making page writes. |
-| `--prune` | After publishing, **archive + delete** import-managed skill pages in the skills project whose source `.md` is gone. Positive-marker predicate: only pages with `external_source="crewlet"` and a `skill:` external id no local file claims — never user-authored pages, `doc:` pages, or knowledge docs. Per-page failure isolation: a 403 on a page the account doesn't own logs and continues — and when the delete is refused *after* a successful archive, the archive is **rolled back** (unarchive) so the page stays visible and republishable rather than stranded archived behind a permanently-409ing external id. If the project enumeration is incomplete, the run aborts before pruning — an incomplete listing deletes nothing. |
-
-> **Credentials.** The company YAML's `integrations.plane` block typically references environment variables (e.g. `token: "${PLANE_ENGINE_TOKEN}"`). The command resolves them from the process environment, and — like `crewlet run` — first loads a `.env` next to the company YAML (falling back to `./.env`). The token's account must be a member of every target project.
+| `-token KEY` | A Plane API key that may write the target projects. Empty reads `$PLANE_TOKEN`, then `integrations.plane.token`. The account must be a member of every target project. |
+| `-prune` | Delete import-managed **skill** pages whose key no local file publishes. Positive-marker predicate — `external_source="crewlet"` **and** a `skill:` external id — so unmarked pages, `doc:` pages and knowledge docs are structurally out of reach: a doc absent from this run is far more likely to have moved than to be dead. Deletion follows the fork's archive-then-delete precondition, per page. When the archive lands and the delete is refused (deletion is owner-or-project-admin only), the archive is **rolled back**: left archived, the page is invisible to every agent while its external id keeps 409ing every future republish of that skill. A failed prune has to be a no-op, not a half-removal. |
+| `-dry-run` | Print the routed plan and write nothing. It is the **same** plan the run uses. |
 
 ---
 
 ## `crewlet plane resync`
 
 ```
-crewlet plane resync my_company.yaml [--project ID]
+crewlet plane resync <company.yaml> [-token KEY] [-project ID]
 ```
 
-The Plane analog of [`crewlet confluence resync`](#crewlet-confluence-resync): re-runs the boot-time full populate of the Tool Skills registry — one strict enumeration of the Tool Skills project, the same decode + admission logic the engine's boot walk runs — against a *temporary* registry and prints the loaded keys. **Skills-only**, and **does not** reach into a running engine: a live engine receives Plane page webhooks directly (create / content-persist update / delete), so a manual resync is only needed when you suspect a webhook was missed across a long outage. Restart the engine (or wait for the next webhook) to apply changes there.
+The read-only diagnostic. It runs the **same** walk and the **same** admission the engine's boot sync runs — one strict enumeration of the Tool Skills project — against a throwaway registry, and prints the keys that loaded plus any page that declares a trigger and does not parse. That last case is the one worth printing: somebody wrote a trigger and got the rest wrong, and the only other symptom is guidance that never appears, so the command exits non-zero when it finds one.
+
+It does **not** reach into a running engine: a live engine receives Plane page webhooks directly (create / content update / delete), so this answers "why is this skill not being applied", not "make it apply". Restart the engine, or wait for the next webhook, to change what it holds. `-project` targets a project other than the configured one, for checking a container before pointing the company at it.
 
 ---
 

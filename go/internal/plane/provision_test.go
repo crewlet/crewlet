@@ -72,9 +72,28 @@ type instance struct {
 	// now is the instant token expiry is judged against, so a test can
 	// age a token without waiting.
 	now time.Time
+	// pages is the workspace's page store, for the import tests.
+	pages map[string]*pageRow
+	// failPageNamed refuses to write the page with this name, to reach
+	// the isolated-failure path.
+	failPageNamed string
+	// refuseDelete makes a page delete 403 after its archive landed,
+	// which is the state a failed prune has to undo.
+	refuseDelete bool
 	// bodies are the write payloads, so a test can assert what was SENT
 	// rather than what the fake chose to remember about it.
 	bodies []recorded
+}
+
+// pageRow is a page as the workspace holds it.
+type pageRow struct {
+	ID             string
+	Project        string
+	Name           string
+	HTML           string
+	ExternalID     string
+	ExternalSource string
+	Archived       bool
 }
 
 // recorded is one write, as it arrived.
@@ -89,6 +108,7 @@ func newInstance() *instance {
 		accounts: map[string]*plane.Account{},
 		tokens:   map[string][]*plane.Token{},
 		member:   map[string]bool{},
+		pages:    map[string]*pageRow{},
 		projects: []plane.Project{{ID: "p-eng", Identifier: "ENG", Name: "Engineering"}},
 		now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
@@ -140,6 +160,120 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": owner})
+
+	case strings.HasSuffix(path, "/pages/") && r.Method == http.MethodGet:
+		project := strings.TrimSuffix(strings.TrimPrefix(path, ws+"/projects/"), "/pages/")
+		out := make([]map[string]any, 0, len(f.pages))
+		for _, page := range f.pages {
+			if page.Project != project {
+				continue
+			}
+			row := map[string]any{
+				"id": page.ID, "name": page.Name, "project": page.Project,
+				"description_html":     page.HTML,
+				"description_stripped": plane.HTMLToText(page.HTML),
+				"external_id":          page.ExternalID,
+				"external_source":      page.ExternalSource,
+			}
+			if page.Archived {
+				row["archived_at"] = "2026-01-01T00:00:00Z"
+			}
+			// THE PROJECTION IS HONOURED, because the import
+			// enumeration asks for a narrow one and a fake that served
+			// every field would hide a caller reading something it
+			// never requested.
+			if fields := r.URL.Query().Get("fields"); fields != "" {
+				want := map[string]bool{}
+				for _, name := range strings.Split(fields, ",") {
+					want[strings.TrimSpace(name)] = true
+				}
+				for name := range row {
+					if !want[name] {
+						delete(row, name)
+					}
+				}
+			}
+			out = append(out, row)
+		}
+		// DELIBERATELY UNSORTED: Plane guarantees no order here, and a
+		// fake that sorted would hide every place the importer depends
+		// on one.
+		json.NewEncoder(w).Encode(map[string]any{"results": out})
+
+	case strings.HasSuffix(path, "/pages/") && r.Method == http.MethodPost:
+		project := strings.TrimSuffix(strings.TrimPrefix(path, ws+"/projects/"), "/pages/")
+		name := fmt.Sprint(body["name"])
+		if name == f.failPageNamed {
+			deny(w, http.StatusForbidden, "this page is locked")
+			return
+		}
+		page := &pageRow{
+			ID: f.id("page"), Project: project, Name: name,
+			HTML:           fmt.Sprint(body["description_html"]),
+			ExternalID:     fmt.Sprint(body["external_id"]),
+			ExternalSource: fmt.Sprint(body["external_source"]),
+		}
+		f.pages[page.ID] = page
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": page.ID, "name": page.Name,
+			"external_id": page.ExternalID, "external_source": page.ExternalSource,
+		})
+
+	case strings.Contains(path, "/pages/") && strings.HasSuffix(path, "/archive/"):
+		id := pageIDIn(path, "/archive/")
+		page := f.pages[id]
+		if page == nil {
+			deny(w, http.StatusNotFound, "gone")
+			return
+		}
+		if page.Archived {
+			// Plane refuses to archive what is already archived.
+			deny(w, http.StatusBadRequest, "page is already archived")
+			return
+		}
+		page.Archived = true
+		w.WriteHeader(http.StatusNoContent)
+
+	case strings.Contains(path, "/pages/") && strings.HasSuffix(path, "/unarchive/"):
+		id := pageIDIn(path, "/unarchive/")
+		if page := f.pages[id]; page != nil {
+			page.Archived = false
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+	case strings.Contains(path, "/pages/") && r.Method == http.MethodPatch:
+		id := pageIDIn(path, "")
+		page := f.pages[id]
+		if page == nil {
+			deny(w, http.StatusNotFound, "gone")
+			return
+		}
+		if fmt.Sprint(body["name"]) == f.failPageNamed {
+			deny(w, http.StatusForbidden, "this page is locked")
+			return
+		}
+		page.Name = fmt.Sprint(body["name"])
+		page.HTML = fmt.Sprint(body["description_html"])
+		page.ExternalID = fmt.Sprint(body["external_id"])
+		page.ExternalSource = fmt.Sprint(body["external_source"])
+		w.WriteHeader(http.StatusNoContent)
+
+	case strings.Contains(path, "/pages/") && r.Method == http.MethodDelete:
+		id := pageIDIn(path, "")
+		page := f.pages[id]
+		if page != nil && !page.Archived {
+			// ARCHIVE IS THE PRECONDITION. Plane will not delete a live
+			// page, which is why the prune archives first — and why a
+			// prune that stops between the two has to undo the archive.
+			deny(w, http.StatusBadRequest, "archive the page before deleting it")
+			return
+		}
+		if f.refuseDelete {
+			deny(w, http.StatusForbidden, "only a project admin may delete a page")
+			return
+		}
+		delete(f.pages, id)
+		w.WriteHeader(http.StatusNoContent)
 
 	case path == ws+"/projects/" && r.Method == http.MethodPost:
 		project := plane.Project{
@@ -382,6 +516,13 @@ func (f *instance) owner(value string) (string, bool) {
 	return "", false
 }
 
+// pageIDIn pulls the page id out of a page-scoped path.
+func pageIDIn(path, suffix string) string {
+	_, rest, _ := strings.Cut(path, "/pages/")
+	rest = strings.TrimSuffix(rest, suffix)
+	return strings.Trim(rest, "/")
+}
+
 func deny(w http.ResponseWriter, status int, detail string) {
 	w.WriteHeader(status)
 	fmt.Fprintf(w, `{"error":%q}`, detail)
@@ -497,8 +638,13 @@ func workspaceClient(t *testing.T, f *instance) *plane.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(server.Close)
+	// THE SERVER'S OWN CLIENT, whose transport belongs to this server and
+	// dies with it. A client over http.DefaultTransport shares one
+	// connection pool with every other parallel test, so one server's
+	// Close breaks a request in flight against another.
 	c, err := plane.NewClient(plane.ClientOptions{
 		URL: server.URL, Workspace: "nimbus", APIKey: adminKey,
+		HTTP: server.Client(),
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

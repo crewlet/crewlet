@@ -6,7 +6,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
-	"github.com/crewlet/crewlet/internal/engine"
 )
 
 // The tool-skill path, end to end: a page an operator published reaches the
@@ -18,15 +17,15 @@ import (
 
 // pagesFor renders skills back into page text, so this exercises the
 // admission path rather than reaching past it into the registry.
-func pagesFor(in []skills.Skill) []engine.Page {
-	out := make([]engine.Page, 0, len(in))
+func pagesFor(in []skills.Skill) []skills.Page {
+	out := make([]skills.Page, 0, len(in))
 	for _, s := range in {
 		phases := []string{"plan", "execute"}
 		required := "true"
 		if !s.Required {
 			required = "false"
 		}
-		out = append(out, engine.Page{
+		out = append(out, skills.Page{
 			ID: s.Key + "-page", Title: s.Title, Version: 1,
 			Text: "---\nkey: " + s.Key + "\ntitle: " + s.Title +
 				"\nsummary: " + s.Summary +
@@ -137,7 +136,7 @@ func TestAnOrdinaryPageInTheContainerIsNotASkill(t *testing.T) {
 	waitForSeat(t, n, "ceo")
 
 	n.engine.SyncSkills(append(
-		[]engine.Page{{ID: "home", Title: "Project home",
+		[]skills.Page{{ID: "home", Title: "Project home",
 			Text: "# Welcome\n\nRead the runbooks."}},
 		pagesFor([]skills.Skill{
 			toolSkill("recall-conventions", "query_episodes", true)})...))
