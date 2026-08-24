@@ -1,6 +1,6 @@
-# d-501 — The scheduler: a claim per tick, a ledger under it, and a horizon sized to the grammar
+# d-408 — The scheduler: a claim per tick, a ledger under it, and a horizon sized to the grammar
 
-Status: **decided** · Phase: 5 · Spec: `src/crewlet/schedule/` (`cron.py`,
+Status: **decided** · Phase: 4 · Spec: `src/crewlet/schedule/` (`cron.py`,
 `scheduler.py`, `store.py`), `docs/concepts/scheduling.md` ·
 Implementation: `go/internal/schedule/`, `go/internal/schedule/sqlledger/`,
 `go/internal/schedule/scheduletest/`

@@ -97,6 +97,23 @@ export function createFleetView({ query, refresh }) {
       .join(" ");
   }
 
+  // What a node says it is doing, off its own presence heartbeat.
+  //
+  // AN EM DASH WHEN IT SAID NOTHING, never a zero. A node that publishes no
+  // status — one whose engine is not co-located, or an older build — is not
+  // a node with no work in flight, and a confident 0 would draw an idle row
+  // for a process that is simply not saying.
+  function workCell(node) {
+    if (node.in_flight === undefined || node.in_flight === null) {
+      return '<span class="muted" title="this node publishes no status">—</span>';
+    }
+    const count = esc(String(node.in_flight));
+    if (!node.draining) return count;
+    // DRAINING IS THE REASON the count is falling, and without it a node
+    // winding down reads the same as one that is simply quiet.
+    return `${count} <span class="badge caution">draining</span>`;
+  }
+
   // Where this node is against where the fleet is heading.
   //
   // An epoch on its own is a number with nothing to compare it to. Lag
@@ -255,6 +272,7 @@ export function createFleetView({ query, refresh }) {
           <td>${roleBadges(n.roles)}</td>
           <td>${labelChips(n.labels)}</td>
           <td class="num">${esc(String(n.seats))}</td>
+          <td class="num">${workCell(n)}</td>
           <td>${configCell(n, target)}</td>
           <td>${ttlCell(n.expires_in)}</td>
         </tr>`,
@@ -296,7 +314,7 @@ export function createFleetView({ query, refresh }) {
         <div class="list tbl-wrap"><table class="tbl">
           <thead><tr>
             <th>Node</th><th>Roles</th><th>Labels</th><th class="num">Seats</th>
-            <th>Config</th><th>Lease</th>
+            <th class="num">In flight</th><th>Config</th><th>Lease</th>
           </tr></thead>
           <tbody>${nodeRows}</tbody>
         </table></div>
@@ -324,8 +342,8 @@ export function createFleetView({ query, refresh }) {
         }
         <p class="fleet-foot">
           Read from the lease table, so it is the same answer from every
-          node. In-flight turn counts are per process and stay on
-          <code>/health</code>. ${freshness()}
+          node — including each node's own in-flight count, which rides on
+          its presence heartbeat. ${freshness()}
         </p>`;
     },
 

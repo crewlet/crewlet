@@ -513,6 +513,49 @@ func (h *SeatHost) checkFleetRoles(live []placement.NodeProfile) {
 	}
 }
 
+// presenceMeta is what this node advertises to its peers.
+//
+// The placement half — roles and labels — and the live half beside it under
+// its own key, both re-sent on every heartbeat. A node with no status hook
+// publishes only the placement half, which is what makes "did not say"
+// distinguishable from "said zero" on the reading side.
+//
+// It writes into the profile's own map because [placement.NodeProfile.Meta]
+// returns a fresh literal per call — the lease payload is built for this
+// beat and belongs to no one else.
+//
+// The hook is BOUNDED. Answering may mean reading the control plane, and
+// this is the path that renews presence: an unbounded read on a wedged store
+// would hold the beat until the watchdog shot the process, to publish a
+// display column. Overrunning it publishes the placement half alone, which
+// the reading side already renders as "did not say".
+func (h *SeatHost) presenceMeta(ctx context.Context) map[string]any {
+	meta := h.profile.Meta()
+	if h.status == nil {
+		return meta
+	}
+	ctx, cancel := context.WithTimeout(ctx, h.statusBudget())
+	defer cancel()
+	status := h.status(ctx)
+	if ctx.Err() != nil {
+		return meta
+	}
+	meta[coord.StatusKey] = status.Meta()
+	return meta
+}
+
+// statusBudget is how long one beat lets the status hook run.
+func (h *SeatHost) statusBudget() time.Duration {
+	d := h.heartbeat / StatusBudgetRatio
+	if d <= 0 {
+		// A host configured with a heartbeat under the divisor still has
+		// to give the hook a turn: a zero budget expires before the call
+		// starts, so the column would never be published at all.
+		d = time.Millisecond
+	}
+	return d
+}
+
 // renewNodePresence keeps this node counted in the fleet size.
 //
 // NOT WHILE DRAINING. BeginDrain drops the presence lease precisely so peers
@@ -543,7 +586,7 @@ func (h *SeatHost) renewNodePresence(ctx context.Context) {
 		// different roles or labels has to be able to correct what its
 		// peers believe about it without waiting for its presence lease to
 		// lapse first.
-		Meta: h.profile.Meta(),
+		Meta: h.presenceMeta(ctx),
 	})
 	if err != nil {
 		return

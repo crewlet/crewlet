@@ -283,6 +283,13 @@ func runEngine(args []string, stderr io.Writer) error {
 		return err
 	}
 
+	// THE POSTURE REACHES PEERS from here, because the reconciler owns it
+	// and is only built once the engine exists. Set before Start, so the
+	// first heartbeat already carries it.
+	e.SetPosture(func(ctx context.Context) string {
+		return string(reconciler.Posture(ctx))
+	})
+
 	if err := e.Start(ctx); err != nil {
 		// Everything the engine opened comes down with it. Returning
 		// without this leaves a broker, a store and a set of held seat
@@ -537,6 +544,7 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		InFlight:     r.engine.Backends().Queue.InFlightCount(),
 		ShuttingDown: host.Draining(),
 		Seats:        host.Held(),
+		StartedAt:    r.engine.StartedAt().Format(time.RFC3339),
 	}
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached

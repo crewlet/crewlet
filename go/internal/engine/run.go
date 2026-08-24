@@ -40,6 +40,16 @@ type Engine struct {
 	backends *Backends
 	node     *node.Node
 
+	// startedAt is when THIS engine started, which on a split deployment
+	// is a different process on a different clock from the API's own
+	// start. Carried on the presence heartbeat so a peer can tell a node
+	// that has been up for a week from one that restarted a minute ago.
+	startedAt time.Time
+
+	// posture reports this node's config lag, from whoever owns the
+	// control plane. Nil publishes none — see [Engine.SetPosture].
+	posture atomic.Pointer[func(context.Context) string]
+
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
 	// requeues and pauses through, so holding "the ones I use" and "do I
@@ -208,6 +218,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+		startedAt: time.Now().UTC(),
 	}
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
@@ -281,7 +292,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// opposite.
 		Seats:   func() []placement.Seat { return e.Company().Seats() },
 		Profile: e.profile,
-		Turn:    e.Dispatch,
+		// WHAT THIS NODE IS DOING, advertised to peers on every
+		// heartbeat. Only the node running a seat knows its in-flight
+		// count and its drain state, and /health answers about whichever
+		// node served the request — so behind a load balancer a refresh
+		// tells a different story each time. See
+		// rewrite/decisions/501-node-runtime.md.
+		Status: e.nodeStatus,
+		Turn:   e.Dispatch,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -571,3 +589,57 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	e.publishTurnCompleted(ctx, tel, req.WorkKey, r.Spend(), res, err)
 	return res, err
 }
+
+// nodeStatus is what this node advertises about itself on every heartbeat.
+//
+// Read LIVE, per beat, rather than cached: a cached in-flight count is a
+// node reporting work it finished a minute ago, and the whole value of
+// carrying this fleet-wide is that an operator can see where the work
+// actually is right now.
+func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
+	status := coord.NodeStatus{StartedAt: e.startedAt}
+	if b := e.backends; b != nil && b.Queue != nil {
+		status.InFlight = b.Queue.InFlightCount()
+	}
+	if n := e.node; n != nil {
+		if host := n.Host(); host != nil {
+			status.Draining = host.Draining()
+		}
+	}
+	if fn := e.posture.Load(); fn != nil {
+		posture := (*fn)(ctx)
+		// A posture read that ran out of the beat's budget did not
+		// answer — what came back is the reporter's fail-open default,
+		// which is "serve". Publishing that would put a confident
+		// healthy posture on a node whose control plane is unreadable,
+		// so an unanswered read says nothing at all.
+		if ctx.Err() == nil {
+			status.Posture = posture
+		}
+	}
+	return status
+}
+
+// StartedAt is when this engine started.
+//
+// Its own accessor rather than a field on some larger snapshot: on a split
+// deployment the API is a different process on a different clock, and a
+// merged uptime would report one number for two windows.
+func (e *Engine) StartedAt() time.Time { return e.startedAt }
+
+// SetPosture supplies the config-lag reporter the presence heartbeat
+// advertises.
+//
+// # A setter rather than an option
+//
+// The posture belongs to the reconciler, which is built AFTER the engine —
+// it needs the engine to converge against. So there is no moment at
+// construction when a real wiring could pass one, and an option nobody could
+// fill would be a second way in that only tests use.
+//
+// Safe to call while the engine is running: the heartbeat reads it per beat,
+// so a posture supplied late starts appearing within one interval rather
+// than at the next restart.
+//
+// The context is the beat's, already bounded — see [seat.Config].Status.
+func (e *Engine) SetPosture(fn func(context.Context) string) { e.posture.Store(&fn) }

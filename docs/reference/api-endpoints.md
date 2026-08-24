@@ -557,9 +557,21 @@ balancer sends the next refresh somewhere else.
 Read from the lease table, so every node gives the same answer: node
 presence carries each node's `node.roles` and `node.labels`, seat and
 worker leases name their holder, and the per-node config epoch comes from
-the control plane's apply status. In-flight turn counts are per process
-and stay on `/health` — leases say who *holds* a seat, not what that node
-is doing with it.
+the control plane's apply status.
+
+Presence also carries what each node is **doing** — `in_flight`,
+`draining`, `posture` and `started_at` — because only the node running a
+seat knows those, and `/health` answers about whichever node served the
+request. They ride on the heartbeat that already re-sends roles and labels
+on every beat, rather than over a request/reply to the owning node: every
+answer would then be partial, it opens a new trust edge, and it duplicates
+the mechanism the lease table already is. See
+[d-501](https://github.com/crewlet/crewlet/blob/main/rewrite/decisions/501-node-runtime.md).
+
+**Absent is not zero.** A node that publishes no status — one whose engine
+is not co-located — omits those fields entirely, and the dashboard draws an
+em dash. A confident `0` would render an idle row for a process that is
+simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live

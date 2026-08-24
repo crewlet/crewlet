@@ -696,3 +696,60 @@ func TestASeatThatIsHeldIsNotReportedUnplaceable(t *testing.T) {
 		}
 	}
 }
+
+// A NODE'S LIVE STATE REACHES ITS PEERS on the presence heartbeat, which is
+// what makes the fleet view answer "where is the work" from any node rather
+// than only from the one that served the request. See
+// rewrite/decisions/501-node-runtime.md.
+func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	claim := func(resource, owner string, meta map[string]any) {
+		t.Helper()
+		if _, err := backend.TryAcquire(t.Context(), resource, coord.AcquireOptions{
+			Owner: owner, TTL: time.Minute, Meta: meta,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim(coord.NodeResource("node-a"), "node-a:1", map[string]any{
+		"roles": []any{"seats"},
+		coord.StatusKey: coord.NodeStatus{
+			InFlight: 4, Posture: "shed",
+		}.Meta(),
+	})
+	// A peer that publishes no status at all — an older build, or one
+	// whose engine is not co-located.
+	claim(coord.NodeResource("node-b"), "node-b:1", map[string]any{
+		"roles": []any{"ingress"},
+	})
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+		Company: func() *config.Company { return cfg },
+	}, "fleet", nil))
+
+	nodes, _ := body["nodes"].([]any)
+	if len(nodes) != 2 {
+		t.Fatalf("%d nodes, want 2: %v", len(nodes), body)
+	}
+	a, _ := nodes[0].(map[string]any)
+	if a["in_flight"] != float64(4) || a["posture"] != "shed" {
+		t.Errorf("node-a = %v", a)
+	}
+	if a["draining"] != false {
+		t.Errorf("node-a draining = %v, want an explicit false", a["draining"])
+	}
+
+	// ABSENT IS NOT ZERO. A confident 0 would draw an idle row for a
+	// process that is simply not saying, which is the one thing this
+	// surface must never do.
+	b, _ := nodes[1].(map[string]any)
+	if _, present := b["in_flight"]; present {
+		t.Errorf("a node that published no status reported %v in flight", b["in_flight"])
+	}
+	if _, present := b["posture"]; present {
+		t.Errorf("a node that published no status reported a posture: %v", b)
+	}
+}

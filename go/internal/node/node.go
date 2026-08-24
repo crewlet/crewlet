@@ -56,6 +56,14 @@ type Config struct {
 	// Profile is what this node is: its roles and labels.
 	Profile placement.NodeProfile
 
+	// Status is what this node is DOING, advertised to peers on the
+	// presence heartbeat. Nil publishes none, which reads as "did not
+	// say" rather than as an idle node — see
+	// rewrite/decisions/501-node-runtime.md.
+	//
+	// The beat bounds it: see [seat.Config].Status.
+	Status func(context.Context) coord.NodeStatus
+
 	// Turn runs a seat's turn. Required.
 	Turn TurnFunc
 
@@ -130,6 +138,7 @@ func New(cfg Config) (*Node, error) {
 		NodeID:            cfg.NodeID,
 		Seats:             cfg.Seats,
 		Profile:           cfg.Profile,
+		Status:            cfg.Status,
 		Hooks:             n,
 		TTL:               cfg.LeaseTTL,
 		HeartbeatInterval: cfg.HeartbeatInterval,

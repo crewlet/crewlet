@@ -155,6 +155,84 @@ test("a failed refresh keeps the fleet but stops claiming it is current", async 
   });
 });
 
+test("a node's in-flight count comes from its own presence heartbeat", async () => {
+  // Only the node running a seat knows its in-flight count, and /health
+  // answers about whichever node served the request — so behind a load
+  // balancer a refresh tells a different story each time. It rides on the
+  // presence lease instead.
+  const payload = fleetPayload();
+  payload.nodes[0].in_flight = 4;
+  payload.nodes[0].draining = false;
+  await withView([payload], ({ el }) => {
+    assert.match(el.innerHTML, /In flight/);
+    assert.match(el.innerHTML, />4</);
+  });
+});
+
+test("a draining node says why its count is falling", async () => {
+  const payload = fleetPayload();
+  payload.nodes[0].in_flight = 1;
+  payload.nodes[0].draining = true;
+  await withView([payload], ({ el }) => {
+    assert.match(el.innerHTML, /draining/);
+  });
+});
+
+test("a node that published no status is an em dash, never a zero", async () => {
+  // A node whose engine is not co-located is not a node with no work in
+  // flight. A confident 0 would draw an idle row for a process that is
+  // simply not saying, which is the one thing this surface must not do.
+  await withView([fleetPayload()], ({ el }) => {
+    assert.match(el.innerHTML, /—/);
+    assert.doesNotMatch(el.innerHTML, /class="num">0</);
+  });
+});
+
+// THE COLUMNS LINE UP, in all three tables.
+//
+// Adding a heading and forgetting its cell — or writing the new cell OVER
+// the one beside it — shifts every column after it, and not one substring
+// assertion in this file would notice: the words are all still on the page,
+// just under the wrong headings. That is exactly how the in-flight column
+// arrived, silently replacing Seats.
+test("every row has as many cells as its table has headings", async () => {
+  const payload = fleetPayload();
+  payload.nodes[0].in_flight = 4;
+  await withView([payload], ({ el }) => {
+    const tables = el.innerHTML.match(/<table[\s\S]*?<\/table>/g) || [];
+    assert.equal(tables.length, 3, "nodes, seat ownership and duties");
+    for (const table of tables) {
+      const head = table.match(/<thead>([\s\S]*?)<\/thead>/)[1];
+      const headings = (head.match(/<th[\s>]/g) || []).length;
+      const body = table.match(/<tbody>([\s\S]*?)<\/tbody>/)[1];
+      const rows = body.split(/<tr[\s>]/).slice(1);
+      assert.ok(rows.length, `no rows in ${head}`);
+      for (const row of rows) {
+        assert.equal(
+          (row.match(/<td[\s>]/g) || []).length,
+          headings,
+          `cells do not match headings: ${head}`,
+        );
+      }
+    }
+  });
+});
+
+test("the seat count survives beside the in-flight count", async () => {
+  // Two different questions — how many seats this node HOLDS and how many
+  // turns are running on it — and a node holding two seats with nothing in
+  // flight is the ordinary idle case, not an error.
+  const payload = fleetPayload();
+  payload.nodes[0].seats = 2;
+  payload.nodes[0].in_flight = 0;
+  await withView([payload], ({ el }) => {
+    const row = el.innerHTML.match(/<tr data-k="node:node-a"[\s\S]*?<\/tr>/)[0];
+    const cells = row.match(/<td[^>]*>([\s\S]*?)<\/td>/g);
+    assert.match(cells[3], />2</, "the seats cell");
+    assert.match(cells[4], />0</, "the in-flight cell");
+  });
+});
+
 test("a failed FIRST read says so instead of spinning forever", async () => {
   // No prior data to fall back on. A skeleton here means "loading", and
   // nothing is loading — it is the most patient lie a page can tell.

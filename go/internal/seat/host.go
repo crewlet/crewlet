@@ -114,6 +114,22 @@ type Config struct {
 	// restart that made it.
 	Profile placement.NodeProfile
 
+	// Status is this node's live state, re-read on every heartbeat and
+	// advertised to peers on the presence lease.
+	//
+	// Nil publishes none, which is a real answer rather than a zero: a
+	// node whose engine is not co-located has no in-flight count to
+	// report, and a peer reading 0 for it would draw an idle row for a
+	// process that is simply not saying. See
+	// rewrite/decisions/501-node-runtime.md.
+	//
+	// It takes a context because answering may mean reading a store, and
+	// this runs on the path that renews presence: the beat bounds it to
+	// [StatusBudgetRatio] of an interval and publishes nothing if it
+	// overruns, so a slow control plane costs a column rather than the
+	// node's seats.
+	Status func(context.Context) coord.NodeStatus
+
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
 
@@ -144,6 +160,7 @@ type SeatHost struct {
 	nodeID   string
 	seats    func() []placement.Seat
 	profile  placement.NodeProfile
+	status   func(context.Context) coord.NodeStatus
 	hooks    Hooks
 	clock    func() time.Time
 	protocol int
@@ -221,6 +238,7 @@ func New(cfg Config) (*SeatHost, error) {
 		nodeID:       cfg.NodeID,
 		seats:        cfg.Seats,
 		profile:      profile,
+		status:       cfg.Status,
 		hooks:        cfg.Hooks,
 		clock:        cfg.Clock,
 		protocol:     orInt(cfg.Protocol, coord.ProtocolVersion),

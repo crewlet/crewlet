@@ -76,6 +76,19 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		// epoch a second ago — and the one that stopped is exactly the
 		// one an operator is looking for.
 		row["config_reported_at"] = isoOrEmpty(status.UpdatedAt)
+		// WHAT THAT NODE IS DOING, off its own presence heartbeat.
+		// Absent when the node published none — an older build, or one
+		// whose engine is not co-located — and absent is NOT zero: a
+		// confident 0 would draw an idle row for a process that is
+		// simply not saying. See rewrite/decisions/501-node-runtime.md.
+		if live, ok := coord.StatusFromMeta(lease.Meta); ok {
+			row["in_flight"] = live.InFlight
+			row["draining"] = live.Draining
+			row["started_at"] = isoOrEmpty(live.StartedAt)
+			if live.Posture != "" {
+				row["posture"] = live.Posture
+			}
+		}
 		nodeRows = append(nodeRows, row)
 	}
 	sort.Slice(nodeRows, func(i, j int) bool {

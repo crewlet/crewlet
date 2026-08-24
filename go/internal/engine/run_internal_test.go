@@ -10,7 +10,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -178,5 +181,140 @@ func TestParkAndPauseRefuseAnUnroutableSeat(t *testing.T) {
 	}
 	if err := e.pause(t.Context(), "", "reason"); err == nil {
 		t.Error("a pause on an unroutable seat succeeded")
+	}
+}
+
+// --- what this node advertises about itself -------------------------------
+
+// A POSTURE READ THAT RAN OUT OF THE BEAT'S BUDGET DID NOT ANSWER.
+//
+// [Reconciler.Posture] fails OPEN — a control plane it cannot read reports
+// as "serve", deliberately, so a database blip does not take every node out
+// of rotation. That is the right answer for the readiness probe and the
+// wrong one to broadcast: it would put a confident healthy posture on the
+// one node an operator is looking for.
+func TestATimedOutPostureReadPublishesNoPosture(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	e.SetPosture(func(ctx context.Context) string {
+		<-ctx.Done()
+		return "serve" // what a fail-open reporter hands back
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+	defer cancel()
+	if got := e.nodeStatus(ctx).Posture; got != "" {
+		t.Errorf("posture = %q, want none published", got)
+	}
+}
+
+// AN ANSWERED READ IS PUBLISHED, which is the whole point of carrying it.
+func TestAnAnsweredPostureReachesTheHeartbeat(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	e.SetPosture(func(context.Context) string { return "shed" })
+	if got := e.nodeStatus(t.Context()).Posture; got != "shed" {
+		t.Errorf("posture = %q, want shed", got)
+	}
+}
+
+// A NODE WITH NO REPORTER PUBLISHES NO POSTURE, rather than an empty one
+// that a reader would have to tell apart from a real answer.
+func TestANodeWithNoPostureReporterPublishesNone(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	status := e.nodeStatus(t.Context())
+	if status.Posture != "" {
+		t.Errorf("posture = %q", status.Posture)
+	}
+	if _, published := status.Meta()["posture"]; published {
+		t.Error("an absent posture reached the lease anyway")
+	}
+}
+
+// THE START IS THIS ENGINE'S OWN. On a split deployment the API is a
+// different process on a different clock, so a peer reading one uptime for
+// both would report a number that is true of neither.
+func TestTheAdvertisedStartIsTheEnginesOwn(t *testing.T) {
+	t.Parallel()
+	e := &Engine{startedAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)}
+	if got := e.nodeStatus(t.Context()).StartedAt; !got.Equal(e.StartedAt()) {
+		t.Errorf("started_at = %v, want %v", got, e.StartedAt())
+	}
+}
+
+// A DRAINING NODE SAYS SO, and its peers can tell it apart from one that
+// simply died: a row that is both draining and expiring is a clean shutdown,
+// one that vanished without it is a process that fell over.
+func TestADrainingNodeAdvertisesIt(t *testing.T) {
+	t.Parallel()
+	n, err := node.New(node.Config{
+		Queue:  memory.New(),
+		Coord:  coordmemory.New(),
+		NodeID: "node-a",
+		Owner:  "node-a:1",
+		Seats:  func() []placement.Seat { return nil },
+		Turn: func(context.Context, string, []*events.Event) queue.Result {
+			return queue.Ack()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{node: n}
+	if e.nodeStatus(t.Context()).Draining {
+		t.Fatal("a fresh node reported itself draining")
+	}
+
+	n.Host().BeginDrain(t.Context())
+
+	if !e.nodeStatus(t.Context()).Draining {
+		t.Error("a draining node did not say so")
+	}
+}
+
+// THE IN-FLIGHT COUNT IS THIS NODE'S OWN, read live off the broker client
+// rather than from a cached number: a cached one is a node reporting work it
+// finished a minute ago, and the whole reason for carrying it fleet-wide is
+// that an operator can see where the work actually is right now.
+func TestTheAdvertisedInFlightCountIsTheBrokerClients(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	e := &Engine{backends: &Backends{Queue: q}}
+	if got := e.nodeStatus(t.Context()).InFlight; got != 0 {
+		t.Fatalf("in flight = %d on an idle node", got)
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	const topic = "crewlet.test.inbox"
+	if err := q.Subscribe(t.Context(), topic, "g", func(context.Context, *events.Event) queue.Result {
+		close(entered)
+		<-release
+		return queue.Ack()
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The memory broker runs the handler INLINE on Publish, so the publish
+	// has to be the thing that waits, not this goroutine.
+	delivered := make(chan error, 1)
+	go func() {
+		delivered <- q.Publish(context.Background(), topic,
+			events.New(types.TaskAssigned{TaskID: "t-1"}, events.NewTrace()))
+	}()
+	<-entered
+
+	got := e.nodeStatus(t.Context()).InFlight
+	close(release)
+	if err := <-delivered; err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Errorf("in flight = %d, want the handler this node is running", got)
 	}
 }

@@ -124,6 +124,23 @@ const (
 	// configured TTL derives its own.
 	HeartbeatInterval = SeatLeaseTTL / HeartbeatRatio
 
+	// StatusBudgetRatio is the share of ONE heartbeat interval the status
+	// hook may spend before the beat gives up on it.
+	//
+	// The hook is allowed to read a store — this node's config posture
+	// lives in the control plane — and it runs on the path that renews
+	// this node's PRESENCE lease, which is what keeps it counted in the
+	// fleet. A display column must never be able to delay that. One fifth
+	// of the interval (3 s at the shipped TTL) is far more than two
+	// indexed reads need and still leaves four fifths of the beat for the
+	// renewal itself; a hook that overruns publishes nothing, which reads
+	// as "did not say" rather than as an idle node.
+	//
+	// A RATIO for the same reason [HeartbeatRatio] is one: a deployment
+	// that shortens its TTL shortens this with it, instead of leaving a
+	// fixed budget that swallows the whole beat.
+	StatusBudgetRatio = 5
+
 	// SweepInterval is how often placement is re-evaluated.
 	//
 	// Distinct from the heartbeat because they answer different questions:
