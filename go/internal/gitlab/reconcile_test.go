@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -33,6 +35,17 @@ type adminInstance struct {
 	hooks        []gitlab.Hook
 	hookBodies   []map[string]any
 	updatedHooks []string
+
+	// freeTier makes the GROUP hooks API answer 404, the way GitLab
+	// hides a Premium endpoint on Free — which is what this repository's
+	// own unlicensed compose instance does.
+	freeTier bool
+	// hookStatus answers the group-hooks route with this status instead,
+	// for the refusals that are NOT a tier gate.
+	hookStatus int
+	// projectHooks is what the per-project route holds, keyed by project
+	// path.
+	projectHooks map[string][]gitlab.Hook
 
 	// failToken makes minting fail for this username, to reach the
 	// rollback path.
@@ -236,6 +249,33 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+	case strings.HasSuffix(path, "/hooks") && strings.HasPrefix(path, "/projects/"):
+		project := strings.TrimSuffix(strings.TrimPrefix(path, "/projects/"), "/hooks")
+		project = mustUnescape(project)
+		if r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(f.projectHooks[project])
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		f.hookBodies = append(f.hookBodies, body)
+		hook := gitlab.Hook{ID: len(f.projectHooks[project]) + 1, URL: body["url"].(string)}
+		if f.projectHooks == nil {
+			f.projectHooks = map[string][]gitlab.Hook{}
+		}
+		f.projectHooks[project] = append(f.projectHooks[project], hook)
+		json.NewEncoder(w).Encode(hook)
+
+	case strings.HasPrefix(path, "/groups/7/hooks") && f.hookStatus != 0:
+		w.WriteHeader(f.hookStatus)
+		json.NewEncoder(w).Encode(map[string]any{"message": "refused"})
+
+	case strings.HasPrefix(path, "/groups/7/hooks") && f.freeTier:
+		// GitLab HIDES a licensed endpoint rather than answering 402, so
+		// Free says "not found" about a feature it has.
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"message": "404 Not Found"})
+
 	case r.Method == http.MethodGet && path == "/groups/7/hooks":
 		json.NewEncoder(w).Encode(f.hooks)
 
@@ -293,6 +333,16 @@ func (f *adminInstance) revoked() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.revokes
+}
+
+// mustUnescape decodes a path-escaped project ("nimbus%2Fapi"), which is
+// how every project route addresses one.
+func mustUnescape(raw string) string {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return decoded
 }
 
 func atoi(s string) int {
@@ -1153,5 +1203,172 @@ func TestAnUnverifiableTokenIsLeftAloneWithANote(t *testing.T) {
 	}
 	if f.revoked() != 0 {
 		t.Errorf("%d tokens were revoked on an unverifiable seat", f.revoked())
+	}
+}
+
+// --- where the webhook lands ---------------------------------------------
+
+// GROUP WEBHOOKS ARE PREMIUM, and a run must not fail on the tier most
+// self-hosted instances are.
+//
+// GitLab hides a licensed endpoint as a 404 rather than a 402, so on Free
+// the group hooks API simply is not there. Registering only at the group
+// level failed the whole reconcile — AFTER minting, so the rollback revoked
+// every credential the run had just created — on the exact instance this
+// repository's own compose stack starts.
+func TestOnFreeTheHookFallsBackToTheProjects(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.freeTier = true
+	sink := newRecordingSink()
+
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Fatalf("project hooks = %+v, want one on the declared project", f.projectHooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "nimbus/api" {
+		t.Errorf("HookedOn = %v, want the project", got)
+	}
+	// AND THE TOKENS SURVIVED. The bug this covers was not "no webhook" —
+	// it was a rollback that revoked every credential the run had minted.
+	if sink.value("GITLAB_TOKEN_SWE") == "" {
+		t.Error("the run rolled back and revoked what it had minted")
+	}
+	// SAID OUT LOUD, because the two are not interchangeable: a project
+	// added to the group later is covered by a group hook and not by
+	// these.
+	if !strings.Contains(strings.Join(res.Notes, "\n"), "Premium") {
+		t.Errorf("notes did not explain the fallback: %v", res.Notes)
+	}
+}
+
+// ON PREMIUM IT STAYS AT THE GROUP, which is the level that covers a
+// project added tomorrow.
+func TestOnPremiumTheHookGoesOnTheGroup(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "group" {
+		t.Errorf("HookedOn = %v, want the group", got)
+	}
+	// NEVER BOTH. A group hook and a project hook subscribed to the same
+	// events both fire for an in-project event.
+	if len(f.projectHooks) != 0 {
+		t.Errorf("project hooks were registered as well: %+v", f.projectHooks)
+	}
+}
+
+// `group_webhook: false` GOES STRAIGHT TO THE PROJECTS, on an instance
+// where the group endpoint would have worked.
+func TestGroupWebhookFalseNeverTouchesTheGroup(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.GroupWebhook = config.GroupWebhookNever
+		})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.hooks) != 0 {
+		t.Errorf("a group hook was registered anyway: %+v", f.hooks)
+	}
+	if got := res.HookedOn; len(got) != 1 || got[0] != "nimbus/api" {
+		t.Errorf("HookedOn = %v, want the project", got)
+	}
+}
+
+// `group_webhook: true` REFUSES TO FALL BACK, and says why.
+//
+// The mode exists for an operator who needs the group-level guarantee —
+// every project, including ones added later. Quietly giving them per-project
+// hooks would be the opposite of what they asked for, and they would find
+// out the day a new repository went unwatched.
+func TestGroupWebhookTrueFailsRatherThanFallingBack(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.freeTier = true
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.GroupWebhook = config.GroupWebhookRequire
+		})
+	if err == nil {
+		t.Fatal("a required group hook was not available and the run succeeded")
+	}
+	if !strings.Contains(err.Error(), "Premium") {
+		t.Errorf("the failure does not name the cause: %v", err)
+	}
+	if len(f.projectHooks) != 0 {
+		t.Errorf("it fell back anyway: %+v", f.projectHooks)
+	}
+}
+
+// A REAL REFUSAL IS NOT A TIER GATE. A 401 means the credential is wrong,
+// and falling back on it would paper over a broken token with a set of
+// project hooks the operator never asked for.
+func TestABadCredentialDoesNotLookLikeAFreeInstance(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.hookStatus = http.StatusUnauthorized
+	_, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err == nil {
+		t.Fatal("an unauthorized group-hooks call was treated as success")
+	}
+	if len(f.projectHooks) != 0 {
+		t.Errorf("it fell back on a credential failure: %+v", f.projectHooks)
+	}
+}
+
+// PER-PROJECT HOOKS WITH NO PROJECTS IS A REFUSAL, not a quiet no-op: a run
+// that hooked nothing leaves the instance reporting a healthy integration
+// that delivers to nobody.
+func TestPerProjectHooksWithNoProjectsRefuses(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) {
+			o.Config.Provisioning.GroupWebhook = config.GroupWebhookNever
+			o.Config.Provisioning.Projects = nil
+		})
+	if err == nil {
+		t.Fatal("no projects and no group hook, and the run reported success")
+	}
+	if !strings.Contains(err.Error(), "provisioning.projects") {
+		t.Errorf("the failure does not name what to fix: %v", err)
+	}
+}
+
+// AN EXISTING PROJECT HOOK IS RE-POINTED, not duplicated — the same rule
+// the group level has, for the same reason: the signing secret may have
+// rotated, and a hook still carrying the old one delivers events the engine
+// then refuses.
+func TestAnExistingProjectHookIsUpdated(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.freeTier = true
+	f.projectHooks = map[string][]gitlab.Hook{
+		"nimbus/api": {{ID: 4, URL: "https://crewlet.example.com/webhooks/gitlab"}},
+	}
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.projectHooks["nimbus/api"]) != 1 {
+		t.Errorf("the hook was duplicated: %+v", f.projectHooks["nimbus/api"])
+	}
+	if len(f.updatedHooks) != 1 || !strings.HasSuffix(f.updatedHooks[0], "/hooks/4") {
+		t.Errorf("updated = %v, want the existing hook re-pointed", f.updatedHooks)
 	}
 }

@@ -46,6 +46,12 @@ type Result struct {
 	// Hooked is the webhook target this run registered or re-pointed, or
 	// empty when webhooks were not part of it.
 	Hooked string
+	// HookedOn names WHERE it was registered: the single element "group",
+	// or one entry per project. Reported because the two are not
+	// interchangeable — a group hook covers projects added later and a set
+	// of project hooks does not, and an operator reading "webhook
+	// registered" cannot tell which they got.
+	HookedOn []string
 	// Notes carries the plan's notes plus anything the run itself found.
 	Notes []string
 }
@@ -243,10 +249,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if target := webhookTarget(opts.WebhookBase); target != "" {
-		if err := ensureHook(ctx, opts.Client, group.ID, target, opts.SigningSecret); err != nil {
+		hooked, notes, err := ensureHooks(ctx, opts, group.ID, target)
+		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
-		res.Hooked = target
+		res.Hooked, res.HookedOn = target, hooked
+		res.Notes = append(res.Notes, notes...)
 	} else {
 		res.Notes = append(res.Notes,
 			"no webhook was registered: pass the deployment's public base URL "+
@@ -454,12 +462,81 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 	return removed, notes, nil
 }
 
-// ensureHook registers the group webhook, or re-points the existing one.
+// ensureHooks registers this deployment's webhook, at ONE level.
+//
+// # One level, never both
+//
+// A group hook already fires for every issue, merge request, note and
+// pipeline event in every project of the group and its subgroups. GitLab is
+// explicit that a group hook and a project hook subscribed to the same
+// events BOTH fire for an in-project event — double delivery, which the
+// engine's ledger deduplicates and its inbox does not. So this picks a
+// level and registers there.
+//
+// # Why there is a choice at all
+//
+// GROUP WEBHOOKS ARE PREMIUM. On gitlab.com Free and on an unlicensed
+// self-managed instance — which is what this repository's own compose
+// stack runs — the group hooks API is not there, and GitLab hides a
+// licensed endpoint as a 404 rather than a 402. Registering only at the
+// group level therefore failed the whole reconcile on the most common
+// self-hosted tier, and failed it AFTER minting, so the rollback revoked
+// every credential the run had just created.
+//
+// Modes come from provisioning.group_webhook — auto (default) tries the
+// group and falls back, true demands the group, false goes straight to the
+// projects.
+func ensureHooks(ctx context.Context, opts Options, groupID int, target string) ([]string, []string, error) {
+	mode := config.GroupWebhookAuto
+	projects := []string(nil)
+	if pv := opts.Config.Provisioning; pv != nil {
+		if pv.GroupWebhook != "" {
+			mode = pv.GroupWebhook
+		}
+		projects = pv.Projects
+	}
+	secret := opts.SigningSecret
+
+	if mode != config.GroupWebhookNever {
+		err := ensureGroupHook(ctx, opts.Client, groupID, target, secret)
+		switch {
+		case err == nil:
+			return []string{"group"}, nil, nil
+		case mode == config.GroupWebhookRequire:
+			return nil, nil, fmt.Errorf(
+				"%w\n\ngroup_webhook is \"true\", so no per-project fallback was "+
+					"tried. Group webhooks are a GitLab Premium feature: on Free "+
+					"the endpoint answers 404. Set group_webhook: false (or auto) "+
+					"to register one hook per provisioning.projects entry", err)
+		case !gatedByTier(err):
+			return nil, nil, err
+		}
+		// The tier gate, on auto. Fall through to the projects, and say
+		// so — an operator who expected one group hook and got four
+		// project hooks should learn it here rather than from the
+		// instance's settings pages.
+		hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+		if err != nil {
+			return nil, nil, err
+		}
+		return hooked, []string{
+			"this instance does not serve the group webhooks API (it is a " +
+				"GitLab Premium feature), so one hook was registered per " +
+				"project instead of one for the group; a project added to the " +
+				"group later will NOT be covered until this runs again",
+		}, nil
+	}
+
+	hooked, err := ensureProjectHooks(ctx, opts.Client, projects, target, secret)
+	return hooked, nil, err
+}
+
+// ensureGroupHook registers the one group webhook, or re-points it.
 //
 // MATCHED ON THE URL, because that is what identifies "our" hook: an
 // instance may carry hooks somebody else registered, and a run that replaced
 // the first one it found would take down an unrelated integration.
-func ensureHook(ctx context.Context, c *Client, groupID int, target, secret string) error {
+func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret string) error {
 	hooks, err := c.GroupHooks(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("gitlab: list group hooks: %w", err)
@@ -479,6 +556,65 @@ func ensureHook(ctx context.Context, c *Client, groupID int, target, secret stri
 		return fmt.Errorf("gitlab: create group hook: %w", err)
 	}
 	return nil
+}
+
+// ensureProjectHooks registers one hook per declared project.
+//
+// It refuses an empty list rather than registering nothing: a run that
+// quietly hooked no project leaves the instance reporting a healthy
+// integration that delivers to nobody, which is the exact failure the
+// skipped-rather-than-guessed rule above exists to prevent.
+func ensureProjectHooks(ctx context.Context, c *Client, projects []string, target, secret string) ([]string, error) {
+	if len(projects) == 0 {
+		return nil, errors.New(
+			"gitlab: per-project webhooks need provisioning.projects, and none " +
+				"are declared — either list the projects to hook, or use a " +
+				"Premium instance where one group hook covers them all")
+	}
+	hooked := make([]string, 0, len(projects))
+	for _, project := range projects {
+		if err := ensureProjectHook(ctx, c, project, target, secret); err != nil {
+			return nil, err
+		}
+		hooked = append(hooked, project)
+	}
+	return hooked, nil
+}
+
+func ensureProjectHook(ctx context.Context, c *Client, project, target, secret string) error {
+	hooks, err := c.ProjectHooks(ctx, project)
+	if err != nil {
+		return fmt.Errorf("gitlab: list hooks on %s: %w", project, err)
+	}
+	for _, hook := range hooks {
+		if hook.URL == target {
+			if err := c.UpdateProjectHook(ctx, project, hook.ID, target, secret); err != nil {
+				return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
+			}
+			return nil
+		}
+	}
+	if _, err := c.CreateProjectHook(ctx, project, target, secret); err != nil {
+		return fmt.Errorf("gitlab: create hook on %s: %w", project, err)
+	}
+	return nil
+}
+
+// gatedByTier reports whether a failure is GitLab withholding a licensed
+// endpoint rather than refusing this request.
+//
+// 404 is the one that matters and the one that reads wrong: GitLab hides a
+// Premium endpoint rather than answering 402, so "not found" is what a Free
+// instance says about a feature it has. 403 is the same answer from an
+// instance that surfaces the endpoint and refuses the call. Anything else —
+// a 401, a 5xx, a transport failure — is a real problem, and falling back on
+// it would paper over a broken credential with four project hooks.
+func gatedByTier(err error) bool {
+	switch Status(err) {
+	case http.StatusNotFound, http.StatusForbidden:
+		return true
+	}
+	return false
 }
 
 // rollback revokes what this run minted and clears what it recorded.

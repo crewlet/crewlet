@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +79,21 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("gitlab: %s %s: %d: %s", e.Method, e.Path, e.Status, e.Detail)
+}
+
+// Status reports the HTTP status a call was refused with, or 0 when the
+// failure was not an API error.
+//
+// The same accessor the Plane and Mattermost clients export, for the same
+// reason: a caller deciding what to do about a refusal needs the number, and
+// three vendor packages spelling that three ways is three places to get it
+// wrong.
+func Status(err error) int {
+	var e *APIError
+	if errors.As(err, &e) {
+		return e.Status
+	}
+	return 0
 }
 
 // Conflict reports a call refused because the thing already exists.
@@ -358,6 +374,32 @@ func (c *Client) CreateGroupHook(ctx context.Context, groupID int, target, secre
 func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, target, secret string) error {
 	return c.send(ctx, http.MethodPut,
 		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID),
+		hookBody(target, secret), nil)
+}
+
+// ProjectHooks lists a project's webhooks.
+func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, error) {
+	var out []Hook
+	err := c.get(ctx, "/projects/"+url.PathEscape(project)+"/hooks", nil, &out)
+	return out, err
+}
+
+// CreateProjectHook registers a webhook on one project.
+//
+// The FREE-TIER path. Group webhooks are Premium, so on gitlab.com Free and
+// on an unlicensed self-managed instance this is the only way a hook exists
+// at all — see [config.GroupWebhookMode].
+func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret string) (Hook, error) {
+	var out Hook
+	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",
+		hookBody(target, secret), &out)
+	return out, err
+}
+
+// UpdateProjectHook re-points an existing project hook.
+func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID int, target, secret string) error {
+	return c.send(ctx, http.MethodPut,
+		"/projects/"+url.PathEscape(project)+"/hooks/"+strconv.Itoa(hookID),
 		hookBody(target, secret), nil)
 }
 
