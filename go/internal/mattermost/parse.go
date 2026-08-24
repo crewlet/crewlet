@@ -197,6 +197,26 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 // `thread_ts` carries a Mattermost root-post id, because the coalescer, the
 // working-status resolver and the sandbox round trip all read that one name
 // across every chat backend. Only the value is backend-shaped.
+// canonicalKind maps Mattermost's single-letter channel type onto the shape
+// every backend describes a surface with.
+//
+// A PRIVATE CHANNEL IS A GROUP, not a DM: "dm" is what tells a worker the
+// message was addressed to this seat alone, and a five-person private
+// channel is not that. An unrecognised letter — a type this build does not
+// know — reads as unknown rather than being guessed into one of the four.
+func canonicalKind(raw string) types.ChannelKind {
+	switch raw {
+	case "D":
+		return types.ChannelDM
+	case "G", "P":
+		return types.ChannelGroup
+	case "O":
+		return types.ChannelPublic
+	default:
+		return types.ChannelUnknown
+	}
+}
+
 func metadata(body map[string]any, seat Seat, post map[string]any, reach notify.Delivery, channelKind string) map[string]string {
 	root := str(post, "root_id")
 	m := map[string]string{
@@ -208,11 +228,17 @@ func metadata(body map[string]any, seat Seat, post map[string]any, reach notify.
 		// must not have one, since its ids are opaque alphanumerics that
 		// would mark arbitrary public channels as direct messages.
 		"channel_type": channelKind,
-		"channel_name": str(body, "channel_name"),
-		"ts":           str(post, "id"),
-		"thread_ts":    root,
-		"user":         str(post, "user_id"),
-		"bot_user_id":  seat.UserID,
+		// The canonical shape beside the raw letter. Both, because the
+		// raw one is what a prompt and an operator recognise and the
+		// canonical one is what the learning workers read — and the
+		// mapping belongs here, in the only code that knows what "G"
+		// means (see notify.ChannelKindField).
+		notify.ChannelKindField: string(canonicalKind(channelKind)),
+		"channel_name":          str(body, "channel_name"),
+		"ts":                    str(post, "id"),
+		"thread_ts":             root,
+		"user":                  str(post, "user_id"),
+		"bot_user_id":           seat.UserID,
 		// Mattermost addresses a bot by NAME, so a prompt needs both:
 		// the id to recognise its own posts, the username to write a
 		// mention that renders.

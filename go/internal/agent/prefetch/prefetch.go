@@ -70,6 +70,13 @@ type Blocks struct {
 	// SynthesizedSkills are the procedures this seat wrote for itself.
 	SynthesizedSkills string
 
+	// SkillIDs are the ids behind that block, carried out because a skill
+	// OFFERED to a turn is a skill used: the curator ages a skill on when
+	// it was last used, so a menu that never reports back would archive
+	// the procedures a seat reads every single turn. Ids rather than
+	// names, since a rename must not restart the clock.
+	SkillIDs []string
+
 	// OnboardingHint renders only for a seat that has not completed
 	// onboarding for its current org chain.
 	OnboardingHint string
@@ -210,19 +217,29 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks Blocks
 		wg     sync.WaitGroup
 	)
-	run := func(into *string, render func() string) {
+	spawn := func(render func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			render()
+		}()
+	}
+	run := func(into *string, render func() string) {
+		spawn(func() {
 			defer recoverInto(into)
 			*into = render()
-		}()
+		})
 	}
 	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r) })
 	run(&blocks.RelevantKnowledge, func() string { return f.relevantKnowledge(ctx, r) })
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
-	run(&blocks.SynthesizedSkills, func() string { return f.synthesizedSkills(ctx, r) })
+	// Its own spawn rather than a run(), because it is the one block that
+	// reports something back besides its prose.
+	spawn(func() {
+		defer recoverSkills(&blocks.SynthesizedSkills, &blocks.SkillIDs)
+		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
+	})
 	run(&blocks.OnboardingHint, func() string { return f.onboardingHint(ctx, r) })
 	wg.Wait()
 	return blocks
@@ -240,6 +257,18 @@ func recoverInto(into *string) {
 	if r := recover(); r != nil {
 		log.Error("prefetch_block_panicked", "panic", r)
 		*into = ""
+	}
+}
+
+// recoverSkills is [recoverInto] for the one block with two outputs.
+//
+// BOTH are cleared: ids naming skills whose menu never rendered would be
+// reported as used by a turn that was never told about them, which is the
+// one way this list can lie to the curator.
+func recoverSkills(into *string, ids *[]string) {
+	if r := recover(); r != nil {
+		log.Error("prefetch_block_panicked", "panic", r)
+		*into, *ids = "", nil
 	}
 }
 
@@ -294,6 +323,17 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 // ends mid-sentence: a reader — a model — that hits a truncated final line
 // cannot tell whether the thought was completed elsewhere.
 func budget(bullets []string, chars int) string {
+	rendered, _ := budgetN(bullets, chars)
+	return rendered
+}
+
+// budgetN is [budget] plus how many bullets survived.
+//
+// The count exists for the one caller that has a PARALLEL list to trim —
+// the skill menu's ids, which are reported back as used. Counting lines in
+// the rendered text instead would be wrong the first time a description
+// contained a newline, and would be wrong silently.
+func budgetN(bullets []string, chars int) (string, int) {
 	var (
 		kept []string
 		used int
@@ -308,5 +348,5 @@ func budget(bullets []string, chars int) string {
 		kept = append(kept, bullet)
 		used += len(bullet) + 1
 	}
-	return strings.Join(kept, "\n")
+	return strings.Join(kept, "\n"), len(kept)
 }

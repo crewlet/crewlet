@@ -44,6 +44,21 @@ const KeyField = "conversation_key"
 // by the payload.
 const RecipientField = "recipient_handle"
 
+// ChannelKindField carries the CANONICAL shape of the surface a message
+// arrived on — one of [types.ChannelKind].
+//
+// Stamped by the parser and never derived downstream, for the reason
+// [KeyField] gives: the raw value is vendor-specific (Mattermost says "D",
+// Slack says the id starts with "D", a tracker has no channel at all), and
+// mapping it anywhere but in the vendor's own parser puts vendor knowledge
+// in a layer that must not have it — where it would quietly mark arbitrary
+// surfaces as direct messages the first time a vendor changed its encoding.
+//
+// A source with no channel concept stamps nothing, which reads back as
+// [types.ChannelUnknown]. That is a real answer for a tracker or a code
+// host — "this did not arrive on a channel" — rather than a gap.
+const ChannelKindField = "channel_kind"
+
 // EventPrefix namespaces the fallback key.
 //
 // Its own namespace so it can never collide with a derived key: a vendor's

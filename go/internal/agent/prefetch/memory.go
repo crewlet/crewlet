@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/learning"
 )
@@ -347,9 +348,18 @@ func collapse(s string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
 }
 
+// truncate cuts s to at most max bytes and marks the cut.
+//
+// NEVER THROUGH A RUNE: a plain s[:max] splits whatever multi-byte character
+// straddles the boundary and yields invalid UTF-8, which reaches a model as
+// a replacement character and a JSON encoder as an escaped substitution — a
+// bug that appears the first time a memory is not ASCII.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
 	}
 	return s[:max] + "…"
 }

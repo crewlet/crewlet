@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -1140,20 +1141,44 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return clip(s, n) + "..."
+}
+
+// clip cuts s to at most n bytes, never through a rune.
+//
+// A plain s[:n] splits whatever multi-byte character straddles the cut and
+// yields invalid UTF-8 — which reaches a model as a replacement character,
+// an embedding API as a rejected body, and a JSON encoder as an escaped
+// substitution. Every one of those is a bug that only appears once the text
+// stops being ASCII, which in a company's traffic is a matter of when.
+func clip(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // ---- the model-backed summarizer ------------------------------------- //
 
-// CompleteFunc is one call to a model: a system prompt, a user prompt, and the
-// text that came back.
+// CompleteFunc is one call to a model on one seat's behalf: the ROLE whose
+// chain answers, a system prompt, a user prompt, and the text that came back.
 //
 // The narrowest thing that can stand for "an LLM" — no provider, no message
 // types, no telemetry. Everything the engine wraps around a model call (the
 // role's auxiliary provider chain, the token budget, the usage event) lives on
 // the engine's side of this function, which is why this package still imports
 // nothing but the store.
-type CompleteFunc func(ctx context.Context, system, user string) (string, error)
+//
+// The role is a NAME rather than a resolved provider for the same reason:
+// resolving it is the engine's job, and a resolved chain here would put the
+// provider types back in this package's imports.
+type CompleteFunc func(ctx context.Context, role, system, user string) (string, error)
 
 // NewSummarizer builds the model-backed [Summarizer]: it renders the cluster,
 // makes one call, and parses what comes back.
@@ -1172,7 +1197,12 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 	if len(c.Episodes) == 0 {
 		return Summary{}, errors.New("learning: summarizer got an empty cluster")
 	}
-	raw, err := m.complete(ctx, CompactorSystemPrompt, RenderCluster(c))
+	// THE ROLE IS PASSED THROUGH, which is what [Cluster.Role] is hoisted
+	// out of the episodes for: it selects the seat's auxiliary provider
+	// chain and attributes the token spend. Dropping it here would compact
+	// every seat's memory on whichever single model the wiring happened to
+	// close over, in a company whose whole point is that seats differ.
+	raw, err := m.complete(ctx, c.Role, CompactorSystemPrompt, RenderCluster(c))
 	if err != nil {
 		return Summary{}, err
 	}

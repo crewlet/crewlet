@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -31,7 +32,7 @@ const ReflectGroup = "reflect-engine"
 // double-persists every turn.
 const ReflectTool = "reflect_and_persist"
 
-// reflectSeen bounds the dispatcher's memory of turns it has already handled.
+// ReflectSeen bounds the dispatcher's memory of turns it has already handled.
 //
 // 1024 turns is well over an hour of traffic on a busy company, which is far
 // longer than any backend's redelivery window: past that, a redelivery of a
@@ -40,7 +41,7 @@ const ReflectTool = "reflect_and_persist"
 // node reflecting the same turn writes a second diary row, which is the
 // bounded duplication the engine promises rather than exactly-once (REWRITE
 // PLAN §16).
-const reflectSeen = 1024
+const ReflectSeen = 1024
 
 // turnCompletedTopic is the subject completed turns arrive on.
 var turnCompletedTopic = topics.Event(types.TurnCompleted{}.EventType())
@@ -128,15 +129,23 @@ type Worker interface {
 	// WHICH gate is closing.
 	Skip(t Turn) string
 
-	// Reflect runs one pass and returns the lifecycle event to publish,
-	// nil for none.
+	// Reflect runs one pass and returns the lifecycle events to publish,
+	// empty for none.
 	//
-	// It may return BOTH a payload and an error: the payload is what the
+	// A SLICE because a pass is not always about one thing: the
+	// counterparty profiler observes every distinct sender of a coalesced
+	// trigger, and its event is per-subject. Collapsing that to one would
+	// either announce the first party and silently drop the rest, or need
+	// a second publishing path inside the worker — which is where the
+	// trace context and the source stamping would start to disagree with
+	// the dispatcher's.
+	//
+	// It may return BOTH payloads and an error: the payloads are what the
 	// worker managed to conclude, the error is what went wrong reaching
-	// it. A classifier whose LLM call failed still concluded "nothing was
-	// persisted", and dropping that event because the call failed would
-	// hide the failure from every surface that counts outcomes.
-	Reflect(ctx context.Context, t Turn) (events.Payload, error)
+	// them. A classifier whose LLM call failed still concluded "nothing
+	// was persisted", and dropping that event because the call failed
+	// would hide the failure from every surface that counts outcomes.
+	Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 }
 
 // Subscriber is the half of the queue the dispatcher attaches through.
@@ -145,13 +154,31 @@ type Subscriber interface {
 }
 
 // Reflector dispatches learning workers over completed turns.
+//
+// ONE PER PROCESS, not one per config epoch, even though its org and its
+// workers both belong to an epoch: the redelivery ring below is the reason.
+// It is what stops a turn being reflected on twice, and reflection is not
+// idempotent — each pass is a fresh auxiliary call that writes a second,
+// differently-worded row for the same fact. A reflector rebuilt on every
+// apply would empty that ring, so a redelivery landing either side of a
+// config change would be classified twice, which is the one failure the ring
+// exists to prevent. So an apply calls [Reflector.Reconfigure] and the
+// subscription, and the ring, stay put.
 type Reflector struct {
-	org     *org.Organization
-	pub     queue.Publisher
-	workers []Worker
+	pub queue.Publisher
+
+	// live is the epoch-scoped half, swapped whole by Reconfigure and
+	// never mutated — the same rule the engine's own epoch follows.
+	live atomic.Pointer[reflectorEpoch]
 
 	mu   sync.Mutex
 	seen *recentTurns
+}
+
+// reflectorEpoch is what an apply replaces.
+type reflectorEpoch struct {
+	org     *org.Organization
+	workers []Worker
 }
 
 // NewReflector builds a dispatcher over an org and a publisher.
@@ -169,25 +196,60 @@ func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker) (*
 	if pub == nil {
 		return nil, fmt.Errorf("learning: reflection needs a publisher for its lifecycle events")
 	}
+	if err := validateWorkers(workers); err != nil {
+		return nil, err
+	}
+	r := &Reflector{pub: pub, seen: newRecentTurns(ReflectSeen)}
+	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers)})
+	return r, nil
+}
+
+// Reconfigure swaps the org and the worker set an apply produced.
+//
+// Validated the same way the constructor validates, and REFUSED the same
+// way: a bad worker set leaves the previous one serving rather than taking
+// the dispatcher down, because the alternative to reflecting with the old
+// config is not reflecting at all.
+//
+// An in-flight pass finishes on the epoch it started with — it read the
+// pointer once — which is the same guarantee a turn gets about its own
+// config pin.
+func (r *Reflector) Reconfigure(o *org.Organization, workers []Worker) error {
+	if o == nil {
+		return fmt.Errorf("learning: reflection needs an organization to resolve seats against")
+	}
+	if err := validateWorkers(workers); err != nil {
+		return err
+	}
+	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers)})
+	log.Info("reflect_engine_reconfigured", "workers", r.names())
+	return nil
+}
+
+// epoch is the currently-serving org and worker set.
+func (r *Reflector) epoch() *reflectorEpoch {
+	if live := r.live.Load(); live != nil {
+		return live
+	}
+	return &reflectorEpoch{}
+}
+
+// validateWorkers refuses a set the dispatcher cannot report on honestly.
+func validateWorkers(workers []Worker) error {
 	names := make(map[string]bool, len(workers))
 	for i, w := range workers {
 		if w == nil {
-			return nil, fmt.Errorf("learning: reflection worker %d is nil", i)
+			return fmt.Errorf("learning: reflection worker %d is nil", i)
 		}
 		// A pass reports its skips and its swallowed failures BY NAME, so
 		// two workers sharing one erase each other in both maps and an
 		// operator reads one worker's failure as the other's.
 		if names[w.Name()] {
-			return nil, fmt.Errorf("learning: two reflection workers named %q", w.Name())
+			return fmt.Errorf("learning: two reflection workers named %q", w.Name())
 		}
 		names[w.Name()] = true
 	}
-	return &Reflector{
-		org:     o,
-		pub:     pub,
-		workers: slices.Clone(workers),
-		seen:    newRecentTurns(reflectSeen),
-	}, nil
+	return nil
 }
 
 // Start attaches the dispatcher to the completed-turn subject.
@@ -200,8 +262,9 @@ func (r *Reflector) Start(ctx context.Context, sub Subscriber) error {
 }
 
 func (r *Reflector) names() []string {
-	out := make([]string, 0, len(r.workers))
-	for _, w := range r.workers {
+	workers := r.epoch().workers
+	out := make([]string, 0, len(workers))
+	for _, w := range workers {
 		out = append(out, w.Name())
 	}
 	return out
@@ -283,11 +346,16 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// Fast path before any other work: with nothing wired there is no
 	// question to ask about this turn, and asking it means an org lookup
 	// and a dedup insert per completed turn for nothing.
-	if len(r.workers) == 0 {
+	live := r.epoch()
+	if len(live.workers) == 0 {
 		return Reflection{Skip: SkipNoWorkers}
 	}
 
-	role := r.org.Role(tc.RoleName)
+	// live.org is never nil past that check: both the constructor and
+	// Reconfigure refuse a nil org, and the only epoch without one is the
+	// zero value epoch() falls back to — which has no workers either, so
+	// it has already returned above.
+	role := live.org.Role(tc.RoleName)
 	if role == nil {
 		// A turn from a seat this epoch no longer has. Learning about a
 		// role that has been renamed or removed would write memory under
@@ -336,7 +404,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	}
 
 	out := Reflection{}
-	for _, w := range r.workers {
+	for _, w := range live.workers {
 		if reason := w.Skip(turn); reason != "" {
 			if out.Skipped == nil {
 				out.Skipped = map[string]string{}
@@ -346,7 +414,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 				"worker", w.Name(), "reason", reason)
 			continue
 		}
-		payload, err := r.dispatch(ctx, w, turn)
+		payloads, err := r.dispatch(ctx, w, turn)
 		if err != nil {
 			if out.Failed == nil {
 				out.Failed = map[string]error{}
@@ -361,8 +429,10 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		// gate had just skipped, which made a pass that did nothing at
 		// all report workers_run=1.
 		out.Ran = append(out.Ran, w.Name())
-		if payload != nil {
-			r.publish(ctx, turn, payload)
+		for _, payload := range payloads {
+			if payload != nil {
+				r.publish(ctx, turn, payload)
+			}
 		}
 	}
 
@@ -383,10 +453,10 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 // or an out-of-range index does not cost the pass its remaining workers or
 // its sentinel — the seat would then render as working for ever, which is
 // the visible half of a bug whose invisible half is simply no learning.
-func (r *Reflector) dispatch(ctx context.Context, w Worker, t Turn) (payload events.Payload, err error) {
+func (r *Reflector) dispatch(ctx context.Context, w Worker, t Turn) (payloads []events.Payload, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			payload = nil
+			payloads = nil
 			err = fmt.Errorf("learning: worker %s panicked: %v", w.Name(), rec)
 			log.Error("reflection_worker_panicked", "worker", w.Name(),
 				"turn_id", t.Event.TurnID, "error", rec, "stack", string(debug.Stack()))

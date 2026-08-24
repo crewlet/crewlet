@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -59,6 +60,18 @@ type Engine struct {
 	sandboxCoordinator *sandbox.Coordinator
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
+
+	// reflector is the learning write side: one dispatcher for the life of
+	// the process, whose org and workers an apply swaps. On the ENGINE
+	// rather than on an epoch because its redelivery ring is process
+	// state — see learning.Reflector.
+	reflector *learning.Reflector
+
+	// learning is the two background passes no turn drives: episode
+	// compaction and skill ageing. On the ENGINE for the same reason the
+	// sandbox waiter is — they are loops this PROCESS runs, and rebuilding
+	// them on an apply would start a second one against the same rows.
+	learning *learning.Background
 
 	// notify is this node's inbound edge: the party registry, the
 	// notification service and the vendor transports. On the ENGINE
@@ -249,6 +262,18 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	// AFTER the epoch is current, because the dispatcher resolves a turn's
+	// seat against it — and before notifications, so a turn woken by the
+	// first inbound message already has somewhere to write what it learns.
+	// A failure here is fatal: the subscription is the only path to the
+	// write side, and a company that boots without it learns nothing at
+	// all while looking entirely healthy.
+	if err := e.startReflection(ctx); err != nil {
+		return fail(err)
+	}
+	// The two background passes, after the node exists: both are fleet
+	// singletons claimed under its own incarnation.
+	e.startLearningBackground(ctx)
 	e.notify.admits = opts.Admits
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return fail(fmt.Errorf("engine: %w", err))
@@ -445,6 +470,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// gate skipped — rides the Recon seam below, keyed on a plan summary
 	// that does not exist until Plan has run.
 	prefetchReq, blocks := e.prefetchFor(ctx, company, req, task)
+	// The skills OFFERED to this turn, carried onto its completion so the
+	// curator ages a skill on when it was last put in front of a model
+	// rather than archiving the ones a seat reads every turn.
+	tel.skills = blocks.SkillIDs
 	fetcher := e.prefetcher(company)
 
 	r, err := company.RunnerFor(req.Handle, RunnerInput{

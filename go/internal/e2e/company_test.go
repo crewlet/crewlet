@@ -148,6 +148,37 @@ type scriptedModel struct {
 	// rendered" and "the model was shown it" are different claims and only
 	// the second one matters.
 	systems []string
+
+	// engages makes the executor call a tool before answering, which is
+	// what the reflect dispatcher's engagement gate reads. A company with
+	// a chat integration always does — its executor calls the delivery
+	// tool — but this document configures none, so the default turn ends
+	// having called nothing and every learning worker correctly skips it.
+	// Opt-in rather than default because the phase-count assertions
+	// elsewhere are written against a one-round Execute.
+	engages bool
+	// engaged records whether the extra call has already been made this
+	// turn, so the executor calls the tool once and then answers.
+	engaged bool
+}
+
+// engageOnExecute makes the next turn's Execute phase call a tool.
+func (m *scriptedModel) engageOnExecute() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.engages, m.engaged = true, false
+}
+
+// shouldEngage reports whether this Execute round is the tool-calling one,
+// and marks it spent.
+func (m *scriptedModel) shouldEngage() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.engages || m.engaged {
+		return false
+	}
+	m.engaged = true
+	return true
 }
 
 func newScriptedModel(t *testing.T) *scriptedModel {
@@ -218,6 +249,13 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		pass := auxiliaryPass(raw)
 		m.saw("aux:" + pass)
 		reply = textReply(auxiliaryAnswer(pass))
+	case m.shouldEngage():
+		// The round that CALLS something. Recorded as execute like the
+		// answering round, because it is the same phase — what differs
+		// is that this turn leaves an observable trace, which is the
+		// condition every learning worker is gated on.
+		m.saw("execute")
+		reply = toolUse("list_mcp_server_tools", map[string]any{})
 	default:
 		m.saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
@@ -241,6 +279,12 @@ func auxiliaryPass(raw []byte) string {
 		return "knowledge"
 	case strings.Contains(system, "compress an AI agent's record"):
 		return "recall"
+	case strings.Contains(system, "post-turn reflection classifier"):
+		return "persist"
+	case strings.Contains(system, "working profile of one person"):
+		return "profile"
+	case strings.Contains(system, "episode compactor"):
+		return "compact"
 	default:
 		return ""
 	}
@@ -259,6 +303,15 @@ func auxiliaryAnswer(pass string) string {
 		return "[0, 1, 2, 3, 4, 5, 6, 7]"
 	case "knowledge":
 		return "staging login redirect proxy"
+	case "persist":
+		// A REAL classification, so the write side's end-to-end case has
+		// a row to find. The other passes answer with what they would
+		// really answer; a decider that always said NOOP would prove the
+		// gate and nothing about the write.
+		return `{"kind":"LONG","content":"The founder wants the weekly ` +
+			`numbers stated plainly, with no preamble."}`
+	case "profile":
+		return `{"reply_style":"plain numbers, no preamble"}`
 	default:
 		return ""
 	}

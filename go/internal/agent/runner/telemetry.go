@@ -128,6 +128,25 @@ type Spend struct {
 
 	// ToolExecutions is every call the turn made, in order across phases.
 	ToolExecutions []types.ToolExecution
+
+	// PlanTools and ExecuteTools are the tool NAMES, split the way the
+	// learning workers reason about them and accumulated differently on
+	// purpose.
+	//
+	// Plan accumulates across self-iterate rounds, because a Plan-phase
+	// builtin firing in round 1 is a fact about the whole turn — the
+	// reflect dispatcher reads it to see that the agent already wrote its
+	// own memory, and a later round that did not call it again does not
+	// undo that. Execute keeps only the LAST round: the earlier rounds
+	// were re-attempted work the agent itself judged incomplete, and a
+	// skill drafted from their calls would be drafted from a sequence the
+	// agent then chose not to stand behind.
+	PlanTools    []string
+	ExecuteTools []string
+
+	// PlanDecision is the planner's verdict — the LAST one, for the same
+	// reason: a turn that self-iterated ends on the decision it acted on.
+	PlanDecision string
 }
 
 // Total is the turn's token count.
@@ -152,6 +171,32 @@ func (s *Spend) record(rec phaseRecord) {
 		s.Response = rec.Result.Text
 	}
 	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
+	switch rec.Phase {
+	case phase.Plan:
+		s.PlanTools = append(s.PlanTools, toolNames(rec.Result.Executions)...)
+		if rec.Decision != "" {
+			s.PlanDecision = rec.Decision
+		}
+	case phase.Execute:
+		// REPLACED, not appended — see the field's own note.
+		s.ExecuteTools = toolNames(rec.Result.Executions)
+	}
+}
+
+// toolNames is the called tools in order, including repeats.
+//
+// REPEATS KEPT, because the sequence is what skill synthesis clusters on:
+// "search, read, read, read, reply" and "search, read, reply" are different
+// procedures, and a set would render them identical.
+func toolNames(execs []toolloop.Execution) []string {
+	if len(execs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(execs))
+	for _, ex := range execs {
+		out = append(out, ex.Name)
+	}
+	return out
 }
 
 // on reports whether anything is listening. Checked by the callers that would

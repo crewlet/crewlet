@@ -25,21 +25,31 @@ Crewlet puts the weight on layers **2–4**. Layer 1 is desirable but optional �
 
 ## Subsystems
 
-Six small components, each with a single responsibility, plus the orchestrator that wires them.
+Small components, each with a single responsibility, plus the orchestrator that wires them.
+
+**Two ways in, and they are not the same shape.** Everything learned *from a turn* arrives on one event through one dispatcher; the two passes driven by a *clock* rather than a turn are their own loops, and fleet singletons.
 
 ```mermaid
 flowchart TD
-    TC["TurnCompleted event"] --> RE
-    SCH["scheduled consolidator<br/>(SkillClusteringScheduler,<br/>EpisodeLifecycleWorker)"] --> RE
-    RE["ReflectEngine<br/>(orchestrator)"]
-    RE --> SS["SkillSynthesizer"]
-    RE --> SR["SkillRefiner"]
+    TC["turn_completed event"] --> RE
+    RE["ReflectEngine<br/>(one dispatcher per process)"]
     RE --> PD["PersistDecider"]
+    RE --> EPW["Episodist"]
     RE --> CP["CounterpartyProfiler"]
-    SS --> SK["synthesized_skills<br/>(per-agent)"]
-    SR --> SK
+    RE --> SU["SkillUse<br/>(refreshes the staleness clock)"]
     PD --> AD["agent_diary<br/>(private)"]
-    CP --> EX["counterparty_profiles<br/>episodes (per-turn)"]
+    EPW --> EP["episodes<br/>(one row per turn)"]
+    CP --> CPT["counterparty_profiles"]
+    SU --> SK["synthesized_skills<br/>(per-agent)"]
+
+    CLK["background loops<br/>(fleet singletons)"]
+    CLK -->|hourly, threshold-gated| ELW["episode lifecycle<br/>(compaction + retention)"]
+    CLK -->|daily| CUR["skill curator<br/>(stale / archive / revive)"]
+    ELW --> EP
+    CUR --> SK
+
+    SS["SkillSynthesizer"] --> SK
+    SR["SkillRefiner"] --> SK
     AT["AgentTurn<br/>(Plan-phase prefetch + tools)"]
     AT -->|"use_skill, refine_skill"| SK
     AT -->|"query_episodes, reflect_and_persist, refresh_memory"| AD
@@ -115,12 +125,21 @@ When a synthesized skill was central to a successful turn, append an *observed-i
 
 The deterministic harness. Owns when reflection runs and coordinates the workers above.
 
-- **Hooks:** subscribes to `TurnCompleted` on the EventQueue.
-- **Concurrency:** acquires a `ConcurrencyController` slot per role around dispatch and releases in `finally`, so reflection workers compete with live turns for execution slots.
-- **Budget pre-flight:** checks `BudgetManager` — if either the org-wide or per-agent budget is exhausted, the whole pass short-circuits with a `reflection_skipped_budget_exhausted` log.
-- **Per-role gate:** `Role.learning_enabled = False` opts a noisy or sensitive role out of reflection without disabling the subsystem globally.
-- **Idempotency:** an LRU of recently-processed `turn_id`s short-circuits duplicate deliveries; at-least-once queue semantics don't cause duplicate writes.
-- **Failure mode:** every dispatch is best-effort. A failed worker logs and the next worker still runs; a failed reflect never fails the parent turn.
+- **Hooks:** subscribes to `turn_completed` on the EventQueue, under its **own consumer group**. Its own, shared with nothing: reflection is the one subsystem an operator turns off on its own, and a group shared with another consumer would take that consumer's traffic down with it.
+- **One consumer, not one per writer.** Everything a seat learns is learned from one event, and every writer is gated on the same questions about it. Three subscriptions would mean three redelivery windows over one turn, three places to discover a company that learns nothing, and three chances for one of them to be quietly unwired.
+- **One dispatcher per process, not per config revision.** A [config apply](configuration.md) swaps the org and the worker set behind it; the subscription and the redelivery guard stay put. Rebuilding it per revision would empty that guard, so a redelivery landing either side of an apply would be classified twice — two auxiliary calls, two differently-worded rows for one fact. A refused worker set leaves the previous one serving: reflecting against a stale org is a far smaller wrong than not reflecting at all.
+- **Gates, in order.** Each is reported by name, per worker, per turn, because "this company never learns anything" needs an answer that says *which* gate closed:
+  1. **No workers** — nothing is wired, so there is no question to ask about this turn.
+  2. **No role** — the turn came from a seat this revision no longer has. Learning about a renamed or removed role writes memory under an identity nothing can read back.
+  3. **Per-role opt-out** — `learning_enabled: false` opts a noisy or sensitive role out without disabling the subsystem globally. Unset inherits the company-wide setting.
+  4. **Duplicate** — a bounded ring of recently-processed work keys. Reflection is *not* idempotent: each pass is a fresh auxiliary call that can write a second, differently-worded row for the same fact. The ring is per-process and deliberately not durable — a second node reflecting the same turn writes a second diary row, which is the [bounded duplication](#what-does-not-happen) the engine promises rather than exactly-once. It **evicts** rather than growing: past the bound, a redelivery is far outside any backend's redelivery window.
+  5. **No engagement** — the planner opted out (`plan_decision: skip`), or was coerced to `direct` and called nothing. Either way the agent processed nothing externally observable, and a fact read off the trigger would teach it a directive it never received.
+  6. **Per-worker skip** — each worker states its own applicability, because they genuinely differ: the persist decider must not run on an unsettled turn, the counterparty profiler must.
+- **Failure mode:** every dispatch is best-effort and each worker runs under its own panic recovery, so one worker's bug costs neither the pass's remaining workers nor its sentinel. A failed worker logs and the next one still runs; a failed reflect never fails the parent turn. The handler **always acks**: reflection is work about a turn that is already over, so a nak would redeliver it to spend another round of auxiliary tokens reaching the same conclusion.
+
+#### What the turn event has to carry
+
+The dispatcher is a queue consumer, so it usually runs on a node that never saw the trigger. Everything the gates read therefore rides on the `turn_completed` payload itself — the tool sequences, the plan decision, the skills the prompt offered, and the inbound interactions with their senders resolved. A field left off that payload is a fact no worker can consult, and the gates fail **open-looking**: an absent tool sequence reads as "the agent engaged with nothing", which silently skips every worker on exactly the successful turns worth learning from, while the dispatcher reports a clean pass.
 
 ---
 
@@ -301,15 +320,23 @@ Without this, a stored memory that perfectly answered a question went unused: th
 
 ## Episode lifecycle
 
-The `episodes` hypertable is the raw substrate of agent learning. Without lifecycle management it grows forever. The `EpisodeLifecycleWorker` drains it on a write-triggered, demand-proportional cadence — no daily cron, no caller-path latency.
+The `episodes` table is the raw substrate of agent learning. Without lifecycle management it grows forever. The episode lifecycle worker drains it on a threshold-gated pass, walking each seat and doing nothing for the ones that are not due.
 
-### Trigger: write-side, threshold-based
+**Episodes have no plain retention sweep, deliberately.** Every other short-horizon table gets a range delete on a single horizon. Episodes cannot: their retention is this pass, which applies four different horizons to four different row states. A single `DELETE WHERE ended_at < cutoff` would collapse all four, and the row it would take first is the compacted summary — the only record of a whole era of a seat's work, standing in for hundreds of turns that are already gone.
 
-Every `EpisodeStore.write` increments a per-agent counter; every Nth write (default 10) the store runs a cheap `count(*)` and, if the agent's raw-episode total has crossed `max_raw_episodes_per_agent` (default 500), publishes a `CompactionRequested` event. The lifecycle worker is the subscriber. Idle agents fire nothing; busy agents fire often. A per-agent semaphore in the worker dedups concurrent requests.
+### Trigger: threshold-gated, on a slow loop
+
+The worker ticks hourly and, for each seat, runs one indexed `count(*)`. A seat under `max_raw_episodes_per_agent` (default 500) is skipped without touching the pass; a seat over it gets the full lifecycle run. The count is the gate rather than the pass's own early return, because "not yet" is the overwhelmingly common answer and it must cost one query rather than a walk.
+
+The cadence is far shorter than the [skill curator's](#skill-curator) because what it watches is a **count**, not a clock: a busy seat crosses its threshold in a burst, and every turn past that point pays the recall scan over rows that should already have been folded. An hour bounds that overshoot to one hour of one seat's traffic.
+
+**It is a fleet singleton**, claimed per tick under the node's own incarnation — two nodes compacting one seat's episodes would summarise the same cluster twice and pay for it twice. The claim **fails closed**: not knowing whether a peer holds the duty is exactly the case where running anyway produces the double write. Neither background pass fires on start, because every node in a fleet starts within seconds of a rolling restart — firing on start means every node races for the duty at once, and a crash-looping node spends the company's tokens on every restart.
+
+**Compaction needs a summarizer.** The pass folds a cluster by asking the seat's own `llm_auxiliary` chain to describe what its members had in common — per seat, so a company whose seats run on different models has each one's memory compacted by the model that seat is configured with. With no auxiliary model configured anywhere, the pass does not run at all: what it could still do is delete, and deleting is the half an operator least wants unsupervised. The rows stay raw and readable instead.
 
 ### One worker, four actions
 
-For each `CompactionRequested` event the worker runs the full lifecycle pass for that agent:
+For each seat over its threshold the worker runs the full lifecycle pass:
 
 1. **Drop non-terminal episodes** older than `non_terminal_max_age_days` (default 14). `self_iterate` is a mid-state — the reflect engine's terminal-outcome gate already excludes it from skill synthesis, and it only feeds `query_episodes` recall as noise. Cheap SQL DELETE; no LLM.
 2. **Drop skill-consolidated episodes** older than `consolidated_grace_days` (default 30). When the synthesizer drafts a skill from a cluster of episodes it stamps `consolidated_into_skill_id` on each source row; the lifecycle worker drops them after grace because the skill itself now carries the learning forward. The grace gives operators a chance to audit / detect bad consolidations before the source disappears.
@@ -345,11 +372,37 @@ Vector similarity returns both kinds in one query. Callers branch on `kind` at r
 
 ### What does NOT happen
 
-- **Reads never trigger compaction** — only writes can fire the trigger. Read paths pay no latency cost for lifecycle work.
+- **No work on the caller's path** — nothing about compaction runs inside a turn. Reads pay no latency cost for it, and neither does the write that crossed the threshold.
 - **Compaction never feeds skill synthesis** — the consolidation hierarchy is one-directional: raw → skill, raw → compacted. A compacted entry doesn't get re-promoted to a skill; if the same pattern recurs after compaction, the *new* raw episodes form a fresh cluster the synthesizer can pick up.
-- **No daily cron, no idle work** — agents that don't accumulate episodes do no lifecycle work at all.
+- **No work for idle seats** — a seat under its threshold costs one indexed count per tick and nothing else. The loop wakes; the seat does not.
 
 ---
+
+## Skill curator
+
+A synthesized skill that nothing uses any more should leave the catalogue, and one that is used again should come back. That is a clock, not an event, so it is the second background pass — a fleet singleton on the same claim discipline as the episode lifecycle, ticking **daily**. A day, because the transitions it makes are measured in tens of days: a pass an hour would scan the whole catalogue 24 times to make the same zero transitions, and the one it eventually makes would land at most an hour earlier, against a threshold nobody set to the hour.
+
+The state machine is `active → stale → archived` on disuse, and `stale → active` on use:
+
+| Transition | When | Effect |
+| --- | --- | --- |
+| `active → stale` | unused for `stale_after_days` (default 30) | Still listed and still loadable — the prefetch renders it with an ageing marker, so the agent knows. |
+| `stale → archived` | unused for `archive_after_days` (default 90) | Listings hide it and the loader refuses it. **Archived is not deleted:** the row stays readable, so restoring one is an operator edit rather than a re-synthesis. |
+| `stale → active` | the skill is used again | Revival happens in the same transaction as the use, so the skill is back in the very next Plan prefetch rather than after the curator's next tick — which on the default schedule is up to a day later. |
+
+An **archive window inside the stale window** is a misconfiguration, and taken literally it archives rows the same policy calls fresh. It is widened to the stale window instead, which is the reading both halves agree on.
+
+Skills the operator has **pinned** are exempt from every automatic transition. Nothing promotes a skill to pinned.
+
+### Being offered is being used
+
+A skill's staleness clock is its last-used stamp, and the thing that moves it is the Plan-phase prefetch **offering** the skill — not the model then loading its body.
+
+That is the honest reading of what the stamp answers. A skill rendered into the prompt *is* in the catalogue and *is* what the seat is being asked to work from; whether the model loaded the body is a question about that turn, not about the skill's currency. Keying on the load would age out every skill whose menu line was enough — which is the well-written ones.
+
+The ids follow the prompt's own character budget: a skill whose menu line did not fit was never offered, so its clock does not move. A stamp that cannot be written is announced as a telemetry failure rather than swallowed, because an operator has to see a clock that stopped **before** the curator archives a hot skill.
+
+Without this the whole catalogue ages out over a quarter while the prefetch is putting it in front of a model the entire time — and not as a slow degradation anyone notices. The menu simply gets shorter.
 
 ## Telemetry harness
 
@@ -393,13 +446,13 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 
 | Touchpoint | Role |
 |---|---|
-| `crewlet.agent.turn` (TurnEngine) | Emits `TurnCompleted` with plan, tool trace, review outcome, skills used. |
+| `crewlet.agent.turn` (TurnEngine) | Emits `turn_completed` carrying everything the reflection gates read: the plan summary and decision, the Plan and Execute tool sequences, the review outcome, the skills the prompt offered, and the inbound interactions with their senders resolved. |
 | `crewlet.agent.prompts` | Plan-phase prompt builders inject conditional guidance blocks gated on tool availability. |
 | `crewlet.knowledge` | The `KnowledgeSearcher` seam (`protocol`) with its two backends — `ConfluenceSearcher` (CQL) and `PlaneSearcher` (fork page search) — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
 | `crewlet.tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
-| `crewlet.events` | `TurnCompleted`, `SkillSynthesized`, `SkillRefined`, `SkillPromoted`, `SkillUsed`, `PersistDeciderCompleted`, `CounterpartyProfileUpdated`, `PlanPrefetchSummary`, `RelevantKnowledgeRefetched`, `CompactionRequested`. |
+| `crewlet.events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `plan_prefetch_summary`, `relevant_knowledge_refetched`, `compaction_requested`, `compaction_completed`. |
 | `crewlet.timescaledb` | Underpins the `episodes` hypertable + the dashboard event store. |
-| `crewlet.learning/` | `ReflectEngine`, `SkillSynthesizer`, `SkillRefiner`, `PromotionSynthesizer`, `SkillClusteringScheduler`, `EpisodeLifecycleWorker`, `PersistDecider`, `CounterpartyProfiler`, `AgentDiary`, `OnboardingMarkerStore`, `relevant_knowledge.fetch_relevant_knowledge_block`. |
+| `crewlet.learning/` | The reflect dispatcher and its per-turn workers (`PersistDecider`, `Episodist`, `CounterpartyProfiler`, `SkillUse`), the two background passes (episode lifecycle, skill curator), `SkillSynthesizer`, `SkillRefiner`, `PromotionSynthesizer`, `AgentDiary`, the onboarding marker store, and the relevant-knowledge prefetch. |
 | `crewlet.config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
 | `crewlet.api` | `GET /agents/{id}/memory` aggregates personal memories, episodes, counterparty profiles, and synthesized skills for the dashboard's per-agent memory view. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
 

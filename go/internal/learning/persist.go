@@ -235,7 +235,7 @@ func (d *PersistDecider) Skip(t Turn) string {
 }
 
 // Reflect runs one classification and reports it as a lifecycle event.
-func (d *PersistDecider) Reflect(ctx context.Context, t Turn) (events.Payload, error) {
+func (d *PersistDecider) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
 	dec, err := d.Decide(ctx, t)
 	ev := types.PersistDeciderCompleted{
 		Agent:          t.Event.Agent,
@@ -257,7 +257,7 @@ func (d *PersistDecider) Reflect(ctx context.Context, t Turn) (events.Payload, e
 			ev.TTLUntil = dec.Entry.TTLUntil.UTC().Format(time.RFC3339)
 		}
 	}
-	return ev, err
+	return []events.Payload{ev}, err
 }
 
 // Decide runs one classification pass, writing the row when the tier calls

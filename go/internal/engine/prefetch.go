@@ -178,3 +178,83 @@ func subjectOf(registry *notify.Registry, source, sender string, metadata map[st
 	}
 	return subject
 }
+
+// interactionsOf renders a turn's trigger as the interactions a learning
+// worker reads.
+//
+// ON THE EVENT rather than looked up later, because the reflect dispatcher
+// is a queue consumer: the node running it may never have seen the trigger,
+// and an interaction it cannot read off the payload is one it cannot reason
+// about at all.
+//
+// EVERY constituent of a coalesced trigger, in the order they spoke — the
+// same rule sendersOf states, and for the same reason. A turn woken by four
+// people is not a turn about the last of them.
+func (e *Engine) interactionsOf(evs []*events.Event) []types.InboundInteraction {
+	registry := e.Registry()
+	var out []types.InboundInteraction
+	for _, n := range notificationsIn(evs) {
+		if len(n.Messages) == 0 {
+			out = append(out, interaction(registry, n.NotificationSource,
+				n.SourceEventType, n.Sender, salientBody(n), n.Metadata,
+				n.ContextRequiresRecon))
+			continue
+		}
+		// A COALESCED EVENT'S FLAT FIELDS MIRROR THE LATEST constituent,
+		// so taking them as well would double-count that one message and
+		// weight it against the others in every worker that joins bodies.
+		for _, m := range n.Messages {
+			out = append(out, interaction(registry, n.NotificationSource,
+				m.SourceEventType, m.Sender, m.Body, m.Metadata,
+				m.ContextRequiresRecon))
+		}
+	}
+	return out
+}
+
+// interaction assembles one, resolving its sender the way a profile is keyed.
+func interaction(registry *notify.Registry, source, rawType, sender, body string,
+	metadata map[string]string, requiresRecon bool,
+) types.InboundInteraction {
+	subject := subjectOf(registry, source, sender, metadata)
+	return types.InboundInteraction{
+		Sender: types.CanonicalIdentity{
+			Handle: subject.Handle, ExternalID: subject.ExternalID,
+			Platform: subject.Platform, DisplayName: subject.Name,
+		},
+		Body: body,
+		// UNKNOWN when the source stamped nothing, which is the honest
+		// answer for a tracker or a code host rather than a gap — see
+		// notify.ChannelKindField.
+		ChannelKind:   channelKind(metadata),
+		RawEventType:  rawType,
+		RequiresRecon: requiresRecon,
+	}
+}
+
+// salientBody is the raw inbound message, never the enriched prompt.
+//
+// A NIL SalientBody falls back to Body and an EMPTY one does not: nil means
+// this producer emits no distinct raw message, while empty means it set one
+// and it was genuinely empty. Falling back on empty would hand every worker
+// the same 1.5k of triage boilerplate and call it what the person said.
+func salientBody(n *types.ExternalNotification) string {
+	if n.SalientBody != nil {
+		return *n.SalientBody
+	}
+	return n.Body
+}
+
+// channelKind reads the canonical surface shape a parser stamped.
+//
+// A value this build does not recognise reads as unknown rather than being
+// passed through: the field is a closed set, and a consumer switching on it
+// must never meet a member that arrived from a newer producer.
+func channelKind(metadata map[string]string) types.ChannelKind {
+	switch kind := types.ChannelKind(metadata[notify.ChannelKindField]); kind {
+	case types.ChannelDM, types.ChannelGroup, types.ChannelPublic, types.ChannelInternal:
+		return kind
+	default:
+		return types.ChannelUnknown
+	}
+}

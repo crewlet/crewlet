@@ -1238,7 +1238,7 @@ func TestTheModelSummarizerMakesOneCallAndParsesIt(t *testing.T) {
 	t.Parallel()
 	var gotSystem, gotUser string
 	calls := 0
-	s := NewSummarizer(func(_ context.Context, system, user string) (string, error) {
+	s := NewSummarizer(func(_ context.Context, _, system, user string) (string, error) {
 		calls++
 		gotSystem, gotUser = system, user
 		return `{"common_task_pattern":"posted updates","subjects_involved":["finance"]}`, nil
@@ -1260,7 +1260,7 @@ func TestTheModelSummarizerMakesOneCallAndParsesIt(t *testing.T) {
 	}
 
 	boom := errors.New("rate limited")
-	s = NewSummarizer(func(context.Context, string, string) (string, error) { return "", boom })
+	s = NewSummarizer(func(context.Context, string, string, string) (string, error) { return "", boom })
 	if _, err := s.Summarize(context.Background(), Cluster{Episodes: []Episode{rawEp("a", t0)}}); !errors.Is(err, boom) {
 		t.Errorf("model error = %v, want it propagated", err)
 	}

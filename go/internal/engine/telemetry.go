@@ -41,6 +41,17 @@ type turnTelemetry struct {
 	convKey   string
 	startedAt time.Time
 	trace     events.TraceContext
+
+	// interactions is who spoke to this seat and what they said, one per
+	// constituent of the partition. It rides the completed-turn event
+	// because the reflect dispatcher is a QUEUE CONSUMER: it can run on a
+	// node that never saw the trigger, so an interaction it cannot read
+	// off the payload is one it cannot reason about at all.
+	interactions []types.InboundInteraction
+
+	// skills is the synthesized-skill ids offered to this turn's prompt.
+	// Set after the prefetch, which is the only thing that knows them.
+	skills []string
 }
 
 // describeTurn assembles the identity for one dispatch.
@@ -61,6 +72,7 @@ func (e *Engine) describeTurn(company *Company, req Request) turnTelemetry {
 			t.agentID = id.String()
 		}
 	}
+	t.interactions = e.interactionsOf(req.Events)
 	for _, ev := range req.Events {
 		if ev == nil {
 			continue
@@ -161,9 +173,20 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// decision except where a guard ended it first — so it is read off
 		// the result rather than off the last review, and the two differ
 		// exactly when the engine overrode the reviewer.
-		ReviewOutcome:   decision,
-		Iterations:      res.Rounds,
-		ConversationKey: t.convKey,
+		ReviewOutcome: decision,
+		Iterations:    res.Rounds,
+		// EVERYTHING THE REFLECT DISPATCHER GATES ON. Its workers run on
+		// whichever node wins the delivery, which is rarely this one, so
+		// a fact left off this payload is a fact no worker can consult —
+		// and the gates fail OPEN-LOOKING: an absent tool sequence reads
+		// as "the agent engaged with nothing", which silently skips every
+		// worker on exactly the successful turns worth learning from.
+		ToolSequence:     spend.ExecuteTools,
+		PlanToolSequence: spend.PlanTools,
+		PlanDecision:     types.PlanDecision(spend.PlanDecision),
+		SkillsUsed:       t.skills,
+		Interactions:     t.interactions,
+		ConversationKey:  t.convKey,
 	}, t.trace), t.role)
 }
 

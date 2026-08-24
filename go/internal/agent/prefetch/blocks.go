@@ -251,13 +251,13 @@ func renderTrait(value any) string {
 }
 
 // synthesizedSkills renders the procedures this seat wrote for itself.
-func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) string {
+func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []string) {
 	if f.src.Skills == nil || r.Seat == nil {
-		return ""
+		return "", nil
 	}
 	handle := r.Seat.Handle()
 	if handle == "" {
-		return ""
+		return "", nil
 	}
 	// ARCHIVED EXCLUDED, STALE KEPT. Archived is "aged out of the
 	// catalogue" and bringing one back is an operator's decision; stale is
@@ -266,27 +266,40 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) string {
 	skills, err := f.src.Skills.List(ctx, handle, learning.ListOptions{})
 	if err != nil {
 		log.Warn("skills_list_failed", "seat", handle, "error", err.Error())
-		return ""
+		return "", nil
 	}
 	if len(skills) == 0 {
-		return ""
+		return "", nil
 	}
 	if len(skills) > skillsListed {
 		skills = skills[:skillsListed]
 	}
 	bullets := make([]string, 0, len(skills)+1)
+	ids := make([]string, 0, len(skills))
 	for _, skill := range skills {
-		bullets = append(bullets, renderSkill(skill))
+		line := renderSkill(skill)
+		if line == "" {
+			// A skill with no name renders nothing, so it was not
+			// offered and must not be reported as used.
+			continue
+		}
+		bullets = append(bullets, line)
+		ids = append(ids, skill.ID)
 	}
-	rendered := budget(bullets, SkillsCharBudget)
+	// THE IDS FOLLOW THE BUDGET, which is why this takes the count back:
+	// the budget drops the tail that does not fit, and a skill the model
+	// never saw must not have its staleness clock reset — that is
+	// precisely how a never-read skill would live for ever.
+	rendered, kept := budgetN(bullets, SkillsCharBudget)
 	if rendered == "" {
-		return ""
+		return "", nil
 	}
+	ids = ids[:kept]
 	// THE MENU NEEDS ITS VERB. A list of skill names with no instruction
 	// is a list the model reads and does not act on — it has to be told
 	// that loading one is a thing it can do.
 	return rendered + "\nLoad any of these by name with your skill tool " +
-		"before doing the work it covers."
+		"before doing the work it covers.", ids
 }
 
 // renderSkill renders one skill as a menu line.

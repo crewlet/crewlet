@@ -89,6 +89,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 				"node's tools; the previous epoch is still current")
 		return configplane.StatusError, fmt.Errorf("engine: apply: %w", err)
 	}
+	// The learning workers are rebuilt for the new epoch — they hold its
+	// org and its model registry — while the dispatcher, its subscription
+	// and its redelivery ring stay put. A failure leaves the previous
+	// epoch's workers serving rather than failing the apply: reflecting
+	// against a stale org is a far smaller wrong than not reflecting.
+	e.reconfigureReflection(next)
 	// The sandbox MANAGER is swapped, and only the manager: the coordinator
 	// and the waiter hold this process's busy set and poll loop, so
 	// rebuilding them would forget which seats are mid-run and start a

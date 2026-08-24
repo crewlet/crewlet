@@ -244,24 +244,6 @@ func TestAWrongWidthEmbeddingIsRefusedAtWrite(t *testing.T) {
 	}
 }
 
-func TestPurgeDropsOldEpisodes(t *testing.T) {
-	t.Parallel()
-	e := episodes(t)
-	mustAppend(t, e, ep("old", "ceo", base))
-	mustAppend(t, e, ep("new", "ceo", base.Add(2*time.Hour)))
-	n, err := e.Purge(context.Background(), base.Add(time.Hour))
-	if err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("purged %d, want 1", n)
-	}
-	got, _ := e.Recent(context.Background(), "ceo", 10)
-	if len(got) != 1 || got[0].ID != "new" {
-		t.Errorf("survivors = %v", ids(got))
-	}
-}
-
 func TestRecallRanksBySimilarity(t *testing.T) {
 	t.Parallel()
 	e := episodes(t)

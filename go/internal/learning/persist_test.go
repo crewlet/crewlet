@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -322,11 +323,11 @@ func TestADocIsAnnouncedAndNeverMemorised(t *testing.T) {
 		t.Errorf("directive = %+v", dec.Directive)
 	}
 
-	payload, err := d.Reflect(context.Background(), pdTurn())
+	payloads, err := d.Reflect(context.Background(), pdTurn())
 	if err != nil {
 		t.Fatalf("Reflect: %v", err)
 	}
-	ev := payload.(types.PersistDeciderCompleted)
+	ev := onlyPayload(t, payloads).(types.PersistDeciderCompleted)
 	if ev.Classification != types.PersistDoc || ev.Persisted || ev.Scope != "" || ev.DocID != "" {
 		t.Errorf("event = %+v, want an unpersisted DOC with no scope", ev)
 	}
@@ -472,11 +473,11 @@ func TestAFailedWriteReportsTheTierItFailedNotNothingToPersist(t *testing.T) {
 		t.Error("a failed write reported a persisted row")
 	}
 
-	payload, err := d.Reflect(context.Background(), pdTurn())
+	payloads, err := d.Reflect(context.Background(), pdTurn())
 	if err == nil {
 		t.Error("Reflect swallowed the write failure; nothing would ever log it")
 	}
-	ev := payload.(types.PersistDeciderCompleted)
+	ev := onlyPayload(t, payloads).(types.PersistDeciderCompleted)
 	if ev.Persisted || ev.DocID != "" || ev.Scope != "" {
 		t.Errorf("event = %+v, want it to claim nothing landed", ev)
 	}
@@ -828,11 +829,11 @@ func TestAPersistedRowIsAnnouncedWithWhereToReadItBack(t *testing.T) {
 	t.Parallel()
 	store := &fakeDiary{}
 	d := decider(t, says(`{"kind":"SHORT","content":"freeze until June","ttl_days":10}`), store)
-	payload, err := d.Reflect(context.Background(), pdTurn())
+	payloads, err := d.Reflect(context.Background(), pdTurn())
 	if err != nil {
 		t.Fatalf("Reflect: %v", err)
 	}
-	ev := payload.(types.PersistDeciderCompleted)
+	ev := onlyPayload(t, payloads).(types.PersistDeciderCompleted)
 	if !ev.Persisted || ev.DocID != "row-1" {
 		t.Errorf("event = %+v, want the row it wrote", ev)
 	}
@@ -855,11 +856,11 @@ func TestAPersistedRowIsAnnouncedWithWhereToReadItBack(t *testing.T) {
 func TestALongIsAnnouncedWithNoDeadline(t *testing.T) {
 	t.Parallel()
 	d := decider(t, says(`{"kind":"LONG","content":"a durable fact"}`), &fakeDiary{})
-	payload, err := d.Reflect(context.Background(), pdTurn())
+	payloads, err := d.Reflect(context.Background(), pdTurn())
 	if err != nil {
 		t.Fatalf("Reflect: %v", err)
 	}
-	if ev := payload.(types.PersistDeciderCompleted); ev.TTLUntil != "" {
+	if ev := onlyPayload(t, payloads).(types.PersistDeciderCompleted); ev.TTLUntil != "" {
 		t.Errorf("ttl_until = %q on a LONG, which never expires", ev.TTLUntil)
 	}
 }
@@ -887,4 +888,13 @@ func TestConcurrentClassificationsDoNotCollide(t *testing.T) {
 	if len(store.written()) != 8 {
 		t.Errorf("%d rows written, want one per turn", len(store.written()))
 	}
+}
+
+// onlyPayload unwraps the single event a one-subject worker reports.
+func onlyPayload(t *testing.T, payloads []events.Payload) events.Payload {
+	t.Helper()
+	if len(payloads) != 1 {
+		t.Fatalf("worker reported %d events, want exactly 1", len(payloads))
+	}
+	return payloads[0]
 }

@@ -256,19 +256,18 @@ func (e *Episodes) ForConversation(ctx context.Context, handle, conversation str
 	return collectEpisodes(rows)
 }
 
-// Purge deletes episodes that ended before cutoff, returning the count.
-func (e *Episodes) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := e.db.SQL().ExecContext(ctx,
-		`DELETE FROM episodes WHERE ended_at < ?`, store.EncodeTime(cutoff))
-	if err != nil {
-		return 0, fmt.Errorf("learning: purge episodes: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("learning: purge episodes: %w", err)
-	}
-	return n, nil
-}
+// EPISODES HAVE NO Purge, deliberately, and this note is here so the next
+// reader does not add one.
+//
+// Every other short-horizon table gets a range delete on a single horizon,
+// wired into the maintenance sweep. Episodes cannot: their retention is
+// [Lifecycle.Pass], which applies FOUR different horizons to four different
+// row states — mid-state rows go early, rows a skill absorbed go after an
+// audit grace, exemplars of a compacted cluster stay raw, and the compacted
+// summaries themselves are kept for years or forever. A single
+// `DELETE WHERE ended_at < cutoff` would collapse all four, and the row it
+// would take first is the compacted summary — the only record of a whole era
+// of a seat's work, standing in for hundreds of turns that are already gone.
 
 func collectEpisodes(rows *sql.Rows) ([]Episode, error) {
 	defer rows.Close()

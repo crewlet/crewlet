@@ -41,7 +41,7 @@ func (w *stubWorker) Skip(t learning.Turn) string {
 	return w.skip
 }
 
-func (w *stubWorker) Reflect(_ context.Context, t learning.Turn) (events.Payload, error) {
+func (w *stubWorker) Reflect(_ context.Context, t learning.Turn) ([]events.Payload, error) {
 	w.mu.Lock()
 	w.seen = append(w.seen, t)
 	w.mu.Unlock()
@@ -49,7 +49,10 @@ func (w *stubWorker) Reflect(_ context.Context, t learning.Turn) (events.Payload
 		var boom []int
 		_ = boom[3] // a worker's own bug, not a returned error
 	}
-	return w.out, w.err
+	if w.out == nil {
+		return nil, w.err
+	}
+	return []events.Payload{w.out}, w.err
 }
 
 func (w *stubWorker) turns() []learning.Turn {
@@ -679,5 +682,147 @@ func TestAMidTurnStateNeverReachesTheDecider(t *testing.T) {
 	if p.count() != 0 || len(store.written()) != 0 {
 		t.Errorf("model called %d times, %d rows written from an incomplete turn",
 			p.count(), len(store.written()))
+	}
+}
+
+// --- surviving an apply ---------------------------------------------------
+//
+// The dispatcher is ONE PER PROCESS and an apply swaps what runs behind it.
+// The alternative — rebuilding it per epoch — empties the redelivery ring,
+// so a redelivery landing either side of a config change is classified
+// twice: two auxiliary calls, two differently-worded rows for one fact.
+
+func TestReconfigureSwapsTheWorkerSet(t *testing.T) {
+	t.Parallel()
+	before, after := &stubWorker{name: "before"}, &stubWorker{name: "after"}
+	r := reflector(t, devOrg(), &recordingPub{}, before)
+
+	if err := r.Reconfigure(devOrg(), []learning.Worker{after}); err != nil {
+		t.Fatalf("Reconfigure: %v", err)
+	}
+	res := reflectOnce(r, settledTurn())
+	if len(res.Ran) != 1 || res.Ran[0] != "after" {
+		t.Fatalf("ran %v, want only the new epoch's worker", res.Ran)
+	}
+	if len(before.turns()) != 0 {
+		t.Error("the previous epoch's worker still ran")
+	}
+}
+
+// THE RING SURVIVES THE SWAP, which is the whole reason the dispatcher
+// outlives an epoch: a redelivery arriving just after an apply must not be
+// reflected on a second time.
+func TestAReconfigureDoesNotForgetWhatWasAlreadyReflected(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "w"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+	if res := reflectOnce(r, settledTurn()); res.Skip != "" {
+		t.Fatalf("the first pass was skipped: %s", res.Skip)
+	}
+
+	if err := r.Reconfigure(devOrg(), []learning.Worker{w}); err != nil {
+		t.Fatalf("Reconfigure: %v", err)
+	}
+	if res := reflectOnce(r, settledTurn()); res.Skip != learning.SkipDuplicate {
+		t.Fatalf("skip = %q after an apply, want the redelivery still "+
+			"recognised as a duplicate", res.Skip)
+	}
+}
+
+// A BAD WORKER SET LEAVES THE PREVIOUS ONE SERVING. Reflecting against a
+// stale epoch is a far smaller wrong than not reflecting at all, and the
+// caller cannot fix a duplicate worker name by trying again.
+func TestARefusedReconfigureKeepsThePreviousEpochServing(t *testing.T) {
+	t.Parallel()
+	good := &stubWorker{name: "good"}
+	r := reflector(t, devOrg(), &recordingPub{}, good)
+
+	for _, bad := range [][]learning.Worker{
+		{&stubWorker{name: "dup"}, &stubWorker{name: "dup"}},
+		{nil},
+	} {
+		if err := r.Reconfigure(devOrg(), bad); err == nil {
+			t.Fatalf("Reconfigure accepted %d bad workers", len(bad))
+		}
+	}
+	if err := r.Reconfigure(nil, []learning.Worker{good}); err == nil {
+		t.Fatal("Reconfigure accepted a nil org")
+	}
+	if res := reflectOnce(r, settledTurn()); len(res.Ran) != 1 || res.Ran[0] != "good" {
+		t.Fatalf("ran %v, want the previous epoch's worker still serving", res.Ran)
+	}
+}
+
+// AN APPLY THAT REMOVES EVERY WORKER really does stop the passes — the
+// company turned learning off, and the fast path is what makes that free.
+func TestReconfiguringToNoWorkersStopsThePasses(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "w"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+	if err := r.Reconfigure(devOrg(), nil); err != nil {
+		t.Fatalf("Reconfigure: %v", err)
+	}
+	if res := reflectOnce(r, settledTurn()); res.Skip != learning.SkipNoWorkers {
+		t.Fatalf("skip = %q, want no_workers", res.Skip)
+	}
+}
+
+// THE NEW EPOCH'S ORG DECIDES. A seat the revision removed must stop being
+// learned about, and one it added must start.
+func TestReconfigureSwapsTheOrgTheSeatIsResolvedAgainst(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "w"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+
+	renamed := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Engineer"}}}
+	if err := r.Reconfigure(renamed, []learning.Worker{w}); err != nil {
+		t.Fatalf("Reconfigure: %v", err)
+	}
+	if res := reflectOnce(r, settledTurn()); res.Skip != learning.SkipNoRole {
+		t.Fatalf("skip = %q, want the removed role to stop being reflected on",
+			res.Skip)
+	}
+
+	moved := settledTurn()
+	moved.RoleName, moved.TurnID = "Engineer", "t2"
+	if res := reflectOnce(r, moved); res.Skip != "" {
+		t.Fatalf("skip = %q, want the new epoch's role to be reflected on",
+			res.Skip)
+	}
+}
+
+// THE REDELIVERY RING IS BOUNDED, and that bound is the point: the guard is
+// per-process and lives for months, so a set that only ever grew would be a
+// slow leak keyed on every turn the company has ever taken. Past the bound,
+// a redelivery of a turn this process reflected on long ago is no longer a
+// case worth spending memory against — it is far outside any backend's
+// redelivery window.
+func TestTheRedeliveryGuardEvictsRatherThanGrowing(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "w"}
+	r := reflector(t, devOrg(), &recordingPub{}, w)
+
+	first := settledTurn()
+	if res := reflectOnce(r, first); res.Skip != "" {
+		t.Fatalf("the first pass was skipped: %s", res.Skip)
+	}
+	// One more than the ring holds, so the first id is evicted.
+	for i := range learning.ReflectSeen {
+		tc := settledTurn()
+		tc.TurnID = fmt.Sprintf("filler-%d", i)
+		reflectOnce(r, tc)
+	}
+	if res := reflectOnce(r, first); res.Skip == learning.SkipDuplicate {
+		t.Fatal("an id far past the bound is still remembered, so the guard " +
+			"grows without limit")
+	}
+
+	// And the RECENT ones are still remembered, which is what the guard is
+	// actually for — an eviction policy that forgot everything would pass
+	// the check above and dedupe nothing.
+	recent := settledTurn()
+	recent.TurnID = fmt.Sprintf("filler-%d", learning.ReflectSeen-1)
+	if res := reflectOnce(r, recent); res.Skip != learning.SkipDuplicate {
+		t.Fatalf("skip = %q for the most recent turn, want it deduped", res.Skip)
 	}
 }
