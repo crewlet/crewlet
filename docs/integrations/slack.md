@@ -1,5 +1,15 @@
 # Slack Integration
 
+> **v1 status — webhook ingestion only.** This build verifies and stores
+> Slack deliveries on `POST /webhooks/slack/{handle}`, but no parser turns
+> one into a notification, so a Slack message does not wake a seat — and
+> `crewlet slack provision` does not exist, so the one-app-per-agent
+> automation below is not available. The chat backend that routes end to
+> end is [Mattermost](mattermost.md), provisioned with
+> [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision).
+> Everything below describes the intended contract; the parts that are live
+> today are the `slack:` config block and the webhook endpoint.
+
 Crewlet uses a **one Slack app per agent** model — each agent gets its own bot identity, token, and webhook endpoint in Slack.
 
 > **Prerequisites.** You need a Slack **workspace you administer** (create one if you don't have it). The engine's API endpoint must be **reachable by Slack over public HTTPS** so the Events API can deliver webhooks, and so the OAuth install can land (for local development, use a tunnel such as ngrok or cloudflared).

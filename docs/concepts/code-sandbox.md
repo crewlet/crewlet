@@ -1,5 +1,12 @@
 # Code Sandbox
 
+> **v1 status — local backends only.** This build ships `type: local` —
+> `direct` (a process tree) and `container` (Docker or Podman). The E2B
+> backend is not here yet, so the remote-sandbox passages below describe the
+> intended contract rather than something you can configure today. The
+> `cli-agent` credential paths are likewise not in this build; see
+> [Subscription LLM Backends](subscription-llm-backends.md).
+
 Crewlet agents author code through the **`run_sandbox` Execute tool**: the executor calls it with a concrete code task, the engine provisions an isolated sandbox (a real VM with a shell, a filesystem, and a git checkout), and a **coding agent** — Claude Code or OpenCode — works on the task autonomously inside it. The call is **detached**: the Execute tool-loop *suspends* when the job starts, the engine persists the in-flight conversation, and when the job completes — minutes or hours later — the **same loop resumes** with the coding agent's findings spliced in as that tool call's reply. The executor then reports and acts with its own tools (replying on the originating channel, updating the ticket) in the same turn, with full context.
 
 This is how a Crewlet agent implements a feature, makes tests pass, reproduces a bug, or runs a one-off script — anything that needs a shell and a checkout. The sandbox is the isolation boundary: arbitrary, autonomously generated code runs *there*, never on the engine host, which is why the coding agent can run fully permissioned (Claude Code `--permission-mode bypassPermissions`; OpenCode `permission: "allow"`).

@@ -886,7 +886,7 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 
 ### `GET /webhooks/slack-oauth`
 
-The OAuth install landing page for [`crewlet slack provision`](cli.md#crewlet-slack-provision) — every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds.
+The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md) — every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds.
 
 ### `/webhooks/github`
 

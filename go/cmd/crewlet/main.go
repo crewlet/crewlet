@@ -90,6 +90,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runSecrets(rest, stdout, stderr)
 	case "config":
 		return runConfig(rest, stdout, stderr)
+	case "migrate":
+		return runMigrate(rest, stdout, stderr)
+	case "budgets":
+		return runBudgets(rest, stdout, stderr)
 	case "gitlab", "plane", "mattermost":
 		return runIntegration(cmd, rest, stdout, stderr)
 	default:
@@ -106,6 +110,8 @@ Usage:
                               -roles ingress|seats|workers narrows what this node does
   crewlet validate [flags]    Check both config tiers without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
+  crewlet migrate [config]    Apply pending schema migrations (-check reports only)
+  crewlet budgets <cmd>       Show or reset the durable token counters
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet gitlab provision    Reconcile the company's seats into a GitLab instance

@@ -1,5 +1,11 @@
 # Subscription LLM Backends
 
+> **v1 status — not in this build.** The `cli-agent` provider type and the
+> `crewlet llm` command family are not part of the Go engine yet. The
+> providers it ships are `openai` and `anthropic` (and `openai-compatible`,
+> which is the same backend at a different base URL), with the fallback
+> chain across them. Everything below describes the intended contract.
+
 Run agents on a **coding CLI you already pay a subscription for** —
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Copilot — instead of a
 metered API key.
@@ -543,7 +549,7 @@ smoke test    : ok — 812 in / 34 out
 problems      : none
 ```
 
-See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
+Every flag is described below; the command is not in this build (see the note at the top).
 
 ---
 
@@ -583,4 +589,3 @@ See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
 - [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models)
 - [Secret Store](secret-store.md) — where tokens and credential bundles live
 - [Code Sandbox](code-sandbox.md) — the *other* place Crewlet runs a coding agent
-- [CLI reference — `crewlet llm`](../reference/cli.md#crewlet-llm)

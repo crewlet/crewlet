@@ -158,3 +158,59 @@ func SchemaVersions() []string {
 	}
 	return names
 }
+
+// Pending reports the schema files a database has not applied, WITHOUT
+// applying them.
+//
+// # Why this is not Open followed by a comparison
+//
+// Open migrates. That is the right default — every process that touches the
+// store gets a current schema without an operator remembering a step — but
+// it makes "what would this apply" unanswerable through it: by the time you
+// could ask, the answer is none.
+//
+// So this opens the pool and reads, and creates nothing at all. A database
+// with no schema_migrations table has applied nothing, which is what a fresh
+// deployment looks like rather than an error: reporting a missing table
+// would send an operator to investigate the state every new install starts
+// in.
+func Pending(ctx context.Context, path string, opts Options) (applied, pending []string, err error) {
+	drv, err := resolveDriver(opts.Driver)
+	if err != nil {
+		return nil, nil, err
+	}
+	busy := opts.BusyTimeout
+	if busy <= 0 {
+		busy = defaultBusyTimeout
+	}
+	pool, err := openPool(string(drv), path, busy, opts.WrapDriver)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = pool.Close() }()
+	if err := pool.PingContext(ctx); err != nil {
+		return nil, nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
+	}
+
+	db := &DB{sql: pool, drv: drv, path: path}
+	if applied, err = db.appliedVersions(ctx); err != nil {
+		// A database that has never been migrated has no
+		// schema_migrations table, and that is the ordinary state of a
+		// fresh deployment rather than a fault.
+		applied = nil
+	}
+	have := make(map[string]bool, len(applied))
+	for _, v := range applied {
+		have[v] = true
+	}
+	files, err := schemaVersions()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, file := range files {
+		if !have[file] {
+			pending = append(pending, file)
+		}
+	}
+	return applied, pending, nil
+}

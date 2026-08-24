@@ -1,5 +1,16 @@
 # Confluence Integration
 
+> **v1 status — webhook ingestion only.** This build verifies and stores
+> Confluence deliveries on `POST /webhooks/confluence`, and agents reach
+> Confluence through MCP. What it does **not** yet have is the routing
+> half, the knowledge searcher, or the publishing CLI — no parser turns a
+> delivery into a notification, and `crewlet confluence import` does not
+> exist. The knowledge backend that is live is [Plane](plane.md), through
+> [`crewlet plane import`](../reference/cli.md#crewlet-plane-import).
+> Everything below describes the intended contract; the parts that are live
+> today are the `confluence:` config block, the webhook endpoint and the MCP
+> surface.
+
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
@@ -304,7 +315,7 @@ crewlet confluence import <company.yaml> examples/nimbus-docs --update
 - Add `--dry-run` to preview, or `--create-space` to auto-create any missing target space (needs space-admin on the tenant).
 - Add `--prune` to garbage-collect orphans: after publishing, it deletes import-managed skill pages whose source `.md` is gone (e.g. a renamed or removed bundled skill). It only touches pages the importer itself published — never user-authored pages or knowledge docs — and pairs with `--dry-run` to preview. `crewlet run --import-confluence` exposes the same behaviour as `--prune-confluence`.
 
-The same publish can be bundled into engine start with `crewlet run --import-company <company.yaml> --import-confluence <path> --update-confluence`. That import runs **before** the Tier A bootstrap is loaded — it needs only `--import-company`, so it publishes even when `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to start serving afterward). For a publish-only workflow, prefer the standalone `crewlet confluence import`. See the [CLI reference](../reference/cli.md#crewlet-confluence-import).
+The same publish can be bundled into engine start with `crewlet run --import-company <company.yaml> --import-confluence <path> --update-confluence`. That import runs **before** the Tier A bootstrap is loaded — it needs only `--import-company`, so it publishes even when `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to start serving afterward). For a publish-only workflow, prefer the standalone `crewlet confluence import`.
 
 ---
 

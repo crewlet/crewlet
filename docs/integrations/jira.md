@@ -1,5 +1,14 @@
 # Jira Integration
 
+> **v1 status — webhook ingestion only.** This build verifies and stores
+> Jira deliveries on `POST /webhooks/jira` (and Forge invocations on
+> `POST /webhooks/forge`), and agents reach Jira through MCP. What it does
+> **not** yet have is the routing half: no parser turns a delivery into a
+> notification, so a Jira event does not wake a seat. The tracker that
+> routes end to end is [Plane](plane.md). Everything below describes the
+> intended contract; the parts that are live today are the `jira:` config
+> block, the webhook endpoints and the MCP surface.
+
 Crewlet integrates with Jira in two directions: agents control Jira via MCP tools, and Jira pushes events to agents via webhooks.
 
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-jira-pushes-to-agents)).

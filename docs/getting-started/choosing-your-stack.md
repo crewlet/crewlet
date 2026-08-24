@@ -249,7 +249,7 @@ There is no self-hosted variant:
    `mcp_servers`. Each agent is its own bot identity: own token, own DM,
    own @-mention.
 3. **Provision the apps** with
-   [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision),
+   [`crewlet slack provision`](../integrations/slack.md),
    which creates one app per agent through Slack's App Manifest APIs, points
    each app's event subscriptions at `POST /webhooks/slack/{handle}`, and
    writes the obtained secrets back under the exact `${VAR}` names the YAML

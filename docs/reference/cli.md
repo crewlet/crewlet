@@ -9,11 +9,10 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | Command | Description |
 |---------|-------------|
 | `crewlet run [config]` | Read Tier A bootstrap (default `./config.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
-| `crewlet run api <config>` | **Deprecated** alias for `crewlet run <config> --roles ingress` — an ingress-only node is the standalone API |
 | `crewlet validate <config.yaml>` | Validate a Tier A or Tier B YAML and print a summary (`--json` for machine-readable errors) |
-| `crewlet migrate [config]` | Apply pending database migrations (Tier A file, default `./config.yaml`). Run this once before starting any process — `--check` reports pending work without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) |
-| `crewlet budgets reset [config]` | Zero token usage — durable across restarts, so resetting is deliberate. `--scope` limits it to one scope |
+| `crewlet migrate [config]` | Apply pending schema migrations (Tier A file, default `./config.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) — nothing rather than zeros when no scope has spent anything |
+| `crewlet budgets reset [config]` | Zero token usage — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -29,20 +28,10 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
-| `crewlet llm list` | List the [`cli-agent`](../concepts/subscription-llm-backends.md) LLM providers in a company config and whether each looks logged in |
-| `crewlet llm login <provider>` | Authenticate a subscription CLI backend: adopt the machine's existing login (`--from-host`), broker the vendor's own login, mint a headless token, or drive a credential login |
-| `crewlet llm doctor [provider]` | Verify a CLI backend end to end — binary, version, login, token accounting, and a real smoke completion |
-| `crewlet llm status <provider>` | Ask the CLI who it is logged in as |
-| `crewlet llm logout <provider>` | Run the CLI's logout and delete its stored credentials |
-| `crewlet llm export <provider>` | Pack the provider's credential files into one portable blob (stdout, or the [secret store](../concepts/secret-store.md)) |
-| `crewlet llm import <provider>` | Restore a credential bundle onto this host |
-| `crewlet confluence import <company.yaml> [PATH]` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into Confluence (`trigger:` ⇒ skill; otherwise ⇒ doc in its parent-directory space) |
-| `crewlet confluence resync <company.yaml>` | Re-fetch the Tool Skills space and print loaded keys |
 | `crewlet plane import <company.yaml> <directory>` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) — `trigger:` ⇒ skill in the Tool Skills project, otherwise ⇒ doc in its parent-directory project. Idempotent by `external_id`; `-prune` removes orphaned skill pages. |
 | `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
-| `crewlet slack provision <company.yaml> --base-url URL` | Create/update one Slack app per Slack-enabled agent via Slack's App Manifest APIs, run the OAuth installs, write tokens into `.env` or the [secret store](../concepts/secret-store.md) |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). A re-run leaves a working token alone; `-rotate` mints fresh ones. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits, a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
 | `crewlet --version` | Show the installed version |
@@ -221,146 +210,6 @@ Re-encrypts every stored secret not already sealed under `secrets.active_key_id`
 
 ---
 
-## `crewlet llm`
-
-Operate the [subscription-authenticated CLI
-backends](../concepts/subscription-llm-backends.md) — `providers.llm`
-entries of type `cli-agent`, which drive a locally installed coding CLI
-(`claude`, `codex`, `gemini`, `opencode`, …) on the operator's
-subscription instead of a metered API key.
-
-Every subcommand reads the Tier B company YAML for the provider's `cli`
-block (`--company`, default `./company.yaml`). The ones that write or
-read a secret also take `--bootstrap` (default `./config.yaml`) or
-`--dsn`, exactly like [`crewlet secrets`](#crewlet-secrets).
-
-### `crewlet llm list`
-
-```
-crewlet llm list [--company PATH]
-```
-
-One row per `cli-agent` provider: key, CLI profile, model, and whether a
-login is reachable (credential files on disk, or a subscription token in
-the [secret store](../concepts/secret-store.md)).
-
-### `crewlet llm login`
-
-```
-crewlet llm login <provider> [--company PATH] [--bootstrap PATH] [--dsn DSN]
-                             [--capture-token] [--token-stdin]
-                             [--username USER] [--password-stdin]
-                             [--print-token]
-```
-
-With no flags, runs the vendor's own login command attached to your
-terminal, inside the provider's isolated credential directory — so the
-device-code prompt and browser hand-off behave exactly as they do by
-hand, and the result does not collide with your personal CLI login on
-the same machine.
-
-`--from-host` skips logging in at all when the machine already has a
-login: it copies the CLI's credential files out of your home directory
-into Crewlet's. Crewlet never reads `$HOME` by itself (each call gets
-its own), so an existing login is invisible until adopted this way.
-A copy, not a redirect — agents never write into your personal
-credential file. Both copies then share one refresh token, so prefer
-`--capture-token` where the vendor mints one. `--home PATH` reads from a
-different user's home.
-
-`--capture-token` runs the CLI's token-minting command (`claude
-setup-token`) and stores the result encrypted under the profile's token
-variable. **Prefer this where the vendor offers it:** no credential
-files to sync, no refresh-token rotation, and it survives an ephemeral
-container. `--token-stdin` stores a token you already have
-(`pass show … | crewlet llm login default --token-stdin`).
-`--print-token` writes a captured token to stdout instead of storing it,
-and refuses to run on a terminal.
-
-`--username` / `--password-stdin` drive a CLI's credential login where
-one genuinely exists (the `opencode` profile, a custom wrapper, a
-self-hosted gateway). The password is read from stdin or a declared
-environment variable, never from argv. Vendor subscription logins are
-browser OAuth with no password grant; for those the command explains
-that and points at the flows above rather than failing obscurely.
-
-### `crewlet llm doctor`
-
-```
-crewlet llm doctor [provider] [--company PATH] [--bootstrap PATH] [--dsn DSN]
-                              [--no-smoke]
-```
-
-The command to run before the first turn, and the one to run when a
-vendor ships a breaking CLI release. Checks the binary is on `PATH`,
-runs its version probe (printing it next to the version the built-in
-profile was written against), reports whether a login is present and
-whether token counts will be real or estimated — then runs **a real
-completion with a real tool**, because a profile can look correct and
-still not produce a parseable tool call. `--no-smoke` skips that last
-step so the check spends no subscription quota. Omit *provider* to check
-every `cli-agent` entry; exits non-zero if any has a problem.
-
-### `crewlet llm status` / `crewlet llm logout`
-
-```
-crewlet llm status <provider> [--company PATH]
-crewlet llm logout <provider> [--company PATH]
-```
-
-`status` forwards to the CLI's own status command. `logout` runs the
-CLI's logout **and** deletes the credential files — several CLIs clear
-only the active profile's entry, which would keep a revoked login
-seeding into every seat. A stored subscription token is a separate
-credential; remove it with `crewlet secrets unset`.
-
-### `crewlet llm export` / `crewlet llm import`
-
-```
-crewlet llm export <provider> [--secret-store] [--company PATH] [--bootstrap PATH]
-crewlet llm import <provider> [--secret-store] [--company PATH] [--bootstrap PATH]
-```
-
-Move one login between hosts. `export --secret-store` writes the
-credential files as one encrypted blob under
-`CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, which any engine sharing that
-database restores at boot when its own credential directory is empty —
-so a rebuilt container comes up already authenticated. Without the flag
-the blob goes to stdout (refused on a terminal).
-
-Only credential files travel; sessions, history and caches never enter a
-bundle. On the way back in the archive is validated — files only, only
-the profile's own credential paths, size-capped — because an archive is
-an execution surface if unpacked on trust.
-
----
-
-## `crewlet run api` (deprecated)
-
-```
-crewlet run api config.yaml [--host 0.0.0.0] [--port 8000] [--debug]
-```
-
-**Deprecated — use `crewlet run <config> --roles ingress` instead.** It is
-kept for one minor release and prints a warning to stderr; the flags map
-onto `--api-host` / `--api-port`.
-
-There is one node type now, and what it does is a config value. An
-ingress-only node *is* the standalone API: an engine that claims no
-seats, runs no singleton duties, launches no MCP children, and serves the
-routes. It used to be a second process shape with its own wiring — the
-app, the stream service and the config refresher built by hand in the
-same order as the engine's embedded path, but never provably the same
-way, so every fix to one had to be remembered for the other.
-
-The split topology is unchanged in shape: run one node with
-`--roles ingress` and `api.port` set, and the others with `api.port: 0`
-so nothing else binds it. The two halves talk over Pulsar. See
-[Running a Fleet](../guides/fleet.md) and
-[API Endpoints](api-endpoints.md).
-
----
-
 ## `crewlet validate`
 
 ```
@@ -399,78 +248,67 @@ Exit code is `0` when valid, `1` otherwise (in both output modes).
 
 ## `crewlet migrate`
 
-Applies pending database migrations. This is the recommended first step of
-any deployment — run it to completion **before** starting the engine or the
-API.
+Applies pending schema migrations. Every process that opens the store
+migrates it, so this is never *required* — what it is, is a way to do it
+without starting a node.
 
 ```bash
 crewlet migrate                          # uses ./config.yaml
 crewlet migrate /etc/crewlet/config.yaml
-crewlet migrate --check                  # report pending work, apply nothing
-crewlet migrate --company company.yaml   # supply the embedding width up front
+crewlet migrate -check                   # report pending work, apply nothing
 ```
 
 | Flag | Description |
 |------|-------------|
-| `config` | Tier A YAML (positional, default `./config.yaml`) |
-| `--company PATH` | Tier B YAML to read the embedding width from, when no revision is active yet |
-| `--check` | List pending migrations and exit `1` if any; applies nothing |
-| `--debug` | Verbose logging |
+| `config` | Tier A YAML (positional, or `-config`; default `./config.yaml`) |
+| `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
 
-The whole run is serialized behind a PostgreSQL advisory lock and each
-migration file applies inside its own transaction, so concurrent callers
-wait rather than race, and a file is either fully applied and recorded or
-neither.
+Rolling out N nodes at once means N processes opening the same database and
+racing to apply the same files. That race is safe — one transaction per
+file, with the version row written inside it, so a file is either fully
+applied and recorded or neither — but it is not what an operator wants to
+watch during a deploy, and a failure mid-rollout is a fleet in two schema
+states. Migrating once, deliberately, before anything starts makes the
+outcome one thing that either worked or did not.
 
-### The embedding width, and why a run can stop early
-
-The `agent_diary` and `episodes` tables carry `vector(N)` columns whose
-width is fixed at creation, and the migration sequence is forward-only —
-so the width can never be changed afterwards. It is read from the active
-company config's `providers.embeddings.dimensions`.
-
-On a database with **no active revision yet**, that width is unknown, and
-`crewlet migrate` stops before those two migrations rather than guessing.
-It tells you so and exits `0`; the remaining migrations apply on the next
-run, once a company config exists:
-
-```bash
-crewlet config import company.yaml   # or: crewlet migrate --company company.yaml
-crewlet migrate                      # applies the rest
-```
-
-This is deliberate. A guessed width that disagrees with your embedding
-model makes every diary and episode write fail permanently, and the
-failure is swallowed — the [agent-learning subsystem](../concepts/agent-learning.md)
-simply goes quiet with nothing in the logs to explain it.
-
-`crewlet run` still auto-migrates on boot, whatever roles the node has, so the
-single-host quickstart stays one command. That is now safe to do
-concurrently — the advisory lock serializes them, and neither can bake a
-guessed embedding width because the width is either read from the active
-revision or deferred. Running `crewlet migrate` first is still the
-recommendation for any multi-process deployment: it makes schema changes an
-explicit, observable step rather than a side effect of whichever process
-happened to start first.
+Applying is done by **opening the store**, not by a second code path: a
+migrator the engine does not use is one that can disagree with it about what
+"applied" means. `-check` is the exception and has to be — it reads
+`schema_migrations` and creates nothing, because a command that migrated
+while answering "what would you migrate" could never answer it. A database
+with no `schema_migrations` table has applied nothing, which is what a fresh
+install looks like rather than an error.
 
 ---
 
 ## `crewlet budgets`
 
-Token-budget usage is stored in PostgreSQL: it is shared by every process
-running the company (an in-memory counter would make an org cap of 500k
-into N x 500k) and it survives restarts.
+Token-budget usage is stored in the database: it is shared by every process
+running the company (an in-memory counter would make an org cap of 500k into
+N × 500k) and it survives restarts.
 
 ```bash
 crewlet budgets show                       # usage per scope
 crewlet budgets reset                      # zero every scope
-crewlet budgets reset --scope org          # just the org
-crewlet budgets reset --scope agent:<uuid> # just one seat
+crewlet budgets reset -scope org           # just the org
+crewlet budgets reset -scope agent:<id>    # just one seat
 ```
 
-The **caps** are not stored here — they come from the active company
-config (`token_budget` on the org, `role.token_budget` on a seat), so
-every process derives the same numbers without coordinating.
+The **caps** are not stored here — they come from the active company config
+(`token_budget` on the org, `role.token_budget` on a seat), so every process
+derives the same numbers without coordinating. Only the usage is shared.
+
+`show` prints nothing rather than zeros when no scope has spent anything: a
+company that has spent nothing and one whose counters were reset are the
+same row-less state, and printing `0` for scopes that do not exist would
+invent seats.
+
+`reset` is an operator action and never a schedule — a budget is a ceiling
+for the life of a deployment, and a counter that rolled itself over would
+silently re-arm a company somebody had stopped on purpose. It **names the
+scopes it cleared**, because a count alone leaves you unable to tell "reset
+the seat I meant" from "reset a scope that was already empty", and a scoped
+reset names only its own scope.
 
 ---
 
@@ -509,66 +347,6 @@ name: "Acme AI"
 ```
 
 See [Authoring with an AI assistant](../getting-started/ai-authoring.md).
-
----
-
-## `crewlet confluence import`
-
-```
-crewlet confluence import my_company.yaml [PATH]
-                                          [--space KEY] [--update] [--dry-run]
-                                          [--create-space] [--prune]
-```
-
-The positional argument is the **Tier B company YAML** — the Confluence credentials are read from its `confluence:` block (passing the Tier A bootstrap fails with `Company config file must have a 'name' field`). Walks every `.md` file under `PATH` recursively (defaults to `examples/`) and **routes each file by frontmatter**:
-
-- `trigger:` ⇒ a [Tool Skill](../concepts/tool-skills.md) page (YAML-macro encoding) in the Tool Skills space. Idempotent by the `crewlet-skill-key-<key>` label.
-- **otherwise** ⇒ a [knowledge doc](../concepts/knowledge-system.md#publishing-knowledge-docs) (clean prose, `crewlet-doc` label). Its **space is the file's parent directory name** and its **title is the first `# H1`** (frontmatter is optional, only for `title` / `parent` / `labels` overrides). Idempotent by `(space, title)`.
-
-A skill file with malformed frontmatter, or a doc with no determinable title (no `# H1` and no frontmatter `title:`), is skipped with a log line.
-
-| Flag | Description |
-|------|-------------|
-| `--space KEY` | Tool Skills space key for **skill** files. Default: `$CREWLET_TOOL_SKILLS_SPACE` or `TS`. Knowledge docs take their space from their parent directory. |
-| `--update` | Overwrite existing pages (Confluence retains the prior version in page history). |
-| `--dry-run` | Print what would be created/updated without making API calls. |
-| `--create-space` | Auto-create any target Confluence space that doesn't exist. Requires the bot account to have Confluence space-admin permission on the tenant. |
-| `--prune` | After publishing, delete import-managed skill pages in the skill space whose source `.md` is gone (e.g. a removed bundled skill). Only touches pages the importer published — identified by the `crewlet-skill` marker plus a per-key label no local file claims — never user-authored pages or knowledge docs. Combine with `--dry-run` to preview deletions. |
-
-> **Credentials.** The company YAML's `confluence:` block typically references environment variables (e.g. `token: "${CONFLUENCE_API_TOKEN}"`). The command resolves them from the process environment, and — like `crewlet run` — first loads a `.env` next to the company YAML (falling back to `./.env`), so credentials kept only in `.env` work too. Real environment variables take precedence over `.env`. Use `--update` to overwrite existing pages; **without it, pages that already exist are skipped** (only new ones are created).
-
-See [Tool Skills](../concepts/tool-skills.md) and [Knowledge System](../concepts/knowledge-system.md#publishing-knowledge-docs) for the file formats and operator workflow.
-
----
-
-## `crewlet slack provision`
-
-```
-crewlet slack provision my_company.yaml --base-url https://your-server.com
-                                        [--secret-store] [--env-file PATH]
-                                        [--bootstrap PATH] [--dsn DSN]
-                                        [--state-file PATH]
-                                        [--handles a,b] [--dry-run]
-                                        [--skip-install] [--reinstall]
-```
-
-Creates (or updates) **one Slack app per Slack-enabled agent seat** — a role whose `integrations.slack` uses whole-value `${VAR}` placeholders — via Slack's App Manifest APIs, then walks through the per-app OAuth install click and writes every obtained secret (`SLACK_BOT_TOKEN_*`, `SLACK_SIGNING_SECRET_*`) under the exact `${VAR}` names the YAML references — into `.env` by default, or into the encrypted [secret store](../concepts/secret-store.md) with `--secret-store`. Self-contained by default: company YAML + network access to slack.com, no engine/DB/queue; `--secret-store` additionally needs the database and the Tier A keyring.
-
-Requires an app **configuration token** (`SLACK_CONFIG_REFRESH_TOKEN`, generated once at [api.slack.com/apps](https://api.slack.com/apps) → *Your App Configuration Tokens*), taken from the env file or the environment; rotation is expiry-aware and the fresh pair (plus `SLACK_CONFIG_TOKEN_EXPIRES_AT`) is persisted back to the env file, which is authoritative from then on. The Crewlet API should already be serving at `--base-url` so Slack's events-URL verification and the OAuth landing page (`GET /webhooks/slack-oauth`) work — see [Slack integration](../integrations/slack.md#automated-setup-crewlet-slack-provision) for the full operator flow.
-
-| Flag | Description |
-|------|-------------|
-| `--base-url URL` | Public HTTPS base URL of the Crewlet API server (required). Becomes each app's events Request URL (`…/webhooks/slack/{handle}`) and OAuth redirect (`…/webhooks/slack-oauth`). |
-| `--secret-store` | Write the obtained secrets into the encrypted [`secret_values`](../concepts/secret-store.md) table instead of an env file. The engine resolves `${VAR}` from there directly, so the source-and-restart step disappears — including for the rotating config-token pair, whose persisted copy is the only valid one after each rotation. Needs a Tier A keyring + DSN (`--bootstrap` / `--dsn`). |
-| `--env-file PATH` | The env file secrets are read from **and** written to (default: the `.env` `crewlet run` loads — beside the company YAML if one is there, else `./.env`). For provisioning-managed keys, values in this file win over shell exports. Ignored with `--secret-store`. |
-| `--bootstrap PATH` / `--dsn DSN` | Tier A bootstrap YAML (default `./config.yaml`) supplying the DB DSN + keyring for `--secret-store`, or an explicit DSN override. |
-| `--state-file PATH` | Provisioning ledger mapping handles to app ids + app credentials + last-pushed manifest fingerprints (default: `slack-apps.json` next to the company YAML). A secrets file — keep it out of version control. |
-| `--handles a,b` | Comma-separated agent handles to provision (default: all Slack-enabled seats). |
-| `--dry-run` | Validate each manifest via `apps.manifest.validate` and print the plan; no app is created or updated. May refresh the stored config-token pair if missing or near expiry (validation needs a live token). |
-| `--skip-install` | Create/update apps and write signing secrets, but skip the interactive OAuth step (no bot tokens written) — for non-interactive runs, e.g. pushing a scope change to every app. |
-| `--reinstall` | Redo the OAuth install even for agents whose bot-token env var is already set (mints a fresh `xoxb-` token, e.g. after a revoke or scope change). |
-
-Re-runs are idempotent (ledger-keyed; byte-identical manifests are skipped as `unchanged`) and resumable — state and secrets are persisted after every step, so an interrupted run continues where it stopped. One agent's failure is reported as `FAILED`, the remaining agents still run, and the exit code is non-zero.
 
 ---
 
@@ -618,16 +396,6 @@ Checks a Mattermost install by exercising what actually breaks, in the order it 
 Each seat is checked with **its own** credential, because "the server accepts sockets" and "this bot wakes" are different questions and only the second delivers a message. A seat that fails early is not asked the later ones: one whose token did not resolve is never dialled, and one whose credential is refused is never asked about its channels — reporting those as separate failures would send an operator after faults nobody observed. The same rule governs the run as a whole: an unreachable server, an unreadable server config or a missing credential **stops** the checks and says so, because one failing line with nothing after it otherwise reads as "one thing is wrong" when it means "nothing else was even asked".
 
 Read-only. Exits non-zero when any check fails, so it drops into a deploy script.
-
----
-
-## `crewlet confluence resync`
-
-```
-crewlet confluence resync my_company.yaml [--space KEY]
-```
-
-Re-runs the boot-time full populate of the Tool Skills registry against a *temporary* registry and prints the loaded keys. Like `confluence import`, the positional argument is the Tier B company YAML (its `confluence:` block carries the credentials). Used to verify what the engine would see at next boot, or to diagnose drift after a long outage. **Skills-only** — knowledge docs are searched live and never loaded into a registry, so there is nothing to resync for them. **Does not** reach into a running engine — restart the engine (or wait for the next webhook) to apply changes there.
 
 ---
 
