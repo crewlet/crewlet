@@ -5,123 +5,141 @@ need to get a development environment running and land a change.
 
 ## Development setup
 
-Prerequisites: **Python 3.12+**, **[uv](https://docs.astral.sh/uv/)**, and
-**Docker** (for the local Pulsar + PostgreSQL stack).
+Prerequisites: **Go 1.27+** and **node** (any version with ES modules — the
+dashboard's suites use `node:assert` and nothing else). **Docker** only for
+the vendor loops below; the engine itself needs no services.
 
 ```bash
 git clone https://github.com/crewlet/crewlet.git
 cd crewlet
-uv sync --all-extras          # installs crewlet + all extras + dev tools
-
-# Infrastructure for integration-style runs (not needed for unit tests)
-cp .env.example .env
-docker compose up -d          # Pulsar + PostgreSQL (TimescaleDB + pgvector)
+go build ./...
 ```
+
+That is the whole setup. The engine embeds its own event stream (a NATS
+JetStream server) and its store is a local file it creates, so `crewlet run`
+in an empty directory is a working company — there is no broker to operate
+and nothing to point a DSN at.
+
+The Docker stack is for the **integrations**: Mattermost, Plane and GitLab,
+each behind its own compose profile with a bootstrap script that stands it up
+and provisions the example company's seats. See
+[docs/integrations/](docs/integrations/).
 
 ## Running tests and lint
 
 ```bash
-uv run pytest                          # full test suite (no external services needed)
-uv run ruff check src/ tests/          # lint
-uv run ruff format --check src/ tests/ # formatting
+go test ./...            # the full suite
+gofmt -l .               # formatting — prints the files that need it
+go vet ./...
+golangci-lint run        # what CI's lint job runs
 ```
 
-CI runs exactly these three commands — please make sure all of them pass
-before opening a pull request. `ruff check --fix` and `ruff format` fix most
-issues automatically.
+CI runs those, plus the suite again **under the race detector**
+(`go test ./... -race`). That is not optional here: the engine's concurrency
+model is real parallelism, and every "atomic because it is single-threaded"
+assumption is a data race until proven otherwise. Run it locally before
+pushing anything that touches the seat host, the queue or the turn engine.
 
-### Integration tests, and why a skip is not a pass
+### A skip is not a pass
 
-Some suites need real infrastructure and **skip silently without it** — a
-green run on a laptop with nothing up has simply not exercised them:
+Some suites need something the machine may not have and **skip silently
+without it** — a green run has simply not exercised them.
 
-```bash
-docker compose up -d                                    # Pulsar + PostgreSQL
-export CREWLET_TEST_DSN=postgresql://crewlet@localhost/crewlet
-uv run pytest -m integration -s                         # -s to see measurements
-```
-
-- **`CREWLET_TEST_DSN`** adds a third parameterisation to the storage
-  contract suites, running them against a real PostgreSQL alongside the
-  memory twin and the SQL fake. The fake can only confirm that SQL means
-  what its author thought; it cannot catch a statement PostgreSQL rejects.
-  **CI runs this one**: the `test` job brings up the same PostgreSQL image
-  the compose file uses, applies the migrations and sets the variable, so a
-  statement the server rejects fails the pull request rather than the
-  deployment. Setting it locally still matters — it is how you find that out
-  before pushing.
-
-  A new store belongs in that parameterisation from its first commit.
-  Asserting that a statement *contains* some text, or that a fake returns
-  what the test put in it, proves the author's intent and nothing about the
-  server: it cannot tell a correct statement from one PostgreSQL refuses to
-  parse, and it cannot test exclusivity at all — an at-most-once claim is a
-  property of the statement, not of the dict standing in for it.
-- **`node`** runs the dashboard's suites. `src/crewlet/static/dashboard/`
-  is a zero-build ES-module app — no package.json, no node_modules, no test
-  runner — so `tests/test_dashboard/js/*.test.mjs` execute under whatever
-  `node` is on PATH, driven by a pytest wrapper. Without one they skip, and
-  since the dashboard has almost no Python, that is a whole subsystem going
-  quiet. **CI runs these too**, and unlike the others here it *fails* rather
-  than skipping when node is missing: the `test` job installs one if the
-  runner image does not ship it, and the wrapper asserts it independently.
-  Any `node` recent enough for ES modules will do.
+- **`node`** runs the dashboard's suites. `static/dashboard/` is a zero-build
+  ES-module app — no package.json, no node_modules, no test runner — so
+  `tests/dashboard/js/*.test.mjs` execute under whatever `node` is on PATH,
+  driven from Go by `internal/api`. The dashboard has no Go code of its own,
+  so without node a whole subsystem goes quiet. **CI fails rather than
+  skipping** when node is missing: the job installs one if the runner image
+  does not ship it, and the test asserts the workflow asks for it.
 
   **Which dashboard the suites test is a parameter.** They resolve it once,
-  in `tests/test_dashboard/js/dashboardRoot.mjs`, from
-  `CREWLET_DASHBOARD_ROOT` — unset, it is the tree in `src/crewlet/static/`.
-  The Go rewrite's `go-ci` workflow points it at the copy embedded in the Go
-  binary and runs the same suite files, so one set of assertions certifies
-  both servers. Spell the path in a suite instead and it becomes a fact that
-  can only ever be corrected in most of the places it appears.
+  in `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —
+  unset, it is `static/dashboard`, the tree the binary embeds. Spell the path
+  in a suite instead and it becomes a fact that can only ever be corrected in
+  most of the places it appears.
 
-- **`tests/test_queue/test_broker_behavior.py`** measures the broker
-  behaviours the multi-node design rests on (redelivery timing, cursor
-  continuity across a subscription's change of owner, prefetch size) and
-  prints the numbers under `-s`. Run it after any Pulsar upgrade: it is
-  where a changed broker behaviour should fail, rather than in a
-  production handoff. **CI runs this one too**, along with the real-broker
-  half of `tests/test_fleet`: the `test` job starts a standalone broker with
-  the same image and command the compose file uses. A service container
-  cannot supply that command, so it is a plain `docker run` step.
+- **`CREWLET_STORE_DRIVER`** selects the store implementation. Two are
+  certified — `turso` (the default) and `sqlite` (mainline SQLite, pure Go) —
+  and **every statement in `internal/store` must parse on both**. CI runs the
+  store suites twice, once per driver, because Turso's dialect is currently
+  the narrower of the two and nothing else catches a statement that only one
+  of them accepts.
 
-  Between that and `CREWLET_TEST_DSN`, every backend the suite knows how to
-  exercise is real on every pull request. What that buys is the part of the
-  design that is a *claim about the broker* rather than about our code — a
-  close-driven handoff returning a seat's mail at `redeliveryCount` 0, the
-  cursor surviving a change of owner, a wedged consumer holding its prefetch
-  for the ack timeout. The memory twin models all three, and a twin agreeing
-  with itself proves nothing about Pulsar. Run it locally before a Pulsar
-  upgrade anyway, under `-s`, where the measurements print.
+  ```bash
+  CREWLET_STORE_DRIVER=sqlite go test ./internal/store/...
+  ```
 
-CI also builds the distributions on every pull request, because a packaging
-break is otherwise invisible until the tag that publishes it. If you touched
-`pyproject.toml`, `README.md`, or anything under `src/crewlet/` that is not a
-`.py` file, run that check too:
+- **`CREWLET_TEST_PULSAR_URL`** and **`CREWLET_TEST_PULSAR_ADMIN_URL`** run
+  the Pulsar conformance suite, which **skips entirely** without them — and
+  skipping is not passing, since that job is the only place the Pulsar
+  backend is certified at all. CI starts a standalone broker for it, with the
+  reapers that would otherwise eat an unowned seat's mailbox turned OFF:
+  certifying against a broker configured differently from a real deployment
+  certifies the wrong broker.
+
+  What this buys is the part of the design that is a *claim about the broker*
+  rather than about our code — a close-driven handoff returning a seat's mail
+  at redelivery count 0, a cursor surviving a change of owner, a wedged
+  consumer holding its prefetch for the ack timeout. The memory twin models
+  all three, and a twin agreeing with itself proves nothing.
+
+Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
+files sit beside what they cover, as Go expects.
+
+### The end-to-end gates
+
+`internal/e2e` runs a real engine, a real broker and the real API, then
+replays the frames its socket produced through the dashboard's own
+`store.js`. Both halves of the wire protocol are checked against each other
+there and nowhere else, so it needs node too:
 
 ```bash
-uv run python -m build && uv run twine check --strict dist/*
+go test ./internal/e2e/... -race -v
 ```
-
-Tests never call real LLM APIs — use the mock providers in the test suite.
-Test files mirror the source layout: `src/crewlet/queue/protocol.py` is
-covered by `tests/test_queue/test_protocol.py`.
 
 ## Project conventions
 
-- **Python 3.12+ syntax** — `X | Y` type unions, `match` where it helps.
-- **Pydantic v2** for data models; `typing.Protocol` for provider interfaces.
-- **asyncio everywhere** — any function that does I/O is `async def`.
-- **Structured logging** via `structlog` (`from crewlet._logging import get_logger`);
-  never stdlib `logging` directly. Event names are snake_case, dynamic data goes
-  in keyword arguments.
-- **Type annotations** on every public class and function.
-- **Docs are part of the change** — any change to public APIs, config formats,
-  CLI commands, or behavior must update the relevant page under `docs/`.
-- **Diagrams are Mermaid** — architecture, flow, sequence, and state diagrams go
-  in ` ```mermaid ` fences, not ASCII box art. GitHub renders them inline, and
-  the docs site renders them in the Crewlet design system. Directory trees and
-  file listings stay plain code fences — they are literal output, not diagrams.
+- **Go 1.27+**, and the module pins its own toolchain — `GOTOOLCHAIN=auto`
+  fetches it rather than failing on a mismatch.
+- **Interfaces are defined by the consumer**, in the package that calls them,
+  and kept to what that caller needs.
+- **`context.Context` first, always**, and threaded rather than stored. The
+  exception is a rollback, which takes `context.WithoutCancel`: the failure
+  it is undoing is often the cancellation itself, and a cleanup that inherits
+  a dead context does nothing at all.
+- **Structured logging** via `internal/logging` (`log := logging.Get("component")`);
+  never the bare `slog` default. Event names are snake_case, dynamic data
+  goes in key/value pairs, and a message is a name rather than a sentence.
+- **Errors say what to do about it.** An error a person will read names the
+  field, the file or the variable they have to change — not just what failed.
+- **Comments explain WHY**, and especially why an obvious alternative is
+  wrong. The diff shows what the code does.
+- **Docs are part of the change** — any change to public APIs, config
+  formats, CLI commands, or behavior must update the relevant page under
+  `docs/`.
+- **Diagrams are Mermaid** — architecture, flow, sequence, and state diagrams
+  go in ` ```mermaid ` fences, not ASCII box art. GitHub renders them inline,
+  and the docs site renders them in the Crewlet design system. Directory
+  trees and file listings stay plain code fences — they are literal output,
+  not diagrams.
+
+## A build that compiles is not a backend that works
+
+Go's compiler proves the types line up. It cannot prove a backend is wired,
+and this codebase has two shapes where it is not:
+
+- **A config value with no implementation.** `providers.sandbox.type: e2b`
+  parses, validates, appears in the generated schema — and the engine refuses
+  it at construction, because that backend is not built. That refusal is the
+  right behaviour; what would be wrong is accepting it and failing later.
+- **A knob nothing reads.** `provisioning.group_webhook` was validated,
+  documented and consulted by no code at all, so an operator setting it got
+  the default and no error. A config field ships with the code that reads it,
+  or it does not ship.
+
+The test for both is the same: a field added to a config struct needs a test
+that a value in it changes what the engine *does*, not merely that it parses.
 
 ## Dependency updates
 
@@ -131,21 +149,14 @@ pull request when any of them has a newer release:
 | Surface | Ecosystem | What it covers |
 |---|---|---|
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
-| `pyproject.toml` | `pip` | the package's own requirements |
-| `go/go.mod` | `gomod` | the engine's own Go dependencies |
+| `go.mod` | `gomod` | the engine's own Go dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, and nothing else. Each pull request is
-reviewed on its own merits, and CI runs on it — for the actions, image and
-Compose surfaces that is most of the review. Three things are worth knowing:
+reviewed on its own merits, and CI runs on it. Three things are worth knowing:
 
-- **Python pull requests are rare.** `pyproject.toml` declares open floors
-  (`pydantic>=2.0`), which already admit new releases, so a routine upstream
-  version needs no change here. A *capped* requirement is what produces one:
-  `mcp>=2,<3` is capped so that the next major arrives as a pull request to
-  migrate deliberately, with CI already run against it.
 - **Some Compose images are pinned on purpose**, with the reason in a comment
   beside each — `plane-db` holds postgres on its major to match Plane's own
   compose file and to keep an existing volume readable. Closing that pull
@@ -154,30 +165,17 @@ Compose surfaces that is most of the review. Three things are worth knowing:
 - **`docker` and `docker-compose` are two ecosystems, not one.** The first
   reads `Dockerfile`s and the second reads Compose files; neither sees the
   other's manifests, so a repository with both needs both entries.
+- **An action pinned to a non-version ref is invisible.** A branch pointer
+  (`@release/v1`) or `@main` yields no update pull requests at all, so pin
+  actions to a version tag or a full SHA. That matters most for the one
+  handed an OIDC token: pinned, its updates arrive as reviewable pull
+  requests instead of moving under the workflow unannounced.
 
-Adding a new dependency surface — the first `Dockerfile`, a `package.json` —
-means adding its `updates:` entry in the same change. Nothing reports the
-omission: a manifest Dependabot has not been told about simply never produces
-a pull request, which is indistinguishable from one that has nothing to
-update.
-
-### An extra carries its own surface's requirements
-
-`crewlet[all]` is the union of the runtime extras, and `tests/test_packaging`
-asserts that. What the union *cannot* tell you is whether each extra carries
-what its own surface needs, because a package can reach `all` through some
-other extra while the one that actually needs it still lacks it — and the
-union check passes either way.
-
-That is not hypothetical. `crewlet[api]` served a dashboard whose entire data
-plane is a WebSocket while pinning no WebSocket implementation: `websockets`
-reached `all` through the `mattermost` extra, so nothing failed. Bare
-`uvicorn` answered the upgrade with a 404, the dashboard fell back to polling
-`/stream/snapshot` every five seconds, and every `crewlet[api]` install ran
-in degraded mode indefinitely with nothing on screen to say so.
-
-So when an extra's surface needs a package to work at all, name it in that
-extra — and pin the requirement with a test, since the union check will not.
+Adding a new dependency surface — a `package.json`, a second module — means
+adding its `updates:` entry in the same change. Nothing reports the omission:
+a manifest Dependabot has not been told about simply never produces a pull
+request, which is indistinguishable from one that has nothing to update. The
+Go module itself went the length of the rewrite that way.
 
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
@@ -185,9 +183,12 @@ neither the weekly schedule nor Dependabot's default release cooldown.
 
 ## Releasing
 
-Releases are cut by pushing a `v*` tag; GitHub Actions builds, verifies, and
-publishes to PyPI over OpenID Connect. The full process — including the
-one-time trusted-publisher setup and how to rehearse on TestPyPI — is in
+Releases are cut by pushing a `v*` tag; GitHub Actions builds every target
+with [goreleaser](https://goreleaser.com), signs the checksums with keyless
+Sigstore, publishes the container image to GHCR and creates the GitHub
+Release. **The tag is the version** — nothing in the tree records one, so
+there is nothing for a tag to disagree with. The full process, including how
+to rehearse the whole pipeline locally without touching GitHub, is in
 [RELEASING.md](RELEASING.md).
 
 ## Documentation
@@ -223,21 +224,22 @@ Required, and drawn from this set:
 | `refactor` | a change that neither fixes a bug nor adds a capability |
 | `perf` | a change made for speed, memory, or token cost |
 | `test` | tests only |
-| `ci` | `.github/workflows/*`, `.github/dependabot.yml`, release tooling |
-| `build` | `pyproject.toml`, packaging metadata, the Compose stack |
+| `ci` | `.github/workflows/*`, `.github/dependabot.yml` |
+| `build` | `go.mod`, the `Dockerfile`, `.goreleaser.yaml`, the Compose stack |
 | `chore` | anything else with no user-visible effect (dependency bumps, tidying) |
 | `revert` | reverting an earlier commit |
 
 ### Scope
 
 The scope names the **component** the change lands in. For code that is the
-package directory under `src/crewlet/` — `agent`, `sandbox`, `plane`, `api`,
-`db`, `secrets`, `knowledge`, `notifications`, `schedule`, `tools`, `mcp`, and
-so on — so a reader can go from a subject line to a directory without guessing.
-Use `dashboard` for `src/crewlet/static/dashboard/`, which is the component
-people call it. Outside the package, scope by area: `docs`, `deps`,
-`packaging`, `examples`, `schema`, `scripts` — and for CI, the workflow's own
-name (`ci(release)`, `ci(docs-publish)`).
+package directory under `internal/` — `agent`, `api`, `coord`, `engine`,
+`gitlab`, `knowledge`, `mattermost`, `mcp`, `notify`, `plane`, `queue`,
+`sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
+reader can go from a subject line to a directory without guessing. Two scopes
+name a component by the name people use rather than by its import path:
+`dashboard` for `static/dashboard/`, and `cli` for `cmd/crewlet/`. Outside
+`internal/`, scope by area: `docs`, `deps`, `examples`, `schema`, `scripts` —
+and for CI, the workflow's own name (`ci(release)`, `ci(docs-publish)`).
 
 Drop the scope only when a change genuinely spans the whole repository
 (`chore: normalise line endings`). The type is never optional.
@@ -267,8 +269,9 @@ feat(sandbox): reuse a paused box when a clarification is answered
 fix(plane): relax the page-search query when the server returns no hits
 perf(providers): cache the tool-definition prefix on Anthropic calls
 docs(secret-store): document that the keyring is required
+build: stamp the version into the binary at link time
 ci(docs-publish): rebuild the docs site when a release ships
-chore(deps): bump ruff to 0.14
+chore(deps): bump golangci-lint to 2.6
 ```
 
 Nothing enforces any of this — there is no commit-message hook and CI does not

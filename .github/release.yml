@@ -1,10 +1,11 @@
 # Shapes the release notes GitHub generates for a tag.
 #
-# `.github/workflows/release.yml` runs `gh release create --generate-notes`, so
-# the body of every GitHub Release is the list of pull requests merged since the
-# previous tag. Without this file that list is flat and — because Dependabot
-# opens most of the pull requests in a quiet week — dominated by dependency
-# bumps. The categories below sort it into something a reader can skim.
+# goreleaser asks GitHub for the notes (`changelog.use: github-native`), so the
+# body of every GitHub Release is the list of pull requests merged since the
+# previous tag rather than a list of commit subjects. Without this file that
+# list is flat and — because Dependabot opens most of the pull requests in a
+# quiet week — dominated by dependency bumps. The categories below sort it into
+# something a reader can skim.
 #
 # Labels are matched against the pull request's labels, and each pull request
 # lands in the first category that matches it. `dependencies` is applied by
