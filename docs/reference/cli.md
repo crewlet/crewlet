@@ -473,13 +473,21 @@ Prints the JSON Schema for a config tier — `company` (Tier B, the
 default) or `bootstrap` (Tier A) — to stdout, or to `PATH` with
 `-o/--output`.
 
-The schema is **generated from the Pydantic models**, so it cannot drift
-from what the loader accepts, and because every config model forbids
-unknown keys it carries `additionalProperties: false` throughout — a
-mistyped field is flagged rather than silently ignored.
+The schema is **generated from the config types the loader itself uses**,
+so it cannot drift from what the engine accepts, and because every config
+type forbids unknown keys it carries `additionalProperties: false`
+throughout — a mistyped field is flagged rather than silently ignored.
 
-Both documents are also checked into [`schema/`](../../schema/); a test
-regenerates and compares them so a stale copy fails CI.
+It is deliberately a **subset** of the validator, never a superset. A
+schema can express structure — key spaces, types, closed sets, ranges,
+patterns — and not the cross-field rules the validator enforces. The
+invariant is one-directional and tested: everything the schema rejects,
+the validator also rejects. An editor that red-underlines a config the
+engine would happily run teaches authors to ignore it.
+
+Both documents are checked into [`schema/`](../../schema/); a test
+regenerates and compares them, so a config field added without a schema
+entry fails the build rather than leaving a stale file nobody opens.
 
 Point your editor at it for completion, inline field docs, and typo
 squiggles:

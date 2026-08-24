@@ -1,0 +1,2266 @@
+{
+  "$defs": {
+    "CLIAgent": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "description": "Which coding CLI to drive.",
+          "type": "string"
+        },
+        "auth": {
+          "$ref": "#/$defs/CLIAgentAuth"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra environment for the CLI child process.",
+          "type": "object"
+        },
+        "max_concurrent": {
+          "description": "Concurrent CLI processes; each costs 200-400 MB.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "overrides": {
+          "additionalProperties": {},
+          "description": "Field-wise overrides of the built-in CLI profile.",
+          "type": "object"
+        },
+        "state_dir": {
+          "description": "Credential + per-seat home directory. Entries sharing one share a login.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Wall-clock cap on one CLI invocation.",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "CLIAgentAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "credential_bundle": {
+          "description": "${VAR} holding a bundle exported by crewlet llm export.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "subscription (default), api-key, or inherit-env.",
+          "enum": [
+            "subscription",
+            "api-key",
+            "inherit-env"
+          ],
+          "type": "string"
+        },
+        "token": {
+          "description": "${VAR} holding a long-lived subscription token.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Confluence": {
+      "additionalProperties": false,
+      "properties": {
+        "cloud_id": {
+          "description": "Atlassian Cloud id. Give this or url, not both.",
+          "type": "string"
+        },
+        "email": {
+          "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
+          "type": "string"
+        },
+        "site_url": {
+          "description": "Human-readable base for shareable links; needed with cloud_id.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Admin API token or PAT; ${VAR} supported.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance URL. Give this or cloud_id, not both.",
+          "type": "string"
+        },
+        "webhook_secret": {
+          "description": "HMAC secret for Data Center webhooks.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "type": "object"
+    },
+    "ConversationSession": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Record and replay per-conversation history (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "injected_max_chars": {
+          "description": "Byte budget for the injected block.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "injected_max_entries": {
+          "description": "Entries injected into the prompt, newest N.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_entries": {
+          "description": "Entries kept per conversation.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retention_days": {
+          "description": "How long a conversation is remembered.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Counterparty": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_tokens": {
+          "description": "Soft token cap on the profiler call.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "Observe counterparties (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CredentialCooldowns": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_seconds": {
+          "description": "Cooldown after an auth error (60..86400s).",
+          "maximum": 86400,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit_seconds": {
+          "description": "Cooldown after a rate-limit error (60..86400s).",
+          "maximum": 86400,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "EmbeddingProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "API key or ${VAR} reference.",
+          "type": "string"
+        },
+        "base_url": {
+          "description": "Endpoint for an openai-compatible embedding service.",
+          "type": "string"
+        },
+        "dimensions": {
+          "description": "Vector width; must match the model's output size.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Embedding model id.",
+          "type": "string"
+        },
+        "type": {
+          "description": "openai (default) or openai-compatible.",
+          "enum": [
+            "openai",
+            "openai-compatible"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "EpisodeLifecycle": {
+      "additionalProperties": false,
+      "properties": {
+        "compacted_max_age_days": {
+          "description": "Age at which compacted summaries are dropped; 0 = never.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compaction_batch_size": {
+          "description": "Raw episodes pulled into one pass.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compaction_budget_tokens": {
+          "description": "Soft token cap on summarising one cluster.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compaction_jaccard_threshold": {
+          "description": "Similarity that pools two episodes into one cluster.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "compaction_min_age_days": {
+          "description": "Only compact rows older than this.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compaction_min_cluster_size": {
+          "description": "Smallest cluster worth compacting.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "consolidated_grace_days": {
+          "description": "Audit grace before a consolidated raw row is dropped.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exemplar_count": {
+          "description": "Originals kept raw after a cluster is compacted.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_raw_episodes_per_agent": {
+          "description": "Raw episodes per seat that trigger a lifecycle pass.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "non_terminal_max_age_days": {
+          "description": "Age at which mid-state episodes are dropped.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "write_check_every_n": {
+          "description": "Writes between real threshold checks.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Episodic": {
+      "additionalProperties": false,
+      "properties": {
+        "retrieval_limit": {
+          "description": "Episode-query hits returned (1..20).",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "GitHub": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn inbound GitHub webhooks on.",
+          "type": "boolean"
+        },
+        "webhook_secret": {
+          "description": "HMAC secret for inbound deliveries.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GitLab": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "type": "boolean"
+        },
+        "provisioning": {
+          "$ref": "#/$defs/GitLabProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "signing_secret": {
+          "description": "Standard-Webhooks signing token; required when enabled.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Read PAT for participants-based routing; empty degrades routing.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance base URL, e.g. https://gitlab.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GitLabProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "access_level": {
+          "description": "Default membership level.",
+          "enum": [
+            "developer",
+            "maintainer"
+          ],
+          "type": "string"
+        },
+        "access_levels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Per-handle membership overrides.",
+          "type": "object"
+        },
+        "group": {
+          "description": "Top-level group the service accounts join.",
+          "type": "string"
+        },
+        "group_webhook": {
+          "description": "auto (one group hook if the plan allows), true, or false.",
+          "enum": [
+            "auto",
+            "true",
+            "false"
+          ],
+          "type": "string"
+        },
+        "projects": {
+          "description": "Extra projects to join and hook.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "token_scopes": {
+          "description": "Scopes minted on each service-account token.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "username_prefix": {
+          "description": "Prefix on each service-account username.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HumanContact": {
+      "additionalProperties": false,
+      "properties": {
+        "atlassian_account_id": {
+          "type": "string"
+        },
+        "github_login": {
+          "type": "string"
+        },
+        "gitlab_username": {
+          "type": "string"
+        },
+        "mattermost_user_id": {
+          "type": "string"
+        },
+        "plane_user_id": {
+          "type": "string"
+        },
+        "slack_user_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Integrations": {
+      "additionalProperties": false,
+      "properties": {
+        "confluence": {
+          "$ref": "#/$defs/Confluence",
+          "description": "Confluence admin account. Absent = disabled."
+        },
+        "forge_app_id": {
+          "description": "Forge app id whose invocation tokens the webhook endpoint accepts.",
+          "type": "string"
+        },
+        "github": {
+          "$ref": "#/$defs/GitHub",
+          "description": "GitHub webhook config. Absent = disabled."
+        },
+        "gitlab": {
+          "$ref": "#/$defs/GitLab",
+          "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
+        },
+        "jira": {
+          "$ref": "#/$defs/Jira",
+          "description": "Jira admin account and webhook secret. Absent = disabled."
+        },
+        "mattermost": {
+          "$ref": "#/$defs/Mattermost",
+          "description": "Mattermost instance and team. Absent = disabled."
+        },
+        "plane": {
+          "$ref": "#/$defs/Plane",
+          "description": "Plane instance, workspace and webhook secret. Absent = disabled."
+        },
+        "slack": {
+          "$ref": "#/$defs/Slack",
+          "description": "Slack transport marker and org-wide behaviour. Absent = disabled."
+        }
+      },
+      "type": "object"
+    },
+    "Jira": {
+      "additionalProperties": false,
+      "properties": {
+        "cloud_id": {
+          "description": "Atlassian Cloud id. Give this or url, not both.",
+          "type": "string"
+        },
+        "email": {
+          "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Admin API token or PAT; ${VAR} supported.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance URL. Give this or cloud_id, not both.",
+          "type": "string"
+        },
+        "webhook_secret": {
+          "description": "HMAC secret for inbound webhooks.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "type": "object"
+    },
+    "Knowledge": {
+      "additionalProperties": false,
+      "properties": {
+        "confluence_spaces": {
+          "description": "Org-wide Confluence read scope. Empty = unscoped.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plane_projects": {
+          "description": "Org-wide Plane read scope. Empty = unscoped. Requires integrations.plane.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "LLMProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "api_keys": {
+          "description": "API keys, ${VAR} supported. Several rotate on rate-limit/auth errors.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "base_url": {
+          "description": "Endpoint for openai-compatible providers.",
+          "type": "string"
+        },
+        "cli": {
+          "$ref": "#/$defs/CLIAgent",
+          "description": "The cli-agent block. Required for type cli-agent, refused otherwise."
+        },
+        "cooldowns": {
+          "$ref": "#/$defs/CredentialCooldowns"
+        },
+        "model": {
+          "description": "Model id this provider serves.",
+          "type": "string"
+        },
+        "reasoning": {
+          "description": "Enable extended thinking (openai and anthropic only).",
+          "type": "boolean"
+        },
+        "reasoning_budget_tokens": {
+          "description": "Anthropic thinking budget in tokens when reasoning is on.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reasoning_effort": {
+          "description": "OpenAI reasoning effort when reasoning is on.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Per-request HTTP timeout in seconds.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "type": {
+          "description": "Which implementation to construct.",
+          "enum": [
+            "openai",
+            "anthropic",
+            "openai-compatible",
+            "cli-agent"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Learning": {
+      "additionalProperties": false,
+      "properties": {
+        "counterparty": {
+          "$ref": "#/$defs/Counterparty"
+        },
+        "enabled": {
+          "description": "Master switch for agent learning (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "episode_lifecycle": {
+          "$ref": "#/$defs/EpisodeLifecycle"
+        },
+        "episodic": {
+          "$ref": "#/$defs/Episodic"
+        },
+        "personal_memory": {
+          "$ref": "#/$defs/PersonalMemory"
+        },
+        "reflect": {
+          "$ref": "#/$defs/Reflect"
+        },
+        "skill_curator": {
+          "$ref": "#/$defs/SkillCurator"
+        },
+        "skill_promotion": {
+          "$ref": "#/$defs/SkillPromotion"
+        },
+        "skill_refinement": {
+          "$ref": "#/$defs/SkillRefinement"
+        },
+        "skill_synthesis": {
+          "$ref": "#/$defs/SkillSynthesis"
+        }
+      },
+      "type": "object"
+    },
+    "LocalSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "containment": {
+          "description": "direct (state isolation only) or container (host isolation).",
+          "enum": [
+            "direct",
+            "container"
+          ],
+          "type": "string"
+        },
+        "image": {
+          "description": "Container image with the coding-agent CLI installed.",
+          "type": "string"
+        },
+        "network": {
+          "description": "Container network; setting it to none also cuts off the coding agent's LLM.",
+          "type": "string"
+        },
+        "run_args": {
+          "description": "Extra container run arguments. This is where a local box is sized.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "runtime": {
+          "description": "Container CLI to drive.",
+          "enum": [
+            "auto",
+            "docker",
+            "podman"
+          ],
+          "type": "string"
+        },
+        "state_dir": {
+          "description": "Parent directory for box directories.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MCPServer": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "description": "Arguments for the executable (stdio).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Executable to launch (stdio).",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment for the subprocess (stdio); ${VAR} supported.",
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Headers sent with each request (http); ${VAR} supported.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Server name; the key seats declare credentials under.",
+          "type": "string"
+        },
+        "request_timeout_seconds": {
+          "description": "Cap on one tool call.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "shared": {
+          "description": "One shared instance (default), or false for one per seat.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "startup_timeout_seconds": {
+          "description": "Connect, handshake and first tool listing budget.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "tool_annotations": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "destructive": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "destructiveHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotent": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotentHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "openWorldHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "open_world": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "readOnlyHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "read_only": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "description": "Per-tool behavioural-hint overrides, keyed by bare tool name.",
+          "type": "object"
+        },
+        "tool_prefix": {
+          "description": "Prefix applied to this server's tool names.",
+          "type": "string"
+        },
+        "transport": {
+          "description": "stdio (default) or http.",
+          "enum": [
+            "stdio",
+            "http"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "description": "Endpoint of the remote server (http).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Mattermost": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "type": "boolean"
+        },
+        "provisioning": {
+          "$ref": "#/$defs/MattermostProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "team": {
+          "description": "Team slug the agent bots belong to.",
+          "type": "string"
+        },
+        "typing_status": {
+          "description": "When to show the typing indicator (default off).",
+          "enum": [
+            "addressed",
+            "always",
+            "off"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance base URL, e.g. https://chat.example.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MattermostProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "description": "Channels every bot joins.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "display_name_suffix": {
+          "description": "Suffix on each bot display name, e.g. \" (AI)\".",
+          "type": "string"
+        },
+        "username_prefix": {
+          "description": "Prefix on each bot username, e.g. agent-.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PersonalMemory": {
+      "additionalProperties": false,
+      "properties": {
+        "max_refreshes_per_turn": {
+          "description": "Distinct memory refreshes one turn may make.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Plane": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "type": "boolean"
+        },
+        "provisioning": {
+          "$ref": "#/$defs/PlaneProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "skills_project": {
+          "description": "Project holding tool-skill pages; excluded from routing and knowledge search. Default TS.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Engine read credential; empty degrades routing.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance base URL.",
+          "type": "string"
+        },
+        "webhook_secret": {
+          "description": "HMAC key; generated by Plane and captured by the provisioner.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace slug; every resource path is workspace-scoped.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PlaneProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "projects": {
+          "description": "Project identifiers the accounts join.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "role": {
+          "description": "Default workspace role for agent accounts.",
+          "enum": [
+            "admin",
+            "member",
+            "guest"
+          ],
+          "type": "string"
+        },
+        "roles": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Per-handle workspace-role overrides.",
+          "type": "object"
+        },
+        "token_expiry_days": {
+          "description": "Expiry on each minted token; 0 = never expires.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "username_prefix": {
+          "description": "Prefix on each service-account username.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ProjectRef": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "description": "Project key or identifier.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Providers": {
+      "additionalProperties": false,
+      "properties": {
+        "embeddings": {
+          "$ref": "#/$defs/EmbeddingProvider",
+          "description": "Embedding provider for diary and episode recall."
+        },
+        "llm": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LLMProvider"
+          },
+          "description": "Named LLM providers; seats select one by key.",
+          "type": "object"
+        },
+        "llm_order": {
+          "description": "Provider precedence; normally derived from the order they are written in.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxProvider",
+          "description": "Code sandbox backend. Absent = no seat runs code."
+        }
+      },
+      "type": "object"
+    },
+    "Reflect": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_tokens": {
+          "description": "Soft token cap on the reflection call; 0 = uncapped.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "Run reflection after each turn (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "persist_decider": {
+          "description": "Run the persist decision after each turn (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "summarize_episodes": {
+          "description": "Summarise episode hits through the auxiliary model (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "summarize_max_tokens": {
+          "description": "Soft cap on a per-hit summary.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Role": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "description": "Human seats: free-text availability shown in rosters.",
+          "type": "string"
+        },
+        "backstory": {
+          "description": "Who this seat is; reaches its prompt.",
+          "type": "string"
+        },
+        "behavioral_guidelines": {
+          "description": "How this seat should work; reaches its prompt.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "contact": {
+          "$ref": "#/$defs/HumanContact",
+          "description": "Human seats: external account ids per surface."
+        },
+        "email": {
+          "description": "Seat email; plus-addressing derives from the handle.",
+          "type": "string"
+        },
+        "goal": {
+          "description": "What this seat is for; reaches its prompt.",
+          "type": "string"
+        },
+        "handle": {
+          "description": "Canonical slug. Effectively permanent — it derives the seat's durable id.",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "type": "string"
+        },
+        "integrations": {
+          "$ref": "#/$defs/RoleIntegrations"
+        },
+        "kind": {
+          "description": "agent (default) or human.",
+          "enum": [
+            "agent",
+            "human"
+          ],
+          "type": "string"
+        },
+        "learning_enabled": {
+          "description": "Override company learning for this seat.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "llm": {
+          "description": "Provider key, chain, or per-phase mapping.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "auxiliary": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "default": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "execute": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "judge": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "plan": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "review": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "sandbox": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "subagent": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "llm_auxiliary": {
+          "description": "Cheap model for reflection and summaries.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_execute": {
+          "description": "Provider chain for Execute.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_judge": {
+          "description": "Cheap model for the round-cap extension judge.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_plan": {
+          "description": "Provider chain for Plan; wins over llm.plan.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_review": {
+          "description": "Provider chain for Review.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_sandbox": {
+          "description": "Model the sandboxed coding agent runs on.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_subagent": {
+          "description": "Provider chain for spawned sub-agents.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "manages": {
+          "description": "Seats or units this seat manages; a unit expands to its seats.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mcp_env": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Per-seat MCP credentials: env vars (stdio) or headers (http).",
+          "type": "object"
+        },
+        "name": {
+          "description": "Unique seat name; also the source of the auto-derived handle.",
+          "type": "string"
+        },
+        "placement": {
+          "$ref": "#/$defs/RolePlacement",
+          "description": "Which nodes may run this seat. Absent = any node that runs seats."
+        },
+        "responsibilities": {
+          "description": "What this seat owns.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/RoleSandbox",
+          "description": "Per-seat code sandbox gate. Absent = never offered."
+        },
+        "schedules": {
+          "description": "Recurring work fired into this seat's inbox.",
+          "items": {
+            "$ref": "#/$defs/Schedule"
+          },
+          "type": "array"
+        },
+        "token_budget": {
+          "description": "Per-seat token ceiling; 0 = unlimited.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unit": {
+          "description": "Home unit for a root-level seat; the seat is moved into it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "RoleIntegrations": {
+      "additionalProperties": false,
+      "properties": {
+        "confluence": {
+          "$ref": "#/$defs/SpaceRef",
+          "description": "The Confluence space this seat owns."
+        },
+        "jira": {
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Jira project this seat owns for webhook routing."
+        },
+        "mattermost": {
+          "$ref": "#/$defs/RoleMattermost",
+          "description": "This seat's Mattermost bot: one token covers everything."
+        },
+        "plane": {
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Plane project this seat owns."
+        },
+        "slack": {
+          "$ref": "#/$defs/RoleSlack",
+          "description": "This seat's own Slack app: bot token, signing secret, default channel."
+        }
+      },
+      "type": "object"
+    },
+    "RoleMattermost": {
+      "additionalProperties": false,
+      "properties": {
+        "bot_token": {
+          "description": "Bot personal access token; one credential covers everything.",
+          "type": "string"
+        },
+        "channel": {
+          "description": "Default channel name for this seat.",
+          "type": "string"
+        },
+        "username": {
+          "description": "Bot username; defaults to the seat handle.",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RolePlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Node labels that must all match.",
+          "type": "object"
+        },
+        "node": {
+          "description": "Exact node id to pin this seat to.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RoleSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "coding_agent": {
+          "description": "Override the provider default for this seat.",
+          "enum": [
+            "claude-code",
+            "opencode"
+          ],
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Offer this seat the sandbox tool.",
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Env for this seat's sandbox run; declare external tokens here.",
+          "type": "object"
+        },
+        "mcp": {
+          "$ref": "#/$defs/RoleSandboxMCP"
+        },
+        "pause_ttl_seconds": {
+          "description": "Paused-box TTL. Unset (or negative) = provider default; 0 = never pause.",
+          "type": "number"
+        },
+        "setup": {
+          "description": "Per-seat provisioning steps, applied after the engine-wide ones.",
+          "items": {
+            "$ref": "#/$defs/SandboxSetupStep"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RoleSandboxMCP": {
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "description": "MCP server names the coding agent may use.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RoleSlack": {
+      "additionalProperties": false,
+      "properties": {
+        "bot_token": {
+          "description": "Bot token for outbound Web API calls.",
+          "type": "string"
+        },
+        "channel": {
+          "description": "Default channel id for this seat.",
+          "type": "string"
+        },
+        "signing_secret": {
+          "description": "Verifies inbound webhooks for this seat's app.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SandboxProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Remote sandbox API key; ${VAR} supported.",
+          "type": "string"
+        },
+        "default_coding_agent": {
+          "description": "Coding agent for seats that name none.",
+          "enum": [
+            "claude-code",
+            "opencode"
+          ],
+          "type": "string"
+        },
+        "default_pause_ttl_seconds": {
+          "description": "Paused-box TTL before reap and re-seed. 0 = never pause.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "default_timeout_seconds": {
+          "description": "Box TTL/keepalive. Not a run cap — the orphan-reclaim grace.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "domain": {
+          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
+          "type": "string"
+        },
+        "local": {
+          "$ref": "#/$defs/LocalSandbox",
+          "description": "The local backend's block. Required for type local, refused otherwise."
+        },
+        "setup": {
+          "description": "Provisioning steps applied to every box before per-seat extras.",
+          "items": {
+            "$ref": "#/$defs/SandboxSetupStep"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
+          "type": "string"
+        },
+        "type": {
+          "description": "e2b (default), local, fake, or none.",
+          "enum": [
+            "e2b",
+            "local",
+            "fake",
+            "none"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SandboxSetupStep": {
+      "additionalProperties": false,
+      "properties": {
+        "brief": {
+          "description": "What this step made true about the box, told to the coding agent.",
+          "type": "string"
+        },
+        "commands": {
+          "description": "Shell commands run in order; a non-zero exit fails the box.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Env merged into the run; resolved once at launch, not at load.",
+          "type": "object"
+        },
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Files written into the box before commands run.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Short identifier used in logs and failure messages.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Per-command wall-clock cap for this step.",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Schedule": {
+      "additionalProperties": false,
+      "properties": {
+        "catchup": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cron": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "type": "integer"
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Scheduling": {
+      "additionalProperties": false,
+      "properties": {
+        "catchup_max_seconds": {
+          "description": "Upper clamp on the missed-tick catchup window.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "catchup_min_seconds": {
+          "description": "Lower clamp on the missed-tick catchup window.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "default_timezone": {
+          "description": "IANA zone for schedules that name none.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Master switch for the scheduler (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jitter_seconds": {
+          "description": "Deterministic per-schedule jitter to spread a popular minute.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tick_seconds": {
+          "description": "Scheduler poll interval; under 60s catches every cron minute.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SkillCurator": {
+      "additionalProperties": false,
+      "properties": {
+        "archive_after_days": {
+          "description": "Unused days before a skill is archived.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "Age unused skills out (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "interval_hours": {
+          "description": "How often the curator walks the skill table.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stale_after_days": {
+          "description": "Unused days before a skill goes stale.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SkillPromotion": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_tokens": {
+          "description": "Soft token cap per promotion draft.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "Promote sibling skills to unit scope (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jaccard_threshold": {
+          "description": "Similarity that pools two seats' skills.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "min_sibling_count": {
+          "description": "Distinct seats a cluster needs before promotion.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SkillRefinement": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_refine_on_failure": {
+          "description": "Append a counter-example when it failed (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "auto_refine_on_success": {
+          "description": "Append an observation when a skill's turn succeeded (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "budget_tokens": {
+          "description": "Soft token cap per refinement.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "Refine skills after use (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_body_chars": {
+          "description": "Ceiling on a refined skill's body.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_versions_kept": {
+          "description": "Archived versions kept for rollback.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SkillSynthesis": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_tokens": {
+          "description": "Soft token cap per draft attempt.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cluster_jaccard_threshold": {
+          "description": "Similarity that pools two turns into one cluster.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "cluster_min_size": {
+          "description": "Turns a cluster needs before it earns a skill.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cluster_window_hours": {
+          "description": "How far back the clustering pass looks.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duplicate_jaccard_threshold": {
+          "description": "Reject a draft this similar to an existing skill.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "enabled": {
+          "description": "Draft skills from turns (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "episode_fetch_limit": {
+          "description": "Episodes pulled into one clustering pass.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_skills_per_agent": {
+          "description": "Hard per-seat skill cap.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_tool_calls": {
+          "description": "Tool calls a turn needs before an inline draft.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scheduler_enabled": {
+          "description": "Background clustering pass (default off).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "scheduler_interval_seconds": {
+          "description": "How often the clustering pass runs.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Slack": {
+      "additionalProperties": false,
+      "properties": {
+        "status_phrases": {
+          "$ref": "#/$defs/StatusPhrases"
+        },
+        "typing_status": {
+          "description": "When to show the working indicator (default addressed).",
+          "enum": [
+            "addressed",
+            "always",
+            "off"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SpaceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "space": {
+          "description": "Space key.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StatusPhrases": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "description": "Lines for any phase with no pool of its own.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "execute": {
+          "description": "Lines shown during Execute.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "onboarding": {
+          "description": "Lines shown during the first-turn onboarding pass.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan": {
+          "description": "Lines shown during Plan.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "review": {
+          "description": "Lines shown during Review.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "TurnEngine": {
+      "additionalProperties": false,
+      "properties": {
+        "conversation_session": {
+          "$ref": "#/$defs/ConversationSession"
+        },
+        "delegation_depth_limit": {
+          "description": "Maximum depth of agent-to-agent delegation chains.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execute_max_tool_rounds_ceiling": {
+          "description": "Hard ceiling for Execute rounds across extensions.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "executor_always_on_tools": {
+          "description": "Tools Execute always has, whatever the plan named.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "extension_enabled": {
+          "description": "Round-cap extension judge (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "extension_round_step": {
+          "description": "Maximum rounds one extension call may grant.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_iterations": {
+          "description": "Plan/Execute/Review iterations per turn.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tool_rounds": {
+          "description": "Tool rounds within one Execute run.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onboarding_max_tool_rounds": {
+          "description": "Rounds for the first-turn onboarding pass; 0 disables it.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onboarding_max_tool_rounds_ceiling": {
+          "description": "Hard ceiling for onboarding rounds across extensions.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_max_tool_rounds": {
+          "description": "Tool rounds within one Plan run.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_max_tool_rounds_ceiling": {
+          "description": "Hard ceiling for Plan rounds across extensions.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sandbox_budget_fraction": {
+          "description": "Share of the seat's remaining budget a sandboxed Execute may use.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "sandbox_min_budget_tokens": {
+          "description": "Refuse a sandboxed Execute below this remaining budget.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_batch_timeout_seconds": {
+          "description": "Wall-clock cap on a whole batched spawn.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "subagent_budget_fraction": {
+          "description": "Share of the parent's remaining budget a sub-agent may use.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "subagent_max_parallel": {
+          "description": "Sub-agents run concurrently in one batch.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_max_turns": {
+          "description": "Tool rounds one sub-agent may run.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_min_per_child_tokens": {
+          "description": "Floor on a child's token slice; below it the batch is refused.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_timeout_seconds": {
+          "description": "Wall-clock cap on one sub-agent.",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Unit": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "description": "Child units.",
+          "items": {
+            "$ref": "#/$defs/Unit"
+          },
+          "type": "array"
+        },
+        "goals": {
+          "description": "What this unit is working toward.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integrations": {
+          "$ref": "#/$defs/UnitIntegrations"
+        },
+        "knowledge": {
+          "description": "Free-text knowledge references. Not a read scope.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lead": {
+          "description": "Seat leading this unit; inherited from the parent when empty.",
+          "type": "string"
+        },
+        "mcp_env": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Credentials inherited by this unit's direct members.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Unit name; also what a manages entry can reference.",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "What this unit is for.",
+          "type": "string"
+        },
+        "roles": {
+          "description": "Seats belonging to this unit.",
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "type": "array"
+        },
+        "schedules": {
+          "description": "Recurring work owned by this unit.",
+          "items": {
+            "$ref": "#/$defs/Schedule"
+          },
+          "type": "array"
+        },
+        "slack_channel": {
+          "description": "Unit channel; inherited by child units.",
+          "type": "string"
+        },
+        "type": {
+          "description": "Informational label: team (default), department, squad, ...",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "UnitIntegrations": {
+      "additionalProperties": false,
+      "properties": {
+        "confluence": {
+          "$ref": "#/$defs/SpaceRef",
+          "description": "The Confluence space this unit owns."
+        },
+        "jira": {
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Jira project this unit owns."
+        },
+        "plane": {
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Plane project this unit owns."
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://docs.crewlet.ai/schema/company.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "$comment": "integrations.confluence and an enabled integrations.plane are mutually exclusive.",
+      "not": {
+        "properties": {
+          "integrations": {
+            "allOf": [
+              {
+                "properties": {
+                  "confluence": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "confluence"
+                ]
+              },
+              {
+                "properties": {
+                  "plane": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "enabled"
+                    ]
+                  }
+                },
+                "required": [
+                  "plane"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "integrations"
+        ]
+      }
+    },
+    {
+      "$comment": "knowledge.plane_projects requires an enabled integrations.plane.",
+      "if": {
+        "properties": {
+          "knowledge": {
+            "properties": {
+              "plane_projects": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "plane_projects"
+            ]
+          }
+        },
+        "required": [
+          "knowledge"
+        ]
+      },
+      "then": {
+        "properties": {
+          "integrations": {
+            "properties": {
+              "plane": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "plane"
+            ]
+          }
+        },
+        "required": [
+          "integrations"
+        ]
+      }
+    },
+    {
+      "$comment": "knowledge.confluence_spaces is a Confluence scope; it is refused when Plane is the backend.",
+      "if": {
+        "properties": {
+          "knowledge": {
+            "properties": {
+              "confluence_spaces": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "confluence_spaces"
+            ]
+          }
+        },
+        "required": [
+          "knowledge"
+        ]
+      },
+      "then": {
+        "not": {
+          "properties": {
+            "integrations": {
+              "properties": {
+                "plane": {
+                  "properties": {
+                    "enabled": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "enabled"
+                  ]
+                }
+              },
+              "required": [
+                "plane"
+              ]
+            }
+          },
+          "required": [
+            "integrations"
+          ]
+        }
+      }
+    }
+  ],
+  "properties": {
+    "integrations": {
+      "$ref": "#/$defs/Integrations"
+    },
+    "knowledge": {
+      "$ref": "#/$defs/Knowledge"
+    },
+    "learning": {
+      "$ref": "#/$defs/Learning"
+    },
+    "mcp_servers": {
+      "description": "Tool servers, stdio or http. Per-agent credentials live in role.mcp_env.",
+      "items": {
+        "$ref": "#/$defs/MCPServer"
+      },
+      "type": "array"
+    },
+    "mission": {
+      "description": "One line on what the company is for; reaches every seat's prompt.",
+      "type": "string"
+    },
+    "name": {
+      "description": "Company name. Half of every seat's derived id — effectively permanent.",
+      "type": "string"
+    },
+    "notification_coalesce_max_batch": {
+      "description": "Events merged into one digest trigger.",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "notification_coalesce_window_seconds": {
+      "description": "Inbox linger before dispatch, 0..60s. 0 adds no latency.",
+      "maximum": 60,
+      "minimum": 0,
+      "type": "number"
+    },
+    "notification_rate_limit": {
+      "description": "Outbound notification cap; 0 = unlimited.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "policies": {
+      "description": "Company-wide rules injected into every seat's prompt.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "providers": {
+      "$ref": "#/$defs/Providers"
+    },
+    "roles": {
+      "description": "Seats belonging to no unit.",
+      "items": {
+        "$ref": "#/$defs/Role"
+      },
+      "type": "array"
+    },
+    "scheduling": {
+      "$ref": "#/$defs/Scheduling"
+    },
+    "skill_variables": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
+      "type": "object"
+    },
+    "token_budget": {
+      "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "turn_engine": {
+      "$ref": "#/$defs/TurnEngine"
+    },
+    "units": {
+      "description": "The org hierarchy; units nest to any depth.",
+      "items": {
+        "$ref": "#/$defs/Unit"
+      },
+      "type": "array"
+    },
+    "vision": {
+      "description": "Longer statement of where the company is going.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "title": "Crewlet company config (Tier B)",
+  "type": "object"
+}
