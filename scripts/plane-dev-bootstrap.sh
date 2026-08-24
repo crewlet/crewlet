@@ -377,7 +377,7 @@ if [ -z "${COMPANY}" ]; then
    - Then run the engine — its EMBEDDED API (api.port: 80 in the Tier A
      file) receives the Plane webhooks and serves the dashboard:
        source ${ENV_FILE}
-       crewlet run examples/nimbus.config.yaml --import-company examples/nimbus.company.yaml
+       crewlet run -config examples/nimbus.config.yaml -company examples/nimbus.company.yaml
 EONEXT
 else
   cat <<EONEXT
@@ -385,7 +385,7 @@ else
    - Next, run the engine — its EMBEDDED API (api.port: 80 in the Tier A
      file) receives the Plane webhooks and serves the dashboard:
        source ${ENV_FILE}
-       crewlet run examples/nimbus.config.yaml --import-company ${COMPANY}
+       crewlet run -config examples/nimbus.config.yaml -company ${COMPANY}
 EONEXT
 fi
 

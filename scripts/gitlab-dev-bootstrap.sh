@@ -135,11 +135,11 @@ if [ -z "${COMPANY}" ]; then
        GITLAB_ADMIN_TOKEN=${ROOT_TOKEN} \\
          crewlet gitlab provision <your-config>.yaml \\
            -public-url ${ENGINE_URL} -env-file .env.gitlab
-       source .env.gitlab && crewlet run config.yaml --import-company <your-config>.yaml
+       source .env.gitlab && crewlet run -config crewlet.yaml -company <your-config>.yaml
 EONEXT
 else
   cat <<EONEXT
    - Tokens written: .env.gitlab
-   - Next: source .env.gitlab && crewlet run config.yaml --import-company ${COMPANY}
+   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${COMPANY}
 EONEXT
 fi

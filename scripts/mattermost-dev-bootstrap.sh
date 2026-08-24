@@ -684,7 +684,7 @@ Next:
 
   4. Start the engine — it opens one websocket per agent seat:
 
-       crewlet run config.yaml
+       crewlet run -config crewlet.yaml -company <company.yaml>
 
 Nothing needs to reach the engine from Mattermost, so no tunnel is needed.
 See docs/integrations/mattermost.md for the full walkthrough.
