@@ -90,6 +90,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runSecrets(rest, stdout, stderr)
 	case "config":
 		return runConfig(rest, stdout, stderr)
+	case "gitlab", "plane", "mattermost":
+		return runIntegration(cmd, rest, stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", cmd)
@@ -106,6 +108,7 @@ Usage:
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
+  crewlet gitlab provision    Reconcile the company's seats into a GitLab instance
   crewlet version             Print the version
   crewlet help                Show this message
 
