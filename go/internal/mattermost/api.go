@@ -67,6 +67,17 @@ func (c *Client) Me(ctx context.Context) (User, error) {
 	return out, err
 }
 
+// Ping asks whether the server is there, UNAUTHENTICATED.
+//
+// The first question the doctor asks, and it must not carry a credential: a
+// bad token would otherwise make a healthy server look dead, and the two
+// have completely different remedies.
+func (c *Client) Ping(ctx context.Context) error {
+	var out map[string]any
+	_, err := c.request(ctx, http.MethodGet, "/system/ping", nil, &out, false)
+	return err
+}
+
 // UserByUsername resolves a name to an account.
 func (c *Client) UserByUsername(ctx context.Context, username string) (User, error) {
 	var out User

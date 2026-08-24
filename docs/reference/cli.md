@@ -602,20 +602,22 @@ A bot this run created is rolled back by revoking every token on it — nothing 
 ## `crewlet mattermost doctor`
 
 ```
-crewlet mattermost doctor my_company.yaml
+crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]
 ```
 
-Checks a Mattermost install the way [`crewlet llm doctor`](#crewlet-llm) checks a subscription CLI: by exercising what actually breaks, not what raises.
+Checks a Mattermost install by exercising what actually breaks, in the order it breaks — and **no operator credential is required**: the seat tokens already in the config are what the engine authenticates with, so they are the honest thing to check with, and minting an admin token to find out whether a company works is a step that exists only to be skipped. Pass `-admin-token` (or export `MATTERMOST_ADMIN_TOKEN`) to run the shared checks as somebody else.
 
 | Check | What it catches |
 |---|---|
-| `GET /system/ping` (unauthenticated) | Wrong URL, server down, no route from here |
-| `ServiceSettings.SiteURL` vs `integrations.mattermost.url` | The setting with no error message: Mattermost accepts a websocket only from a browser whose `Origin` matches SiteURL exactly, so a mismatch silently costs every human live updates while the engine — which sends no `Origin` — keeps working. See [The Site URL](../integrations/mattermost.md#the-site-url). |
-| A websocket upgrade sent **with** an `Origin` header | Predicts what a browser gets, including a reverse proxy that drops `Upgrade` |
-| Per seat: `/users/me`, account state, channel membership | Revoked token, disabled bot, a bot in no channel (it would only ever hear DMs) |
-| Per seat: a real authenticated websocket | The engine's only inbound path — a token valid for REST can still fail to open a socket |
+| `GET /system/ping`, **unauthenticated** | Wrong URL, no route from here. First and without a credential, because a bad token must not make a healthy server look dead — the two have completely different remedies. |
+| `ServiceSettings.SiteURL` vs `integrations.mattermost.url` | The setting with no error message: Mattermost accepts a websocket only from a client whose `Origin` matches SiteURL, so a mismatch silently costs every human live updates while agents keep working. See [The Site URL](../integrations/mattermost.md#the-site-url). A path-only difference is reported separately — the socket is fine, but the server builds its absolute links from its own value. |
+| A websocket upgrade sent **with** a browser's `Origin` | What every human's live feed does, including a reverse proxy that drops `Upgrade`. The Origin carries scheme and host only, because that is the exact string the server compares. |
+| The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed. |
+| Per seat: its own credential, a real socket, its channels | A revoked token, a disabled bot, a `${VAR}` that never reached this deployment, or a bot in **no channel** — which hears only direct messages while its account looks perfectly healthy. |
 
-Read-only, and no operator credential: the seat tokens already in the config do the work, resolved the way the engine resolves them ([secret store](../concepts/secret-store.md), then environment). Exits non-zero when any check fails.
+Each seat is checked with **its own** credential, because "the server accepts sockets" and "this bot wakes" are different questions and only the second delivers a message. A seat that fails early is not asked the later ones: one whose token did not resolve is never dialled, and one whose credential is refused is never asked about its channels — reporting those as separate failures would send an operator after faults nobody observed. The same rule governs the run as a whole: an unreachable server, an unreadable server config or a missing credential **stops** the checks and says so, because one failing line with nothing after it otherwise reads as "one thing is wrong" when it means "nothing else was even asked".
+
+Read-only. Exits non-zero when any check fails, so it drops into a deploy script.
 
 ---
 

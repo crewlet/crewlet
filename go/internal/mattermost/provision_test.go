@@ -96,9 +96,27 @@ type chatServer struct {
 	// identityFails makes the identity route answer 500 for a BOT's
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
-	teamOf        map[string]bool   // user id -> in team
-	channels      map[string]string // channel name -> id
-	members       map[string]bool   // "channelID:userID"
+	// siteURL is what the server reports as its own address. Empty makes
+	// it echo the address it is actually served at, which is the healthy
+	// case; a value is the misconfiguration the doctor exists to find.
+	siteURL string
+	// refuseIdentity makes /users/me 401 for every token, which is what
+	// a revoked operator credential does.
+	refuseIdentity bool
+	// base is the address this fake is actually served at, so the
+	// healthy case reports the truth about itself.
+	base string
+	// refuseConfig makes the server's own configuration unreadable.
+	refuseConfig bool
+	// unreachable makes the unauthenticated ping fail, which is a URL
+	// that does not point at a Mattermost server.
+	unreachable bool
+	// channelsOf is what every bot's channel list answers. Empty is a
+	// bot that hears only direct messages.
+	channelsOf []string
+	teamOf     map[string]bool   // user id -> in team
+	channels   map[string]string // channel name -> id
+	members    map[string]bool   // "channelID:userID"
 
 	failRecord string
 	next       int
@@ -120,10 +138,54 @@ func (s *chatServer) revoked() int {
 // adminToken is the operator credential the fixture's client presents.
 const adminToken = "admin-token"
 
+// issue registers a token against a user, as a mint would have.
+func (s *chatServer) issue(userID, token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokens[userID] = append(s.tokens[userID], mattermost.Token{
+		ID: "tok-" + userID, Description: "seeded", Value: token,
+	})
+}
+
+// chatClient stands the fake up and points a client at it.
+//
+// THE SERVER'S OWN CLIENT, whose transport belongs to this server and dies
+// with it. A client over http.DefaultTransport shares one connection pool
+// with every other parallel test, so one server's Close breaks a request in
+// flight against another.
+func chatClient(t *testing.T, srv *chatServer) *mattermost.Client {
+	t.Helper()
+	return chatClientAs(t, srv, adminToken)
+}
+
+// chatClientWithout points a client at the fake with NO credential, which
+// is how an operator runs the doctor having minted nothing.
+func chatClientWithout(t *testing.T, srv *chatServer) *mattermost.Client {
+	t.Helper()
+	return chatClientAs(t, srv, "")
+}
+
+func chatClientAs(t *testing.T, srv *chatServer, token string) *mattermost.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(srv.serve))
+	t.Cleanup(server.Close)
+	srv.mu.Lock()
+	srv.base = server.URL
+	srv.mu.Unlock()
+	client, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: server.URL, Token: token, HTTP: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client
+}
+
 func newChatServer() *chatServer {
 	return &chatServer{
 		bots: map[string]string{}, tokens: map[string][]mattermost.Token{},
-		teamOf: map[string]bool{}, members: map[string]bool{},
+		channelsOf: []string{"eng"},
+		teamOf:     map[string]bool{}, members: map[string]bool{},
 		channels: map[string]string{"general": "ch-general", "leadership": "ch-lead"},
 	}
 }
@@ -135,7 +197,46 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	switch {
+	case r.Method == http.MethodGet && path == "/system/ping":
+		if s.unreachable {
+			// A 404 rather than a 502: this models the wrong URL, which
+			// is the case the doctor exists to separate from a bad
+			// credential. A 502 is a proxy mid-restart, which the
+			// client deliberately waits out.
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"Not found"}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": "OK"})
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/users/") &&
+		strings.Contains(path, "/teams/") && strings.HasSuffix(path, "/channels"):
+		out := make([]map[string]any, 0, len(s.channelsOf))
+		for _, name := range s.channelsOf {
+			out = append(out, map[string]any{
+				"id": "chan-" + name, "name": name, "team_id": "team-1",
+			})
+		}
+		json.NewEncoder(w).Encode(out)
+
+	case r.Method == http.MethodGet && path == "/config/client":
+		if s.refuseConfig {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"You do not have the appropriate permissions"}`))
+			return
+		}
+		site := s.siteURL
+		if site == "" {
+			site = s.base
+		}
+		json.NewEncoder(w).Encode(map[string]string{"SiteURL": site})
+
 	case r.Method == http.MethodGet && path == "/users/me":
+		if s.refuseIdentity {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"message":"Invalid or expired session"}`))
+			return
+		}
 		// WHOEVER PRESENTED THE TOKEN. The re-run check takes the value
 		// a variable holds and asks the server who it is, so a fake
 		// answering the same account for every token would prove
@@ -358,18 +459,7 @@ func reconcileChatWith(t *testing.T, srv *chatServer, sink provision.TokenSink,
 	roles []*org.Role, tune func(*mattermost.Options),
 ) (*mattermost.Result, error) {
 	t.Helper()
-	http := httptest.NewServer(http.HandlerFunc(srv.serve))
-	t.Cleanup(http.Close)
-	// THE SERVER'S OWN CLIENT, whose transport belongs to this server and
-	// dies with it. A client over http.DefaultTransport shares one
-	// connection pool with every other parallel test, so one server's
-	// Close breaks a request in flight against another.
-	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: http.URL, Token: adminToken, HTTP: http.Client(),
-	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	client := chatClient(t, srv)
 	o := &org.Organization{Name: "Nimbus", Roles: roles}
 	cfg := enabledChat()
 	plan, err := mattermost.PlanFor(o, cfg)

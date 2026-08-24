@@ -161,6 +161,13 @@ func (c *Client) WebsocketURL() string { return WebsocketURL(c.base) }
 // Token is the session this client authenticates with.
 func (c *Client) Token() string { return c.token }
 
+// HTTP is the transport this client uses.
+//
+// Exported so a client built FROM another one — the doctor probing as a
+// seat, say — shares its transport rather than opening a second connection
+// pool against the same instance.
+func (c *Client) HTTP() *http.Client { return c.http }
+
 // request is every call's single path in and out.
 //
 // repeatable says the caller has established that repeating this request

@@ -428,39 +428,43 @@ inbound path, in the order it breaks:
 
 | Check | Why it is here |
 |---|---|
-| `/system/ping` | Reachability, unauthenticated — a bad operator token must not make a healthy server look dead |
+| `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead |
 | `SiteURL` vs `integrations.mattermost.url` | The [one setting](#the-site-url) whose failure has no error message |
 | A **browser-shaped** websocket upgrade | Sent *with* an `Origin` header, which is the only difference between a browser and the engine — this is the check that predicts what a human sees |
-| Per seat: token, account, channel membership | A bot receives nothing from channels it has not joined |
-| Per seat: a real authenticated websocket | The engine's only inbound path. A token can be valid for REST and still not open a socket |
+| The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed |
+| Per seat: its own credential, a real socket, its channels | A token can be valid for REST and still not open a socket, and a bot receives nothing from channels it has not joined |
 
-Nothing is written and no admin credential is needed — the seat tokens
-already in the config do the work, resolved the same way the engine resolves
-them (secret store, then environment). The exit code is non-zero when any
-check fails, so it drops into a deploy script.
+**No admin credential is needed and nothing is written.** The seat tokens
+already in the config do the work, resolved the way the engine resolves them
+(secret store, then environment) — they are the credentials the engine
+authenticates with, so they are the honest thing to check with. A literal
+token is used as-is: managing a seat's credential by hand is a supported
+choice, and refusing to check it would report a working seat as
+unconfigured. Pass `-admin-token` to run the shared checks as somebody else.
+The exit code is non-zero when any check fails, so it drops into a deploy
+script.
 
-Every cell distinguishes **checked and bad** from **never checked**. A `?`
-in a websocket column, `(not checked)` for the Site URL, `<< not checked` on
-the team — none of those is a failure, and reporting them as one sends you
-after faults nobody observed. An unreachable server returns before the Site
-URL, the browser socket and the team are ever queried; a seat whose token
-did not resolve or was rejected never gets a socket dialled; and an install
-without the `websockets` package (`pip install 'crewlet[mattermost]'`) can
-open neither socket, which is reported once as its own problem rather than
-as two failures. Everything that *can* be answered still is.
+**Checked-and-bad is distinguished from never-checked.** An unreachable
+server, an unreadable server configuration or a missing credential *stops*
+the run, and the report says so: one failing line with nothing after it
+would otherwise read as "one thing is wrong" when it means "nothing else was
+even asked". The same holds per seat — a seat whose token did not resolve is
+never dialled, and one whose credential is refused is never asked about its
+channels. Everything that *can* still be answered is: a team that does not
+resolve leaves the per-seat socket checks intact, because whether each agent
+authenticates is worth knowing either way.
 
 ```
-url           : http://203.0.113.7:8065
-reachable     : yes (Mattermost 10.5.1)
-site url      : http://203.0.113.7:8065
-browser ws    : ok — upgraded with Origin: http://203.0.113.7:8065
-team          : nimbus
-
-SEAT               USERNAME               TOKEN   WS      CHANNELS
-agent-pm           agent-pm               ok      ok      engineering,product,town-square
-agent-swe          agent-swe              ok      ok      engineering,town-square
-
-problems      : none
+ok    reachable        http://203.0.113.7:8065 answers
+ok    site url         the server agrees it is served at http://203.0.113.7:8065
+ok    credential       authenticates as agent-pm
+ok    team             team "nimbus" resolves (kx8f...)
+ok    browser socket   a browser-shaped upgrade to ws://203.0.113.7:8065/api/v4/websocket was accepted
+ok    seat pm          agent-pm authenticates, opens a socket, and is in 3 channel(s)
+FAIL  seat swe         agent-swe authenticates and opens a socket but has joined no
+                       channel, so it will only ever hear direct messages. Name channels
+                       under integrations.mattermost.provisioning or on the seat itself,
+                       and run `crewlet mattermost provision`
 ```
 
 ---

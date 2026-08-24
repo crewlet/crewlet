@@ -276,6 +276,8 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 		return runGitLabProvision(rest, stdout, stderr)
 	case vendor == "mattermost" && sub == "provision":
 		return runMattermostProvision(rest, stdout, stderr)
+	case vendor == "mattermost" && sub == "doctor":
+		return runMattermostDoctor(rest, stdout, stderr)
 	case vendor == "plane" && sub == "provision":
 		return runPlaneProvision(rest, stdout, stderr)
 	case vendor == "plane" && sub == "import":
@@ -284,6 +286,10 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 		return runPlaneResync(rest, stdout, stderr)
 	case sub == "" || sub == "help":
 		fmt.Fprintf(stderr, "usage: crewlet %s provision <company.yaml>\n", vendor)
+		if vendor == "mattermost" {
+			fmt.Fprintln(stderr,
+				"       crewlet mattermost doctor <company.yaml>")
+		}
 		if vendor == "plane" {
 			fmt.Fprintln(stderr,
 				"       crewlet plane import <company.yaml> <directory>\n"+
@@ -800,4 +806,98 @@ func runPlaneResync(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("%d page(s) could not be decoded", len(report.Undecodable))
 	}
 	return nil
+}
+
+// runMattermostDoctor is `crewlet mattermost doctor`.
+func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
+	companyPath, args := splitSubject(args)
+
+	fs := flag.NewFlagSet("mattermost doctor", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	adminToken := fs.String("admin-token", "",
+		"a Mattermost token to run the checks as; empty reads "+
+			"MATTERMOST_ADMIN_TOKEN, and failing that borrows a seat's own")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	tail := fs.Args()
+	if companyPath == "" && len(tail) == 1 {
+		companyPath, tail = tail[0], nil
+	}
+	if companyPath == "" || len(tail) > 0 {
+		fmt.Fprintln(stderr,
+			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]")
+		return errors.New("name exactly one company document")
+	}
+
+	company, err := config.LoadCompany(companyPath)
+	if err != nil {
+		return err
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		return err
+	}
+	cfg := company.Integrations.Mattermost
+	if cfg == nil || !cfg.Enabled {
+		return errors.New("mattermost: the company config does not enable mattermost")
+	}
+
+	env := config.EnvOnly()
+	token := strings.TrimSpace(*adminToken)
+	if token == "" {
+		token = strings.TrimSpace(env.Lookup("MATTERMOST_ADMIN_TOKEN"))
+	}
+	// AN EMPTY TOKEN IS FINE. The checks that need one borrow a seat's,
+	// because those are the credentials the engine authenticates with —
+	// and asking an operator to mint an admin token to find out whether
+	// their company works is a step that exists only to be skipped.
+	//
+	// THE CONFIGURED URL, resolved but NOT normalised away: the whole
+	// point is comparing what this company believes against what the
+	// server reports, so the check has to see the operator's own value.
+	resolved := *cfg
+	resolved.URL = env.Value(cfg.URL)
+	resolved.Team = env.Value(cfg.Team)
+	client, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: resolved.URL, Token: token,
+	})
+	if err != nil {
+		return err
+	}
+
+	report, err := mattermost.Doctor(context.Background(), mattermost.DoctorOptions{
+		Client: client, Config: &resolved, Org: organization,
+		SeatToken: mattermost.SeatTokens(env),
+	})
+	if err != nil {
+		return err
+	}
+	printDoctor(stdout, report)
+	if !report.Healthy() {
+		return errors.New("mattermost: the instance is not healthy for this company")
+	}
+	return nil
+}
+
+// printDoctor renders a health report.
+func printDoctor(w io.Writer, report *mattermost.Report) {
+	for _, finding := range report.Findings {
+		mark := "ok  "
+		if !finding.OK {
+			mark = "FAIL"
+		}
+		fmt.Fprintf(w, "%s  %-16s %s\n", mark, finding.Check, finding.Detail)
+	}
+	switch {
+	case report.Stopped():
+		// SAID OUT LOUD: one failing line with nothing after it reads
+		// as "one thing is wrong", when what it means is "nothing else
+		// was even asked".
+		fmt.Fprintln(w, "\nThe checks stopped here — everything below this "+
+			"would have reported a consequence rather than a cause. Fix it "+
+			"and run again.")
+	case report.Healthy():
+		fmt.Fprintln(w, "\nEverything this command can check is working.")
+	}
 }
