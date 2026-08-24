@@ -5,13 +5,16 @@
 > backend is not here yet, so the remote-sandbox passages below describe the
 > intended contract rather than something you can configure today. The
 > `cli-agent` credential paths are likewise not in this build; see
-> [Subscription LLM Backends](subscription-llm-backends.md).
+> [Subscription LLM Backends](subscription-llm-backends.md). Nor is the
+> engine-fronted OTLP receiver — a coding run's own telemetry has no
+> collector to export to yet, though the run's engine-side lifecycle events
+> and its published transcript are all here.
 
 Crewlet agents author code through the **`run_sandbox` Execute tool**: the executor calls it with a concrete code task, the engine provisions an isolated sandbox (a real VM with a shell, a filesystem, and a git checkout), and a **coding agent** — Claude Code or OpenCode — works on the task autonomously inside it. The call is **detached**: the Execute tool-loop *suspends* when the job starts, the engine persists the in-flight conversation, and when the job completes — minutes or hours later — the **same loop resumes** with the coding agent's findings spliced in as that tool call's reply. The executor then reports and acts with its own tools (replying on the originating channel, updating the ticket) in the same turn, with full context.
 
 This is how a Crewlet agent implements a feature, makes tests pass, reproduces a bug, or runs a one-off script — anything that needs a shell and a checkout. The sandbox is the isolation boundary: arbitrary, autonomously generated code runs *there*, never on the engine host, which is why the coding agent can run fully permissioned (Claude Code `--permission-mode bypassPermissions`; OpenCode `permission: "allow"`).
 
-The moving parts live in `src/crewlet/sandbox/` (provider, manager, runners, waiter, coordinator, pending store) and `src/crewlet/tools/run_sandbox_tool.py`; the launch/collect plumbing is `src/crewlet/agent/execute_sandbox.py`.
+The moving parts live in `internal/sandbox/` — the provider, the manager, the coding-agent runners under `codingagent/`, the waiter, the coordinator, the pending store, and `launch.go`, which is the plumbing between the Execute loop and a detached run.
 
 ---
 
@@ -111,16 +114,16 @@ roles:
 
 ## Sandbox backends
 
-The provider layer is pluggable behind the `SandboxProvider` protocol (`sandbox/protocol.py`). Four backends ship:
+The provider layer is pluggable behind the `SandboxProvider` interface (`internal/sandbox/protocol.go`). Four backends ship:
 
 - **E2B cloud** (`type: e2b`, no `domain`). Sign up at [e2b.dev](https://e2b.dev), export `E2B_API_KEY` from the dashboard. The engine uses the open-source [`e2b`](https://pypi.org/project/e2b/) async SDK and E2B's prebuilt [`claude`](https://e2b.dev/docs/agents/claude-code) / [`opencode`](https://e2b.dev/docs/agents/opencode) templates (the coding-agent CLI preinstalled), picked automatically per coding agent when `template` is empty.
 - **Self-hosted / local E2B** (`type: e2b` + `domain`). E2B's infrastructure is open source ([e2b-dev/infra](https://github.com/e2b-dev/infra)); set `domain` to your cluster's domain and the **same class and code path** talks to it — one field is the whole cloud↔self-hosted switch. The cluster still issues its own `E2B_API_KEY` (the SDK always authenticates; `domain` only changes *which* API it talks to). If your self-hosted keys aren't in the SDK's `e2b_<hex>` format, set `E2B_VALIDATE_API_KEY=false` — see [Environment Variables](../reference/environment-variables.md#code-runtime-sandbox-optional).
 - **[Local](#local-sandboxes)** (`type: local`). The engine host itself — `direct` (a process tree) or `container` (Docker/Podman). No E2B account, and the coding agent can use the **subscription login** `crewlet llm login` already established. See below.
-- **`fake`** — deterministic in-process stubs (`sandbox/fake.py`): an in-memory filesystem, scripted coding-agent results, no network. The unit-test substrate; it does **not** run real code.
+- **`fake`** — deterministic in-process stubs (`internal/sandbox/fake.go`): an in-memory filesystem, scripted coding-agent results, no network. The unit-test substrate; it does **not** run real code.
 
 > **Watch for a leftover `E2B_DOMAIN`.** The E2B SDK reads `E2B_DOMAIN` from the environment directly. With no `domain` in config you are targeting e2b.dev cloud — make sure a stale `E2B_DOMAIN` export from an earlier self-hosted experiment isn't silently routing the SDK to a dead cluster.
 
-The `e2b` SDK is an optional dependency: `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout). It is imported lazily, so an engine without the extra runs fine until an E2B sandbox is actually provisioned.
+There is no optional dependency to install for any of this: the binary carries every backend it has. `providers.sandbox.type: e2b` is refused at construction with an error naming what to use instead, rather than being silently downgraded to `local` — which would run the operator's generated code on the engine host without saying so.
 
 ### Local sandboxes
 
@@ -229,7 +232,7 @@ Because the brief instructs the coding agent that it is *not* the last step, it 
 
 ## Setup steps — provisioning the box
 
-A coding agent's box needs environment wiring beyond the CLI itself: git auth, registry credentials, toolchains. Provisioning is a declarative **setup-step** framework (`sandbox/setup.py`); each `SandboxSetupStep` contributes:
+A coding agent's box needs environment wiring beyond the CLI itself: git auth, registry credentials, toolchains. Provisioning is a declarative **setup-step** framework (`internal/sandbox/setup.go`); each `SandboxSetupStep` contributes:
 
 - `files` — content written into the box (helper scripts, config files);
 - `commands` — shell commands run after the files land; a non-zero exit **fails the acquisition** and tears the box down, so a half-provisioned box never receives a brief promising an environment it doesn't have;
@@ -284,7 +287,7 @@ The GitLab form of this recipe — same shape, `gitlab.com` scoping, `oauth2` us
 
 ## Credentials and the run environment
 
-`build_sandbox_env` (`sandbox/credentials.py`) assembles the env injected into each run. The engine contributes only **tool-agnostic** facts:
+The run env injected into each job is assembled in `internal/sandbox/launch.go`. The engine contributes only **tool-agnostic** facts:
 
 - **LLM credentials**, derived from the role's resolved `providers.llm` entry (the chain above): `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` for an Anthropic provider, `OPENAI_API_KEY` / `OPENAI_BASE_URL` otherwise (for OpenCode the real endpoint redirect is the custom provider written into `opencode.json`; the env forms are kept for parity).
 - **Agent identity** — `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL`, the per-launch facts static config cannot know, which setup recipes map into tool shape (git commit identity above).
@@ -298,7 +301,7 @@ Any `${VAR}` reference whose variable is unset or empty — whole (`"${TOKEN}"`)
 
 ## MCP inside the sandbox
 
-The coding agent is itself an MCP client, so the engine renders the role's servers into the box (`sandbox/mcp_render.py` → Claude Code's `.mcp.json` via `--mcp-config --strict-mcp-config`, or OpenCode's `opencode.json`). Scoping is at the **server level only**: `role.sandbox.mcp.servers` names which of the role's `mcp_servers` to expose, and the coding agent gets **every tool those servers expose**. There is no per-tool allowlist — OpenCode has no allowlist flag and Claude Code runs `bypassPermissions` headless, so a curated list couldn't be enforced uniformly and would give a false sense of restriction. A role that shouldn't reach a surface simply doesn't list that server.
+The coding agent is itself an MCP client, so the engine renders the role's servers into the box (`internal/sandbox/mcprender.go` → Claude Code's `.mcp.json` via `--mcp-config --strict-mcp-config`, or OpenCode's `opencode.json`). Scoping is at the **server level only**: `role.sandbox.mcp.servers` names which of the role's `mcp_servers` to expose, and the coding agent gets **every tool those servers expose**. There is no per-tool allowlist — OpenCode has no allowlist flag and Claude Code runs `bypassPermissions` headless, so a curated list couldn't be enforced uniformly and would give a false sense of restriction. A role that shouldn't reach a surface simply doesn't list that server.
 
 Credentials from `role.mcp_env` are resolved into the rendered specs (HTTP servers get them as headers, stdio servers as env), so the in-box server instances authenticate as the seat. The connected server names are also listed in the coding agent's environment brief.
 
@@ -311,7 +314,7 @@ Two practical caveats:
 
 ## Mid-run clarification (`crewlet-ask`)
 
-Once it is in the code, the coding agent may hit something only a person can answer — an ambiguous spec, a design decision above its remit. Headless coding agents can't pause to ask interactively, so every box gets a shim, **`crewlet-ask`** (`sandbox/coding_agents/ask.py`), and the brief instructs: *don't guess — commit and push your WIP branch, run `crewlet-ask "<question>" --to <audience>`, and stop.* The audience is `requester`, `team`, `manager`, or a named teammate — the brief carries the unit roster and lead so the agent can name a real person.
+Once it is in the code, the coding agent may hit something only a person can answer — an ambiguous spec, a design decision above its remit. Headless coding agents can't pause to ask interactively, so every box gets a shim, **`crewlet-ask`** (`internal/sandbox/codingagent/ask.go`), and the brief instructs: *don't guess — commit and push your WIP branch, run `crewlet-ask "<question>" --to <audience>`, and stop.* The audience is `requester`, `team`, `manager`, or a named teammate — the brief carries the unit roster and lead so the agent can name a real person.
 
 The shim is **signal-only**: it records the question to a file and never posts anything itself. When the run completes with a pending question:
 
@@ -345,7 +348,7 @@ The reaper is scoped to **clarification waits** on purpose. The lifecycle pauses
 
 **A vanished sandbox can't orphan a run.** If reconnecting fails on several consecutive ticks (~1 min at defaults), the waiter declares the box gone and fires completion anyway — E2B reclaimed it, a network partition, or the engine was down past the keepalive grace. The coordinator then frees the agent, marks the run failed, and the resumed executor reports the failure rather than polling a dead box forever.
 
-**Per-run OTel, without handing the sandbox a secret.** The coding agent's telemetry exports to an **engine-fronted OTLP receiver** (`sandbox/otel.py`), enabled by setting `CREWLET_SANDBOX_OTEL_RECEIVER_URL` to the engine API base the sandbox can reach. Each run gets a **per-run, trace-scoped, expiring token embedded in the endpoint path** (`POST /otlp/{token}/v1/{signal}`), so `OTEL_EXPORTER_OTLP_HEADERS` — the backend's ingest credential — never enters the box; the receiver validates the token and forwards upstream, adding the real auth outside the sandbox. The run env also carries non-secret resource attributes (`crewlet.turn_id`, `crewlet.agent_handle`) and a `TRACEPARENT`, so Claude Code's spans/metrics nest under the turn (its `CLAUDE_CODE_*` telemetry toggles are injected only for that runner). OpenCode emits no OTLP today — its observability is the published transcript plus the engine-side lifecycle events.
+**Per-run OTel, without handing the sandbox a secret** *(not in this build — see the note at the top)*. The coding agent's telemetry would export to an **engine-fronted OTLP receiver**, enabled by setting `CREWLET_SANDBOX_OTEL_RECEIVER_URL` to the engine API base the sandbox can reach. Each run gets a **per-run, trace-scoped, expiring token embedded in the endpoint path** (`POST /otlp/{token}/v1/{signal}`), so `OTEL_EXPORTER_OTLP_HEADERS` — the backend's ingest credential — never enters the box; the receiver validates the token and forwards upstream, adding the real auth outside the sandbox. The run env also carries non-secret resource attributes (`crewlet.turn_id`, `crewlet.agent_handle`) and a `TRACEPARENT`, so Claude Code's spans/metrics nest under the turn (its `CLAUDE_CODE_*` telemetry toggles are injected only for that runner). OpenCode emits no OTLP today — its observability is the published transcript plus the engine-side lifecycle events.
 
 **Dashboard.** The live-state projection maintains an active-sandboxes set from the `SandboxRunStarted` / `SandboxClarificationRequested` / `SandboxRunCompleted` lifecycle events, and the dashboard overview shows a **Running sandboxes** panel whenever a job is in flight — agent, coding agent, task, elapsed, status (running / awaiting input). Completed runs render as the three-row Execute group described above, with the findings and transcript.
 
@@ -392,4 +395,4 @@ What an operator should recognize:
 
 ## Testing
 
-`providers.sandbox.type: fake` wires the in-process fakes (`FakeSandboxProvider`, `FakeCodingAgentRunner`) — scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format json`, `opencode run … --format json`) and output parsers, and `tests/test_sandbox/test_setup.py` exercises the git-auth recipes so their security properties (host scoping, `--add` rewrites, identity mapping) can't regress.
+`providers.sandbox.type: fake` wires the in-process fakes (`FakeSandboxProvider`, `FakeCodingAgentRunner`) — scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format json`, `opencode run … --format json`) and output parsers, and `internal/config/examples_test.go` holds the shipped git-auth recipe to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them.

@@ -273,3 +273,107 @@ func wholeRef(value string) (string, bool) {
 	}
 	return m[1], true
 }
+
+// THE SHIPPED GIT-AUTH RECIPE KEEPS ITS SECURITY PROPERTIES.
+//
+// examples/nimbus.company.yaml hands every sandboxed seat a credential
+// helper carrying that seat's own code-host PAT. The recipe is CONFIG — the
+// engine ships no setup steps of its own — so nothing in the engine
+// constrains it, and the properties that keep the token from leaking are
+// properties of this file and this file alone:
+//
+//   - The helper is scoped to the host at BOTH layers. The `credential.
+//     "https://gitlab.com".helper` key is what git consults, and the script
+//     re-checks `host=` itself. Either alone is a token offered to whatever
+//     host asks — a malicious submodule URL is the cheap version of that
+//     attack, and git will happily consult a helper for it.
+//   - It stays silent with no token, so a public clone falls through to
+//     anonymous instead of failing.
+//   - insteadOf is added with `--add` on both forms. It is a multi-valued
+//     key: a second plain `git config` REPLACES the first, which leaves
+//     scp-style `git@host:` remotes on SSH — with no key in the box, so
+//     they simply fail.
+//   - The commit identity comes from the engine's generic agent facts, so
+//     work attributes to the seat rather than to whoever built the image.
+//
+// A reader editing this recipe sees prose explaining each of those. This is
+// what fails when the edit lands anyway.
+func TestTheShippedGitAuthRecipeStaysScoped(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join(repoRoot, "examples", "nimbus.company.yaml"))
+	if err != nil {
+		t.Skipf("the example tree is not in this checkout: %v", err)
+	}
+	cfg, err := ParseCompany(data)
+	if err != nil {
+		t.Fatalf("examples/nimbus.company.yaml no longer loads:\n%v", err)
+	}
+	if cfg.Providers.Sandbox == nil {
+		t.Fatal("the example configures no sandbox provider, so this proves nothing")
+	}
+
+	var step *SandboxSetupStep
+	for i := range cfg.Providers.Sandbox.Setup {
+		if cfg.Providers.Sandbox.Setup[i].Name == "git-auth" {
+			step = &cfg.Providers.Sandbox.Setup[i]
+			break
+		}
+	}
+	if step == nil {
+		t.Fatal("the example ships no git-auth setup step; a sandboxed seat " +
+			"would have no way to authenticate a headless clone")
+	}
+
+	var helper string
+	for path, content := range step.Files {
+		if strings.Contains(path, "git-credential-") {
+			helper = content
+		}
+	}
+	if helper == "" {
+		t.Fatal("the git-auth step writes no credential helper")
+	}
+
+	// Layer one: the script refuses to answer for a host it does not know.
+	if !strings.Contains(helper, "host=") {
+		t.Error("the credential helper does not check the host it is being " +
+			"asked about, so the seat's token is offered to any host that " +
+			"asks — a malicious submodule URL is enough")
+	}
+	// And it declines rather than erroring when there is nothing to offer.
+	if !strings.Contains(helper, "exit 0") {
+		t.Error("the credential helper has no silent-decline path, so a " +
+			"public clone fails instead of falling through to anonymous")
+	}
+
+	commands := strings.Join(step.Commands, "\n")
+
+	// Layer two: git is told to consult it for that host only. A bare
+	// `credential.helper` is the global one, consulted for everything.
+	if !strings.Contains(commands, `credential."https://`) {
+		t.Error("the helper is not registered under a host-scoped " +
+			"credential key, so git consults it for every host")
+	}
+	for _, form := range []string{`insteadOf "git@`, `insteadOf "ssh://`} {
+		if !strings.Contains(commands, form) {
+			t.Errorf("no rewrite for %s remotes: they stay on SSH, and the "+
+				"box has no key, so they fail", form)
+		}
+	}
+	// Both rewrites must be --add. url.<base>.insteadOf is multi-valued.
+	if adds := strings.Count(commands, "--add"); adds < 2 {
+		t.Errorf("insteadOf is set with --add %d times, want at least 2: "+
+			"without it the second rewrite replaces the first", adds)
+	}
+	for _, fact := range []string{"CREWLET_AGENT_HANDLE", "CREWLET_AGENT_EMAIL"} {
+		if !strings.Contains(commands, fact) {
+			t.Errorf("the commit identity does not come from $%s, so work "+
+				"does not attribute to the seat", fact)
+		}
+	}
+	// Headless git must never block on a prompt it cannot answer.
+	if step.Env["GIT_TERMINAL_PROMPT"] != "0" {
+		t.Error("GIT_TERMINAL_PROMPT is not 0, so an unauthenticated fetch " +
+			"blocks on a username prompt until the run's TTL expires")
+	}
+}
