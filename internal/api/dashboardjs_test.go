@@ -75,7 +75,7 @@ const (
 const suiteTimeout = 60 * time.Second
 
 // dashboardRootEnv is how a suite is told which tree to test. Its one
-// resolution point is tests/test_dashboard/js/dashboardRoot.mjs.
+// resolution point is tests/dashboard/js/dashboardRoot.mjs.
 const dashboardRootEnv = "CREWLET_DASHBOARD_ROOT"
 
 // inCI reports whether this is a CI run, where a skip is not a pass.

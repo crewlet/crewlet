@@ -351,10 +351,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 // --- the client's half ----------------------------------------------------- //
 
 // replayScript drives the dashboard's own store.js and socket.js over the
-// frames this server produced. See tests/test_dashboard/js/replay.mjs.
-//
-// PHASE 9 EDITS THIS, with the two constants in internal/api/dashboardjs_test.go
-// it sits beside: the suites move when the Python tree goes.
+// frames this server produced. See tests/dashboard/js/replay.mjs.
 const (
 	replayScript  = "../../tests/dashboard/js/replay.mjs"
 	dashboardTree = "../../static/dashboard"

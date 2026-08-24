@@ -3,8 +3,7 @@
 // Every log line in the engine is structured: a short machine-parsable
 // snake_case event name plus key/value attributes. Dynamic data never goes
 // into the message string, so a log stream stays greppable by event name and
-// filterable by field. This mirrors the discipline the Python engine holds
-// with structlog (see src/crewlet/_logging.py) and carries the same rule:
+// filterable by field. The rule that buys that:
 //
 //	log.Info("task_created", "task_id", id, "creator", who)   // yes
 //	log.Info(fmt.Sprintf("created task %s", id))              // never
