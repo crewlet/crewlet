@@ -21,15 +21,18 @@ func init() {
 //
 // Verification has ALREADY happened when this is published: the API refuses an
 // unsigned delivery at the edge, before anything is persisted or published.
-// The transports check again as defence in depth, which is what the bytes are
-// for.
+// Nothing downstream checks again — an earlier version of this comment claimed
+// the transports did, and no consumer reads a signature at all. The raw bytes
+// are kept because a parser needs the delivery exactly as sent, not because a
+// second verification runs on them.
 type RawWebhook struct {
 	// Body is the delivery's JSON, always an object.
 	Body map[string]any `json:"body"`
 
 	// Headers are the request's, with the credential-bearing ones
 	// redacted. Providers put half the delivery's meaning in headers —
-	// X-GitHub-Event, X-Gitlab-Event, the signature a transport re-checks.
+	// X-GitHub-Event, X-Gitlab-Event, and the signature that proves who
+	// sent it.
 	Headers map[string]string `json:"headers"`
 
 	// BodyRaw is the exact bytes signed. Marshals as base64.

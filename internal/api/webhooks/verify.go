@@ -3,12 +3,10 @@ package webhooks
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -106,39 +104,6 @@ func verifyGitLab(body []byte, secret, id, timestamp, signature string, now time
 		}
 	}
 	return false
-}
-
-// gitlabToken verifies the plain X-Gitlab-Token scheme.
-//
-// A BEARER VALUE, compared in constant time. It carries no timestamp, so a
-// captured delivery can be replayed — bounded by the delivery ledger, which
-// dedupes on the X-Gitlab-Event-UUID every GitLab request carries, so a
-// replay is dropped before it wakes anything.
-//
-// The body is unused and that is the point: this scheme authenticates the
-// SENDER, not the payload. It is the weaker half of [Receiver.gitlab]'s
-// two-scheme gate and is reached only when GitLab sent no signature at all.
-func gitlabToken(_ []byte, secret, presented string) bool {
-	return subtle.ConstantTimeCompare([]byte(secret), []byte(presented)) == 1
-}
-
-// gitlabSchemeOnce reports the scheme in use once rather than per delivery:
-// an operator needs to know they are on the weaker path, and does not need
-// a line about it on every event.
-var gitlabSchemeOnce sync.Once
-
-func noteGitLabScheme(signed bool) {
-	gitlabSchemeOnce.Do(func() {
-		if signed {
-			log.Info("gitlab_webhook_scheme", "scheme", "standard-webhooks")
-			return
-		}
-		log.Info("gitlab_webhook_scheme", "scheme", "x-gitlab-token",
-			"detail", "this instance sends no webhook-signature, so deliveries "+
-				"are verified by the hook's token — a bearer value with no "+
-				"timestamp, replay-bounded by the delivery ledger. A GitLab "+
-				"that signs is verified by signature automatically")
-	})
 }
 
 // gitlabKey is the signing key a "whsec_…" secret denotes.

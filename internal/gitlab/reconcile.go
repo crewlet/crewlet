@@ -508,7 +508,35 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 // the seat tokens follow — or refused, because a literal has nowhere to
 // record it and half-configuring is the failure above.
 func signingSecret(ctx context.Context, opts Options) (string, string, error) {
-	if secret := strings.TrimSpace(opts.SigningSecret); secret != "" {
+	// -rotate REACHES THE SIGNING SECRET, not just the seat tokens.
+	//
+	// It has to. Until the provisioning fix above, the minted key went into
+	// GitLab's plaintext `token` attribute, so the instance echoed it back
+	// in cleartext on every delivery — into request logs, into any proxy in
+	// front of the engine, and into the stored delivery headers. Every key
+	// installed by an older Crewlet is therefore compromised, and a
+	// provisioner that could not replace one would leave the operator
+	// editing environment variables by hand to recover.
+	//
+	// Deliberately gated on the flag rather than done on every run: minting
+	// a signing secret every time would re-point the hook at a key the
+	// RUNNING engine does not have yet, refusing every delivery until the
+	// new value is sourced and the process restarted — the same outage the
+	// seat tokens' Rotate doc explains at length.
+	rotating := opts.Rotate && opts.SigningSecretVar != ""
+	if secret := strings.TrimSpace(opts.SigningSecret); secret != "" && !rotating {
+		if opts.Rotate {
+			// REPORTED, NOT REFUSED. -rotate is about the seat tokens, and
+			// failing the whole run would stop an operator rotating those
+			// because of a signing secret they manage by hand. They do
+			// need to hear it, though — so it is a note on a run that
+			// otherwise succeeded rather than silence.
+			return secret, "the webhook signing secret was left alone: " +
+				"integrations.gitlab.signing_secret is a literal, so there is " +
+				"nowhere to record a new one. Replace it by hand and re-run — " +
+				"a key installed before the signing_token fix was echoed back " +
+				"in cleartext on every delivery, so it is compromised", nil
+		}
 		return secret, "", nil
 	}
 	if opts.SigningSecretVar == "" {
@@ -526,10 +554,14 @@ func signingSecret(ctx context.Context, opts Options) (string, string, error) {
 	if err := opts.Sink.Record(ctx, opts.SigningSecretVar, secret); err != nil {
 		return "", "", fmt.Errorf("gitlab: record %s: %w", opts.SigningSecretVar, err)
 	}
+	what := "minted"
+	if rotating {
+		what = "rotated"
+	}
 	return secret, fmt.Sprintf(
-		"minted a webhook signing secret into %s — source the sink into the "+
+		"%s a webhook signing secret into %s — source the sink into the "+
 			"engine's environment, or it will refuse every delivery this hook "+
-			"sends", opts.SigningSecretVar), nil
+			"sends", what, opts.SigningSecretVar), nil
 }
 
 // SigningSecretPrefix is what GitLab's Standard-Webhooks implementation
@@ -695,13 +727,52 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret
 			if err := c.UpdateGroupHook(ctx, groupID, hook.ID, target, secret); err != nil {
 				return fmt.Errorf("gitlab: update group hook: %w", err)
 			}
-			return nil
+			return confirmSigned(ctx, "group hook", func() ([]Hook, error) {
+				return c.GroupHooks(ctx, groupID)
+			}, target)
 		}
 	}
 	if _, err := c.CreateGroupHook(ctx, groupID, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create group hook: %w", err)
 	}
-	return nil
+	return confirmSigned(ctx, "group hook", func() ([]Hook, error) {
+		return c.GroupHooks(ctx, groupID)
+	}, target)
+}
+
+// confirmSigned reads the hook back and refuses to call the run a success
+// unless GitLab says it now holds a signing token.
+//
+// THE WRITE SUCCEEDING PROVES NOTHING. `signing_token` arrived in GitLab
+// 19.0 and went generally available in 19.1; an older instance takes the
+// attribute, ignores it, and answers 200. The hook then exists, GitLab's
+// settings page calls it healthy, and it delivers unsigned to an engine
+// whose verification is mandatory — so every delivery is refused, and the
+// only place that could have said why is this function.
+//
+// `signing_token_present` is the only thing GitLab will say about it: the
+// token itself is never returned. That is enough, because what is being
+// confirmed is that a signing token EXISTS, not which one.
+func confirmSigned(ctx context.Context, what string, list func() ([]Hook, error), target string) error {
+	hooks, err := list()
+	if err != nil {
+		return fmt.Errorf("gitlab: re-read the %s to confirm it can sign: %w", what, err)
+	}
+	for _, hook := range hooks {
+		if hook.URL != target {
+			continue
+		}
+		if !hook.SigningTokenPresent {
+			return fmt.Errorf(
+				"gitlab: the %s at %s reports no signing token, so this "+
+					"instance would deliver unsigned and the engine refuses "+
+					"unsigned deliveries. Signing tokens need GitLab 19.1 or "+
+					"newer (19.0 behind the webhook_signing_token flag)",
+				what, target)
+		}
+		return nil
+	}
+	return fmt.Errorf("gitlab: the %s at %s is not there after writing it", what, target)
 }
 
 // ensureProjectHooks registers one hook per declared project.
@@ -737,13 +808,17 @@ func ensureProjectHook(ctx context.Context, c *Client, project, target, secret s
 			if err := c.UpdateProjectHook(ctx, project, hook.ID, target, secret); err != nil {
 				return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
 			}
-			return nil
+			return confirmSigned(ctx, "hook on "+project, func() ([]Hook, error) {
+				return c.ProjectHooks(ctx, project)
+			}, target)
 		}
 	}
 	if _, err := c.CreateProjectHook(ctx, project, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create hook on %s: %w", project, err)
 	}
-	return nil
+	return confirmSigned(ctx, "hook on "+project, func() ([]Hook, error) {
+		return c.ProjectHooks(ctx, project)
+	}, target)
 }
 
 // gatedByTier reports whether a failure is GitLab withholding a licensed

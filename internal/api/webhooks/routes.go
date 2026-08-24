@@ -65,29 +65,28 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 			req.Header.Get("webhook-id"), req.Header.Get("webhook-timestamp"),
 			signature, now)
 	}
-	// TWO SCHEMES, IN ORDER — see rewrite/decisions/702.
+	// ONE SCHEME. A delivery without a valid signature is refused —
+	// see rewrite/decisions/702.
 	//
-	// A signed delivery must have a VALID signature: that check runs
-	// whenever the header is present, so stripping it is not a way down
-	// to the weaker path. Only a delivery GitLab sent unsigned is
-	// verified by its token.
+	// There used to be a fallback to the plaintext X-Gitlab-Token, on the
+	// measured premise that gitlab-ee 19.3.0 sent no `webhook-signature`
+	// at all. The measurement was real and the conclusion was wrong: the
+	// hook had been provisioned with GitLab's `token` attribute instead of
+	// `signing_token`, so the instance was doing exactly as asked. GitLab
+	// signs from 19.1 onward whenever a hook has a signing token, and this
+	// engine's provisioner now sets one.
 	//
-	// Measured, because the doc's premise was wrong: gitlab-ee 19.3.0
-	// sends `webhook-id` and `webhook-timestamp` — the Standard-Webhooks
-	// envelope — and no `webhook-signature`, with the feature flag on or
-	// off. Requiring the signature meant the integration received
-	// nothing at all, from a hook GitLab's own settings page called
-	// healthy.
-	signature := req.Header.Get("webhook-signature")
-	check, presented := scheme(standardWebhooks), signature
-	if signature == "" {
-		check, presented = gitlabToken, req.Header.Get("X-Gitlab-Token")
-	}
-	v, ok := r.authenticate(w, "gitlab", r.secrets().GitLab, presented, raw, check)
+	// So the fallback authenticated the sender with a bearer string
+	// GitLab's own documentation calls weaker and not recommended, over a
+	// payload it said nothing about — and it was reachable by an attacker
+	// simply omitting the signature header, which is the shape a
+	// downgrade attack takes. Its absence is the point: there is no path
+	// here that verifies anything but an HMAC over the body.
+	v, ok := r.authenticate(w, "gitlab", r.secrets().GitLab,
+		req.Header.Get("webhook-signature"), raw, scheme(standardWebhooks))
 	if !ok {
 		return
 	}
-	noteGitLabScheme(signature != "")
 	// GitLab 19.1+ sends webhook-id; older deliveries carry
 	// X-Gitlab-Event-UUID. Either is a stable per-delivery identity, and a
 	// deployment mid-upgrade sends both across its instances.

@@ -365,6 +365,18 @@ func (c *Client) DeleteServiceAccount(ctx context.Context, groupID, userID int) 
 type Hook struct {
 	ID  int    `json:"id"`
 	URL string `json:"url"`
+
+	// SigningTokenPresent is the ONLY thing GitLab will say about a hook's
+	// signing token: the token itself is never returned, by design. It is
+	// what lets a reconcile tell a hook that can verify from one that
+	// cannot — the difference between an integration that works and one
+	// that has been silently unauthenticated since it was created.
+	//
+	// Absent on a GitLab older than 19.0, where it decodes as false and a
+	// reconcile then sets the token it could not confirm. That is the safe
+	// direction: setting a token that was already right costs a write,
+	// while skipping one that was missing costs every delivery.
+	SigningTokenPresent bool `json:"signing_token_present"`
 }
 
 // GroupHooks lists a group's webhooks.
@@ -436,10 +448,40 @@ func (c *Client) UpdateProjectHook(ctx context.Context, project string, hookID i
 func hookBody(target, secret string) map[string]any {
 	body := map[string]any{
 		"url": target,
-		// The Standard-Webhooks signing token. GitLab sends it back as a
-		// header the engine verifies an HMAC with; the weaker plain-token
-		// scheme is deliberately unsupported.
-		"token": secret,
+		// THE SIGNING TOKEN, and the field name is the whole feature.
+		//
+		// GitLab takes two different secrets on a hook and they are not
+		// variants of one idea:
+		//
+		//   signing_token — an HMAC key. GitLab signs every delivery and
+		//     sends webhook-id / webhook-timestamp / webhook-signature, so
+		//     the receiver can verify the payload was not tampered with.
+		//     Must be whsec_<base64> over a 32-byte key; never returned.
+		//   token — a bearer string echoed back in plaintext as
+		//     X-Gitlab-Token, which GitLab's own docs call "not
+		//     recommended" and "weaker".
+		//
+		// This sent the minted whsec_ key in `token`. GitLab did exactly
+		// what it was asked: it never signed, and it echoed a 32-byte HMAC
+		// key back in cleartext on every delivery. The engine, verifying
+		// signatures, then rejected everything — measured against a live
+		// 19.3.0 instance, and misread at the time as GitLab not
+		// supporting the scheme. It supports it from 19.1; the hook was
+		// asked for the other one.
+		"signing_token": secret,
+		// AND THE PLAINTEXT FIELD IS EXPLICITLY CLEARED.
+		//
+		// Not merely "no longer set": a hook an older Crewlet created holds
+		// the signing key in `token`, and an update that only writes
+		// `signing_token` leaves it there — so GitLab goes on echoing a
+		// live HMAC key in cleartext on every delivery, for ever, from a
+		// hook that now also signs correctly and therefore never looks
+		// wrong again.
+		//
+		// Sending the empty string is what removes it. Omitting the field
+		// means "leave whatever is there", which is exactly the state that
+		// needs clearing.
+		"token": "",
 		// TLS verification stays ON. A provisioner that turned it off to
 		// make a self-signed development instance work would leave it off
 		// in production, where the hook carries a signing secret.

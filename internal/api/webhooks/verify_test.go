@@ -368,64 +368,69 @@ func vendorSignedDelivery(t *testing.T, body []byte, secret, id string, at time.
 	}
 }
 
-// --- the two GitLab schemes ------------------------------------------------
+// --- the one GitLab scheme -------------------------------------------------
 
-// GITLAB DOES NOT SIGN, and the integration has to work anyway.
+// A GITLAB DELIVERY IS AUTHENTICATED BY ITS SIGNATURE, AND BY NOTHING ELSE.
 //
-// Measured on gitlab-ee 19.3.0: a real Issue Hook delivery carries
-// `webhook-id` and `webhook-timestamp` — the Standard-Webhooks envelope —
-// and NO `webhook-signature`, with the `webhook_standard_signature` feature
-// flag on or off. Requiring the signature meant the integration received
-// nothing at all, from a hook GitLab's own settings page called healthy.
-// See rewrite/decisions/702-gitlab-webhook-verification.md.
-func TestGitLabVerifiesAnUnsignedDeliveryByItsToken(t *testing.T) {
+// GitLab takes two different secrets on a hook: `signing_token`, an HMAC key
+// it signs every delivery with, and `token`, a bearer string it echoes back
+// in plaintext as X-Gitlab-Token — which GitLab's own documentation calls
+// weaker and not recommended. This engine provisions the first and accepts
+// only the first.
+//
+// There was a fallback to the second, added on a measurement that a live
+// 19.3.0 instance sent no `webhook-signature`. The measurement was real and
+// the conclusion was wrong: the hook had been provisioned with `token`, so
+// GitLab was doing as asked. See rewrite/decisions/702.
+func TestGitLabAcceptsASignedDelivery(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
-	e.secrets.GitLab = "whsec_the-hooks-token"
+	e.secrets.GitLab = gitlabSecret
 
 	body := []byte(`{"object_kind":"issue"}`)
+	id, ts := "c32719e0", strconv.FormatInt(pinned.Unix(), 10)
 	got := e.post(t, "/webhooks/gitlab", body, map[string]string{
-		// Exactly what GitLab sends: the envelope, no signature.
-		"webhook-id":          "c32719e0",
-		"webhook-timestamp":   strconv.FormatInt(pinned.Unix(), 10),
-		"X-Gitlab-Token":      "whsec_the-hooks-token",
+		"webhook-id":          id,
+		"webhook-timestamp":   ts,
+		"webhook-signature":   gitlabSignature(t, gitlabSecret, id, ts, body),
 		"X-Gitlab-Event":      "Issue Hook",
 		"X-Gitlab-Event-UUID": "243c86f4",
 	}).Code
 	if got != http.StatusOK {
-		t.Fatalf("got %d — a delivery shaped exactly like a real one was refused", got)
+		t.Fatalf("got %d — a correctly signed delivery was refused", got)
 	}
 }
 
-// A WRONG TOKEN IS STILL A WRONG TOKEN.
-func TestGitLabRefusesAnUnsignedDeliveryWithTheWrongToken(t *testing.T) {
+// THE PLAINTEXT TOKEN IS NOT A CREDENTIAL HERE ANY MORE.
+//
+// This is the inversion of a test that used to assert the opposite. An
+// unsigned delivery presenting the right token in X-Gitlab-Token was the
+// engine's accepted path; it is now refused, because a bearer string says
+// nothing about the payload it arrived with and omitting the signature
+// header was all it took to reach it.
+func TestGitLabRefusesAnUnsignedDeliveryEvenWithTheRightToken(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
-	e.secrets.GitLab = "whsec_the-hooks-token"
+	e.secrets.GitLab = gitlabSecret
 
-	// SAME LENGTH, different bytes. A wrong token of a different length is
-	// refused by a comparison that only measures — which is not a
-	// comparison at all, and is what a hand-rolled equality check tends to
-	// decay into.
-	for _, wrong := range []string{"whsec_the-hooks-taken", "not-the-token"} {
-		got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
-			"webhook-id":        "c32719e0",
-			"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
-			"X-Gitlab-Token":    wrong,
-			"X-Gitlab-Event":    "Issue Hook",
-		}).Code
-		if got != http.StatusUnauthorized {
-			t.Errorf("token %q got %d, want 401", wrong, got)
-		}
+	got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
+		// Exactly what a hook provisioned the OLD way sends.
+		"webhook-id":          "c32719e0",
+		"webhook-timestamp":   strconv.FormatInt(pinned.Unix(), 10),
+		"X-Gitlab-Token":      gitlabSecret,
+		"X-Gitlab-Event":      "Issue Hook",
+		"X-Gitlab-Event-UUID": "243c86f4",
+	}).Code
+	if got != http.StatusUnauthorized {
+		t.Fatalf("got %d — the plaintext token still authenticates a delivery", got)
 	}
 }
 
-// AND NO TOKEN AT ALL IS NOT A WAY IN. An unsigned delivery with nothing
-// presented is the shape an attacker sends first.
-func TestGitLabRefusesADeliveryWithNeitherCredential(t *testing.T) {
+// AND NO CREDENTIAL AT ALL IS NOT A WAY IN. The shape an attacker sends first.
+func TestGitLabRefusesADeliveryWithNoSignature(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
-	e.secrets.GitLab = "whsec_the-hooks-token"
+	e.secrets.GitLab = gitlabSecret
 
 	got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
 		"webhook-id":        "c32719e0",
@@ -437,27 +442,92 @@ func TestGitLabRefusesADeliveryWithNeitherCredential(t *testing.T) {
 	}
 }
 
-// STRIPPING THE SIGNATURE IS NOT A DOWNGRADE PATH.
-//
-// The whole risk of accepting two schemes is that an attacker picks the
-// weaker one. They cannot: the signature check runs whenever the header is
-// present, so a delivery that carries a BAD signature is refused rather than
-// falling through to the token — even when the attacker also presents a
-// token they somehow hold. The only way to the token path is GitLab sending no
-// signature at all.
-func TestABadSignatureDoesNotFallThroughToTheToken(t *testing.T) {
+// A WRONG SIGNATURE IS REFUSED, and cannot fall through to anything.
+func TestGitLabRefusesABadSignature(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
-	e.secrets.GitLab = "whsec_the-hooks-token"
+	e.secrets.GitLab = gitlabSecret
 
 	got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`), map[string]string{
 		"webhook-id":        "c32719e0",
 		"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
 		"webhook-signature": "v1,bm90LWEtc2lnbmF0dXJl",
-		"X-Gitlab-Token":    "whsec_the-hooks-token",
+		// Presented as well, so the test proves there is nothing to fall
+		// through TO rather than that the fall-through was not reached.
+		"X-Gitlab-Token": gitlabSecret,
+		"X-Gitlab-Event": "Issue Hook",
+	}).Code
+	if got != http.StatusUnauthorized {
+		t.Fatalf("got %d — a bad signature was accepted", got)
+	}
+}
+
+// THE BODY IS WHAT IS SIGNED. A signature valid for one payload must not
+// authenticate another: that is the entire difference between this scheme
+// and the bearer token it replaced.
+func TestGitLabRefusesASignatureFromAnotherBody(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = gitlabSecret
+
+	id, ts := "c32719e0", strconv.FormatInt(pinned.Unix(), 10)
+	signed := gitlabSignature(t, gitlabSecret, id, ts, []byte(`{"object_kind":"issue"}`))
+	got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"merge_request"}`), map[string]string{
+		"webhook-id":        id,
+		"webhook-timestamp": ts,
+		"webhook-signature": signed,
 		"X-Gitlab-Event":    "Issue Hook",
 	}).Code
 	if got != http.StatusUnauthorized {
-		t.Fatalf("got %d — a bad signature reached the token path", got)
+		t.Fatalf("got %d — a signature over a different body was accepted", got)
 	}
+}
+
+// SEVERAL SIGNATURES CAN RIDE ONE HEADER, which is how the scheme rotates a
+// key without an outage. GitLab sends one today and its documentation says
+// that may change, so any entry matching is a match.
+func TestGitLabAcceptsOneOfSeveralSignatures(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = gitlabSecret
+
+	body := []byte(`{"object_kind":"issue"}`)
+	id, ts := "c32719e0", strconv.FormatInt(pinned.Unix(), 10)
+	real := gitlabSignature(t, gitlabSecret, id, ts, body)
+	got := e.post(t, "/webhooks/gitlab", body, map[string]string{
+		"webhook-id":        id,
+		"webhook-timestamp": ts,
+		"webhook-signature": "v1,bm90LWEtc2lnbmF0dXJl " + real,
+		"X-Gitlab-Event":    "Issue Hook",
+	}).Code
+	if got != http.StatusOK {
+		t.Fatalf("got %d — a valid signature beside a stale one was refused", got)
+	}
+}
+
+// gitlabSecret is a REAL whsec_ value: the prefix over standard base64 of a
+// 32-byte key, which is the only shape GitLab's API accepts. A fixture that
+// merely looks the part passes a lax verifier and fails a correct one.
+const gitlabSecret = "whsec_TZKyEaPXhi0xZl3mrSf9DdHgcjMC+EWPsBVilfjdgOI="
+
+// gitlabSignature signs exactly as GitLab documents it: HMAC-SHA256 over
+// "{webhook-id}.{webhook-timestamp}.{body}", keyed on the DECODED payload of
+// the whsec_ secret, rendered as "v1,<standard base64>".
+//
+// Built here from the published algorithm rather than by calling the
+// engine's own verifier inside out — a fixture generated by the code under
+// test agrees with it by construction, including where both are wrong.
+func gitlabSignature(t *testing.T, secret, id, timestamp string, body []byte) string {
+	t.Helper()
+	key, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(secret, "whsec_"))
+	if err != nil {
+		t.Fatalf("the fixture secret is not whsec_<standard base64>: %v", err)
+	}
+	if len(key) != 32 {
+		t.Fatalf("the fixture key is %d bytes, and GitLab requires 32", len(key))
+	}
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(id + "." + timestamp + "."))
+	m.Write(body)
+	return "v1," + base64.StdEncoding.EncodeToString(m.Sum(nil))
 }

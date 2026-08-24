@@ -380,11 +380,29 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 
 // sensitiveHeaders are redacted before a delivery's headers travel.
 //
-// The SIGNATURE headers are deliberately not here: a transport re-verifies
-// against them, and stripping the proof of authenticity from a payload that
-// carries the raw bytes would leave the second check unable to run.
+// A delivery's headers are persisted to the event store and rendered on the
+// dashboard, so anything here that carries a SECRET is a secret at rest in
+// the audit log — readable by everyone who can read an event, and impossible
+// to un-write.
+//
+// `x-gitlab-token` is that, and it is here because of what put it there. The
+// provisioner registered the minted signing key in GitLab's plaintext
+// `token` attribute rather than `signing_token`, so GitLab echoed a 32-byte
+// HMAC key back on every single delivery — and it was copied verbatim into
+// the stored headers. The provisioning bug is fixed and this engine no longer
+// sets that field, but the header must be redacted regardless: a hook created
+// by an older version still carries the old value and still sends it.
+//
+// SIGNATURE headers are deliberately NOT redacted, and the reason is not the
+// one that used to be written here. It said "a transport re-verifies against
+// them" — nothing does; no consumer of RawWebhook reads a signature at all.
+// They stay because a signature is an HMAC OUTPUT rather than a key: it
+// reveals nothing about the secret, and it is the evidence an operator needs
+// to tell "the provider did not sign this" from "the provider signed it with
+// the wrong key".
 var sensitiveHeaders = map[string]bool{
 	"authorization": true, "cookie": true, "proxy-authorization": true,
+	"x-gitlab-token": true,
 }
 
 // safeHeaders flattens the request's headers, lowercased, with the

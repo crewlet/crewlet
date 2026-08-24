@@ -1,106 +1,96 @@
-# d-702 — GitLab webhooks: accept the token scheme GitLab actually sends
+# d-702 — GitLab webhooks: the signature is mandatory
 
-Status: **decided, implemented — and it reverses a documented decision, so
-it needs ratification.** Phase: 7 ·
-Implementation: `internal/api/webhooks/verify.go`,
+Status: **decided and implemented.** Supersedes an earlier version of this
+document that decided the opposite on a false premise; the reversal is
+recorded below rather than deleted, because the way it went wrong is the
+useful part. Phase: 7 ·
+Implementation: `internal/gitlab/admin.go`, `internal/api/webhooks/verify.go`,
 `internal/api/webhooks/routes.go` · Docs: `docs/integrations/gitlab.md`
 
-## The measurement
+## The decision
 
-Pointed a real GitLab at a running engine and created an issue. Every
-delivery was refused. The engine logged one `webhook_signature_invalid` per
-delivery; GitLab's own settings page showed a healthy, executable hook.
+A GitLab delivery is authenticated by an HMAC signature over its body, and
+by nothing else. A delivery without a valid `webhook-signature` is refused
+with a 401. There is no fallback.
 
-Captured a real `Issue Hook` delivery at a bare HTTP sink to see what GitLab
-sends. On **gitlab-ee 19.3.0**, through a **project** hook, for a **real
-event** (not the `/test` endpoint), with the hook's `token` set:
+Hooks are provisioned with GitLab's **`signing_token`** attribute — a
+`whsec_<standard-base64>` value over a 32-byte key, which is the only shape
+the API accepts — never with `token`.
+
+## What went wrong, and why it looked like a vendor limitation
+
+The engine minted a correct signing key and registered it in the wrong
+field. `hookBody` sent it as `token`.
+
+GitLab takes two different secrets on a hook, and they are not two variants
+of one idea:
+
+| Attribute | What GitLab does with it |
+|---|---|
+| `signing_token` | Signs every delivery. Sends `webhook-id`, `webhook-timestamp`, `webhook-signature`. Never returned by the API; `signing_token_present` reports only whether one is set. |
+| `token` | Echoes it back verbatim in the `X-Gitlab-Token` header. GitLab's own documentation calls this "not recommended" and "weaker". |
+
+So the instance did exactly as it was asked: it did not sign, and it echoed
+a 32-byte HMAC key back in cleartext on every delivery. The engine, which
+verifies signatures, refused everything.
+
+The capture that was taken at the time is the proof, and it was read
+backwards. From a real `Issue Hook` on gitlab-ee 19.3.0:
 
 ```
-x-gitlab-event:        Issue Hook
-x-gitlab-event-uuid:   243c86f4-…
-x-gitlab-webhook-uuid: 85661e6d-…
-x-gitlab-instance:     http://gitlab.local:8929
 webhook-id:            c32719e0-…
 webhook-timestamp:     1787574263
 x-gitlab-token:        whsec_probe
 ```
 
-**There is no `webhook-signature` header.** GitLab sends the
-Standard-Webhooks *envelope* — `webhook-id` and `webhook-timestamp` — and
-does not sign it.
+`webhook-id` and `webhook-timestamp` are sent on **every** delivery; only
+`webhook-signature` is conditional on a signing token existing. And there,
+in the header dump, is the signing key itself in plaintext — the single
+clearest possible sign that it had been installed as a bearer token. It was
+read as "GitLab sends the envelope but does not sign", and a fallback to the
+plaintext token was added to make the integration work.
 
-The `webhook_standard_signature` feature flag is **off by default** on that
-version (`Feature.get(:webhook_standard_signature).state → off`). Enabling it
-and re-testing changed nothing: still no signature header, on a group hook
-test delivery and on a real project-hook event.
+## Why the fallback had to go, beyond being unnecessary
 
-## What the engine believed
+It was reachable by **omitting a header**. The gate chose its scheme on
+whether `webhook-signature` was present, so anyone who could reach the
+endpoint could select the weaker check by simply not sending one. The
+signature path was guarded against a bad signature falling through, which is
+the attack that was anticipated; the one that mattered needed no signature
+at all.
 
-`docs/integrations/gitlab.md` said, and the verifier enforced:
+What it then verified was a bearer string that says nothing about the
+payload it arrived with. Combined with the provisioning bug, that string was
+also being broadcast in cleartext to the endpoint on every delivery.
 
-> inbound webhooks are verified by the GitLab 19.1+ Standard-Webhooks HMAC
-> signature (`webhook-signature` header) and nothing else. The weaker plain
-> `X-Gitlab-Token` scheme is intentionally unsupported; gitlab.com always
-> runs ≥ 19.1 and the docker-compose test instance runs `gitlab-ee:latest`,
-> so the signing token is always available.
+## What the engine implements
 
-The premise is false. "19.1+" is not the gate; emitting the signature at all
-is, and a current GitLab does not.
+Per <https://docs.gitlab.com/user/project/integrations/webhooks/>:
 
-The consequence is total: **the GitLab integration could not receive a single
-webhook.** Not degraded — zero. And it fails in the shape that takes longest
-to diagnose, because both ends report health: the hook is executable, the
-engine is up, and the only evidence is a warning line per delivery.
+- The signed message is `{webhook-id}.{webhook-timestamp}.{body}`, over the
+  **raw** received bytes.
+- The key is the `whsec_` prefix stripped and the remainder **standard**
+  base64-decoded. Not URL-safe, not raw/unpadded — the wrong alphabet
+  usually still decodes to *something*, which is a mismatch with no message.
+- `webhook-signature` may carry several space-separated `v1,<base64>`
+  entries; GitLab sends one today and documents that this may change. Any
+  entry matching is a match, which is how a key rotates without an outage.
+- Comparison is constant-time.
+- `webhook-timestamp` is checked against a tolerance window in **both**
+  directions. A future stamp is as suspect as an old one: it is what a
+  replay looks like against a node whose clock ran slow. The Standard
+  Webhooks envelope exists partly for this, and a scheme that ignored the
+  timestamp would be signature-checking a replayable message.
 
-## The decision
+## What this costs
 
-**Prefer the signature; accept the token when GitLab sends no signature.**
+A GitLab older than **19.1** cannot sign: `signing_token` arrived in 19.0
+behind a feature flag and went generally available in 19.1. Such an instance
+cannot deliver to this engine at all, and that is the intended reading of
+"mandatory" rather than an oversight. The alternative is accepting a
+plaintext bearer token on a public endpoint, which is what this document
+used to decide.
 
-1. `webhook-signature` present → verify it exactly as before. Unchanged, and
-   still the only scheme accepted when it is there: a delivery that carries a
-   signature must have a *valid* one, so an attacker cannot strip it to reach
-   the weaker path.
-2. No `webhook-signature` → compare `X-Gitlab-Token` against the configured
-   secret in constant time.
-3. Neither, or no configured secret → refuse, as now.
-
-## Why, and what it costs
-
-The plain token is weaker in one specific way: it is a bearer value with no
-timestamp, so a captured delivery can be replayed. It is not weaker in the
-way "unsigned" suggests — the value never appears in a URL or a log, and the
-comparison is constant-time.
-
-Two things bound the replay:
-
-- **The delivery ledger.** Every inbound delivery is deduped on its id, and
-  GitLab sends `X-Gitlab-Event-UUID` on every request. A replayed delivery is
-  dropped as a duplicate before it wakes anything.
-- **Transport.** The token is only observable to something that can already
-  read the request body, which is the payload itself.
-
-Against that: the alternative is an integration that receives nothing. A
-security property that is only available by not shipping the feature is not a
-security property.
-
-The engine says which scheme verified a delivery, once per epoch rather than
-per request, so an operator on the weaker path knows it — and knows the
-remedy is a GitLab that signs, not a config change here.
-
-## What needs ratification
-
-This reverses a decision that was written down and argued. The reasons to
-look at it again:
-
-- The original judgement is defensible and this is a real downgrade for
-  anyone whose GitLab *does* sign — though for them nothing changes, because
-  a present signature is still required to be valid.
-- A stricter option exists: a config field that refuses the token scheme
-  outright, for a deployment that has verified its instance signs. That is
-  one field and one branch; it is not built, because nothing yet knows of a
-  GitLab that signs, and a knob whose safe setting nobody can use is a knob
-  that only ever gets set wrong.
-
-If the answer is "keep requiring the signature", then the GitLab integration
-is not in v1 and its doc needs the same status banner Slack and Confluence
-carry — which is a bigger change than this one.
+`crewlet gitlab provision` reports what it set, and the reconcile reads
+`signing_token_present` back, so an operator finds out at provisioning time
+rather than from silence.

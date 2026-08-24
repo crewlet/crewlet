@@ -28,12 +28,18 @@ import (
 type adminInstance struct {
 	mu sync.Mutex
 
-	users        map[string]int          // username -> id
-	people       map[string]bool         // usernames the instance treats as humans
-	tokens       map[int][]*gitlab.Token // user id -> its token rows
-	members      map[string]int          // "group:7" / "proj:a/b" -> access level
-	hooks        []gitlab.Hook
-	hookBodies   []map[string]any
+	users      map[string]int          // username -> id
+	people     map[string]bool         // usernames the instance treats as humans
+	tokens     map[int][]*gitlab.Token // user id -> its token rows
+	members    map[string]int          // "group:7" / "proj:a/b" -> access level
+	hooks      []gitlab.Hook
+	hookBodies []map[string]any
+	// signsNothing models a GitLab older than 19.1: it ACCEPTS the
+	// signing_token attribute, ignores it, and answers 200 — so the write
+	// succeeds and the hook still cannot sign. That is the only failure
+	// mode confirmSigned exists for, and it is invisible without a fake
+	// that reproduces it.
+	signsNothing bool
 	updatedHooks []string
 
 	// noGroupHooks makes the GROUP hooks API answer 404, the way GitLab
@@ -284,7 +290,10 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		f.hookBodies = append(f.hookBodies, body)
-		hook := gitlab.Hook{ID: len(f.projectHooks[project]) + 1, URL: body["url"].(string)}
+		hook := gitlab.Hook{
+			ID: len(f.projectHooks[project]) + 1, URL: body["url"].(string),
+			SigningTokenPresent: f.signs(body),
+		}
 		if f.projectHooks == nil {
 			f.projectHooks = map[string][]gitlab.Hook{}
 		}
@@ -307,7 +316,10 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/groups/7/hooks":
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
-		hook := gitlab.Hook{ID: len(f.hooks) + 1, URL: body["url"].(string)}
+		hook := gitlab.Hook{
+			ID: len(f.hooks) + 1, URL: body["url"].(string),
+			SigningTokenPresent: f.signs(body),
+		}
 		f.hooks = append(f.hooks, hook)
 		f.hookBodies = append(f.hookBodies, body)
 		json.NewEncoder(w).Encode(hook)
@@ -317,11 +329,36 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&body)
 		f.hookBodies = append(f.hookBodies, body)
 		f.updatedHooks = append(f.updatedHooks, path)
+		// A PUT that carries a signing token makes the hook report one on
+		// the next GET, exactly as GitLab does.
+		target, _ := body["url"].(string)
+		for i := range f.hooks {
+			if f.hooks[i].URL == target {
+				f.hooks[i].SigningTokenPresent = f.signs(body)
+			}
+		}
+		for project := range f.projectHooks {
+			for i := range f.projectHooks[project] {
+				if f.projectHooks[project][i].URL == target {
+					f.projectHooks[project][i].SigningTokenPresent = f.signs(body)
+				}
+			}
+		}
 
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"message":"404 Not Found"}`))
 	}
+}
+
+// signs is what GitLab reports on the next GET: a signing token is present
+// when one was sent and this instance is new enough to honour it.
+func (f *adminInstance) signs(body map[string]any) bool {
+	if f.signsNothing {
+		return false
+	}
+	token, _ := body["signing_token"].(string)
+	return token != ""
 }
 
 func (f *adminInstance) usernameOf(id string) string {
@@ -619,7 +656,7 @@ func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 	if len(f.updatedHooks) != 1 || !strings.HasSuffix(f.updatedHooks[0], "/hooks/10") {
 		t.Fatalf("updated %v, want only our own hook 10", f.updatedHooks)
 	}
-	if f.hookBodies[0]["token"] != "whsec-abc" {
+	if f.hookBodies[0]["signing_token"] != "whsec-abc" {
 		t.Errorf("the update did not carry the signing secret: %v", f.hookBodies[0])
 	}
 }
@@ -1536,7 +1573,7 @@ func TestAnUnsetSigningSecretIsMintedAndRecorded(t *testing.T) {
 	// is the same outage with an extra step.
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if got := f.hookBodies[0]["token"]; got != minted {
+	if got := f.hookBodies[0]["signing_token"]; got != minted {
 		t.Errorf("the hook was stamped with %q, not the recorded %q", got, minted)
 	}
 	// AND IT SAYS SO, with what to do about it: the value is useless to
@@ -1610,7 +1647,7 @@ func TestAResolvedSigningSecretIsNotReminted(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if got := f.hookBodies[0]["token"]; got != "whsec_operators-own" {
+	if got := f.hookBodies[0]["signing_token"]; got != "whsec_operators-own" {
 		t.Errorf("the hook carries %q, not the operator's value", got)
 	}
 }
@@ -1635,5 +1672,175 @@ func TestMintedSigningSecretsDiffer(t *testing.T) {
 			t.Fatalf("two runs minted the same secret: %q", got)
 		}
 		seen[got] = true
+	}
+}
+
+// A GITLAB THAT CANNOT SIGN FAILS THE RUN, LOUDLY.
+//
+// `signing_token` arrived in GitLab 19.0 behind a feature flag and went
+// generally available in 19.1. An older instance ACCEPTS the attribute,
+// ignores it, and answers 200 — so the write succeeds, the hook exists, and
+// GitLab's own settings page calls it healthy. It then delivers unsigned to
+// an engine whose verification is mandatory, and every delivery is refused.
+//
+// Nothing else in the system can report that: the engine sees a stream of
+// unauthenticated deliveries, which is indistinguishable from an attack, and
+// the instance sees a hook it thinks is fine. The provisioner reading
+// `signing_token_present` back is the only moment the two facts are in one
+// place.
+func TestAGitLabThatCannotSignIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.signsNothing = true
+
+	_, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err == nil {
+		t.Fatal("the run succeeded against an instance that ignores signing " +
+			"tokens, so the hook would deliver unsigned for ever")
+	}
+	// The error has to name the remedy: an operator reading "no signing
+	// token" has no way to know it is a version floor rather than a
+	// mistake they made.
+	for _, want := range []string{"signing token", "19.1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// AND THE WRITE ITSELF STILL HAPPENED. The failure is the confirmation, not
+// the write — so a run against a too-old instance is refused rather than
+// half-applied in some way an operator has to unpick.
+func TestTheHookIsStillWrittenWhenTheConfirmationFails(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.signsNothing = true
+
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err == nil {
+		t.Fatal("expected the run to be refused")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) == 0 {
+		t.Fatal("no hook was written at all, so the failure was not the confirmation")
+	}
+	if got := f.hookBodies[0]["signing_token"]; got == nil || got == "" {
+		t.Errorf("the hook was written without a signing token: %v", got)
+	}
+}
+
+// THE OLD PLAINTEXT TOKEN IS CLEARED, NOT JUST STOPPED BEING SET.
+//
+// A hook an older Crewlet created holds the 32-byte signing key in GitLab's
+// `token` attribute, which GitLab echoes back in cleartext on every
+// delivery. An update that writes only `signing_token` leaves it there — and
+// the hook now signs correctly, so nothing ever looks wrong again while a
+// live key keeps going out in the clear.
+//
+// Sending the empty string is what removes it; omitting the field means
+// "leave whatever is there", which is the state being cleaned up.
+func TestTheLegacyPlaintextTokenIsCleared(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// A hook from before the fix: same URL, so the reconcile updates it.
+	f.hooks = []gitlab.Hook{{ID: 4, URL: "https://crewlet.example.com/webhooks/gitlab"}}
+
+	if _, err := reconcileAgainst(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hookBodies) != 1 {
+		t.Fatalf("%d hook writes, want one update", len(f.hookBodies))
+	}
+	body := f.hookBodies[0]
+	token, present := body["token"]
+	if !present {
+		t.Fatal("the update omits `token` entirely, so GitLab keeps the old " +
+			"plaintext value and goes on echoing it on every delivery")
+	}
+	if token != "" {
+		t.Errorf("token = %q, want the empty string that clears it", token)
+	}
+	if body["signing_token"] == "" || body["signing_token"] == nil {
+		t.Error("the update carries no signing token, so the hook cannot sign")
+	}
+}
+
+// -rotate REPLACES THE SIGNING SECRET, not just the seat tokens.
+//
+// The key installed by any Crewlet before the signing_token fix went into
+// GitLab's plaintext `token` attribute, so the instance echoed it back in
+// cleartext on every delivery — into request logs, into any proxy in front
+// of the engine, and into the stored delivery headers. Every one of those
+// keys is compromised, and a provisioner that could not replace one would
+// leave the operator editing environment variables by hand.
+func TestRotateReplacesTheSigningSecret(t *testing.T) {
+	t.Parallel()
+
+	// Both runs point the config's signing_secret at a ${VAR} that resolves
+	// to nothing, so the first MINTS one; the second sees a resolved value
+	// and, with -rotate, must replace it rather than reuse it.
+	run := func(rotate bool, resolved string) string {
+		f, sink := newAdminInstance(), newRecordingSink()
+		if _, err := reconcileWith(t, f, sink,
+			map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+			func(o *gitlab.Options) {
+				o.SigningSecret = resolved
+				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+				o.Rotate = rotate
+			}); err != nil {
+			t.Fatalf("Reconcile(rotate=%v): %v", rotate, err)
+		}
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		return sink.values["GITLAB_SIGNING_SECRET"]
+	}
+
+	first := run(false, "")
+	rotated := run(true, first)
+
+	if first == "" || rotated == "" {
+		t.Fatalf("no secret was written: %q then %q", first, rotated)
+	}
+	if first == rotated {
+		t.Error("-rotate reused the existing signing secret, so a compromised " +
+			"key cannot be replaced by the tool that installed it")
+	}
+	for _, got := range []string{first, rotated} {
+		if !strings.HasPrefix(got, "whsec_") {
+			t.Errorf("secret %q is not a whsec_ value", got)
+		}
+	}
+}
+
+// AND IT SAYS SO WHEN IT CANNOT. A literal signing_secret has nowhere to
+// record a new value — but that must not fail a run whose actual subject is
+// the seat tokens, so it is a note on a successful run rather than a refusal.
+func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
+			o.SigningSecret = "whsec_a-literal-the-operator-manages"
+			o.SigningSecretVar = "" // not a ${VAR}: nowhere to record one
+			o.Rotate = true
+		})
+	if err != nil {
+		t.Fatalf("the run was refused over a signing secret it was not asked "+
+			"to rotate: %v", err)
+	}
+	var said bool
+	for _, note := range res.Notes {
+		if strings.Contains(note, "signing secret was left alone") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("the run said nothing about the signing secret it could not "+
+			"replace: %v", res.Notes)
 	}
 }
