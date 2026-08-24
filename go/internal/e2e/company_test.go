@@ -209,12 +209,59 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		reply = toolUse("mark_onboarded", map[string]any{
 			"notes": "Read the team pages; deploys go out on Thursdays.",
 		})
+	case auxiliaryPass(raw) != "":
+		// AN AUXILIARY PASS, not a phase. The prefetch's memory filter,
+		// knowledge query and episode summary all reach this same
+		// endpoint with no tools offered, and counting them as Execute
+		// made the phase list report work that never happened — and made
+		// "the first execute call" name a prompt the executor never saw.
+		pass := auxiliaryPass(raw)
+		m.saw("aux:" + pass)
+		reply = textReply(auxiliaryAnswer(pass))
 	default:
 		m.saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, reply)
+}
+
+// auxiliaryPass names which prefetch pass a request is, or "" for a phase.
+//
+// Keyed on each pass's own system prompt, which is the only thing that
+// distinguishes them: they share an endpoint, a model and an empty tool
+// list. Matching on a phrase each prompt OPENS with, so a later edit to the
+// guidance below it cannot silently turn every pass back into "execute".
+func auxiliaryPass(raw []byte) string {
+	system := systemPrompt(raw)
+	switch {
+	case strings.Contains(system, "memory-relevance filter"):
+		return "memory"
+	case strings.Contains(system, "into a search query for"):
+		return "knowledge"
+	case strings.Contains(system, "compress an AI agent's record"):
+		return "recall"
+	default:
+		return ""
+	}
+}
+
+// auxiliaryAnswer is what each pass gets back.
+//
+// Real answers rather than empty ones, because an empty answer is the
+// degraded path and a fixture that always takes it proves the degradation
+// works and nothing else.
+func auxiliaryAnswer(pass string) string {
+	switch pass {
+	case "memory":
+		// Every candidate, so a memory written by a test reaches the
+		// prompt it was written for.
+		return "[0, 1, 2, 3, 4, 5, 6, 7]"
+	case "knowledge":
+		return "staging login redirect proxy"
+	default:
+		return ""
+	}
 }
 
 // offeredTools names the tools a Messages request actually offers.

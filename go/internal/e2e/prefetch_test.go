@@ -1,12 +1,19 @@
 package e2e
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // waitForSeat blocks until this node owns the seat: publishing before the
@@ -135,4 +142,159 @@ func tail(s string) string {
 		return s
 	}
 	return "…" + s[len(s)-1200:]
+}
+
+// ── the recon path, end to end ──
+
+// wikiInstance is a fake Plane serving the two reads a knowledge search
+// makes: the project list the identifier cache walks, and the page search.
+type wikiInstance struct {
+	url string
+
+	mu      sync.Mutex
+	queries []string
+}
+
+func fakeWiki(t *testing.T) *wikiInstance {
+	t.Helper()
+	w := &wikiInstance{}
+	server := httptest.NewServer(http.HandlerFunc(
+		func(rw http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/pages/search/"):
+				w.mu.Lock()
+				w.queries = append(w.queries, r.URL.Query().Get("query"))
+				w.mu.Unlock()
+				fmt.Fprint(rw, `{"results":[{"id":"page-1","name":"Staging runbook",`+
+					`"project":"proj-1","description_stripped":"how the proxy is wired"}]}`)
+			case strings.HasSuffix(r.URL.Path, "/projects/"):
+				fmt.Fprint(rw, `{"results":[{"id":"proj-1","identifier":"ENG"}]}`)
+			default:
+				fmt.Fprint(rw, `{"results":[]}`)
+			}
+		}))
+	t.Cleanup(server.Close)
+	w.url = server.URL
+	return w
+}
+
+func (w *wikiInstance) searched() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.queries...)
+}
+
+// wikiCompany enables Plane WITH a read credential and a read SCOPE.
+//
+// Both are needed: a seat searching on the shared engine credential may not
+// search unscoped, because an unscoped search on a shared credential shows
+// one seat pages its own account could never read. The scope is what makes
+// the search permitted at all.
+func wikiCompany(url string) func(string) string {
+	return func(doc string) string {
+		return strings.Replace(doc, "roles:\n", `integrations:
+  plane:
+    enabled: true
+    url: `+url+`
+    workspace: nimbus
+    webhook_secret: ${CREWLET_TEST_PLANE_SECRET}
+    token: plane-engine-token
+knowledge:
+  plane_projects: [ENG]
+roles:
+`, 1)
+	}
+}
+
+// wakeWithPointer publishes a trigger that only NAMES what changed, which is
+// what the thin-trigger gate exists for.
+func wakeWithPointer(t *testing.T, n *node, handle string) {
+	t.Helper()
+	body := "PR !42 got a comment"
+	ev := events.New(types.ExternalNotification{
+		NotificationSource: "gitlab", SourceEventType: "note.comment",
+		Sender: "human-dev", Subject: "Add the rate limiter",
+		Body: body, SalientBody: &body,
+		// THE FLAG the parser sets, and the only thing that tells the
+		// engine this body is a reference rather than the context.
+		ContextRequiresRecon: true,
+	}, events.TraceContext{})
+	if err := n.engine.Backends().Queue.Publish(t.Context(),
+		topics.AgentInbox(handle), ev); err != nil {
+		t.Fatalf("wake %s: %v", handle, err)
+	}
+}
+
+// THE WHOLE RECON PATH: a pointer trigger gates the Plan-time search off,
+// and the plan summary then recovers it for Execute.
+//
+// Neither half is observable without a knowledge backend, which is why this
+// test stands one up: with no searcher the gate and the recovery both render
+// nothing and a broken wire looks exactly like a working one.
+func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
+	wiki := fakeWiki(t)
+	n := startWith(t, wikiCompany(wiki.url))
+	waitForSeat(t, n, "ceo")
+
+	wakeWithPointer(t, n, "ceo")
+	waitForTurn(t, n)
+	waitFor(t, "the execute phase to run", func() bool {
+		return slices.Contains(n.model.seen(), "execute")
+	})
+
+	// THE PLAN PROMPT says to look again rather than carrying pages found
+	// by searching "PR !42 got a comment".
+	plan := planPrompt(t, n)
+	if !strings.Contains(plan, "no team documents surfaced at turn start") {
+		t.Fatalf("the gated plan prompt does not say to search later:\n%s", tail(plan))
+	}
+
+	// THE EXECUTE PROMPT carries what the recovery found.
+	phases, systems := n.model.seen(), n.model.systemPrompts()
+	var execute string
+	for i, phase := range phases {
+		if phase == "execute" && i < len(systems) {
+			execute = systems[i]
+			break
+		}
+	}
+	if !strings.Contains(execute, "Staging runbook") {
+		t.Fatalf("the executor did not receive the recovered knowledge:\n%s", tail(execute))
+	}
+
+	// And the search really did run on the PLAN SUMMARY rather than on the
+	// pointer: the original task is boilerplate on a thin trigger and
+	// would only dilute the one good query this turn has.
+	searched := wiki.searched()
+	if len(searched) == 0 {
+		t.Fatal("no knowledge search ran at all")
+	}
+	for _, query := range searched {
+		if strings.Contains(query, "PR !42") {
+			t.Fatalf("the search ran on the pointer: %q", query)
+		}
+	}
+}
+
+// A SUBSTANTIVE TRIGGER searches at Plan time and does NOT search again for
+// Execute: the Plan-time prefetch already ran against a real trigger, and
+// running anyway would spend a model call and a search to produce the block
+// the planner already read.
+func TestASubstantiveTriggerSearchesOnceAtPlanTime(t *testing.T) {
+	wiki := fakeWiki(t)
+	n := startWith(t, wikiCompany(wiki.url))
+	waitForSeat(t, n, "ceo")
+
+	n.wake(t, "ceo", "the staging login redirect keeps looping, can you look")
+	waitForTurn(t, n)
+	waitFor(t, "the execute phase to run", func() bool {
+		return slices.Contains(n.model.seen(), "execute")
+	})
+
+	if plan := planPrompt(t, n); !strings.Contains(plan, "Staging runbook") {
+		t.Fatalf("the planner did not receive the knowledge block:\n%s", tail(plan))
+	}
+	if got := len(wiki.searched()); got != 1 {
+		t.Fatalf("a substantive trigger ran %d searches, want exactly one", got)
+	}
 }

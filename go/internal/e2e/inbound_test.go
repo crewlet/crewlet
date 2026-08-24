@@ -215,27 +215,33 @@ func TestTheRateValveFollowsTheAppliedConfig(t *testing.T) {
 	box := watchInbox(t, n, "ceo")
 	vendor.says(routed("ceo", "one", nil))
 
-	// Two land inside the cap; the third is refused, all inside one
-	// one-second window.
-	for range 3 {
+	// TEN AGAINST A CAP OF TWO. Not three: the window is a wall clock the
+	// test cannot control, so a batch that straddles a boundary gets a
+	// fresh allowance and an exact count is unassertable — measured, it
+	// fails about one full-suite run in four. What IS assertable is that
+	// the valve BIT, which is the claim.
+	const burst = 10
+	for range burst {
 		deliver(t, n)
 	}
-	got := box.settled(t, 2)
-	time.Sleep(300 * time.Millisecond)
-	if n := len(box.settled(t, 2)); n != 2 {
-		t.Fatalf("%d notifications passed a cap of 2", n)
+	time.Sleep(400 * time.Millisecond)
+	underCap := len(box.settled(t, 2))
+	if underCap < 2 {
+		t.Fatalf("only %d notifications passed a cap of 2", underCap)
 	}
-	_ = got
+	if underCap >= burst {
+		t.Fatalf("all %d notifications passed a cap of 2", underCap)
+	}
 
 	// THE APPLY: raising the cap must take effect without a restart.
 	//
 	// A FRESH DOCUMENT, never the live epoch's config mutated in place —
 	// an epoch is published rather than mutated, and editing the pointer
-	// would change what the running company reads without any apply at
-	// all, which would also make this test pass against a captured cap.
+	// would change what the running company reads with no apply at all,
+	// which would also make this test pass against a captured cap.
 	raised, err := config.ParseCompany([]byte(strings.Replace(
 		fmt.Sprintf(companyDoc, n.model.url),
-		"name: Nimbus", "name: Nimbus\nnotification_rate_limit: 50", 1)))
+		"name: Nimbus", "name: Nimbus\nnotification_rate_limit: 500", 1)))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
@@ -244,10 +250,14 @@ func TestTheRateValveFollowsTheAppliedConfig(t *testing.T) {
 	}
 	// A fresh window, so the earlier refusals do not colour this.
 	time.Sleep(1100 * time.Millisecond)
-	for range 3 {
+	for range burst {
 		deliver(t, n)
 	}
-	if n := len(box.settled(t, 5)); n < 5 {
-		t.Fatalf("only %d landed after the cap was raised", n)
+	// EVERY ONE lands now, whichever window they fall in: the raised cap
+	// is far above the burst, so a boundary crossing cannot change the
+	// answer the way it could above.
+	if got := len(box.settled(t, underCap+burst)); got != underCap+burst {
+		t.Fatalf("%d of %d landed after the cap was raised (%d had landed before)",
+			got-underCap, burst, underCap)
 	}
 }
