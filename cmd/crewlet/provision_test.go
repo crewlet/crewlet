@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/plane"
 	"github.com/crewlet/crewlet/internal/provision"
 )
@@ -124,6 +125,106 @@ func TestTwoSinksAreRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exactly one") {
 		t.Errorf("the refusal is unclear: %v", err)
+	}
+}
+
+// A RUN THAT RECORDED SOMETHING SAYS WHAT IS LEFT TO DO.
+//
+// "Recorded in the encrypted secret store" reads as finished, and it is not:
+// the engine resolves through a snapshot rebuilt on apply, so a value written
+// there reaches a running process at the next apply and not before. The
+// answer differs per sink and only one of the three is "source a file", so
+// the sink is asked rather than the report guessing.
+//
+// A run that changed nothing says nothing. An operator who is told to restart
+// after every no-op run learns to skip the line, and then misses the run that
+// meant it.
+func TestARunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
+	t.Parallel()
+	sink, err := provision.NewPrintSink(io.Discard)
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
+
+	var recorded bytes.Buffer
+	printResult(&recorded, &gitlab.Result{Rotated: []string{"swe"}, Recorded: 1}, sink)
+	if !strings.Contains(recorded.String(), "Next:") {
+		t.Errorf("a run that minted a credential did not say what is left to "+
+			"do:\n%s", recorded.String())
+	}
+	if !strings.Contains(recorded.String(), sink.NextStep()) {
+		t.Errorf("the report did not ask the sink:\n%s", recorded.String())
+	}
+
+	var unchanged bytes.Buffer
+	printResult(&unchanged, &gitlab.Result{Kept: []string{"swe"}}, sink)
+	if strings.Contains(unchanged.String(), "Next:") {
+		t.Errorf("a run that changed nothing told the operator to act:\n%s",
+			unchanged.String())
+	}
+}
+
+// A DRY RUN SAYS WHAT IT WOULD DO TO THE SIGNING SECRET.
+//
+// The most consequential thing a provisioning run can do is replace the key
+// a working hook signs with — every delivery in flight then fails
+// verification until the new value reaches the engine. A dry run that
+// reported the seat plan and said nothing about that was silent about the
+// one outcome an operator most needs warning of.
+func TestADryRunSaysWhatItWouldDoToTheSigningSecret(t *testing.T) {
+	company := gitlabCompanyFile(t)
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		setup func(t *testing.T)
+		want  string
+	}{
+		{
+			name: "no public url leaves it alone",
+			args: []string{"-dry-run"},
+			want: "untouched",
+		},
+		{
+			name: "an unset reference will be minted",
+			args: []string{"-dry-run", "-public-url", "https://crewlet.example.com"},
+			want: "WILL BE MINTED into GITLAB_SIGNING_SECRET",
+		},
+		{
+			name: "a resolved one is reused",
+			args: []string{"-dry-run", "-public-url", "https://crewlet.example.com"},
+			setup: func(t *testing.T) {
+				t.Setenv("GITLAB_SIGNING_SECRET",
+					"whsec_ZTJlLXRlc3Qtc2lnbmluZy1rZXktMzItYnl0ZXMhISE=")
+			},
+			want: "reused",
+		},
+		{
+			// The warning that has to be loud: -rotate re-points the hook
+			// at a key the running engine does not hold yet.
+			name: "rotate replaces a working one",
+			args: []string{"-dry-run", "-public-url", "https://crewlet.example.com", "-rotate"},
+			setup: func(t *testing.T) {
+				t.Setenv("GITLAB_SIGNING_SECRET",
+					"whsec_ZTJlLXRlc3Qtc2lnbmluZy1rZXktMzItYnl0ZXMhISE=")
+			},
+			want: "WILL BE ROTATED into GITLAB_SIGNING_SECRET",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setup != nil {
+				tc.setup(t)
+			}
+			out, errs, err := provisionCmd(t, append([]string{company}, tc.args...)...)
+			if err != nil {
+				t.Fatalf("dry run: %v (%s)", err, errs)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("the plan does not say %q:\n%s", tc.want, out)
+			}
+			if !strings.Contains(out, "nothing was created") {
+				t.Errorf("the dry run does not say it did nothing:\n%s", out)
+			}
+		})
 	}
 }
 

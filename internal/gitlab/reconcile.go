@@ -55,6 +55,17 @@ type Result struct {
 	HookedOn []string
 	// Notes carries the plan's notes plus anything the run itself found.
 	Notes []string
+
+	// Recorded counts the values this run wrote to the sink — seat tokens
+	// plus a minted or rotated signing secret.
+	//
+	// A COUNT rather than the names, because the names are the variables
+	// holding live credentials and this number's only job is deciding
+	// whether the report tells the operator what still has to happen for
+	// those values to reach a running engine. Zero means a re-run that
+	// changed nothing, and instructing that operator to restart anything
+	// would be noise.
+	Recorded int
 }
 
 // Options are one reconcile's inputs.
@@ -233,6 +244,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				fmt.Errorf("gitlab: %s: record %s: %w", seat.Handle, seat.TokenVar, err))
 		}
 		res.Rotated = append(res.Rotated, seat.Handle)
+		res.Recorded++
 		if created {
 			continue
 		}
@@ -269,12 +281,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if target := webhookTarget(opts.WebhookBase); target != "" {
-		secret, note, err := signingSecret(ctx, opts)
+		secret, note, recorded, err := signingSecret(ctx, opts)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted, err)
 		}
 		if note != "" {
 			res.Notes = append(res.Notes, note)
+		}
+		if recorded {
+			res.Recorded++
 		}
 		opts.SigningSecret = secret
 		hooked, notes, err := ensureHooks(ctx, opts, group.ID, projects, target)
@@ -506,10 +521,72 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 // the variable the config's ${VAR} names, the same mint-into-${VAR} contract
 // the seat tokens follow — or refused, because a literal has nowhere to
 // record it and half-configuring is the failure above.
-func signingSecret(ctx context.Context, opts Options) (string, string, error) {
+func signingSecret(ctx context.Context, opts Options) (string, string, bool, error) {
+	plan := PlanSigningSecret(opts.SigningSecret, opts.SigningSecretVar, opts.Rotate, true)
+	switch plan.Action {
+	case SigningReuse:
+		return strings.TrimSpace(opts.SigningSecret), plan.Note, false, nil
+	case SigningBlocked:
+		return "", "", false, errors.New("gitlab: " + plan.Note)
+	}
+	secret, err := whsec.Mint()
+	if err != nil {
+		return "", "", false, err
+	}
+	if err := opts.Sink.Record(ctx, plan.Var, secret); err != nil {
+		return "", "", false, fmt.Errorf("gitlab: record %s: %w", plan.Var, err)
+	}
+	return secret, plan.Note + " — " + opts.Sink.NextStep(), true, nil
+}
+
+// SigningAction is what a run will do about the webhook signing secret.
+type SigningAction string
+
+// The outcomes, named so the plan and the run cannot describe them
+// differently.
+const (
+	// SigningUntouched: no hook is being registered, so the secret is not
+	// this run's business.
+	SigningUntouched SigningAction = "untouched"
+	// SigningReuse: a usable secret already resolved.
+	SigningReuse SigningAction = "reuse"
+	// SigningMint: none resolved, and the config names a ${VAR} to put one in.
+	SigningMint SigningAction = "mint"
+	// SigningRotate: one resolved and -rotate was passed, so it is replaced.
+	SigningRotate SigningAction = "rotate"
+	// SigningBlocked: none resolved and nowhere to record one.
+	SigningBlocked SigningAction = "blocked"
+)
+
+// SigningPlan is what a run intends to do about the webhook signing secret,
+// decided BEFORE anything is touched so `-dry-run` can state it.
+//
+// The plan and the run read the same function, which is the rule the seat
+// plan already follows: a dry run that re-derived this separately would be a
+// second implementation, free to disagree with the real one about the most
+// consequential thing a run can do — replacing the key a working hook signs
+// with, which fails every delivery in flight until the new value reaches the
+// engine.
+type SigningPlan struct {
+	Action SigningAction
+	// Var is the ${VAR} a minted or rotated secret is recorded into.
+	Var string
+	// Note is the caveat this outcome carries, or empty.
+	Note string
+}
+
+// PlanSigningSecret decides what a run will do about the signing secret.
+//
+// secret is the RESOLVED value of integrations.gitlab.signing_secret, varName
+// the whole ${VAR} it references (empty when it is a literal), and
+// registeringHooks whether this run has a public URL to point a hook at.
+func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) SigningPlan {
+	if !registeringHooks {
+		return SigningPlan{Action: SigningUntouched}
+	}
 	// -rotate REACHES THE SIGNING SECRET, not just the seat tokens.
 	//
-	// It has to. Until the provisioning fix above, the minted key went into
+	// It has to. Until the provisioning fix, the minted key went into
 	// GitLab's plaintext `token` attribute, so the instance echoed it back
 	// in cleartext on every delivery — into request logs, into any proxy in
 	// front of the engine, and into the stored delivery headers. Every key
@@ -522,45 +599,54 @@ func signingSecret(ctx context.Context, opts Options) (string, string, error) {
 	// RUNNING engine does not have yet, refusing every delivery until the
 	// new value is sourced and the process restarted — the same outage the
 	// seat tokens' Rotate doc explains at length.
-	rotating := opts.Rotate && opts.SigningSecretVar != ""
-	if secret := strings.TrimSpace(opts.SigningSecret); secret != "" && !rotating {
-		if opts.Rotate {
+	rotating := rotate && varName != ""
+	if trimmed := strings.TrimSpace(secret); trimmed != "" && !rotating {
+		if rotate {
 			// REPORTED, NOT REFUSED. -rotate is about the seat tokens, and
 			// failing the whole run would stop an operator rotating those
 			// because of a signing secret they manage by hand. They do
 			// need to hear it, though — so it is a note on a run that
 			// otherwise succeeded rather than silence.
-			return secret, "the webhook signing secret was left alone: " +
-				"integrations.gitlab.signing_secret is a literal, so there is " +
-				"nowhere to record a new one. Replace it by hand and re-run — " +
-				"a key installed before the signing_token fix was echoed back " +
-				"in cleartext on every delivery, so it is compromised", nil
+			return SigningPlan{Action: SigningReuse, Note: "the webhook signing " +
+				"secret was left alone: integrations.gitlab.signing_secret is a " +
+				"literal, so there is nowhere to record a new one. Replace it by " +
+				"hand and re-run — a key installed before the signing_token fix " +
+				"was echoed back in cleartext on every delivery, so it is " +
+				"compromised"}
 		}
-		return secret, "", nil
+		return SigningPlan{Action: SigningReuse}
 	}
-	if opts.SigningSecretVar == "" {
-		return "", "", errors.New(
-			"gitlab: integrations.gitlab.signing_secret resolved to nothing " +
-				"and is not a whole ${VAR} reference, so there is nowhere to " +
-				"record a minted one. Point it at a variable, export a " +
-				"whsec_ value yourself, or drop -public-url and register the " +
-				"hook by hand")
+	if varName == "" {
+		return SigningPlan{Action: SigningBlocked, Note: "integrations.gitlab." +
+			"signing_secret resolved to nothing and is not a whole ${VAR} " +
+			"reference, so there is nowhere to record a minted one. Point it at " +
+			"a variable, export a whsec_ value yourself, or drop -public-url and " +
+			"register the hook by hand"}
 	}
-	secret, err := MintSigningSecret()
-	if err != nil {
-		return "", "", err
-	}
-	if err := opts.Sink.Record(ctx, opts.SigningSecretVar, secret); err != nil {
-		return "", "", fmt.Errorf("gitlab: record %s: %w", opts.SigningSecretVar, err)
-	}
-	what := "minted"
+	action, what := SigningMint, "minted"
 	if rotating {
-		what = "rotated"
+		action, what = SigningRotate, "rotated"
 	}
-	return secret, fmt.Sprintf(
-		"%s a webhook signing secret into %s — source the sink into the "+
-			"engine's environment, or it will refuse every delivery this hook "+
-			"sends", what, opts.SigningSecretVar), nil
+	return SigningPlan{Action: action, Var: varName, Note: fmt.Sprintf(
+		"%s a webhook signing secret into %s", what, varName)}
+}
+
+// Describe renders the plan as the line a run prints before it acts.
+func (p SigningPlan) Describe() string {
+	switch p.Action {
+	case SigningUntouched:
+		return "webhook signing secret: untouched (no -public-url, so no hook is registered)"
+	case SigningReuse:
+		return "webhook signing secret: reused — the configured one already resolves"
+	case SigningMint:
+		return "webhook signing secret: WILL BE MINTED into " + p.Var
+	case SigningRotate:
+		return "webhook signing secret: WILL BE ROTATED into " + p.Var +
+			" — the hook stops verifying against the old key the moment this runs"
+	case SigningBlocked:
+		return "webhook signing secret: THIS RUN WILL FAIL — " + p.Note
+	}
+	return ""
 }
 
 // SigningSecretPrefix is what GitLab's Standard-Webhooks implementation

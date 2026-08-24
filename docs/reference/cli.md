@@ -485,6 +485,22 @@ crewlet gitlab provision <company.yaml> [-admin-token TOKEN]
 
 Idempotent reconcile from company config to GitLab state. For each **agent** seat that declares a GitLab credential under `mcp_env.gitlab` as a whole `${VAR}` reference, it ensures a [service account](../integrations/gitlab.md#provisioning) exists (username `<username_prefix><handle>`), adds group and project membership, mints a personal access token into that variable, and — with `-public-url` — registers the group webhook at `<url>/webhooks/gitlab`. The positional argument is the Tier B company YAML; its `integrations.gitlab.provisioning` block supplies the group, access levels, and token scopes. Human seats are resolved, never created.
 
+**A dry run says what it would do to the signing secret.** It is the most
+consequential thing a run can do — replacing the key a working hook signs with
+fails every delivery in flight until the new value reaches the engine — so the
+plan states which of *untouched* / *reused* / *minted* / *rotated* will happen,
+and into which `${VAR}`. That decision is made by the same function the real
+run uses, so the two cannot disagree.
+
+**A run that recorded something says what is left to do.** Where the values
+went and what still has to happen are different questions, and only one of the
+three sinks answers "source a file": `-env-file` needs sourcing and a restart,
+`-print` needs the values moved before the terminal closes, and `-secret-store`
+needs the current revision re-activated ([`crewlet config activate`](#crewlet-config-activate))
+so the running engine rebuilds its secret snapshot — it needs no file, which is
+exactly why a report that stopped at "recorded in the encrypted secret store"
+read as finished. A run that changed nothing prints no follow-up.
+
 **A plain re-run does not rotate a working token.** GitLab returns a personal access token's value once, so a provisioner cannot verify that what it recorded last time still matches — and minting every run is an outage, because the engine is running with the *old* value: an operator adding a tenth seat would revoke the nine credentials the other agents are authenticating with. A seat is left alone when the variable holding its token still has a value **and** the account still has a usable token under this tool's name (`crewlet-<handle>`), and both halves are checked because either alone is wrong — a recorded value whose token was revoked leaves an agent 401ing for ever, and a live token nobody wrote down cannot be deployed. `-rotate` mints for every seat regardless, retiring the previous one **after** recording the new: never before, or a failed record leaves the seat with nothing.
 
 | Flag | Description |

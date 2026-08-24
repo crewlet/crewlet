@@ -331,6 +331,40 @@ func TestEverySinkDescribesItself(t *testing.T) {
 	}
 }
 
+// AND SAYS WHAT STILL HAS TO HAPPEN, which is a different question.
+//
+// The secret store is the trap the pair exists for: it needs no file to
+// source, so a report that stopped at Describe read as "you are finished" —
+// while the running engine kept resolving from the snapshot it built at its
+// last apply, refusing every delivery signed with the new secret.
+func TestEverySinkSaysWhatStillHasToHappen(t *testing.T) {
+	t.Parallel()
+	seen := map[string]string{}
+	for _, tc := range sinkCases() {
+		sink, _ := tc.build(t)
+		step := strings.TrimSpace(sink.NextStep())
+		if step == "" {
+			sinkName := tc.name
+			t.Errorf("%s says nothing about what still has to happen", sinkName)
+			continue
+		}
+		if other, clash := seen[step]; clash {
+			t.Errorf("%s and %s give the same next step, so one of them is "+
+				"telling an operator to do the wrong thing: %q", tc.name, other, step)
+		}
+		seen[step] = tc.name
+	}
+
+	store, _ := sinkCases()[0].build(t)
+	if got := store.NextStep(); strings.Contains(got, "source") {
+		t.Errorf("the secret store's next step tells an operator to source a "+
+			"file it never wrote: %q", got)
+	} else if !strings.Contains(got, "activate") {
+		t.Errorf("the secret store's next step does not name the gesture that "+
+			"makes a running engine reload its snapshot: %q", got)
+	}
+}
+
 // AND IT IS STILL 0600 AFTER A REWRITE. Every Record replaces the file
 // through a temp-and-rename, and a rename carries the temp file's mode — so
 // a rewrite is exactly where the permissions would silently widen.

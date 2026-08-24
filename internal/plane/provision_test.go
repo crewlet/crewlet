@@ -744,6 +744,7 @@ func (s *trackerSink) Value(_ context.Context, name string) (string, bool, error
 }
 
 func (s *trackerSink) Describe() string { return "a test sink" }
+func (s *trackerSink) NextStep() string { return "a test next step" }
 
 func (s *trackerSink) recorded(name string) string {
 	s.mu.Lock()

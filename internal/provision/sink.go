@@ -80,6 +80,18 @@ type TokenSink interface {
 	// what tells an operator whether to go looking in a file or in the
 	// store.
 	Describe() string
+
+	// NextStep is what still has to happen for a value recorded here to
+	// reach a RUNNING engine, phrased as an instruction.
+	//
+	// Separate from Describe because the two are different questions and
+	// the answers do not line up. "The encrypted secret store" is where a
+	// value went AND requires no file to source — and a running engine
+	// still will not see it, because the resolver is a snapshot rebuilt on
+	// apply. A report that stopped at Describe told an operator who chose
+	// -secret-store that they were finished, and the next delivery was
+	// refused by a process holding the previous secret.
+	NextStep() string
 }
 
 // ErrNoSink reports a run with nowhere to put what it mints.

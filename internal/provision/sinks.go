@@ -104,6 +104,19 @@ func (s *SecretStoreSink) Describe() string {
 	return "the encrypted secret store (the engine reads it directly; no file to source)"
 }
 
+// NextStep implements [TokenSink].
+//
+// NOT "nothing", which is the answer the store's convenience invites. The
+// engine resolves ${VAR} through a SNAPSHOT of the store, rebuilt on every
+// config apply — so a value written here reaches a running process at the
+// next apply and not before, and re-activating the current revision is the
+// documented gesture for exactly this.
+func (s *SecretStoreSink) NextStep() string {
+	return "re-activate the current revision (`crewlet config activate <uuid>`) " +
+		"so the running engine rebuilds its secret snapshot; a fresh start " +
+		"picks it up on its own"
+}
+
 // ---- an env file ------------------------------------------------------ //
 
 // EnvFileSink writes minted credentials into a `.env`.
@@ -208,6 +221,11 @@ func (s *EnvFileSink) Flush(context.Context) error { return nil }
 // Describe implements [TokenSink].
 func (s *EnvFileSink) Describe() string {
 	return s.path + " (source it, or point the engine's env at it)"
+}
+
+// NextStep implements [TokenSink].
+func (s *EnvFileSink) NextStep() string {
+	return "source " + s.path + " into the engine's environment and restart it"
 }
 
 // rewrite writes the whole file atomically. The caller holds the lock.
@@ -339,6 +357,15 @@ func (s *PrintSink) Flush(context.Context) error { return nil }
 // Describe implements [TokenSink].
 func (s *PrintSink) Describe() string {
 	return "standard output (nothing was persisted; copy them somewhere)"
+}
+
+// NextStep implements [TokenSink].
+//
+// The one sink that has already lost the values if the operator does not
+// act, which is why this says "before you close this terminal".
+func (s *PrintSink) NextStep() string {
+	return "put these into the engine's environment before you close this " +
+		"terminal — nothing here was persisted — and restart it"
 }
 
 func contains(names []string, want string) bool {

@@ -230,11 +230,32 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	// RESOLVED BEFORE THE PLAN IS PRINTED, because the plan's most
+	// consequential line depends on it: whether this run will replace the
+	// key a working hook signs with. Reading the store is not a mutation,
+	// so a -dry-run does it too — a dry run that could not say this would
+	// be silent about the one outcome an operator most needs warning of.
+	ctx := context.Background()
+	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
+	// WHERE a minted secret belongs, from the config's own reference — the
+	// same mint-into-${VAR} contract the seat tokens follow. Empty when
+	// signing_secret is a literal, which the reconcile refuses rather than
+	// half-configuring.
+	signingVar := soleVarOf(cfg.SigningSecret)
+	signing := gitlab.PlanSigningSecret(
+		env.Value(cfg.SigningSecret), signingVar, *rotate, *publicURL != "")
+
 	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run
 	// uses. A --dry-run that re-derived it separately would be a second
 	// implementation that can disagree with the real one about what it
 	// was going to do.
 	printPlan(stdout, plan, "a GitLab credential (mcp_env."+gitlab.SeatEnv+"."+gitlab.CredentialKeys[0]+")")
+	fmt.Fprintln(stdout, signing.Describe())
 	if *dryRun {
 		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, minted or registered.")
 		return nil
@@ -243,18 +264,11 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	ctx := context.Background()
 	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}
 	defer closeSink()
-
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
-	if err != nil {
-		return err
-	}
-	defer closeEnv()
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
@@ -275,19 +289,15 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
-		WebhookBase:   *publicURL,
-		SigningSecret: env.Value(cfg.SigningSecret),
-		// WHERE a minted secret belongs, from the config's own
-		// reference — the same mint-into-${VAR} contract the seat
-		// tokens follow. Empty when signing_secret is a literal, which
-		// the reconcile refuses rather than half-configuring.
-		SigningSecretVar: soleVarOf(cfg.SigningSecret),
+		WebhookBase:      *publicURL,
+		SigningSecret:    env.Value(cfg.SigningSecret),
+		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
 	})
 	if err != nil {
 		return err
 	}
-	printResult(stdout, res, sink.Describe())
+	printResult(stdout, res, sink)
 	return nil
 }
 
@@ -312,8 +322,9 @@ func printPlan(w io.Writer, plan *provision.Plan, what string) {
 // THE REPORT ENDS WITH THE NOTES, because they are the part an operator has
 // to act on: the run itself either worked or returned an error, while a note
 // is a seat that was skipped and will keep being skipped.
-func printResult(w io.Writer, res *gitlab.Result, where string) {
-	fmt.Fprintf(w, "\nRecorded in %s.\n", where)
+func printResult(w io.Writer, res *gitlab.Result, sink provision.TokenSink) {
+	fmt.Fprintf(w, "\nRecorded in %s.\n", sink.Describe())
+	printNextStep(w, res.Recorded, sink)
 	if len(res.Created) > 0 {
 		fmt.Fprintf(w, "Created %d account(s): %s\n",
 			len(res.Created), strings.Join(res.Created, ", "))
@@ -340,6 +351,25 @@ func printResult(w io.Writer, res *gitlab.Result, where string) {
 		fmt.Fprintf(w, "Webhook registered at %s %s\n", res.Hooked, where)
 	}
 	printNotes(w, res.Notes)
+}
+
+// printNextStep says what still has to happen for the values a run recorded
+// to reach a RUNNING engine.
+//
+// Only when something was recorded: a re-run that changed nothing has no
+// next step, and telling that operator to restart anything is noise they
+// learn to skip past — which is how they miss the run that did.
+//
+// The sink answers, because the answer differs per sink and only one of the
+// three is "source a file". The secret store is the trap: it needs no file,
+// so a report that stopped at "recorded in the encrypted secret store" read
+// as finished — while the engine went on resolving from the snapshot it
+// built at its last apply.
+func printNextStep(w io.Writer, recorded int, sink provision.TokenSink) {
+	if recorded == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Next: %s\n", sink.NextStep())
 }
 
 // printKept reports the seats a run deliberately did not touch.

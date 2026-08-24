@@ -517,6 +517,7 @@ func (s *recordingSink) value(name string) string {
 	return s.values[name]
 }
 func (s *recordingSink) Describe() string { return "a test sink" }
+func (s *recordingSink) NextStep() string { return "a test next step" }
 
 func (s *recordingSink) recorded() map[string]string {
 	s.mu.Lock()
@@ -866,6 +867,7 @@ func (s *cancellingSink) Discard(ctx context.Context) error {
 
 func (s *cancellingSink) Flush(context.Context) error { return nil }
 func (s *cancellingSink) Describe() string            { return "a cancelling sink" }
+func (s *cancellingSink) NextStep() string            { return "a test next step" }
 
 // sortByUsername gives the fake a deterministic order, with the DECOY first
 // — a caller taking element zero has to be wrong.

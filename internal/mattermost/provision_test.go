@@ -436,6 +436,7 @@ func (s *chatSink) value(name string) string {
 
 func (s *chatSink) Flush(context.Context) error { return nil }
 func (s *chatSink) Describe() string            { return "a test sink" }
+func (s *chatSink) NextStep() string            { return "a test next step" }
 
 func (s *chatSink) recorded() map[string]string {
 	s.mu.Lock()
