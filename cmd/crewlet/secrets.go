@@ -147,11 +147,7 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 
 // openSecretStore opens the node's store under its Tier A keyring.
 func openSecretStore(ctx context.Context, bootstrapPath string) (*store.SecretValues, func(), error) {
-	// TIER A RESOLVES FROM THE ENVIRONMENT ALONE, and that is structural
-	// rather than a default: this file carries the store's address and the
-	// keys that open it, so a resolver reaching the store would have Tier A
-	// reading from the thing it describes.
-	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
+	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -161,6 +157,21 @@ func openSecretStore(ctx context.Context, bootstrapPath string) (*store.SecretVa
 				"store with; run `crewlet secrets keygen` and add one",
 			bootstrapPath)
 	}
+	return openSecretValues(ctx, boot)
+}
+
+// loadBootstrapForStore reads the Tier A document that names the store.
+func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
+	// TIER A RESOLVES FROM THE ENVIRONMENT ALONE, and that is structural
+	// rather than a default: this file carries the store's address and the
+	// keys that open it, so a resolver reaching the store would have Tier A
+	// reading from the thing it describes.
+	return config.LoadBootstrap(bootstrapPath, config.EnvOnly())
+}
+
+// openSecretValues opens the store a loaded bootstrap names, under its
+// keyring. The caller has already established that a keyring exists.
+func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.SecretValues, func(), error) {
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
 		return nil, nil, fmt.Errorf("secrets keyring: %w", err)

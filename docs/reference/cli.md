@@ -38,6 +38,8 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 
 ---
 
+> **Every command that reads the Tier B company document takes `-config`** (default `./config.yaml`), and resolves its `${VAR}` references the way the engine does: **this node's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+
 ## `crewlet run`
 
 ```
@@ -381,7 +383,7 @@ A bot this run created is rolled back by revoking every token on it — nothing 
 ## `crewlet mattermost doctor`
 
 ```
-crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]
+crewlet mattermost doctor <company.yaml> [-admin-token TOKEN] [-config PATH]
 ```
 
 Checks a Mattermost install by exercising what actually breaks, in the order it breaks — and **no operator credential is required**: the seat tokens already in the config are what the engine authenticates with, so they are the honest thing to check with, and minting an admin token to find out whether a company works is a step that exists only to be skipped. Pass `-admin-token` (or export `MATTERMOST_ADMIN_TOKEN`) to run the shared checks as somebody else.
@@ -403,7 +405,7 @@ Read-only. Exits non-zero when any check fails, so it drops into a deploy script
 ## `crewlet plane import`
 
 ```
-crewlet plane import <company.yaml> <directory> [-token KEY]
+crewlet plane import <company.yaml> <directory> [-token KEY] [-config PATH]
                                                [-prune] [-dry-run]
 ```
 
@@ -429,7 +431,7 @@ Every distinct target project must already exist; a missing one fails the run **
 ## `crewlet plane resync`
 
 ```
-crewlet plane resync <company.yaml> [-token KEY] [-project ID]
+crewlet plane resync <company.yaml> [-token KEY] [-project ID] [-config PATH]
 ```
 
 The read-only diagnostic. It runs the **same** walk and the **same** admission the engine's boot sync runs — one strict enumeration of the Tool Skills project — against a throwaway registry, and prints the keys that loaded plus any page that declares a trigger and does not parse. That last case is the one worth printing: somebody wrote a trigger and got the rest wrong, and the only other symptom is guidance that never appears, so the command exits non-zero when it finds one.

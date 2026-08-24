@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -43,9 +44,20 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 			"record minted credentials in this .env file"),
 		print: fs.Bool("print", false,
 			"print minted credentials to stdout and persist nothing"),
-		bootstrap: fs.String("config", defaultBootstrapPath,
-			"Tier A config: this node's store and its secret keyring"),
+		bootstrap: bootstrapFlag(fs),
 	}
+}
+
+// bootstrapFlag adds the -config flag: the Tier A document naming this
+// node's store and the keyring that opens it.
+//
+// EVERY command that reads Tier B takes it, not only the ones that WRITE a
+// credential. The store is where a rotated secret lives, so a command
+// resolving a company's ${VAR} without it reads an empty string for
+// everything the operator has already rotated. See [companyResolver].
+func bootstrapFlag(fs *flag.FlagSet) *string {
+	return fs.String("config", defaultBootstrapPath,
+		"Tier A config: this node's store and its secret keyring")
 }
 
 // open builds the chosen sink, refusing an ambiguous or absent choice.
@@ -88,6 +100,73 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 		return nil, nil, err
 	}
 	return provision.NewSecretStoreSink(sv, currentOperator()), closeStore, nil
+}
+
+// companyResolver builds the chain a run resolves Tier B ${VAR} references
+// through: the node's secret store first, the environment behind it.
+//
+// THE SAME ORDER THE ENGINE USES, and it has to be the same one. Every
+// command below reads the company's own values — the instance URL, the
+// workspace, the webhook signing secret, the engine's read token — and a run
+// that saw only the environment read an EMPTY STRING for every one an
+// operator had already put in the store. That is not merely a missing value
+// for the GitLab signing secret: empty is the signal to MINT, so the run
+// replaced a working webhook secret at the vendor with a fresh one and broke
+// every delivery in flight until the config caught up. The store is where a
+// rotated secret lives; a tool that provisions against it has to read it.
+//
+// # When there is no store
+//
+// A node with no bootstrap at this path, or one declaring no keyring,
+// resolves from the environment alone. That is the pre-store deployment and
+// it is supported — so it is a NOTE rather than a failure, and it is a note
+// rather than silence: a mistyped -config resolving nothing has exactly the
+// destructive outcome above, and an operator has to be able to see which
+// chain ran.
+//
+// A bootstrap that exists and cannot be read fails the run instead. Someone
+// who configured a store and did not get it must not have their secrets
+// quietly resolved from a stale export.
+func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer) (*config.Resolver, func(), error) {
+	envOnly := func(why string) (*config.Resolver, func(), error) {
+		fmt.Fprintf(notes, "%s: resolving ${VAR} from the environment only.\n", why)
+		return config.EnvOnly(), func() {}, nil
+	}
+	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
+		return envOnly("no " + bootstrapPath)
+	}
+	boot, err := loadBootstrapForStore(bootstrapPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(boot.Secrets.Keys) == 0 {
+		return envOnly(bootstrapPath + " declares no secrets.keys")
+	}
+	sv, closeStore, err := openSecretValues(ctx, boot)
+	if err != nil {
+		return nil, nil, err
+	}
+	values, err := sv.All(ctx)
+	if err != nil {
+		closeStore()
+		return nil, nil, fmt.Errorf("read the secret store: %w", err)
+	}
+	return config.WithStore(config.MapSource(values)), closeStore, nil
+}
+
+// operatorCredential reads the human operator's own credential, from the
+// ENVIRONMENT ALONE.
+//
+// Deliberately NOT through [companyResolver], which every company value goes
+// through. This is the operator's credential rather than the company's, and
+// the difference is not bookkeeping: a GitLab admin PAT carries `api` scope
+// over the whole group, and the secret store is replicated to every node
+// that holds the keyring. Crewlet never persists one, and reading one back
+// from the store would imply it may be kept there — which is how the most
+// powerful credential in the deployment ends up in the shared table beside
+// the seat tokens it exists to mint.
+func operatorCredential(name string) string {
+	return strings.TrimSpace(config.EnvOnly().Lookup(name))
 }
 
 // runGitLabProvision is `crewlet gitlab provision`.
@@ -171,10 +250,15 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	defer closeSink()
 
-	env := config.EnvOnly()
+	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = strings.TrimSpace(env.Lookup("GITLAB_ADMIN_TOKEN"))
+		token = operatorCredential("GITLAB_ADMIN_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
@@ -384,10 +468,15 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	defer closeSink()
 
-	env := config.EnvOnly()
+	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = strings.TrimSpace(env.Lookup("MATTERMOST_ADMIN_TOKEN"))
+		token = operatorCredential("MATTERMOST_ADMIN_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
@@ -531,10 +620,15 @@ func runPlaneProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	defer closeSink()
 
-	env := config.EnvOnly()
+	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = strings.TrimSpace(env.Lookup("PLANE_ADMIN_TOKEN"))
+		token = operatorCredential("PLANE_ADMIN_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
@@ -642,6 +736,7 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 		"delete published tool-skill pages whose key no local file publishes")
 	dryRun := fs.Bool("dry-run", false,
 		"print what would be published and write nothing")
+	bootstrap := bootstrapFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -681,7 +776,13 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	env := config.EnvOnly()
+	ctx := context.Background()
+	env, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	key := strings.TrimSpace(*apiKey)
 	if key == "" {
 		key = strings.TrimSpace(env.Lookup("PLANE_TOKEN"))
@@ -692,7 +793,8 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 	if key == "" {
 		return errors.New(
 			"no API key: pass -token, export PLANE_TOKEN, or set " +
-				"integrations.plane.token to a variable this shell has")
+				"integrations.plane.token to a variable this shell, this " +
+				"node's secret store, or -config's keyring can supply")
 	}
 	client, err := plane.NewClient(plane.ClientOptions{
 		URL: env.Value(cfg.URL), Workspace: env.Value(cfg.Workspace), APIKey: key,
@@ -701,7 +803,7 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	res, err := plane.Publish(context.Background(), plane.PublishOptions{
+	res, err := plane.Publish(ctx, plane.PublishOptions{
 		Client: client, Config: cfg, Plan: plan, Prune: *prune,
 	})
 	if err != nil {
@@ -777,6 +879,7 @@ func runPlaneResync(args []string, stdout, stderr io.Writer) error {
 		"a Plane API key that may read the skills project; empty reads PLANE_TOKEN")
 	project := fs.String("project", "",
 		"the skills project identifier; empty takes integrations.plane.skills_project")
+	bootstrap := bootstrapFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -798,7 +901,13 @@ func runPlaneResync(args []string, stdout, stderr io.Writer) error {
 	if cfg == nil || !cfg.Enabled {
 		return errors.New("plane: the company config does not enable plane")
 	}
-	env := config.EnvOnly()
+	ctx := context.Background()
+	env, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	key := strings.TrimSpace(*apiKey)
 	if key == "" {
 		key = strings.TrimSpace(env.Lookup("PLANE_TOKEN"))
@@ -809,7 +918,8 @@ func runPlaneResync(args []string, stdout, stderr io.Writer) error {
 	if key == "" {
 		return errors.New(
 			"no API key: pass -token, export PLANE_TOKEN, or set " +
-				"integrations.plane.token to a variable this shell has")
+				"integrations.plane.token to a variable this shell, this " +
+				"node's secret store, or -config's keyring can supply")
 	}
 	client, err := plane.NewClient(plane.ClientOptions{
 		URL: env.Value(cfg.URL), Workspace: env.Value(cfg.Workspace), APIKey: key,
@@ -822,7 +932,7 @@ func runPlaneResync(args []string, stdout, stderr io.Writer) error {
 	if identifier == "" {
 		identifier = cfg.SkillsProjectKey()
 	}
-	pages, err := plane.SkillPages(context.Background(), client, identifier)
+	pages, err := plane.SkillPages(ctx, client, identifier)
 	if err != nil {
 		return err
 	}
@@ -856,6 +966,7 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	adminToken := fs.String("admin-token", "",
 		"a Mattermost token to run the checks as; empty reads "+
 			"MATTERMOST_ADMIN_TOKEN, and failing that borrows a seat's own")
+	bootstrap := bootstrapFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -882,10 +993,16 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 		return errors.New("mattermost: the company config does not enable mattermost")
 	}
 
-	env := config.EnvOnly()
+	ctx := context.Background()
+	env, closeEnv, err := companyResolver(ctx, *bootstrap, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = strings.TrimSpace(env.Lookup("MATTERMOST_ADMIN_TOKEN"))
+		token = operatorCredential("MATTERMOST_ADMIN_TOKEN")
 	}
 	// AN EMPTY TOKEN IS FINE. The checks that need one borrow a seat's,
 	// because those are the credentials the engine authenticates with —
@@ -905,7 +1022,7 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	report, err := mattermost.Doctor(context.Background(), mattermost.DoctorOptions{
+	report, err := mattermost.Doctor(ctx, mattermost.DoctorOptions{
 		Client: client, Config: &resolved, Org: organization,
 		SeatToken: mattermost.SeatTokens(env),
 	})
