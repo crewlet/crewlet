@@ -43,9 +43,24 @@ func (e *Engine) equip(c *Company) error {
 		deps.Diary = learning.NewDiary(db)
 		deps.Onboarding = learning.NewOnboarding(db)
 	}
+	// THE REGISTRY, NOT ITS CONTENT. load_tool_skill is registered
+	// whenever a node HAS a registry, empty or not — because whether a
+	// company has published skills is a fact about the knowledge base
+	// that changes without an apply, and a tool that appeared and
+	// disappeared with the sync would make the required-skill guard
+	// unarmable exactly when the first skill lands.
+	if e.skills != nil {
+		deps.ToolSkills = e.skills
+	}
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
+	// The operator's ${var} map is CONFIG, so it is refreshed per epoch —
+	// unlike the skills themselves, which come from the knowledge base and
+	// outlive one. A variable a revision removed then surfaces here rather
+	// than on that skill's next edit, which might be never.
+	e.refreshSkillVariables(c)
+	e.auditSkills(c)
 	return nil
 }
 

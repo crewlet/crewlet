@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
@@ -38,7 +39,7 @@ import (
 // A misauthored trigger can then cost a phase some tools; it can never cost
 // the phase.
 var ExemptTools = []string{
-	"load_tool_skill",
+	LoaderTool,
 	"activate_tool",
 	"list_mcp_server_tools",
 	"submit_plan",
@@ -93,7 +94,7 @@ type Guard struct {
 // The surface it is given is the SAME one the catalogue was built from, so
 // what is enforced and what the model was shown cannot disagree.
 func NewGuard(r *Registry, phase prompts.Phase, surface prompts.Surface) *Guard {
-	if r == nil || !slices.Contains(surface.Tools, "load_tool_skill") {
+	if r == nil || !slices.Contains(surface.Tools, LoaderTool) {
 		return nil
 	}
 	// REVIEW IS EXEMPT ENTIRELY: it has no domain tools and no loader, so
@@ -118,12 +119,29 @@ func NewGuard(r *Registry, phase prompts.Phase, surface prompts.Surface) *Guard 
 
 // Loaded records a successful load, unlocking the tools that skill covers.
 func (g *Guard) Loaded(key string) {
-	if g == nil {
+	if g == nil || key == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.loaded[key] = true
+}
+
+// LoaderTool is the tool whose successful call unlocks a skill.
+const LoaderTool = "load_tool_skill"
+
+// Observe implements [tools.Guard]: it watches for the unlock.
+//
+// Reading the key back off the ARGUMENTS rather than the result, because the
+// result is prose for the model and parsing a key out of it would be
+// guessing at a format nothing promises. The arguments are what the model
+// asked for and what the tool resolved.
+func (g *Guard) Observe(tool string, args map[string]any) {
+	if g == nil || tool != LoaderTool {
+		return
+	}
+	key, _ := args["key"].(string)
+	g.Loaded(strings.TrimSpace(key))
 }
 
 // Check implements [tools.Guard]: it reports why a call must be refused, or

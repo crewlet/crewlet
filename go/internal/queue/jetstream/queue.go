@@ -199,6 +199,74 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 	return nil
 }
 
+// createStream provisions a stream, waiting out a cluster that is still
+// forming.
+//
+// RETRIED ON PLACEMENT ONLY. "No suitable peers" means the metadata group
+// has not yet seen enough members to place a replicated stream — a
+// transient, self-clearing condition during cluster formation, and the one
+// remaining boot hazard after awaitClusterReady: that check answers for THIS
+// member's own catch-up, while placement needs the OTHER members to have
+// joined, and a follower cannot observe the peer list at all
+// (JetStreamClusterPeers answers only on the leader). So the placement
+// attempt is the signal.
+//
+// Every other error is returned at once. A bad subject, a conflicting
+// retention, an auth failure — none of them clears by waiting, and retrying
+// would turn a config mistake into a thirty-second hang with the same
+// message at the end.
+func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
+	for attempt := 0; ; attempt++ {
+		_, err := q.js.CreateOrUpdateStream(ctx, config)
+		if err == nil || !unplaceable(err) {
+			return err
+		}
+		if attempt == 0 {
+			q.log.Info("jetstream_stream_awaiting_peers", "stream", config.Name,
+				"replicas", config.Replicas,
+				"detail", "the cluster has not yet seen enough members to place "+
+					"this stream; retrying until the provisioning deadline")
+		}
+		select {
+		case <-ctx.Done():
+			// The ORIGINAL error, not the context's: "no suitable peers"
+			// says what is wrong and "deadline exceeded" does not.
+			return err
+		case <-time.After(streamPlacementRetry):
+		}
+	}
+}
+
+// unplaceable reports the transient "the cluster is still forming" error.
+func unplaceable(err error) bool {
+	var apiErr *jetstream.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeNoPeers
+}
+
+// jsErrCodeNoPeers is JetStream's "no suitable peers for placement".
+//
+// Spelled here because nats.go names only a handful of its codes and this is
+// not one of them — and matching on the description text instead would break
+// the moment the server reworded it.
+const jsErrCodeNoPeers jetstream.ErrorCode = 10005
+
+// streamPlacementRetry is how often a forming cluster is re-asked.
+//
+// The same reasoning as clusterReadyPoll: short enough that a cluster which
+// forms quickly is not held back by the poll, and it runs at most a few
+// hundred times inside the provisioning deadline.
+const streamPlacementRetry = 250 * time.Millisecond
+
+// streamProvisionTimeout bounds one stream create.
+//
+// Sized to what the call actually does rather than to a generic request:
+// with the metadata group already current — awaitClusterReady has returned —
+// a replicated create is a RAFT round trip plus file-store setup, fast on a
+// quiet cluster and seconds under load. Thirty is well past any healthy
+// case and well inside the sixty the readiness wait already tolerates, so a
+// genuinely wedged cluster still fails rather than hanging a boot.
+const streamProvisionTimeout = 30 * time.Second
+
 // ensureStream provisions one stream, remembering that it did so. Streams
 // are idempotent to create, but the round trip is not free and this runs on
 // every publish to a derived namespace.
@@ -214,14 +282,30 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
 		storage = jetstream.MemoryStorage
 	}
-	if _, err := q.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+	// ITS OWN DEADLINE, because the client's default is not sized for this
+	// call. nats.go applies a five-second API timeout to a context with no
+	// deadline, which is right for an ordinary request and wrong for the
+	// one that provisions a REPLICATED stream: the engine has just waited
+	// up to a minute for the metadata group precisely because that group
+	// is slow to form, and then gave the call that depends on it five
+	// seconds. Measured: a three-member cluster under load fails here
+	// about one boot in six, reported as a bare "context deadline
+	// exceeded" with nothing to say which deadline.
+	//
+	// WithTimeout only ever shortens against the parent, so a caller with
+	// a tighter deadline of its own still wins.
+	ctx, cancel := context.WithTimeout(ctx, streamProvisionTimeout)
+	defer cancel()
+
+	config := jetstream.StreamConfig{
 		Name:      spec.name,
 		Subjects:  spec.subjects,
 		Retention: spec.retention,
 		Storage:   storage,
 		Replicas:  max(q.cfg.Replicas, 1),
 		MaxAge:    spec.maxAge,
-	}); err != nil {
+	}
+	if err := q.createStream(ctx, config); err != nil {
 		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
 	}
 

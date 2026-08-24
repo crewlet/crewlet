@@ -53,6 +53,16 @@ type Guard interface {
 	// server is passed because a rule may be about everything one MCP
 	// server publishes rather than about one tool name.
 	Check(tool, server string) string
+
+	// Observe is told about a call that SUCCEEDED, so a guard whose own
+	// unlock is a tool can watch for it.
+	//
+	// The after-half of the same seam, and it has to be here rather than
+	// in the tool: the tool is registered once per company while the
+	// guard is per phase session, so a tool holding a guard would hold
+	// whichever session registered last. The arguments are passed opaque
+	// — this layer has no idea what any of them mean.
+	Observe(tool string, args map[string]any)
 }
 
 // WithGuard installs the required-skill gate and returns the surface.
@@ -261,6 +271,12 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return toolloop.ToolResult{}, err
 	}
 	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed})
+	if s.guard != nil && !res.Failed {
+		// SUCCESS ONLY. A load that named a key nobody has comes back
+		// failed, and treating it as an unlock would let a typo open
+		// every tool the real skill was gating.
+		s.guard.Observe(call.Name, args)
+	}
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed,
 		Suspend: res.Suspend, SuspendPayload: res.Payload,

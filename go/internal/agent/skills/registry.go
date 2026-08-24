@@ -282,3 +282,23 @@ func (r *Registry) Body(key string) (string, bool) {
 	b.WriteString(r.Render(s.Body))
 	return strings.TrimRight(b.String(), "\n") + "\n", true
 }
+
+// All returns every registered skill, key-sorted.
+//
+// For the callers that must find a skill by something other than its key —
+// the webhook path evicts by SOURCE PAGE, because a page whose key was
+// edited would otherwise leave the old key behind for ever.
+func (r *Registry) All() []Skill {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	skills := r.skills
+	r.mu.Unlock()
+
+	out := make([]Skill, 0, len(skills))
+	for _, key := range slices.Sorted(maps.Keys(skills)) {
+		out = append(out, skills[key])
+	}
+	return out
+}

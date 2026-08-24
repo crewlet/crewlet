@@ -189,3 +189,45 @@ func TestNoRegistryMeansNoGuard(t *testing.T) {
 		t.Fatal("a guard armed with no registry")
 	}
 }
+
+// THE UNLOCK IS A TOOL CALL, watched rather than reported: the tool is
+// registered once per company while the guard is per phase session, so a
+// tool holding a guard would hold whichever session registered last.
+func TestASuccessfulLoadUnlocksTheToolsItCovers(t *testing.T) {
+	t.Parallel()
+	r := registry(t, skill("code", skills.Trigger{MCPServer: "gitlab"}, true))
+	g := skills.NewGuard(r, prompts.PhaseExecute, withLoader(nil, "gitlab"))
+
+	g.Observe(skills.LoaderTool, map[string]any{"key": "code"})
+	if got := g.Check("create_mr", "gitlab"); got != "" {
+		t.Fatalf("the tool is still gated after its skill loaded: %s", got)
+	}
+}
+
+// A load naming a key nobody has, or any other tool, unlocks nothing —
+// otherwise a typo would open every tool the real skill was gating.
+func TestOnlyALoadOfTheRightSkillUnlocksIt(t *testing.T) {
+	t.Parallel()
+	r := registry(t, skill("code", skills.Trigger{MCPServer: "gitlab"}, true))
+
+	for _, tc := range []struct {
+		name string
+		tool string
+		args map[string]any
+	}{
+		{"another skill's key", skills.LoaderTool, map[string]any{"key": "chat"}},
+		{"an empty key", skills.LoaderTool, map[string]any{"key": "  "}},
+		{"no key at all", skills.LoaderTool, map[string]any{}},
+		{"a key of the wrong type", skills.LoaderTool, map[string]any{"key": 7}},
+		{"a different tool entirely", "create_mr", map[string]any{"key": "code"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := skills.NewGuard(r, prompts.PhaseExecute, withLoader(nil, "gitlab"))
+			g.Observe(tc.tool, tc.args)
+			if g.Check("create_mr", "gitlab") == "" {
+				t.Fatalf("%s unlocked the tool", tc.name)
+			}
+		})
+	}
+}

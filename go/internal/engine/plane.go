@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -44,6 +46,11 @@ const (
 type planeParts struct {
 	parser   *plane.Parser
 	searcher *plane.Searcher
+
+	// pages reads the skills container. Nil with no engine credential,
+	// which is the same degradation the searcher takes: a company whose
+	// read token lapsed keeps routing and stops learning.
+	pages *plane.Client
 }
 
 // startPlane builds the tracker's parser, prompt and knowledge searcher.
@@ -104,6 +111,11 @@ func (e *Engine) startPlane(c *Company, cfg *config.Plane) (planeParts, error) {
 		Subscribers: subscriberLookup(engineClient),
 		Leads:       plane.LeadsFrom(c.Org),
 		Excluded:    excludedProjects(skills),
+		// THE INDEXER RUNS BEFORE EVERY ROUTING FILTER, which is the
+		// point: the skills project's own webhooks are excluded from
+		// routing, so a hook that only fired for routable events would
+		// never see a skill change at all.
+		OnPage: e.reindexSkill(skills),
 	})
 	if err != nil {
 		return planeParts{}, fmt.Errorf("engine: plane: %w", err)
@@ -116,10 +128,108 @@ func (e *Engine) startPlane(c *Company, cfg *config.Plane) (planeParts, error) {
 			ForSeat: seatPlaneClient(url, workspace),
 		})
 	}
+	// THE SKILL SYNC, on the same credential. It walks once here and is
+	// refreshed by page webhooks after that, so editing a skill is a wiki
+	// edit and nothing else — no restart, no deploy, no config push.
+	if engineClient != nil {
+		parts.pages = engineClient
+	}
+
 	log.Info("plane_wired", "url", url, "workspace", workspace,
 		"projects_with_leads", len(plane.LeadsFrom(c.Org)),
 		"skills_project", skills, "engine_token", engineClient != nil)
 	return parts, nil
+}
+
+// reindexSkill re-reads one changed page into the skill registry.
+//
+// The LIVE half of the sync: the boot walk seeds the registry and this keeps
+// it in step, so editing a skill is opening the page, editing and saving.
+//
+// It fetches through the PROJECT-SCOPED page read, which is the admission
+// check as well: the fork 404s for a page in another project, so a page
+// moved OUT of the skills container comes back missing and is evicted rather
+// than continuing to serve its last body. Same for an archived one — archive
+// is the operator's remove gesture, since Plane requires it before a delete.
+func (e *Engine) reindexSkill(project string) plane.PageIndexer {
+	if project == "" {
+		return nil
+	}
+	return func(ctx context.Context, eventType, pageID string) error {
+		e.notify.mu.Lock()
+		client := e.notify.plane.pages
+		e.notify.mu.Unlock()
+		if client == nil || pageID == "" {
+			return nil
+		}
+		projectID, err := e.skillsProjectID(ctx, client, project)
+		if err != nil || projectID == "" {
+			return err
+		}
+
+		if strings.HasSuffix(eventType, ".deleted") {
+			e.evictSkillPage(pageID)
+			return nil
+		}
+		page, err := client.GetPage(ctx, projectID, pageID)
+		if err != nil {
+			// MISSING IS AN EVICTION, not a failure: a page in another
+			// project, an archived one, a deleted one — all of them mean
+			// this page must stop serving a skill, and a caller that
+			// treated it as an error would leave the last body in place.
+			e.evictSkillPage(pageID)
+			return nil
+		}
+		text := plane.DecodeSkillPage(page.HTML)
+		if text == "" {
+			// Edited into a non-skill. Evicted rather than skipped, or a
+			// page whose trigger somebody removed keeps gating tools.
+			e.evictSkillPage(pageID)
+			return nil
+		}
+		skill, err := skills.Parse(text, skills.Source{PageID: page.ID})
+		if err != nil {
+			log.Warn("skill_page_undecodable", "page", pageID,
+				"title", page.Name, "error", err.Error())
+			e.evictSkillPage(pageID)
+			return nil
+		}
+		if err := e.skills.Upsert(skill); err != nil {
+			log.Warn("skill_refused", "page", pageID, "error", err.Error())
+			return nil
+		}
+		log.Info("skill_reindexed", "page", pageID, "skill", skill.Key)
+		return nil
+	}
+}
+
+// evictSkillPage removes whichever skill came from a page.
+//
+// BY PAGE, not by key: the caller has a page id and the registry is keyed by
+// skill key, and a page whose key was edited would otherwise leave the old
+// key behind for ever.
+func (e *Engine) evictSkillPage(pageID string) {
+	for _, s := range e.skills.All() {
+		if s.SourcePageID == pageID {
+			if e.skills.Evict(s.Key) {
+				log.Info("skill_evicted", "page", pageID, "skill", s.Key)
+			}
+		}
+	}
+}
+
+// skillsProjectID resolves the skills container's identifier to its UUID.
+func (e *Engine) skillsProjectID(ctx context.Context, client *plane.Client, project string) (string, error) {
+	projects, err := client.Projects(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range projects {
+		if strings.EqualFold(p.Identifier, project) {
+			return p.ID, nil
+		}
+	}
+	return "", nil
 }
 
 // subscriberLookup is the thread fan-out, or nil with no engine credential.

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
@@ -149,6 +150,7 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		Recon:        in.Recon,
 		Conversation: in.Conversation,
 		AlwaysOn:     te.ExecutorAlwaysOnTools,
+		Skills:       in.Skills,
 		SkipNames:    MetaToolNames(),
 		Publisher:    in.Publisher,
 		Turn:         in.Turn,
@@ -165,6 +167,12 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 type RunnerInput struct {
 	Task         string
 	Conversation string
+
+	// Skills is the company's tool-skill registry, threaded per turn like
+	// everything else the runner reads: the registry itself outlives an
+	// epoch, but which registry a turn runs against is the node's answer
+	// at the moment the turn started.
+	Skills *skills.Registry
 
 	// Context is the turn's prefetched prompt blocks, and Recon recovers
 	// the knowledge block a thin trigger's gate skipped once Plan has

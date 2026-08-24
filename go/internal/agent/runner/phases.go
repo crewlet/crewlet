@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -81,6 +82,11 @@ type Config struct {
 
 	// AlwaysOn are tools Execute has whatever the plan named.
 	AlwaysOn []string
+
+	// Skills is the company's tool-skill registry. Nil is a company that
+	// has published none, and it disarms the required-skill guard too —
+	// which is right: with no skills there is nothing to enforce.
+	Skills *skills.Registry
 
 	// SkipNames are the meta-tools the ledger filters out.
 	SkipNames []string
@@ -206,6 +212,11 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		OnboardingHint:      r.onboardingHint(),
+		// The tool-skill catalogue, offered against the surface this
+		// phase actually has — and nil where a company has published
+		// none, which keeps the prompt free of skill scaffolding rather
+		// than rendering an empty section.
+		Skills: r.catalogue(),
 	})
 	user := prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
@@ -284,6 +295,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 		// somebody who cannot see what that register is.
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		RelevantKnowledge:   r.recon(ctx, p.Summary),
+		Skills:              r.catalogue(),
 		// Named explicitly, because a planner that guessed an MCP tool's
 		// name wrong and is not told so assumes the tool exists, fails to
 		// call it, and settles for a text reply that delivers nothing.
@@ -621,7 +633,77 @@ func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit too
 	// Bound to the turn, which is what lets a seat-scoped tool know who is
 	// calling it without the seat travelling through the model's arguments.
 	surface = tools.NewSurface(ph.String(), snapshot, active).ForTurn(r.cfg.Turn.Context)
+	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
+	// what the catalogue showed cannot disagree: both are derived from the
+	// same active list, at the same moment, and the catalogue's "required"
+	// marker is the promise this keeps.
+	surface = surface.WithGuard(r.guardFor(ph, surface))
 	return surface, nil
+}
+
+// guardFor arms the required-skill gate for one phase session, or nil.
+//
+// PER SESSION, because "loaded" means "the body is in this model's context"
+// and Plan, Execute and each sub-agent are separate message histories. A
+// round-cap extension continues the same session AND the same surface, so a
+// load carries across it; a self_iterate builds a fresh surface and
+// therefore a fresh guard, which is correct — its LLM context started over
+// too.
+func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface) tools.Guard {
+	if r.cfg.Skills == nil {
+		return nil
+	}
+	guard := skills.NewGuard(r.cfg.Skills, promptPhase(ph), catalogueSurface(surface))
+	if guard == nil {
+		// A TYPED NIL WOULD NOT BE NIL. Returning the *skills.Guard
+		// directly would give the surface a non-nil interface wrapping a
+		// nil pointer, so its `guard != nil` check would pass and every
+		// tool call would take the guard path to be told yes.
+		return nil
+	}
+	return guard
+}
+
+// catalogue is the tool-skill registry as the prompt sees it, or nil.
+//
+// A TYPED NIL WOULD NOT BE NIL here either: prompts.injectSkillCatalogue
+// checks its interface against nil, and a non-nil interface wrapping a nil
+// registry would take the catalogue path and render a header over nothing.
+func (r *Runner) catalogue() prompts.SkillCatalogue {
+	if r.cfg.Skills == nil {
+		return nil
+	}
+	return r.cfg.Skills
+}
+
+// promptPhase maps a runner phase onto the prompt package's own.
+//
+// Two vocabularies because two packages own them, and the mapping is
+// explicit rather than a string cast: a phase this package adds and forgets
+// to map would silently become the zero value, which matches no skill and
+// arms no guard.
+func promptPhase(ph phase.Phase) prompts.Phase {
+	switch ph {
+	case phase.Plan:
+		return prompts.PhasePlan
+	case phase.Execute:
+		return prompts.PhaseExecute
+	case phase.Review:
+		return prompts.PhaseReview
+	case phase.Subagent:
+		return prompts.PhaseSubagent
+	default:
+		// Onboarding and anything later. Not a phase skills are scoped
+		// to, and the empty value matches none of them — which is the
+		// honest answer rather than a default that quietly picks one.
+		return ""
+	}
+}
+
+// catalogueSurface is the tool surface as the skill triggers see it.
+func catalogueSurface(surface *tools.Surface) prompts.Surface {
+	active := surface.Active()
+	return prompts.Surface{Tools: active, MCPServers: surface.Universe().MCPServers()}
 }
 
 // planActive is what the planner is offered: its submission tool plus the

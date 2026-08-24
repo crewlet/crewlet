@@ -373,6 +373,24 @@ func (s Snapshot) MCPNames() []string {
 	return out
 }
 
+// MCPServers returns the distinct MCP server names in the snapshot, sorted.
+//
+// The SERVERS rather than their tools, which is the vocabulary a tool-skill
+// trigger is written in: an operator documents "how we use GitLab", not each
+// of the forty tools that server publishes.
+func (s Snapshot) MCPServers() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range s.entries {
+		if server, ok := e.FromMCP(); ok && !seen[server] {
+			seen[server] = true
+			out = append(out, server)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // KnownReads returns the positively read-only names in the snapshot.
 func (s Snapshot) KnownReads() []string {
 	var out []string

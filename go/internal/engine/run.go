@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -64,6 +65,14 @@ type Engine struct {
 	// drop every connection whenever an unrelated field changed. The
 	// registry inside it IS swapped per epoch; see notifications.go.
 	notify notifications
+
+	// skills is this node's tool-skill registry, built once and OUTLIVING
+	// every epoch: its content comes from the knowledge base rather than
+	// from config, so an apply that changed a seat's model has nothing to
+	// say about it. Rebuilding it per epoch would empty it on every apply
+	// and leave seats running without their company's guidance until the
+	// next sync walk — which on a webhook-driven sync could be never.
+	skills *skills.Registry
 
 	// maintenance is the retention sweep for the short-horizon tables. On
 	// the engine for the same reason the sandbox machinery is: it is a
@@ -159,7 +168,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// Only what this engine OPENED does it close. A caller that supplied
 	// backends keeps their lifetime — the merged API process outlives the
 	// engine's own shutdown and still needs its broker.
-	e := &Engine{backends: backends, ownsBackends: ownsBackends, onboarded: runner.NewLatch()}
+	e := &Engine{
+		backends: backends, ownsBackends: ownsBackends,
+		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+	}
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
 			backends.Close(ctx)
@@ -429,6 +441,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	r, err := company.RunnerFor(req.Handle, RunnerInput{
 		Task:    task,
 		Context: blocks,
+		Skills:  e.skills,
 		Recon: func(ctx context.Context, planSummary string) string {
 			return fetcher.AfterPlan(ctx, prefetchReq, planSummary)
 		},
