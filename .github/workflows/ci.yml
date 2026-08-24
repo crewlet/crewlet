@@ -129,21 +129,17 @@ jobs:
           version: latest
           # No working-directory: the module is the repository.
 
-  integration:
-    name: integration (real brokers)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      # Embedded NATS runs in-process, so the JetStream conformance and
-      # fleet suites need no service container. Pulsar needs a real broker
-      # and gets its own job below.
-      - run: go test ./... -race -count=1 -tags=integration
-        env:
-          CREWLET_INTEGRATION: "1"
+  # THERE IS NO SEPARATE "integration" JOB, and that is a correction rather
+  # than an omission. One existed, running `go test ./... -tags=integration`
+  # with CREWLET_INTEGRATION=1 — and NOTHING reads either: no file carries
+  # that build tag and no code reads that variable. It was the `test` job
+  # again, at the cost of a second full race-detector run on every pull
+  # request, reported under a name that implied coverage it did not have.
+  #
+  # The suites that genuinely need a service each have their own job and
+  # their own gate: `stores` over both certified drivers, and `pulsar`
+  # against a real broker. Embedded NATS runs in-process, so the JetStream
+  # conformance and fleet suites need no container at all.
 
   pulsar:
     name: pulsar conformance
