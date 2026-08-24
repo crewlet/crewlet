@@ -3,7 +3,7 @@
 The knowledge system (`crewlet.knowledge`) is the read path agents use to find context they don't already have in their system prompt. It is two purpose-specific reads composed into the agent runtime:
 
 - **Shared knowledge** — the team knowledge base, searched live at query time. There is no synced local copy. The knowledge base is **one** of two backends — Confluence or [Plane](../integrations/plane.md) pages — behind a single seam: a `KnowledgeSearcher` translates the turn's trigger into a plain-text search query (once per turn, via the auxiliary LLM) and runs it against the backend's own search API, authenticating as the agent's own user so the backend enforces its page permissions natively.
-- **`agent_diary`** (pgvector) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id and capped at 100, then handed to an aux-LLM relevance filter.
+- **`agent_diary`** (vector-indexed) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id and capped at 100, then handed to an aux-LLM relevance filter.
 
 There is no shared vector index and no scope ladder for shared docs — no synced local copy of the knowledge base exists anywhere in the engine. Shared knowledge is read straight from the backend on demand, so there is no sync worker to run, no index to keep fresh, and no staleness window.
 
@@ -14,7 +14,7 @@ There is no shared vector index and no scope ladder for shared docs — no synce
 ```mermaid
 flowchart TD
     RP["reflect_and_persist<br/>PersistDecider<br/>(post-turn, embeds on write)"]
-    DIARY["agent_diary<br/>pgvector + agent_id + kind/ttl"]
+    DIARY["agent_diary<br/>vector index + agent_id + kind/ttl"]
     SEL["hybrid candidate selection:<br/>vector top-K ∪ recency top-K,<br/>deduped, capped at 100,<br/>then aux-LLM relevance filter"]
     PROMPT["Plan-phase prompt prefetch blocks<br/>'## Personal memory'<br/>'## Relevant knowledge'"]
     KB["knowledge-base pages<br/>(live, query-time)"]

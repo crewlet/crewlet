@@ -43,12 +43,12 @@ flowchart TB
         N3["sat-eu<br/><i>seats</i> · zone=eu"]
     end
     subgraph shared["Shared state — the company"]
-        PG[("PostgreSQL<br/>leases · config epochs<br/>counters · ledgers")]
+        KV[("Coordination<br/>leases · config epochs<br/>counters · ledgers")]
         MQ[("Pulsar<br/>one durable subscription<br/>per seat inbox")]
     end
-    N1 --- PG
-    N2 --- PG
-    N3 --- PG
+    N1 --- KV
+    N2 --- KV
+    N3 --- KV
     N1 --- MQ
     N2 --- MQ
     N3 --- MQ
@@ -91,7 +91,7 @@ the answer is a node model rather than a lock.
 ## What the fleet shares
 
 Everything that must be true for the *company* rather than for a process lives
-in PostgreSQL. A fleet is not configured — it is discovered from these tables,
+in the coordination slot. A fleet is not configured — it is discovered from these tables,
 which is why adding a node is starting a process and removing one is stopping
 it.
 
@@ -106,7 +106,7 @@ it.
 | `credential_cooldowns` | Which provider key is cooling after a 429. Per-process `time.monotonic()` values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `rate_limits` | The notification valve | [Event System](event-system.md) |
 | `pending_sandbox_run` | The suspended Execute conversation and the box that belongs to it, mutated only under the owner's epoch | [Code Sandbox](code-sandbox.md) |
-| `a2a_channels` | Who is on an agent-to-agent channel and whether it is open — read by every authorization decision, and the two parties are usually on different nodes | [Design Decisions](../reference/design-decisions.md#apache-pulsar-for-messaging) |
+| `a2a_channels` | Who is on an agent-to-agent channel and whether it is open — read by every authorization decision, and the two parties are usually on different nodes | [Design Decisions](../reference/design-decisions.md#one-queue-contract-several-backends) |
 | `scheduled_runs` | Which schedule fires have already been claimed | [Scheduling](scheduling.md) |
 | `secret_values` | The encrypted secret store every node resolves `${VAR}` through | [Secret Store](secret-store.md) |
 

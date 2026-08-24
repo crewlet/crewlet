@@ -441,7 +441,7 @@ By default, agents only receive thread replies in threads they are **following**
 3. **Outbound participation** — the agent sends a reply in the thread
 4. **Outbound send** — the agent sends a reply via ``SlackTransport.send()``
 
-Thread tracking state is persisted in PostgreSQL (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
+Thread tracking state is persisted in the store (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
 
 A follow is dropped after **90 days without activity** — the row's timestamp is refreshed every time the follow is re-asserted (a mention, a collective address, the agent posting), so it means last activity rather than when the thread started. The asymmetry is what sets the number: a dropped stale follow costs at most one missed non-mention reply, and the next mention re-follows through the ordinary path above, while keeping every follow forever grows a table that is read on the hot path of every inbound message. The sweep runs on the maintenance worker, once per fleet.
 

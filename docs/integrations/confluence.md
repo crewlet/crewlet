@@ -158,7 +158,7 @@ The transport deduplicates webhook events using a composite key of timestamp + p
 
 ## Query-Time Confluence Search
 
-Crewlet does not maintain a local copy of Confluence content. Shared knowledge is searched **live at query time**: the `ConfluenceSearcher` (`crewlet.knowledge.confluence_search.ConfluenceSearcher`) has the auxiliary LLM turn a turn's trigger context into a Confluence CQL query — once per turn — and runs it against the Confluence REST API (`/rest/api/content/search`). There is no startup walk, no pgvector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
+Crewlet does not maintain a local copy of Confluence content. Shared knowledge is searched **live at query time**: a Confluence searcher behind the knowledge seam would have the auxiliary LLM turn a turn's trigger context into a Confluence CQL query — once per turn — and runs it against the Confluence REST API (`/rest/api/content/search`). There is no startup walk, no pgvector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
 
 The search backs the Plan-phase `## Relevant knowledge` prefetch (see [Knowledge System](../concepts/knowledge-system.md#relevant-knowledge-prefetch)). Agents that want to search or read Confluence directly use the `confluence_search` and `confluence_get_page` MCP tools.
 

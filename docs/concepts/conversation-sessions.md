@@ -197,7 +197,7 @@ cannot undercut the worker's own invariant.
 
 ## Storage
 
-One row per recorded turn in `conversation_sessions`, a regular PostgreSQL
+One row per recorded turn in `conversation_sessions`, a regular
 table (not a hypertable), so dedupe is a plain unique index and an ordinary
 `ON CONFLICT DO NOTHING` — the advisory-lock dance in
 `031_work_key.sql` exists only because `episodes` is partitioned on time.
@@ -242,4 +242,4 @@ either failing says so rather than drawing an empty thread.
 - [Turn Engine](turn-engine.md) — the phases, and the within-turn prior-work ledger
 - [Agent Learning](agent-learning.md) — episodes, the diary, counterparty profiles
 - [Event System](event-system.md) — the conversation key and inbox coalescing
-- [Scaling Out](scaling.md) — why shared state lives in PostgreSQL
+- [Scaling Out](scaling.md) — why shared state lives in the coordination slot

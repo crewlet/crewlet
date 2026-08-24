@@ -331,7 +331,7 @@ minutes. Activity pages beneath it into the event store with the `events`
 query, and three rules keep the merged list honest:
 
 - **One ordering key**, `(instant, id)` descending — `newestFirst` in
-  `format.js`, mirroring `timescaledb/_time.py`. Raw ISO strings are not
+  `format.js`, mirroring the server's own ordering. Raw ISO strings are not
   safely comparable (the API emits naive and aware forms for the same
   instant) and a shared timestamp needs the id to break it. A row's
   position depends only on its own key, so nothing jumps when a page lands.

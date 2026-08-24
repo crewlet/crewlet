@@ -158,7 +158,7 @@ class Event(BaseModel):
 
 Each Event subclass defines its own `summary` property using its domain fields. New event types automatically get a reasonable default.
 
-Changes are additive-only — new fields get defaults, existing fields are never removed. Pulsar retains each subscription's undelivered backlog until it's consumed (so a restart resumes cleanly); durable, replayable event history is the [TimescaleDB event store](../guides/deployment.md#timescaledb-event-store), not the queue. Time-based retention of already-acknowledged messages is an optional Pulsar namespace retention policy.
+Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. On Pulsar, time-based retention of already-acknowledged messages is an optional namespace retention policy.
 
 ---
 
@@ -205,7 +205,7 @@ The dashboard groups events by `trace_id` into collapsible trace trees. See [Dep
 
 The `EventQueue` supports **publish listeners** — async callbacks invoked inline during every `publish()` call. Listeners receive the topic and event, and run in the same coroutine as the publish. Exceptions in listeners are logged but do not prevent the publish or affect queue delivery.
 
-This is used by the **event store writer** to persist events directly at publish time without routing through a Pulsar subscription. See [Deployment — TimescaleDB Event Store](../guides/deployment.md#timescaledb-event-store) for details.
+This is used by the **event store writer** to persist events directly at publish time, inline on the node that published — no subscription, and therefore no consumer group that could let two nodes write one row or lose one in a rebalance. See [Deployment — The event store](../guides/deployment.md#the-event-store) for details.
 
 ---
 

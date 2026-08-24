@@ -46,7 +46,7 @@ crewlet run [-config PATH] [-company PATH] [-debug]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
-Reads Tier A bootstrap (`./config.yaml` by default) and starts the agent engine. Tier B is read from the `company_config` PostgreSQL table — if no active revision exists, the engine boots in the **unconfigured** state with the API still serving so an operator can bootstrap via `crewlet config import` or `PUT /config`. See [Configuration concept doc](../concepts/configuration.md).
+Reads Tier A bootstrap (`./config.yaml` by default) and starts the agent engine. Tier B is read from the `company_config` table in the store — if no active revision exists, the engine boots in the **unconfigured** state with the API still serving so an operator can bootstrap via `crewlet config import` or `PUT /config`. See [Configuration concept doc](../concepts/configuration.md).
 
 | Flag | Description |
 |------|-------------|

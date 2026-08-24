@@ -212,8 +212,7 @@ state with an older event — including a final progress round that
 overtakes its own phase completion, which would otherwise re-open the
 row of a phase that had already finished.
 
-Every one of those comparisons normalizes through
-`timescaledb._time.ts_key` first.  The same instant reaches the API in
+Every one of those comparisons normalizes to a single ordering key first.  The same instant reaches the API in
 more than one encoding (`Z`, `+00:00`, naive, a non-UTC offset), and as
 raw strings those order differently: `…05Z` sorts *after* `…05+00:00`
 for the same moment, and `13:00+01:00` sorts after `12:30+00:00` while
@@ -539,8 +538,8 @@ Sources:
   [promoted](../concepts/agent-learning.md) as draft pages in the shared
   knowledge backend, reachable by all members via query-time search.
 
-Each section degrades independently: a missing knowledge provider, a
-non-Postgres storage backend, or a per-section query error returns an
+Each section degrades independently: a missing knowledge provider, an
+unreadable store, or a per-section query error returns an
 empty list for that section instead of erroring the whole response.
 Returns 404 when no role with the given `id` is configured.
 

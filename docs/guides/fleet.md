@@ -22,19 +22,29 @@ node.
 
 ## What a fleet needs
 
-**A database.** Seat leases live in PostgreSQL. Without
-`providers.database.dsn` they fall back to an in-process store and every
-node believes it owns the whole company; the engine logs
-`seat_placement_is_process_local` at boot. This is the one
-misconfiguration that silently gives two processes the same agents.
+**Shared coordination.** Seat leases live in the `coordination` slot.
+`coordination.type: local` holds them in this process, so every node
+believes it owns the whole company; the engine logs
+`seat_placement_is_process_local` at boot. A fleet needs
+`coordination.type: embedded-kv` — and Tier A refuses `local` beside a
+clustered or external stream by name, because this is the one
+misconfiguration that would otherwise silently give two processes the
+same agents.
 
-**The right broker settings.** An unowned seat's subscription has no
-connected consumer, and two Pulsar reapers delete exactly that: set
+**One node or three, never two.** Two embedded-KV members have no quorum
+without each other, so the fleet stops serving the moment either
+restarts — and a rolling upgrade restarts them one at a time, which makes
+the outage certain rather than unlucky. Tier A refuses a two-member
+config by name.
+
+**The right broker settings, on Pulsar.** An unowned seat's subscription
+has no connected consumer, and two Pulsar reapers delete exactly that: set
 `subscriptionExpirationTimeMinutes` to `0` and
 `brokerDeleteInactiveTopicsEnabled` to `false` (or
 `brokerDeleteInactiveTopicsMode` to
 `delete_when_subscriptions_caught_up`). The repo's `docker-compose.yml`
-ships these values. Nothing in the engine can detect a broker that is
+ships these values under its `pulsar` profile, and CI certifies the
+backend against a broker configured this way. Nothing in the engine can detect a broker that is
 quietly deleting a quiet seat's mail.
 
 **A distinct, stable id per node.** `node.id` in the Tier A file, or

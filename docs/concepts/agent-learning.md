@@ -448,10 +448,10 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 |---|---|
 | `crewlet.agent.turn` (TurnEngine) | Emits `turn_completed` carrying everything the reflection gates read: the plan summary and decision, the Plan and Execute tool sequences, the review outcome, the skills the prompt offered, and the inbound interactions with their senders resolved. |
 | `crewlet.agent.prompts` | Plan-phase prompt builders inject conditional guidance blocks gated on tool availability. |
-| `crewlet.knowledge` | The `KnowledgeSearcher` seam (`protocol`) with its two backends — `ConfluenceSearcher` (CQL) and `PlaneSearcher` (fork page search) — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
+| `crewlet.knowledge` | The knowledge-search seam and its backend — `PlaneSearcher` (fork page search) — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
 | `crewlet.tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
 | `crewlet.events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `plan_prefetch_summary`, `relevant_knowledge_refetched`, `compaction_requested`, `compaction_completed`. |
-| `crewlet.timescaledb` | Underpins the `episodes` hypertable + the dashboard event store. |
+| `crewlet.store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |
 | `crewlet.learning/` | The reflect dispatcher and its per-turn workers (`PersistDecider`, `Episodist`, `CounterpartyProfiler`, `SkillUse`), the two background passes (episode lifecycle, skill curator), `SkillSynthesizer`, `SkillRefiner`, `PromotionSynthesizer`, `AgentDiary`, the onboarding marker store, and the relevant-knowledge prefetch. |
 | `crewlet.config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
 | `crewlet.api` | `GET /agents/{id}/memory` aggregates personal memories, episodes, counterparty profiles, and synthesized skills for the dashboard's per-agent memory view. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
@@ -462,8 +462,8 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 
 | Table | What it holds | Keyed by |
 |---|---|---|
-| `episodes` (hypertable) | One row per completed turn (raw) or per cluster (compacted) | `id`; partitioned by `started_at` |
-| `agent_diary` (pgvector) | The agent's private observation log; rows carry an `embedding` for the vector half of the `## Personal memory` prefetch's hybrid candidate selection | `id`; indexed by `agent_id`, `kind`; HNSW on `embedding` |
+| `episodes` | One row per completed turn (raw) or per cluster (compacted) | `id`; indexed by `started_at` |
+| `agent_diary` | The agent's private observation log; rows carry an `embedding` for the vector half of the `## Personal memory` prefetch's hybrid candidate selection | `id`; indexed by `agent_id`, `kind`; vector index on `embedding` where the driver offers one |
 | `synthesized_skills` | Auto-drafted skills, agent-scope | `id`; unique on `(agent_handle, name)` |
 | `synthesized_skill_versions` | Refinement history | `id`; references `skill_id` |
 | `counterparty_profiles` | One row per `(observer, subject, platform)` | composite |
@@ -502,9 +502,9 @@ That said, several Hermes design choices are directly useful and adopted above:
 
 Explicitly rejected:
 
-- **Monolithic CLI coupling** — Hermes's learning loop is threaded through `run_agent.py`; ours sits behind the `EventQueue` as its own package.
+- **Monolithic CLI coupling** — Hermes's learning loop is threaded through its agent entry point; ours sits behind the `EventQueue` as its own package.
 - **LLM-nudge-only triggers** — Hermes's pipeline fires only if the model invokes the tool. Ours pairs nudges with a deterministic `ReflectEngine`.
 - **Single-user `USER.md` persona** — replaced by multi-party `CounterpartyProfile` keyed by `(observer, subject, platform)`.
-- **Home-dir file storage** — replaced by Postgres + pgvector tables.
+- **Home-dir file storage** — replaced by vector-indexed tables in the engine's own store.
 - **Unversioned skill overwrites** — Crewlet keeps prior revisions for rollback.
 - **No model fine-tuning requirement** — notably, Hermes itself also runs on stock models; Crewlet's in-engine learning never touches weights.

@@ -75,7 +75,7 @@ assistant to list every `${VAR}` it used — a missing one resolves to an
 empty string and fails later, deep in a turn.
 
 ```bash
-cp .env.example .env && docker compose up -d      # Pulsar + PostgreSQL
+# nothing to bring up: the engine embeds its stream and creates its store
 
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."

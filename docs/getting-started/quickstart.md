@@ -244,7 +244,7 @@ units:
 When a budget is exceeded, the agent's turn stops immediately and a
 `BudgetExhausted` event is emitted.
 
-Usage is **durable** — it is stored in PostgreSQL and survives restarts, and
+Usage is **durable** — it is stored in this node's store file and survives restarts, and
 is shared by every process running the company. Reset it deliberately:
 
 ```bash

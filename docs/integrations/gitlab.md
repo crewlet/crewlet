@@ -317,7 +317,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
    ```
    127.0.0.1 gitlab.local
    ```
-2. **Bring up the stack and seed GitLab.** The `gitlab` profile also pulls in Pulsar + Postgres:
+2. **Bring up GitLab and seed it.** The `gitlab` profile brings up GitLab alone — the engine needs no other service:
    ```bash
    docker compose --profile gitlab up -d      # first boot of GitLab takes 3–6 min
    scripts/gitlab-dev-bootstrap.sh            # waits, mints a root PAT, opens the webhook SSRF allowlist, seeds nimbus-hq/nimbuscore

@@ -43,7 +43,7 @@ The share is a ceiling, so shares sum to at least the seat count and a node at i
 ```mermaid
 sequenceDiagram
     participant A as node-a
-    participant L as leases (PostgreSQL)
+    participant L as leases (coordination)
     participant B as node-b
     A->>L: acquire node:node-a
     A->>L: acquire seat:ceo, seat:eng, seat:ops
