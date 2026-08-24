@@ -419,7 +419,7 @@ each), then wire them in:
   [secret store](../concepts/secret-store.md), which the engine consults ahead
   of `os.environ` when resolving the `${...}` references you already wrote.
   Provisioners can write there directly (`crewlet gitlab provision …
-  --secret-store`), so a minted credential reaches the engine with no file to
+  -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the full [Nimbus example](../../examples/) — a seven-seat company
   with Plane + GitLab + Mattermost + sandbox wired end-to-end

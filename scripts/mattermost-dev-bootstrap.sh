@@ -651,7 +651,7 @@ fi
 if [ -n "${COMPANY:-}" ]; then
   say "Provisioning agent bots from ${COMPANY}"
   MATTERMOST_ADMIN_TOKEN="$ADMIN_TOKEN" MATTERMOST_URL="$URL" \
-    crewlet mattermost provision "$COMPANY" --env-file "$ENV_FILE"
+    crewlet mattermost provision "$COMPANY" -env-file "$ENV_FILE"
 else
   say "Skipping bot provisioning (set COMPANY=<company.yaml> to include it)"
 fi

@@ -108,23 +108,24 @@ Every other command reads the **Tier A** config for its keyring, never the compa
 
 ### From a provisioner
 
-Both provisioning CLIs take `--secret-store` in place of `--env-file`:
+Every provisioning CLI takes `-secret-store` in place of `-env-file`:
 
 ```bash
-crewlet gitlab provision company.yaml \
-  --provision-token "$GITLAB_PROVISION_TOKEN" \
-  --webhook-url https://engine.example.com/webhooks/gitlab \
-  --secret-store
+GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
+  -public-url https://engine.example.com \
+  -secret-store
 ```
 
 Minted PATs and the generated webhook signing secret go straight into the encrypted table under the same `${VAR}` names the config already references. The three-step dance collapses to one command — no file to source, no shell to be in.
 
-`crewlet plane provision --secret-store` works identically, and so does
-`crewlet slack provision --secret-store` — which is where it pays off most, since
-the Slack provisioner also persists the **rotating config-token pair**
-(`SLACK_CONFIG_TOKEN` / `SLACK_CONFIG_REFRESH_TOKEN`). Slack invalidates the old
-refresh token on every rotation, so the persisted copy is the only valid one; the
-store is a better home for it than a file someone has to remember to source.
+`crewlet plane provision -secret-store` and
+`crewlet mattermost provision -secret-store` work identically.
+
+Where it pays off most is a credential the vendor shows **once**. Plane
+generates a webhook's secret at creation and returns it exactly once, and every
+vendor here returns a token's value once and never again — so the recorded copy
+*is* the credential. A file someone has to remember to source is a worse home
+for that than an encrypted table the engine reads back itself.
 
 ### Propagation
 
@@ -173,10 +174,10 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Site | Source | Why |
 |---|---|---|
 | `providers.llm.*` / embeddings conventional-key fallback (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set OPENAI_API_KEY` would work through a config reference but not through the fallback |
-| Provisioning pre-flight "which `${VAR}` is unset?" diagnostics | **Store, then env** | With `--secret-store`, a var minted on a previous run is provisioned; naming it would send the operator chasing an export they don't need |
+| Provisioning pre-flight "which `${VAR}` is unset?" diagnostics | **Store, then env** | With `-secret-store`, a var minted on a previous run is provisioned; naming it would send the operator chasing an export they don't need |
 | Sandbox launch credential check | **Store, then env** | A seat whose token lives only in the store must not read as unresolved |
 | Tier A bootstrap (`providers.database.dsn`, `secrets.keys[].material`) | **Env/file only** | Root of trust — this is what opens and decrypts the store |
-| Operator provisioning credentials (`GITLAB_PROVISION_TOKEN`, `PLANE_PROVISION_TOKEN`, `GITLAB_ADMIN_TOKEN`) | **Env only** | Human operator credentials, deliberately never persisted by Crewlet; also needed before the store opens |
+| Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `PLANE_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, deliberately never persisted by Crewlet; also needed before the store opens |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
 | `CREWLET_TOOL_SKILLS_SPACE` / `_PROJECT` | **Env only** | Not secrets — container names with a default |
 | `.env` loading (`load_dotenv`) | **Env only** | This is how the environment gets populated in the first place |

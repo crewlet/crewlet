@@ -91,7 +91,7 @@ What **you** do once:
    `scripts/plane-dev-bootstrap.sh` automates this; against a remote instance
    you sign up and create the workspace in the UI.
 3. **Run the provisioner** — `crewlet plane provision company.yaml
-   --webhook-url https://<engine>/webhooks/plane` creates one service account
+   -public-url https://<engine>` creates one service account
    per agent seat, project memberships, per-agent API tokens (minted into the
    `${VAR}` references your config already declares), the engine's read
    account, and the workspace webhook — idempotently.
@@ -153,7 +153,7 @@ the whole fleet. This is the path the bundled Nimbus example uses:
    compose `gitlab` profile for end-to-end testing). Set `integrations.gitlab.url`
    accordingly — the same config shape covers gitlab.com and self-hosted.
 2. **Run the provisioner** — `crewlet gitlab provision company.yaml
-   --webhook-url https://<engine>/webhooks/gitlab` creates one **service
+   -public-url https://<engine>` creates one **service
    account per engineering seat** (mentionable, assignable, reviewer-able),
    group/project memberships, per-agent PATs minted into your config's own
    `${VAR}` references, and the webhooks. Requires an admin-capable operator
