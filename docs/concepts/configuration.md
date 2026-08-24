@@ -8,8 +8,8 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `config.yaml` on disk | Ops / SRE | Restart-only | DB DSN, queue (Pulsar) URL, API host/port, API auth tokens, debug, knowledge backend |
-| **B** | PostgreSQL (`company_config` table, JSONB, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Plane / Forge), org roles & units, extensions, token budgets |
+| **A** | `config.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, debug |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Plane / Forge), org roles & units, extensions, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
@@ -21,14 +21,16 @@ debug: false
 node:
   id: "node-0"          # optional; see below
 
-providers:
-  queue:
-    type: pulsar
-    url: "pulsar://localhost:6650"
-  database:
-    dsn: "postgresql://crewlet:crewlet@localhost:5432/crewlet"
-  knowledge:
-    type: pgvector
+stream:
+  type: embedded        # a JetStream server inside this process; `nats` or
+                        #   `pulsar` point the same slot at an external one
+  store_dir: "./crewlet-data/stream"
+
+store:
+  path: "./crewlet-data/company.db"   # ONE file, owned exclusively
+
+coordination:
+  type: local           # one node; a fleet needs `embedded-kv`
 
 api:
   host: "0.0.0.0"
@@ -110,8 +112,8 @@ The engine boots in this order:
 
 1. Read `config.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
 2. `configure_logging(level)`
-3. Connect to Pulsar + PostgreSQL
-4. Run migrations in two phases, serialized behind a PostgreSQL advisory lock so concurrent processes wait rather than race: first apply the self-contained bootstrap tables (`company_config`, `secret_values`, `leases`), read the active revision's `providers.embeddings.dimensions`, then apply the rest with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model. The width is **never guessed** — with no active revision the run stops before those migrations and they apply later, when a config declares one (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)). A company bootstrapped through the unconfigured state gets them applied as part of its first `apply_config`.
+3. Open the store file and start or dial the stream
+4. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 7. `SELECT payload FROM company_config WHERE is_active = TRUE`
@@ -150,7 +152,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 
 **What stays running:**
 
-- The Tier A connections — Pulsar, PostgreSQL, the API socket — all up.
+- The Tier A resources — the stream, the store file, the API socket — all up.
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
 - Structlog with `state=unconfigured` so the unconfigured posture is obvious in logs and on the dashboard.
 
@@ -192,7 +194,7 @@ Converging runs `await self.apply_config(payload)`, which:
 
    > **Per-seat caps are a projection of the active org, not an accumulation.** Every org swap re-derives the whole cap set: each agent seat with a positive `token_budget` gets its cap (usage history preserved), and every cap whose seat is gone — role removed, flipped to human, budget dropped to `0` (= unlimited) — is dropped. Crucially the caps cover **every seat in the company on every node**, not just the seats a node happens to be running: caps are config while only *usage* is shared, and a missing local cap is read as "unlimited", so a node that seeded selectively would run a seat with no cap the moment it took that seat over.
    - **`turn_engine`** — push new settings into `TurnEngineSettings` cell; in-flight turns finish on the prior snapshot
-   - **`providers`** — re-instantiate LLM providers and swap dict entries in place (preserves dict identity so `TurnEngine` sees the swap). The **embeddings** provider is rebuilt with the rest — the model, key and base URL are all live — with **one exception that is refused rather than applied**: `dimensions`. The pgvector columns are sized from it at migration time, so a revision moving the width would leave the writer producing vectors the reader cannot match; the apply fails with an error naming the declared width and the width this node's store was opened at, and changing it means a restart. Adding or removing the whole `embeddings` block *is* live, in both directions: a company that drops it degrades to recency-only recall on the next turn rather than at the next restart.
+   - **`providers`** — LLM providers are rebuilt and swapped in place. The **embeddings** provider is rebuilt with them — model, key and base URL are all live — with **one exception that is refused rather than applied**: `dimensions`. Rows already written carry vectors of the old width, and a similarity query across two widths compares nothing; the apply fails with an error naming the declared width and the width this store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live, in both directions: a company that drops it degrades to recency-only recall on the next turn rather than at the next restart.
    - **`scalars`** — `integrations.forge_app_id`, `notification_rate_limit` (the rate limit is propagated onto the running `NotificationService` so it takes effect on the next notification), and `notification_coalesce_window_seconds` / `notification_coalesce_max_batch` (mutated in place on the shared `BatchOptions` the inbox batch consume loops read every cycle — takes effect on the next batch, no re-subscription; see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing))
    - **`restart_required`** — MCP server start/stop/restart for both stdio (`MCPToolBridge.restart_server`) and remote http (`restart_http_server`, triggered by a `url` / `headers` change), per-role MCP respawn when a role's `mcp_env` changes (`_respawn_role_mcp` — this carries the per-agent Slack/GitHub credentials too), notification transport dict swap with routing re-seed (Slack apps + Jira/Confluence project/space key→lead maps), integration handle-registry refresh, extension `unregister`/`register`. **Learning** is the one subsystem that does NOT live-restart — the new `learning:` config is stored for the next engine restart and a WARNING is logged; the running `ReflectEngine` / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then.
 6. Refreshes derived state (`DelegationHandler`).
@@ -411,6 +413,6 @@ What counts as a secret leaf is structural, and it covers the untyped surfaces t
 
 ## One company per engine
 
-An engine runs exactly one company. It connects to one PostgreSQL database, that database holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no `tenant_id` column and no row-level scoping — the revision you activate is simply the company the engine runs. The same rule governs [`secret_values`](secret-store.md): one company per database, so a variable name alone is the primary key.
+An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no `tenant_id` column and no row-level scoping — the revision you activate is simply the company the engine runs. The same rule governs [`secret_values`](secret-store.md): one company per database, so a variable name alone is the primary key.
 
 To run a second company, run a second engine with its own database.

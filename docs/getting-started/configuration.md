@@ -3,7 +3,7 @@
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
 - **Tier A** (`config.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
-- **Tier B** (`company.yaml` imported into PostgreSQL, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, extensions.
+- **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, extensions.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-configyaml).
 
@@ -273,17 +273,17 @@ providers:
                                         #   back on every call
 ```
 
-**The width is a contract with the store, not with the model.** The pgvector
-columns are sized from `dimensions` when migrations run, so a vector of any
-other width is not a degraded search — it is a row that can be written and
-never read back, silently and permanently. Two checks follow from that, and
-both refuse rather than adapt:
+**The width is a contract with the store, not with the model.** Vectors of
+two different widths cannot be compared, so a row written at the wrong one is
+not a degraded search — it is a row that can be written and never read back,
+silently and permanently. Two checks follow from that, and both refuse rather
+than adapt:
 
 - **At the apply.** A revision whose `dimensions` differs from the width this
-  node's store was opened at is rejected, with an error naming both widths.
-  Changing the width means a restart (and a re-embed of what is already
-  stored), which is a decision for an operator who is watching rather than a
-  silent divergence discovered at the first recall weeks later.
+  store already holds is rejected, with an error naming both. Changing the
+  width means re-embedding what is stored, which is a decision for an operator
+  who is watching rather than a silent divergence discovered at the first
+  recall weeks later.
 - **On every call.** A vector that comes back at the wrong width is refused
   rather than stored — on every call and not just the first, because a
   gateway or aggregator can move models mid-deployment.
@@ -294,30 +294,37 @@ turn" and carries on with recency. Nothing here retries — the caller's
 degradation costs less than a retry spent inside a Plan-phase prefetch
 somebody is waiting on.
 
-Tier A (`config.yaml`, restart-only) provides the queue / database /
-knowledge backend.  Example:
+Tier A (`config.yaml`, restart-only) says where this node's stream, store and
+API are.  Example:
 
 ```yaml
 # config.yaml — Tier A bootstrap
-providers:
-  queue:
-    type: pulsar
-    url: "pulsar://localhost:6650"
-    # admin_url: ""                   # optional — admin HTTP endpoint; empty derives it from
-    #                                 #   `url` (pulsar://host:6650 -> http://host:8080).
-    #                                 #   Used to create and delete each seat's durable
-    #                                 #   subscription, which needs no consumer. Set it when
-    #                                 #   the admin endpoint is not on the broker's host at
-    #                                 #   the default port
-    # tenant: public                  # optional — must already exist; tenants and namespaces
-    # namespace: default              #   are never auto-created (see Deployment guide)
-    # auth_token: "${CREWLET_PULSAR_TOKEN}"   # optional — JWT for token auth; the token's role
-    #                                 #   should be granted only this engine's namespace
-    # tls_trust_certs_path: ""        # optional — CA bundle for pulsar+ssl:// URLs
-  database:
-    dsn: "postgresql://user:pass@host:5432/db"  # PostgreSQL with TimescaleDB + pgvector
-  knowledge:
-    type: pgvector
+stream:
+  type: embedded                    # a JetStream server inside this process.
+                                    #   `nats` or `pulsar` point the same slot
+                                    #   at an external one, and then need `url`
+  store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
+                                    #   and nothing published survives a restart
+  # url: "pulsar://localhost:6650"  # required for nats/pulsar, refused for embedded
+  # admin_url: ""                   # Pulsar only — empty derives it from `url`
+                                    #   (pulsar://host:6650 -> http://host:8080).
+                                    #   Each seat's durable subscription is created
+                                    #   over admin REST, so this must be reachable
+  # tenant: public                  # optional — must already exist; tenants and
+  # namespace: default              #   namespaces are never auto-created
+  # token: "${CREWLET_PULSAR_TOKEN}"  # JWT for token auth; grant its role only
+                                    #   this engine's namespace
+  # tls_trust_certs: ""             # CA bundle for pulsar+ssl:// URLs
+
+store:
+  path: "./crewlet-data/company.db"   # ONE file, owned exclusively by this
+                                    #   process. Not a shared database, and no
+                                    #   DSN: two engines on one file corrupt it
+
+coordination:
+  type: local                       # one node holding its own seat leases;
+                                    #   a fleet needs `embedded-kv`
+
 api:
   host: "0.0.0.0"
   port: 8000
@@ -328,11 +335,10 @@ api:
 debug: false
 ```
 
-The event store (LLM observability) lives in the same PostgreSQL instance as
-the rest of Crewlet's state, backed by a TimescaleDB hypertable.  The
-migration runner creates the `crewlet_events` hypertable on startup — no extra
-config is needed beyond `providers.database.dsn`.  See
-[Deployment → TimescaleDB Event Store](../guides/deployment.md#timescaledb-event-store)
+The event store (LLM observability) is a table in that same file, created by
+the engine's own migrations on first start — there is nothing to configure
+beyond `store.path`.  See
+[Deployment → The event store](../guides/deployment.md#the-event-store)
 for the full layout.
 
 ---
