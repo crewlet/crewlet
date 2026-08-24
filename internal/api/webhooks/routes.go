@@ -5,10 +5,24 @@ import (
 )
 
 // The seven endpoints. Each one is the same five steps in the same order —
-// read, answer readiness, parse, authenticate, accept — and each differs only
+// read, answer readiness, AUTHENTICATE, parse, accept — and each differs only
 // in the credential it checks and how it names the event. They are written out
 // rather than driven from a table because what varies between them is the part
 // worth reading, and a table would bury it in optional hooks.
+//
+// # Nothing unverified is decoded
+//
+// The raw body has to be buffered before the gate — the signature is over it,
+// so there is no reading it afterwards — and that cost is unavoidable and
+// bounded by MaxBodyBytes. Decoding it is not. Parsing first handed an
+// unauthenticated caller a JSON unmarshal and a map several times the size of
+// what they sent, on every request, for nothing: not one of these routes
+// reads a body field before its gate.
+//
+// Two parse first and genuinely must. Slack reads `type` to answer readiness
+// and to echo the url_verification handshake, which is deliberately answered
+// without a signature; Forge reads `eventType` for the same readiness answer.
+// Both say so at the line.
 
 func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 	raw, ok := r.body(w, req)
@@ -19,12 +33,12 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "github", event) {
 		return
 	}
-	body, ok := parseBody(w, raw)
+	v, ok := r.authenticate(w, "github", r.secrets().GitHub,
+		req.Header.Get("X-Hub-Signature-256"), raw, verifyGitHub)
 	if !ok {
 		return
 	}
-	v, ok := r.authenticate(w, "github", r.secrets().GitHub,
-		req.Header.Get("X-Hub-Signature-256"), raw, verifyGitHub)
+	body, ok := parseBody(w, raw)
 	if !ok {
 		return
 	}
@@ -49,10 +63,6 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 	}
 	event := headerOr(req, "X-Gitlab-Event", "unknown")
 	if !r.serving(w, "gitlab", event) {
-		return
-	}
-	body, ok := parseBody(w, raw)
-	if !ok {
 		return
 	}
 	// Standard-Webhooks signs {webhook-id}.{webhook-timestamp}.{body}, so
@@ -107,6 +117,10 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
+	body, ok := parseBody(w, raw)
+	if !ok {
+		return
+	}
 	// GitLab 19.1+ sends webhook-id; older deliveries carry
 	// X-Gitlab-Event-UUID. Either is a stable per-delivery identity, and a
 	// deployment mid-upgrade sends both across its instances.
@@ -130,12 +144,12 @@ func (r *Receiver) plane(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "plane", req.Header.Get("X-Plane-Event")) {
 		return
 	}
-	body, ok := parseBody(w, raw)
+	v, ok := r.authenticate(w, "plane", r.secrets().Plane,
+		req.Header.Get("X-Plane-Signature"), raw, verifyPlane)
 	if !ok {
 		return
 	}
-	v, ok := r.authenticate(w, "plane", r.secrets().Plane,
-		req.Header.Get("X-Plane-Signature"), raw, verifyPlane)
+	body, ok := parseBody(w, raw)
 	if !ok {
 		return
 	}
@@ -168,12 +182,12 @@ func (r *Receiver) jira(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "jira", "") {
 		return
 	}
-	body, ok := parseBody(w, raw)
+	v, ok := r.authenticate(w, "jira", r.secrets().Jira,
+		req.Header.Get("X-Hub-Signature"), raw, verifyAtlassian)
 	if !ok {
 		return
 	}
-	v, ok := r.authenticate(w, "jira", r.secrets().Jira,
-		req.Header.Get("X-Hub-Signature"), raw, verifyAtlassian)
+	body, ok := parseBody(w, raw)
 	if !ok {
 		return
 	}
@@ -196,14 +210,14 @@ func (r *Receiver) confluence(w http.ResponseWriter, req *http.Request) {
 	if !r.serving(w, "confluence", "") {
 		return
 	}
-	body, ok := parseBody(w, raw)
-	if !ok {
-		return
-	}
 	// Cloud is unaffected by this route's secret: those events arrive
 	// through the Forge app on /webhooks/forge with its own JWT.
 	v, ok := r.authenticate(w, "confluence", r.secrets().Confluence,
 		req.Header.Get("X-Hub-Signature"), raw, verifyAtlassian)
+	if !ok {
+		return
+	}
+	body, ok := parseBody(w, raw)
 	if !ok {
 		return
 	}
@@ -228,6 +242,11 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
+	// PARSED BEFORE THE GATE, which the other routes deliberately no
+	// longer do, and for two reasons that are both in the body: the
+	// readiness answer is keyed on `type`, and the url_verification
+	// handshake below is answered without a signature at all. The cost is
+	// bounded by MaxBodyBytes and nothing is persisted by decoding it.
 	body, ok := parseBody(w, raw)
 	if !ok {
 		return

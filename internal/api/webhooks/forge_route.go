@@ -51,6 +51,10 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
+	// PARSED BEFORE THE GATE, which the other routes deliberately no
+	// longer do: the readiness answer below is keyed on eventType, and
+	// that field is in the body. The cost is bounded by MaxBodyBytes and
+	// nothing is persisted or published by decoding it.
 	body, ok := parseBody(w, raw)
 	if !ok {
 		return

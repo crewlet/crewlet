@@ -42,6 +42,28 @@ rather than a review comment. `ordering_guard_test.go` covers the one thing the
 compiler cannot: a new handler minting its own `verified{}` to get past the
 signature.
 
+## Nothing unverified is decoded
+
+The raw body is buffered before the gate and there is no avoiding it — the
+signature is over that body, so it cannot be read afterwards — and the cost is
+bounded by `MaxBodyBytes`. **Decoding** it before the gate was avoidable, and
+was not avoided: five routes ran `parseBody` first, handing an unauthenticated
+caller a JSON unmarshal and a `map[string]any` several times the size of what
+they sent, on every request, for nothing. Not one of them read a body field
+before its gate.
+
+They now authenticate first. Two routes genuinely cannot: Slack keys its
+readiness answer on `type` and answers the `url_verification` handshake without
+a signature at all (deliberately — the response is a pure echo of the caller's
+own challenge), and Forge keys the same readiness answer on `eventType`. Both
+say so at the line.
+
+The observable is the STATUS on a delivery that is both unsigned and
+unparseable: `401` means the gate ran first, `400` means the parser did. That
+is also the better answer on its own merits — an unauthenticated caller learns
+nothing about how their body was read — and it is what
+`TestAnUnverifiedDeliveryIsNeverParsed` pins.
+
 ## The response vocabulary
 
 Three refusals, and the difference between them is the whole design:

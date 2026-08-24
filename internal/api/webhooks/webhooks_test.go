@@ -223,6 +223,54 @@ var issueBody = []byte(`{"action":"opened","issue":{"number":7,"title":"Broken"}
 
 // --- the invariants every route shares -------------------------------------
 
+// NOTHING UNVERIFIED IS DECODED.
+//
+// The raw body must be buffered before the gate — the signature is over it —
+// but decoding it need not be, and doing so handed an unauthenticated caller
+// a JSON unmarshal plus a map several times the size of what they sent, on
+// every request, for nothing.
+//
+// The observable is the STATUS on a delivery that is both unsigned and
+// unparseable: 401 says the gate ran first, 400 says the parser did. It is
+// also the better answer on its own merits — an unauthenticated caller
+// learns nothing about how their body was read.
+func TestAnUnverifiedDeliveryIsNeverParsed(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	garbage := []byte("{this is not json")
+
+	for _, route := range []struct{ name, path string }{
+		{"github", "/webhooks/github"},
+		{"gitlab", "/webhooks/gitlab"},
+		{"plane", "/webhooks/plane"},
+		{"jira", "/webhooks/jira"},
+		{"confluence", "/webhooks/confluence"},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+			// A wrong signature over a body that could never parse. Both
+			// checks would reject it; only the order decides which does.
+			got := e.post(t, route.path, garbage, map[string]string{
+				"X-Hub-Signature-256": "sha256=" + hexMAC("wrong", garbage),
+				"X-Hub-Signature":     "sha256=" + hexMAC("wrong", garbage),
+				"X-Plane-Signature":   hexMAC("wrong", garbage),
+				"webhook-signature":   "v1,bm90LWEtc2lnbmF0dXJl",
+				"webhook-id":          "msg_1",
+				"webhook-timestamp":   strconv.FormatInt(pinned.Unix(), 10),
+				"X-GitHub-Event":      "issues",
+				"X-Plane-Event":       "issue",
+			}).Code
+			if got == http.StatusBadRequest {
+				t.Fatalf("%s answered 400, so it decoded an unverified body "+
+					"before checking the signature", route.name)
+			}
+			if got != http.StatusUnauthorized {
+				t.Fatalf("%s answered %d, want 401", route.name, got)
+			}
+		})
+	}
+}
+
 func TestAnUnsignedDeliveryReachesNothing(t *testing.T) {
 	t.Parallel()
 	// THE property this package exists for. These routes are exempt from
