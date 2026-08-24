@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -242,6 +243,22 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 	}
 	log.Info("inbound_sources_routed", "sources", svc.Sources())
 	return nil
+}
+
+// WebhookSecrets is the verification material the inbound edge checks a
+// delivery against, resolved through this node's own chain.
+//
+// It lives here rather than at the call site because both halves are the
+// engine's: the applied company and the resolver. The CLI assembling it
+// meant one line deciding a security property, and the mistake it invites —
+// passing the config through unresolved — leaves seven routes verifying
+// against the literal "${GITLAB_SIGNING_SECRET}".
+func (e *Engine) WebhookSecrets() webhooks.Secrets {
+	company := e.Company()
+	if company == nil {
+		return webhooks.Secrets{}
+	}
+	return webhooks.SecretsOf(company.Config, company.Org, e.Resolve)
 }
 
 // Mattermost is the running chat transport, or nil when the company has no

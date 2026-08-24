@@ -39,25 +39,52 @@ type Secrets struct {
 // The organization is taken as an argument rather than rebuilt from the config,
 // because the caller holding an epoch already has one and building a second
 // would let the two drift over a reload.
-func SecretsOf(c *config.Company, o *org.Organization) Secrets {
+//
+// # Resolved, and that is the whole point
+//
+// A secret lives in the config as a ${VAR}: verbatim in the stored payload,
+// resolved at construction, which is what makes rotating one a change to the
+// environment rather than to the company. Every consumer resolves — and this
+// one did not.
+//
+// The consequence was not a degraded route. It was SEVEN routes verifying
+// against the literal string "${GITLAB_SIGNING_SECRET}": every delivery from
+// every vendor refused, with the engine logging one warning per delivery and
+// the vendor's settings page showing a healthy hook. Measured against a real
+// GitLab. Worse than the outage is what the literal IS — a config field the
+// dashboard renders, not a secret — so a forged delivery would have verified
+// against a string an attacker could read.
+//
+// resolve is what a ${VAR} answers to; nil resolves nothing, which leaves
+// every route with an empty secret and therefore refusing to serve. That is
+// the safe direction: a route with nothing to verify with answers 503 rather
+// than accepting.
+func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) string) Secrets {
+	if resolve == nil {
+		resolve = func(string) string { return "" }
+	}
 	var s Secrets
 	if c != nil {
 		in := c.Integrations
-		s.ForgeAppID = in.ForgeAppID
+		// The Forge app id is the JWT AUDIENCE, not a credential — it is
+		// in every manifest an operator installs — so it is config
+		// rather than a secret, and resolved the same way anything else
+		// that can be a ${VAR} is.
+		s.ForgeAppID = resolve(in.ForgeAppID)
 		if in.GitHub != nil {
-			s.GitHub = in.GitHub.WebhookSecret
+			s.GitHub = resolve(in.GitHub.WebhookSecret)
 		}
 		if in.GitLab != nil {
-			s.GitLab = in.GitLab.SigningSecret
+			s.GitLab = resolve(in.GitLab.SigningSecret)
 		}
 		if in.Plane != nil {
-			s.Plane = in.Plane.WebhookSecret
+			s.Plane = resolve(in.Plane.WebhookSecret)
 		}
 		if in.Jira != nil {
-			s.Jira = in.Jira.WebhookSecret
+			s.Jira = resolve(in.Jira.WebhookSecret)
 		}
 		if in.Confluence != nil {
-			s.Confluence = in.Confluence.WebhookSecret
+			s.Confluence = resolve(in.Confluence.WebhookSecret)
 		}
 	}
 	if o == nil {
@@ -68,13 +95,17 @@ func SecretsOf(c *config.Company, o *org.Organization) Secrets {
 		// is addressed — but nothing delivers Events API traffic to one,
 		// and a signing secret on a seat the engine never wakes would
 		// open a route that can only ever be a dead end.
-		if !role.IsAgent() || role.Slack.SigningSecret == "" {
+		if !role.IsAgent() {
+			continue
+		}
+		secret := resolve(role.Slack.SigningSecret)
+		if secret == "" {
 			continue
 		}
 		if s.Slack == nil {
 			s.Slack = map[string]string{}
 		}
-		s.Slack[role.Handle()] = role.Slack.SigningSecret
+		s.Slack[role.Handle()] = secret
 	}
 	return s
 }

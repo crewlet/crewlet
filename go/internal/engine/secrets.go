@@ -37,6 +37,15 @@ import (
 // Never nil: a node with no store, or no keyring, resolves from the
 // environment alone — which is the pre-store behaviour and a supported
 // deployment, not a degraded one.
+// Resolve answers what a config value's ${VAR} references currently resolve
+// to, through this node's own chain — the secret store, then the environment.
+//
+// Exported because the webhook edge needs it and lives outside this package:
+// it verifies with the VALUE, never with the reference, and a literal
+// "${GITLAB_SIGNING_SECRET}" reaching a verifier refuses every delivery the
+// vendor sends.
+func (e *Engine) Resolve(value string) string { return e.resolver().Value(value) }
+
 func (e *Engine) resolver() *config.Resolver {
 	if r := e.env.Load(); r != nil && *r != nil {
 		return *r

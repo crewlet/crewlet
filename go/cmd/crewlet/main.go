@@ -384,13 +384,7 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
-func companySecrets(e *engine.Engine) webhooks.Secrets {
-	company := e.Company()
-	if company == nil {
-		return webhooks.Secrets{}
-	}
-	return webhooks.SecretsOf(company.Config, company.Org)
-}
+func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher, log *slog.Logger,

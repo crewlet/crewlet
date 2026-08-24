@@ -244,3 +244,48 @@ integrations:
 			"nothing: %q", mm.URL())
 	}
 }
+
+// THE INBOUND EDGE VERIFIES WITH VALUES, never with references.
+//
+// Secrets live in the config as ${VAR}s. The edge's material was assembled
+// from the config WITHOUT resolving, so every route verified against the
+// literal "${GITLAB_SIGNING_SECRET}" — every delivery from every vendor
+// refused, with the vendor's settings page showing a healthy hook. Measured
+// against a real GitLab, where the only trace was one warning per delivery.
+//
+// And the literal is not a secret. It is a config field the dashboard
+// renders, so a forged delivery would have verified against a string an
+// attacker could read.
+func TestTheWebhookEdgeGetsResolvedSecrets(t *testing.T) {
+	// NOT parallel: the secret comes from the process environment.
+	t.Setenv("TEST_GL_SIGNING", "whsec_resolved-value")
+	doc := companyDoc + `
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: ${TEST_GL_SIGNING}
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+
+	got := e.WebhookSecrets().GitLab
+	if strings.Contains(got, "${") {
+		t.Fatalf("the edge verifies against %q, which is the reference and "+
+			"not a secret at all", got)
+	}
+	if got != "whsec_resolved-value" {
+		t.Errorf("gitlab secret = %q, want the resolved value", got)
+	}
+}
+
+// A NODE WITH NO COMPANY VERIFIES NOTHING, which is the safe direction: a
+// route with no secret answers 503 rather than accepting what arrives.
+func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	// The fixture company declares no integrations, so every field is
+	// empty — the same answer a node mid-boot gives.
+	if s := e.WebhookSecrets(); s.GitLab != "" || s.GitHub != "" || s.Plane != "" {
+		t.Errorf("secrets appeared with no integration configured: %+v", s)
+	}
+}

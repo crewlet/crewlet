@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/gitlab"
 	"time"
 )
 
@@ -300,5 +302,68 @@ func TestEachRouteUsesItsOwnSecret(t *testing.T) {
 	})
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("a GitHub delivery signed with Plane's secret got %d, want 401", res.Code)
+	}
+}
+
+// WHAT THE PROVISIONER MINTS IS WHAT THIS ROUTE ACCEPTS.
+//
+// The minter and the verifier live in different packages and agree on one
+// thing that is never written down between them: the `whsec_` payload is
+// STANDARD base64, and the HMAC key is the decoded bytes.
+//
+// Getting it wrong is silent in both directions. A URL-safe payload usually
+// fails a standard decode, and this route's fallback then keys on the
+// printable string verbatim — deliberately, so a hand-written secret still
+// works — while GitLab keys on the decoded bytes. Every delivery is refused
+// with a signature mismatch and nothing names the encoding. Measured against
+// a real instance: the hook fired, and the only trace was one
+// `webhook_signature_invalid` line.
+func TestAMintedSecretVerifiesOnThisRoute(t *testing.T) {
+	t.Parallel()
+	secret, err := gitlab.MintSigningSecret()
+	if err != nil {
+		t.Fatalf("MintSigningSecret: %v", err)
+	}
+	e := newEdge(t)
+	e.secrets.GitLab = secret
+
+	// SIGNED THE WAY GITLAB SIGNS, not the way this package reads. The
+	// ordinary helper derives its key exactly as the verifier does — with
+	// the same verbatim fallback — so it agrees with any encoding and
+	// would prove only that this repository is self-consistent. GitLab
+	// has no fallback: `whsec_` means standard base64 and the key is the
+	// decoded bytes, full stop.
+	body := []byte(`{"object_kind":"issue"}`)
+	if got := e.post(t, "/webhooks/gitlab",
+		body, vendorSignedDelivery(t, body, secret, "msg_1", pinned)).Code; got != http.StatusOK {
+		t.Fatalf("got %d — a secret this repository's own provisioner minted "+
+			"does not verify against a vendor-shaped signature", got)
+	}
+}
+
+// vendorSignedDelivery signs a delivery the way GitLab does: the key is the
+// `whsec_` payload decoded as STANDARD base64, and a payload that does not
+// decode that way is an error rather than a fallback.
+func vendorSignedDelivery(t *testing.T, body []byte, secret, id string, at time.Time) map[string]string {
+	t.Helper()
+	payload, found := strings.CutPrefix(secret, "whsec_")
+	if !found {
+		t.Fatalf("secret %q carries no whsec_ prefix, so GitLab would key on "+
+			"it verbatim and the scheme's own encoding is not being tested", secret)
+	}
+	key, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("the whsec_ payload is not standard base64 (%v), so GitLab "+
+			"cannot derive the key this route expects", err)
+	}
+	ts := strconv.FormatInt(at.Unix(), 10)
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(id + "." + ts + "."))
+	h.Write(body)
+	return map[string]string{
+		"webhook-id":        id,
+		"webhook-timestamp": ts,
+		"webhook-signature": "v1," + base64.StdEncoding.EncodeToString(h.Sum(nil)),
+		"X-Gitlab-Event":    "Issue Hook",
 	}
 }
