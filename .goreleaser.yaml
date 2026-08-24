@@ -89,7 +89,23 @@ release:
   # goreleaser must ask for it rather than write a competing one from commit
   # subjects.
   prerelease: auto
-  mode: append
+
+  # What to do when the Release ALREADY EXISTS, which here means exactly one
+  # thing: a re-run of a tag whose late steps failed (the image push, the
+  # signing) after the Release was created. `replace` makes that re-run
+  # idempotent — the body is regenerated from the same pull request list it
+  # was built from the first time.
+  #
+  # The default, `keep-existing`, would leave a half-written body standing.
+  # `append` — which this was — duplicates the entire changelog on every
+  # re-run, in the one artifact that IS the record of the release, and
+  # nobody notices until they read it.
+  #
+  # The cost is a hand-edit to the body being lost if someone then re-runs
+  # the tag. RELEASING.md sends that case to a new patch release instead,
+  # and prose that must survive belongs in release.header/footer, which are
+  # regenerated too.
+  mode: replace
 
 changelog:
   use: github-native
