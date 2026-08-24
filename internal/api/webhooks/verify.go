@@ -88,11 +88,22 @@ func verifyGitLab(body []byte, secret, id, timestamp, signature string, now time
 	if !withinWindow(timestamp, now) {
 		return false
 	}
+	key, ok := gitlabKey(secret)
+	if !ok {
+		return false
+	}
 	signed := append([]byte(id+"."+timestamp+"."), body...)
-	want := macKey(gitlabKey(secret), signed)
+	want := macKey(key, signed)
 	for token := range strings.FieldsSeq(signature) {
-		_, presented, ok := strings.Cut(token, ",")
-		if !ok || presented == "" {
+		// "v1,<base64>", and the version is CHECKED rather than skipped.
+		// A future v2 will be a different construction — a different
+		// message, a different hash, or both — and trying its signature
+		// against a v1 computation is not a fallback, it is comparing two
+		// unrelated values and hoping. Ignoring an entry this code cannot
+		// evaluate is what lets several ride one header in the first
+		// place, so a v2 alongside a v1 keeps working.
+		version, presented, ok := strings.Cut(token, ",")
+		if !ok || version != "v1" || presented == "" {
 			continue
 		}
 		got, err := base64.StdEncoding.DecodeString(presented)
@@ -106,23 +117,30 @@ func verifyGitLab(body []byte, secret, id, timestamp, signature string, now time
 	return false
 }
 
-// gitlabKey is the signing key a "whsec_…" secret denotes.
+// gitlabKey is the signing key a "whsec_…" secret denotes, and whether the
+// secret is one at all.
 //
-// The prefix marks a base64 payload, and the KEY is those decoded bytes, not
-// the printable form. A secret that carries the prefix but does not decode is
-// used verbatim: refusing it outright would turn a mis-typed secret into a
-// route that rejects every delivery with no way to tell that from an attack,
-// and the verbatim reading is what a hand-written secret means anyway.
-func gitlabKey(secret string) []byte {
+// The prefix marks a STANDARD base64 payload and the key is those decoded
+// bytes, never the printable form. GitLab has no fallback here — it always
+// keys on the decoded bytes — so a secret this engine reads any other way
+// simply computes a different HMAC and refuses every delivery.
+//
+// That is why a malformed one is reported rather than used verbatim. The
+// old behaviour keyed on the printable string, which cannot match anything
+// GitLab produces: it turned "your secret is not a whsec_ value" into an
+// endless stream of signature mismatches, indistinguishable from an attack,
+// with nothing anywhere naming the encoding. Answering false makes the
+// route say `no_webhook_secret` instead, which is the true statement.
+func gitlabKey(secret string) ([]byte, bool) {
 	payload, ok := strings.CutPrefix(secret, "whsec_")
 	if !ok {
-		return []byte(secret)
+		return nil, false
 	}
 	raw, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return []byte(secret)
+		return nil, false
 	}
-	return raw
+	return raw, true
 }
 
 // withinWindow reports whether a signed decimal-seconds timestamp is close

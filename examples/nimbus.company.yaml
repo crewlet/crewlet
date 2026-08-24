@@ -345,9 +345,15 @@ integrations:
       channels: [town-square, engineering, product]
       display_name_suffix: " (AI)"
 
-  # GitLab on gitlab.com.  ``url`` is required; ``signing_secret`` is the
-  # gitlab.com default (every gitlab.com hook is ≥ 19.1, so it signs with
-  # the Standard-Webhooks HMAC).  ``token`` is a read-only PAT that enables
+  # GitLab on gitlab.com.  ``url`` is required.  ``signing_secret`` is the
+  # HMAC key the hook signs with, and it is NOT a version default: GitLab
+  # signs only when a hook has a ``signing_token`` set on it, whatever the
+  # version.  Registering the value in GitLab's other secret field —
+  # ``token`` — makes the instance echo it back in cleartext instead, which
+  # is what `crewlet gitlab provision` exists to get right.  The value must
+  # be whsec_ over standard base64 of a 32-byte key; the provisioner mints
+  # one, and GitLab's own "Generate signing token" button produces the same
+  # shape.  ``token`` below is a read-only PAT that enables
   # participants-based routing (comments + state changes reach everyone
   # participating in an issue/MR, GitLab's own notification reach) — the
   # provisioner mints a dedicated read-only ``crewlet-engine`` account for
@@ -358,7 +364,7 @@ integrations:
   gitlab:
     enabled: true
     url: "https://gitlab.com"
-    signing_secret: "${GITLAB_SIGNING_SECRET}"       # 19.1+ Standard-Webhooks HMAC (the only verification mode)
+    signing_secret: "${GITLAB_SIGNING_SECRET}"       # the hook's signing_token; a delivery without a valid signature is refused
     token: "${GITLAB_ENGINE_TOKEN}"                  # read PAT → participants-based routing
     provisioning:
       group: nimbus-hq                               # top-level group the agent service accounts join

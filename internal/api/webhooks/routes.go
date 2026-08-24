@@ -82,7 +82,27 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 	// simply omitting the signature header, which is the shape a
 	// downgrade attack takes. Its absence is the point: there is no path
 	// here that verifies anything but an HMAC over the body.
-	v, ok := r.authenticate(w, "gitlab", r.secrets().GitLab,
+	// A SECRET THAT CANNOT BE A KEY IS NOTHING TO VERIFY WITH.
+	//
+	// GitLab's signing token is whsec_<standard base64>, and it always keys
+	// on the decoded bytes. A value shaped any other way cannot produce a
+	// matching HMAC for any delivery, so treating it as a credential turns
+	// "your secret is mistyped" into an endless run of signature
+	// mismatches — 401s that read as an attack. Answered here rather than
+	// inside the comparison because it is the 503 case by this package's
+	// own rule: the sender's request is fine, and what is missing is on
+	// this side.
+	secret := r.secrets().GitLab
+	if _, usable := gitlabKey(secret); secret != "" && !usable {
+		log.Error("gitlab_signing_secret_malformed", "source", "gitlab",
+			"detail", "integrations.gitlab.signing_secret is not a "+
+				"whsec_<standard base64> value, so it cannot be the HMAC key "+
+				"GitLab signs with and no delivery can ever verify. Re-run "+
+				"`crewlet gitlab provision` or set the value GitLab was given")
+		noSecret(w, "gitlab")
+		return
+	}
+	v, ok := r.authenticate(w, "gitlab", secret,
 		req.Header.Get("webhook-signature"), raw, scheme(standardWebhooks))
 	if !ok {
 		return

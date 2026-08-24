@@ -184,7 +184,7 @@ integrations:
   gitlab:
     enabled: true
     url: ${TEST_GL_URL}
-    signing_secret: whsec-test
+    signing_secret: whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=
   plane:
     enabled: true
     url: ${TEST_PLANE_URL}

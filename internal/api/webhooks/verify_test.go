@@ -113,14 +113,21 @@ func TestAHeaderTheClientMadeUpCannotBecomeA500(t *testing.T) {
 	}
 }
 
-// gitlabDelivery signs a Standard-Webhooks request.
+// gitlabDelivery signs a Standard-Webhooks request the way GitLab does.
+//
+// NO FALLBACK for a secret that is not a whsec_ value: GitLab always keys on
+// the decoded bytes, so a helper that quietly keyed on the printable string
+// would agree with a lenient verifier and prove nothing about a correct one.
+// A bad secret here is a bad fixture, and it says so.
 func gitlabDelivery(body []byte, secret, id string, at time.Time) map[string]string {
 	ts := strconv.FormatInt(at.Unix(), 10)
-	key := []byte(secret)
-	if payload, found := strings.CutPrefix(secret, "whsec_"); found {
-		if raw, err := base64.StdEncoding.DecodeString(payload); err == nil {
-			key = raw
-		}
+	payload, found := strings.CutPrefix(secret, "whsec_")
+	if !found {
+		panic("gitlabDelivery: " + secret + " is not a whsec_ secret")
+	}
+	key, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		panic("gitlabDelivery: " + secret + " is not standard base64")
 	}
 	h := hmac.New(sha256.New, key)
 	h.Write([]byte(id + "." + ts + "."))
@@ -138,7 +145,7 @@ func TestGitLabStandardWebhooks(t *testing.T) {
 	body := []byte(`{"object_kind":"merge_request","object_attributes":{"iid":3,"action":"open"}}`)
 	e := newEdge(t)
 	if got := e.post(t, "/webhooks/gitlab",
-		body, gitlabDelivery(body, "gl-secret", "msg_1", pinned)).Code; got != http.StatusOK {
+		body, gitlabDelivery(body, gitlabSecret, "msg_1", pinned)).Code; got != http.StatusOK {
 		t.Fatalf("a genuine delivery got %d", got)
 	}
 }
@@ -162,7 +169,7 @@ func TestGitLabSignsTheIDAndTimestampToo(t *testing.T) {
 		{"no timestamp", func(h map[string]string) { delete(h, "webhook-timestamp") }},
 	} {
 		t.Run(tamper.name, func(t *testing.T) {
-			headers := gitlabDelivery(body, "gl-secret", "msg_1", pinned)
+			headers := gitlabDelivery(body, gitlabSecret, "msg_1", pinned)
 			tamper.with(headers)
 			if got := e.post(t, "/webhooks/gitlab", body, headers).Code; got != http.StatusUnauthorized {
 				t.Errorf("got %d, want 401", got)
@@ -178,7 +185,7 @@ func TestGitLabAcceptsAnyOfSeveralSignatures(t *testing.T) {
 	// first would break for the whole rotation window.
 	e := newEdge(t)
 	body := []byte(`{"object_kind":"issue"}`)
-	headers := gitlabDelivery(body, "gl-secret", "msg_1", pinned)
+	headers := gitlabDelivery(body, gitlabSecret, "msg_1", pinned)
 	headers["webhook-signature"] = "v1,c3RhbGU= " + headers["webhook-signature"]
 	if got := e.post(t, "/webhooks/gitlab", body, headers).Code; got != http.StatusOK {
 		t.Fatalf("got %d, want 200", got)
@@ -203,17 +210,38 @@ func TestGitLabDecodesAWhsecSecret(t *testing.T) {
 	}
 }
 
-func TestAWhsecSecretThatDoesNotDecodeIsUsedVerbatim(t *testing.T) {
+// A SECRET THAT IS NOT A whsec_ VALUE IS NOT A SECRET.
+//
+// This inverts a test that asserted the opposite. The old verifier keyed on
+// the printable string when the payload would not decode, so a mistyped
+// secret produced an HMAC that cannot match anything GitLab computes — and
+// the operator got an endless stream of signature mismatches,
+// indistinguishable from an attack, with nothing naming the encoding.
+//
+// 503 rather than 401 is the point: the sender's request was fine, and what
+// is wrong is on this side. That is the same answer a route with no secret
+// at all gives, because it is the same situation — this node cannot verify.
+func TestAMalformedSigningSecretIsReportedNotUsedVerbatim(t *testing.T) {
 	t.Parallel()
-	// Refusing it outright would turn a mis-typed secret into a route that
-	// rejects every delivery with no way to tell that from an attack.
-	e := newEdge(t)
-	e.secrets.GitLab = "whsec_not-base64!!"
+	for _, bad := range []string{
+		"whsec_not-base64!!",      // carries the prefix, will not decode
+		"a-plain-string",          // no prefix at all
+		"whsec_" + "dXJsLXNhZmU_", // URL-safe alphabet, which GitLab never emits
+	} {
+		e := newEdge(t)
+		e.secrets.GitLab = bad
 
-	body := []byte(`{"object_kind":"issue"}`)
-	if got := e.post(t, "/webhooks/gitlab",
-		body, gitlabDelivery(body, "whsec_not-base64!!", "msg_1", pinned)).Code; got != http.StatusOK {
-		t.Fatalf("got %d", got)
+		got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`),
+			map[string]string{
+				"webhook-id":        "msg_1",
+				"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
+				"webhook-signature": "v1,bm90LWEtc2lnbmF0dXJl",
+				"X-Gitlab-Event":    "Issue Hook",
+			}).Code
+		if got != http.StatusServiceUnavailable {
+			t.Errorf("secret %q got %d, want 503 — this node cannot verify, "+
+				"which is not the sender's fault", bad, got)
+		}
 	}
 }
 
@@ -247,7 +275,7 @@ func TestASignedTimestampBoundsTheReplay(t *testing.T) {
 			t.Parallel()
 			e := newEdge(t)
 			res := e.post(t, "/webhooks/gitlab", body,
-				gitlabDelivery(body, "gl-secret", "msg_"+tc.name, tc.at))
+				gitlabDelivery(body, gitlabSecret, "msg_"+tc.name, tc.at))
 			if res.Code != tc.want {
 				t.Errorf("got %d, want %d", res.Code, tc.want)
 			}
@@ -530,4 +558,49 @@ func gitlabSignature(t *testing.T, secret, id, timestamp string, body []byte) st
 	m.Write([]byte(id + "." + timestamp + "."))
 	m.Write(body)
 	return "v1," + base64.StdEncoding.EncodeToString(m.Sum(nil))
+}
+
+// THE SIGNATURE'S VERSION IS PART OF ITS FORMAT.
+//
+// GitLab sends "v1,<base64>". A future v2 will be a different construction —
+// a different message, a different hash, or both — so trying its bytes
+// against a v1 computation is not a fallback, it is comparing two unrelated
+// values and hoping one collides.
+//
+// The entry is IGNORED rather than the delivery refused: ignoring what this
+// code cannot evaluate is exactly what lets several signatures ride one
+// header, so a v2 arriving beside a v1 keeps working through a rotation.
+func TestGitLabIgnoresASignatureVersionItCannotEvaluate(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"object_kind":"issue"}`)
+	id, ts := "msg_1", strconv.FormatInt(pinned.Unix(), 10)
+	v1 := gitlabSignature(t, gitlabSecret, id, ts, body)
+	// The same bytes under a version this build does not know.
+	v2 := "v2," + strings.TrimPrefix(v1, "v1,")
+
+	t.Run("a v2 entry alone is not accepted", func(t *testing.T) {
+		e := newEdge(t)
+		e.secrets.GitLab = gitlabSecret
+		got := e.post(t, "/webhooks/gitlab", body, map[string]string{
+			"webhook-id": id, "webhook-timestamp": ts,
+			"webhook-signature": v2, "X-Gitlab-Event": "Issue Hook",
+		}).Code
+		if got != http.StatusUnauthorized {
+			t.Fatalf("got %d — a v2 signature was verified as though it were "+
+				"a v1, which is a comparison of two unrelated values", got)
+		}
+	})
+
+	t.Run("a v2 beside a valid v1 still passes", func(t *testing.T) {
+		e := newEdge(t)
+		e.secrets.GitLab = gitlabSecret
+		got := e.post(t, "/webhooks/gitlab", body, map[string]string{
+			"webhook-id": id, "webhook-timestamp": ts,
+			"webhook-signature": v2 + " " + v1, "X-Gitlab-Event": "Issue Hook",
+		}).Code
+		if got != http.StatusOK {
+			t.Fatalf("got %d — an unknown version beside a valid signature "+
+				"broke the rotation window it exists to keep open", got)
+		}
+	})
 }

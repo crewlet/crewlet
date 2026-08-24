@@ -114,7 +114,7 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 	t.Cleanup(func() { _ = db.Close() })
 
 	secrets := &webhooks.Secrets{
-		GitHub: "gh-secret", GitLab: "gl-secret", Plane: "pl-secret",
+		GitHub: "gh-secret", GitLab: gitlabSecret, Plane: "pl-secret",
 		Jira: "jira-secret", Confluence: "conf-secret", ForgeAppID: "app-123",
 		Slack: map[string]string{"ceo": "slack-secret"},
 	}
@@ -719,5 +719,66 @@ func TestAClientThatHangsUpStillLeavesARecord(t *testing.T) {
 	}
 	if rows := e.rows(t); len(rows) != 1 {
 		t.Errorf("%d rows, want 1: the audit row followed the client out", len(rows))
+	}
+}
+
+// CREDENTIAL HEADERS DO NOT REACH THE EVENT STORE.
+//
+// A delivery's headers are persisted and rendered on the dashboard, so any
+// secret among them is a secret at rest in the audit log — readable by
+// everyone who can read an event, and impossible to un-write.
+//
+// `x-gitlab-token` is here because of what put it there. The provisioner
+// registered the minted signing key in GitLab's plaintext `token` attribute
+// rather than `signing_token`, so GitLab echoed a 32-byte HMAC key back on
+// every single delivery, and it was copied verbatim into the stored headers.
+// The provisioning bug is fixed and this engine no longer sets that field,
+// but a hook created by an older version still carries the old value and
+// still sends it.
+func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	e.secrets.GitLab = gitlabSecret
+
+	body := []byte(`{"object_kind":"issue"}`)
+	id, ts := "msg_redact", strconv.FormatInt(pinned.Unix(), 10)
+	headers := map[string]string{
+		"webhook-id":        id,
+		"webhook-timestamp": ts,
+		"webhook-signature": gitlabSignature(t, gitlabSecret, id, ts, body),
+		"X-Gitlab-Event":    "Issue Hook",
+		// The three shapes a credential arrives in.
+		"X-Gitlab-Token": "whsec_the-key-an-old-hook-still-echoes",
+		"Authorization":  "Bearer a-real-looking-token",
+		"Cookie":         "session=abc123",
+	}
+	if got := e.post(t, "/webhooks/gitlab", body, headers).Code; got != http.StatusOK {
+		t.Fatalf("the delivery was refused with %d", got)
+	}
+
+	ev := e.published.last()
+	if ev == nil {
+		t.Fatal("nothing was published")
+	}
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, secret := range []string{
+		"whsec_the-key-an-old-hook-still-echoes",
+		"a-real-looking-token",
+		"session=abc123",
+	} {
+		if strings.Contains(string(blob), secret) {
+			t.Errorf("the published delivery carries %q verbatim, so it lands "+
+				"in the event store and on every dashboard socket", secret)
+		}
+	}
+	// AND THE SIGNATURE SURVIVES. It is an HMAC output rather than a key, and
+	// it is the evidence that tells "the provider did not sign this" from
+	// "the provider signed it with the wrong key".
+	if !strings.Contains(string(blob), "webhook-signature") {
+		t.Error("the signature header was stripped, so an operator cannot " +
+			"tell an unsigned delivery from a wrongly-signed one")
 	}
 }

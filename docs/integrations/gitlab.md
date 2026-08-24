@@ -212,18 +212,49 @@ Inbound GitLab events arrive at **`POST /webhooks/gitlab`**.
 
 ### Verification
 
-**Two schemes, in that order** — because GitLab does not always sign. See [d-702](https://github.com/crewlet/crewlet/blob/main/rewrite/decisions/702-gitlab-webhook-verification.md).
+A delivery is authenticated by its **signature**, and by nothing else. See
+[d-702](https://github.com/crewlet/crewlet/blob/main/rewrite/decisions/702-gitlab-webhook-verification.md).
 
-1. **`webhook-signature` present** → verified as a Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}` (constant-time compare, ±5-minute timestamp tolerance; the `whsec_…` secret's base64 payload is the HMAC key). This check runs **whenever the header is there**, so a bad signature is a `401` rather than a fall-through — stripping it is not a way to the weaker path.
-2. **No `webhook-signature`** → the hook's `X-Gitlab-Token` is compared against `signing_secret`, constant-time.
+`webhook-signature` is verified as a Standard-Webhooks HMAC-SHA256 over
+`{webhook-id}.{webhook-timestamp}.{body}`, keyed on the `whsec_…` secret's
+base64 payload, compared in constant time against any of the header's
+space-separated `v1,…` entries, with a ±5-minute timestamp tolerance in both
+directions.
 
-Neither present, or a wrong value → **401**. A request that arrives before `signing_secret` is configured → **503** with a `Retry-After`, so the delivery is held for retry rather than discarded.
+- **No signature, or a wrong one → `401`.** There is no fallback. GitLab's
+  other secret — the plaintext `X-Gitlab-Token` — is not a credential here.
+- **A delivery before `signing_secret` is configured, or one whose value is
+  not a usable key → `503`** with a `Retry-After`, so the delivery is held
+  for retry rather than discarded. The request was fine; what is missing is
+  on this side.
 
-> **Measured, because the obvious assumption is wrong.** On **gitlab-ee 19.3.0** a real `Issue Hook` delivery carries `webhook-id` and `webhook-timestamp` — the Standard-Webhooks *envelope* — and **no `webhook-signature`**. The `webhook_standard_signature` feature flag is **off by default** there, and enabling it changed nothing. Requiring the signature meant the integration received **nothing at all**, from a hook GitLab's own settings page reported as healthy.
+> **GitLab signs when the hook has a signing token, not when the version is
+> new enough.** These are two different secrets on the same hook and they are
+> not variants of one idea:
 >
-> The token scheme is weaker in one specific way: it is a bearer value with no timestamp, so a captured delivery can be replayed. That is bounded by the delivery ledger, which dedupes on the `X-Gitlab-Event-UUID` every GitLab request carries — a replay is dropped before it wakes anything. The engine logs which scheme is in use **once**, not per delivery, so an operator on the weaker path knows it.
+> | Field | What GitLab does with it |
+> |---|---|
+> | **`signing_token`** | Signs every delivery, and sends `webhook-id`, `webhook-timestamp`, `webhook-signature`. Never returned by the API. |
+> | `token` | Echoes it back verbatim as `X-Gitlab-Token`. GitLab's own docs call this "not recommended" and "weaker". |
+>
+> An earlier version of this engine registered the minted signing key in
+> `token`. The instance did exactly as asked — it never signed, and it echoed
+> a 32-byte HMAC key back in cleartext on every delivery — and that was
+> diagnosed as GitLab not supporting the scheme. It supports it from **19.1**
+> (19.0 behind the `webhook_signing_token` flag).
+>
+> A GitLab older than 19.1 therefore cannot deliver to this engine at all.
+> That is what "mandatory" means; the alternative is accepting a plaintext
+> bearer token on a public endpoint.
 
-The provisioner sets that secret as each hook's token when it registers webhooks, and mints one when the `${VAR}` is unset.
+`crewlet gitlab provision` sets the hook's `signing_token`, clears any legacy
+`token`, mints a secret when the `${VAR}` is unset, and reads
+`signing_token_present` back to confirm the instance honoured it — so a
+too-old GitLab fails the run instead of delivering unsigned for ever.
+
+**If the key may have leaked** — any hook registered before this fix had its
+key broadcast in cleartext on every delivery — re-run with `-rotate`, which
+now replaces the signing secret as well as the seat tokens.
 
 GitLab **does not auto-retry** failed webhook deliveries (and auto-disables a hook after 4 consecutive failures), so operators use the manual resend endpoint; the engine carries the delivery UUID / `Idempotency-Key` into event metadata so resends are idempotent.
 

@@ -115,9 +115,8 @@ Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart f
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `GITLAB_ADMIN_TOKEN` | Read directly by `crewlet gitlab provision` as the operator credential fallback (group Owner / admin PAT with `api` scope; `-admin-token` overrides) | GitLab > Access tokens |
-| `GITLAB_ADMIN_TOKEN` | Second fallback for the same operator credential | GitLab > Access tokens |
 | `GITLAB_ENGINE_TOKEN` | Engine read token (`integrations.gitlab.token`) | GitLab service account, or minted by provisioning |
-| `GITLAB_SIGNING_SECRET` | Webhook signing token (`integrations.gitlab.signing_secret`, GitLab 19.1+ Standard-Webhooks scheme) | Set when registering the webhook |
+| `GITLAB_SIGNING_SECRET` | The hook's **signing token** (`integrations.gitlab.signing_secret`) — the HMAC key every delivery is verified against, and the route's only credential. Must be `whsec_` over standard base64 of a 32-byte key. | `crewlet gitlab provision` mints one into this variable; GitLab's own **Generate signing token** button produces the same shape |
 | `GITLAB_TOKEN_<SEAT>` | Per-agent service-account PAT (each role's `mcp_env.gitlab.GITLAB_TOKEN`, also referenced from `role.sandbox.env`, e.g. `GITLAB_TOKEN_SWE`) | Minted by `crewlet gitlab provision` |
 
 ---

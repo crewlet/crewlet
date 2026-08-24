@@ -61,7 +61,7 @@ func TestSummariesNameWhoWhatAndWhere(t *testing.T) {
 			        "object_attributes":{"iid":7,"action":"open","title":"Ship it"},
 			        "project":{"path_with_namespace":"acme/api"}}`,
 			headers: func(b []byte) map[string]string {
-				return gitlabDelivery(b, "gl-secret", "msg_s1", pinned)
+				return gitlabDelivery(b, gitlabSecret, "msg_s1", pinned)
 			},
 			want: []string{"GitLab", "jo", "open MR !7", "Ship it", "acme/api"},
 		},
@@ -71,7 +71,7 @@ func TestSummariesNameWhoWhatAndWhere(t *testing.T) {
 			body: `{"object_kind":"pipeline","object_attributes":{"status":"failed"},
 			        "project":{"path_with_namespace":"acme/api"}}`,
 			headers: func(b []byte) map[string]string {
-				return gitlabDelivery(b, "gl-secret", "msg_s2", pinned)
+				return gitlabDelivery(b, gitlabSecret, "msg_s2", pinned)
 			},
 			want: []string{"pipeline failed", "acme/api"},
 		},

@@ -19,6 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
+// The suite's signing secrets are REAL ones: the whsec_ prefix over standard
+// base64 of a 32-byte key, which is the only shape GitLab's API accepts. A
+// fixture that merely looks the part is one a real instance rejects with a
+// 400, and a fake lax enough to take it certifies the whole suite as valid
+// while production refuses every hook — which is the class of bug this
+// package spent an incident on.
+const (
+	testSigningSecret     = "whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM="
+	operatorSigningSecret = "whsec_dGhlLW9wZXJhdG9ycy1vd24tMzItYnl0ZS1rZXkhISE="
+)
+
 // adminInstance is a GitLab that remembers what was done to it.
 //
 // A stand-in rather than a mock: the reconcile's whole job is a sequence of
@@ -290,6 +301,12 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		f.hookBodies = append(f.hookBodies, body)
+		if badSigningToken(body) {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "signing_token must be whsec_<base64> over 32 bytes"})
+			return
+		}
 		hook := gitlab.Hook{
 			ID: len(f.projectHooks[project]) + 1, URL: body["url"].(string),
 			SigningTokenPresent: f.signs(body),
@@ -316,18 +333,30 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/groups/7/hooks":
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
+		f.hookBodies = append(f.hookBodies, body)
+		if badSigningToken(body) {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "signing_token must be whsec_<base64> over 32 bytes"})
+			return
+		}
 		hook := gitlab.Hook{
 			ID: len(f.hooks) + 1, URL: body["url"].(string),
 			SigningTokenPresent: f.signs(body),
 		}
 		f.hooks = append(f.hooks, hook)
-		f.hookBodies = append(f.hookBodies, body)
 		json.NewEncoder(w).Encode(hook)
 
 	case r.Method == http.MethodPut && strings.Contains(path, "/hooks/"):
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		f.hookBodies = append(f.hookBodies, body)
+		if badSigningToken(body) {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "signing_token must be whsec_<base64> over 32 bytes"})
+			return
+		}
 		f.updatedHooks = append(f.updatedHooks, path)
 		// A PUT that carries a signing token makes the hook report one on
 		// the next GET, exactly as GitLab does.
@@ -359,6 +388,27 @@ func (f *adminInstance) signs(body map[string]any) bool {
 	}
 	token, _ := body["signing_token"].(string)
 	return token != ""
+}
+
+// badSigningToken reports a value GitLab's API would refuse with a 400.
+//
+// The documented contract is "whsec_<base64> format encoding a 32-byte key",
+// and a fake that took anything non-empty would certify every fixture in
+// this suite as valid while a real instance rejected it — which is exactly
+// the shape of bug this whole change exists to undo. An empty value is not
+// checked here: it means "no signing token", which is a different thing and
+// is what confirmSigned catches.
+func badSigningToken(body map[string]any) bool {
+	token, _ := body["signing_token"].(string)
+	if token == "" {
+		return false
+	}
+	payload, ok := strings.CutPrefix(token, "whsec_")
+	if !ok {
+		return true
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	return err != nil || len(raw) != 32
 }
 
 func (f *adminInstance) usernameOf(id string) string {
@@ -514,7 +564,7 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 	}
 	opts := gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
-		WebhookBase: "https://crewlet.example.com", SigningSecret: "whsec-abc",
+		WebhookBase: "https://crewlet.example.com", SigningSecret: testSigningSecret,
 		Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
 	tune(&opts)
@@ -656,7 +706,7 @@ func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 	if len(f.updatedHooks) != 1 || !strings.HasSuffix(f.updatedHooks[0], "/hooks/10") {
 		t.Fatalf("updated %v, want only our own hook 10", f.updatedHooks)
 	}
-	if f.hookBodies[0]["signing_token"] != "whsec-abc" {
+	if f.hookBodies[0]["signing_token"] != testSigningSecret {
 		t.Errorf("the update did not carry the signing secret: %v", f.hookBodies[0])
 	}
 }
@@ -1637,7 +1687,7 @@ func TestAResolvedSigningSecretIsNotReminted(t *testing.T) {
 	sink := newRecordingSink()
 	if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
-			o.SigningSecret = "whsec_operators-own"
+			o.SigningSecret = operatorSigningSecret
 			o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
 		}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -1647,7 +1697,7 @@ func TestAResolvedSigningSecretIsNotReminted(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if got := f.hookBodies[0]["signing_token"]; got != "whsec_operators-own" {
+	if got := f.hookBodies[0]["signing_token"]; got != operatorSigningSecret {
 		t.Errorf("the hook carries %q, not the operator's value", got)
 	}
 }
@@ -1825,7 +1875,7 @@ func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
 	f := newAdminInstance()
 	res, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
-			o.SigningSecret = "whsec_a-literal-the-operator-manages"
+			o.SigningSecret = operatorSigningSecret
 			o.SigningSecretVar = "" // not a ${VAR}: nowhere to record one
 			o.Rotate = true
 		})

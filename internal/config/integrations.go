@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"regexp"
 	"strings"
 
@@ -454,6 +455,20 @@ type GitLab struct {
 // APIBase is the REST base derived from URL.
 func (g *GitLab) APIBase() string { return strings.TrimRight(g.URL, "/") + "/api/v4" }
 
+// validSigningSecret reports whether a value is one GitLab would accept.
+//
+// "Must be in whsec_<base64> format encoding a 32-byte key" — the API's own
+// words. STANDARD base64: the URL-safe alphabet usually still decodes to
+// something, which is a mismatch with no message rather than an error.
+func validSigningSecret(secret string) bool {
+	payload, ok := strings.CutPrefix(secret, "whsec_")
+	if !ok {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	return err == nil && len(raw) == 32
+}
+
 // GitLabProvisioning is the provisioning CLI's inputs: one service account
 // per agent seat, memberships, per-agent tokens minted into the config's
 // own ${VAR} references, and project webhooks.
@@ -485,10 +500,30 @@ func (g *GitLab) validate(path string) error {
 			p.add(at(path, "url"), ErrUnknownValue,
 				"%q must start with http:// or https://", g.URL)
 		}
-		if strings.TrimSpace(g.SigningSecret) == "" {
+		secret := strings.TrimSpace(g.SigningSecret)
+		_, isRef := envref.Whole(secret)
+		switch {
+		case secret == "":
 			p.add(at(path, "signing_secret"), ErrMissing,
 				"required when gitlab is enabled — it is the only supported "+
 					"webhook verification mode")
+		case isRef:
+			// A ${VAR} is checked where it is RESOLVED, not here. Tier B
+			// stores the reference verbatim, so the reference is all this
+			// layer ever sees and validating its shape would reject every
+			// correctly-written config.
+		case !validSigningSecret(secret):
+			// THE SHAPE IS A CONTRACT WITH GITLAB, and getting it wrong is
+			// silent in both directions: the API rejects the hook with a
+			// 400 an operator may never see, and a value that slips past
+			// produces an HMAC that cannot match anything GitLab computes
+			// — an endless run of signature mismatches that reads as an
+			// attack, with nothing naming the encoding.
+			p.add(at(path, "signing_secret"), ErrShape,
+				"must be whsec_ followed by standard base64 over a 32-byte "+
+					"key, which is the only shape GitLab's API accepts. "+
+					"`crewlet gitlab provision` mints one, and GitLab's own "+
+					"Generate signing token button produces the same shape")
 		}
 	}
 	if g.Provisioning == nil {

@@ -31,7 +31,7 @@ integrations:
   gitlab:
     enabled: true
     url: https://gitlab.example.com
-    signing_secret: gl
+    signing_secret: whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=
   plane:
     enabled: true
     url: https://plane.example.com
@@ -151,7 +151,7 @@ func TestSecretsComeFromTheEpoch(t *testing.T) {
 
 	for _, tc := range []struct{ name, got, want string }{
 		{"github", got.GitHub, "gh"},
-		{"gitlab", got.GitLab, "gl"},
+		{"gitlab", got.GitLab, "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="},
 		{"plane", got.Plane, "pl"},
 		{"forge app id", got.ForgeAppID, "forge-app"},
 		{"jira", atlassian.Jira, "jira"},
