@@ -621,12 +621,5 @@ func (q *Queue) lookup(topic, group string) []*attachment {
 
 // --- in-flight accounting -------------------------------------------------
 
-func (q *Queue) beginHandler() {
-	q.inFlight.Add(1)
-	q.inFlightN.Add(1)
-}
-
-func (q *Queue) endHandler() {
-	q.inFlightN.Add(-1)
-	q.inFlight.Done()
-}
+func (q *Queue) beginHandler() { q.inFlight.Begin() }
+func (q *Queue) endHandler()   { q.inFlight.End() }

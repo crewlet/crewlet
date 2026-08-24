@@ -60,6 +60,25 @@ wildcards), `PauseTopic`/`ResumeTopic` (reason-scoped holds keyed by the
 other), `PauseDelivery`/`WaitForHandlers` (the one-way graceful-drain protocol), and
 `Publish` that must persist before returning.
 
+### The in-flight count is one implementation, not three
+
+`queue.Inflight` — the counter behind `InFlightCount` and `WaitForHandlers` — lives
+in the contract package and every backend embeds it. That is not tidiness. Two of
+the three counted with a `sync.WaitGroup`, whose contract forbids exactly what a
+dispatch loop does: *"calls with a positive delta that start when the counter is
+zero must happen before a Wait."* A message arrives when it arrives, so a handler
+can start while a drain is already waiting on an empty queue — and `Wait` may then
+return on a momentary zero while that handler is starting, reporting a clean drain
+through a running turn.
+
+The memory twin never had it: a count under a mutex with a channel closed on the
+transition to zero, which is what the shared type is. That the **twin** was right
+and both real backends were wrong is the argument for one implementation — the
+certified suite exercised the contract identically for all three and could not see
+the difference, because every drain case waited on a quiet queue. It has one that
+does not now (`a_handler_may_start_while_a_drain_is_waiting`), and its real
+assertion is the race detector, which CI runs on everything.
+
 ## 4. Ordering policy lives in the contract package, not the backends
 
 `PartitionByKey` and `OrderPartitionsOldestFirst` are exported pure functions shared

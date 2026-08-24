@@ -3,7 +3,10 @@ package queuetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -620,6 +623,67 @@ func (s *suite) runCore(t *testing.T) {
 		}
 		if remaining != 0 {
 			t.Fatalf("WaitForHandlers on an idle queue = %d, want 0", remaining)
+		}
+	})
+
+	t.Run("a_handler_may_start_while_a_drain_is_waiting", func(t *testing.T) {
+		t.Parallel()
+		// A DISPATCH LOOP STARTS HANDLERS AT MOMENTS NOBODY CHOSE.
+		//
+		// Two of the three backends counted with a sync.WaitGroup, whose
+		// contract forbids exactly this: "calls with a positive delta that
+		// start when the counter is zero must happen before a Wait". A
+		// queue cannot honour that — a message arrives when it arrives —
+		// and the consequence is not theoretical: Wait may return on a
+		// momentary zero while a handler is starting, so a drain reports
+		// clean and the process shuts down through a running handler.
+		//
+		// The suite could not see it because every other case here waits
+		// on a QUIET queue. This one overlaps the two on purpose, and its
+		// real assertion is the RACE DETECTOR: under -race, which CI runs
+		// on everything, a WaitGroup implementation reports a data race on
+		// itself here. Without -race it still exercises the interleaving
+		// and asserts the counts stay sane.
+		q := s.start(t)
+		var handled atomic.Int64
+		subscribe(t, q, "topic.overlap", "grp",
+			func(context.Context, *events.Event) queue.Result {
+				handled.Add(1)
+				return queue.Ack()
+			})
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := range overlapRounds {
+				_ = q.Publish(ctx, "topic.overlap", newEvent(fmt.Sprintf("m%d", i)))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range overlapRounds {
+				// A drain against a queue that is mostly idle, so most of
+				// these start their wait at zero — the case the WaitGroup
+				// contract rules out and a dispatch loop cannot avoid.
+				if _, err := q.WaitForHandlers(ctx, 0); err != nil && ctx.Err() == nil {
+					t.Errorf("WaitForHandlers during publishing: %v", err)
+					return
+				}
+			}
+		}()
+		wg.Wait()
+
+		if got := q.InFlightCount(); got < 0 {
+			t.Fatalf("the in-flight count went negative (%d), so a drain would "+
+				"never converge", got)
+		}
+		remaining, err := q.WaitForHandlers(ctx, settleFor)
+		if err != nil {
+			t.Fatalf("WaitForHandlers after the overlap: %v", err)
+		}
+		if remaining != 0 {
+			t.Fatalf("WaitForHandlers after everything finished = %d, want 0", remaining)
 		}
 	})
 

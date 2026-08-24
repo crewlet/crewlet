@@ -440,20 +440,8 @@ func (q *Queue) lookup(topic, group string) []*attachment {
 
 // --- in-flight accounting -------------------------------------------------
 
-type atomicCounter struct{ n atomic.Int64 }
-
-func (c *atomicCounter) add(d int64) { c.n.Add(d) }
-func (c *atomicCounter) load() int   { return int(c.n.Load()) }
-
-func (q *Queue) beginHandler() {
-	q.inFlight.Add(1)
-	q.inFlightN.add(1)
-}
-
-func (q *Queue) endHandler() {
-	q.inFlightN.add(-1)
-	q.inFlight.Done()
-}
+func (q *Queue) beginHandler() { q.inFlight.Begin() }
+func (q *Queue) endHandler()   { q.inFlight.End() }
 
 // sleep waits for d or until ctx is done, reporting the context error so a
 // caller can return promptly on shutdown.

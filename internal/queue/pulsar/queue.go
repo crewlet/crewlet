@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
@@ -46,8 +45,7 @@ type Queue struct {
 
 	// inFlight counts handler invocations, which is the number an operator
 	// watches converge to zero during a drain.
-	inFlight  sync.WaitGroup
-	inFlightN atomic.Int64
+	inFlight queue.Inflight
 }
 
 type attachKey struct{ topic, group string }
@@ -150,7 +148,7 @@ func (q *Queue) Backend() string { return "pulsar" }
 func (q *Queue) Start(context.Context) error { return nil }
 
 // InFlightCount reports handler invocations currently mid-flight.
-func (q *Queue) InFlightCount() int { return int(q.inFlightN.Load()) }
+func (q *Queue) InFlightCount() int { return q.inFlight.Count() }
 
 // AddPublishListener registers a listener called inline on every publish.
 func (q *Queue) AddPublishListener(l queue.PublishListener) {
@@ -331,26 +329,7 @@ func (q *Queue) PauseDelivery(context.Context) error {
 // timeout expired, which is not an error — the caller owns any "too long"
 // policy.
 func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error) {
-	done := make(chan struct{})
-	go func() {
-		q.inFlight.Wait()
-		close(done)
-	}()
-
-	var timer <-chan time.Time
-	if timeout > 0 {
-		t := time.NewTimer(timeout)
-		defer t.Stop()
-		timer = t.C
-	}
-	select {
-	case <-done:
-		return 0, nil
-	case <-timer:
-		return q.InFlightCount(), nil
-	case <-ctx.Done():
-		return q.InFlightCount(), ctx.Err()
-	}
+	return q.inFlight.Wait(ctx, timeout)
 }
 
 // Stop closes every attachment, every stream, the producers and the client.

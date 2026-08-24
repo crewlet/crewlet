@@ -295,11 +295,17 @@ type Queue struct {
 	quiescing map[subKey]struct{}
 	listeners []queue.PublishListener
 
-	inFlight int
-	// idle is closed when inFlight falls to zero and replaced when it
-	// leaves it, so WaitForHandlers waits on a channel instead of polling
-	// a counter.
-	idle chan struct{}
+	// inFlight counts running handlers and is what a drain waits on.
+	//
+	// The shared [queue.Inflight] rather than a count beside the broker
+	// state, because the contract has three backends and this is the one
+	// place they used to differ: the twin kept a count under a mutex with
+	// a channel closed on the transition to zero (correct), and both real
+	// backends used a sync.WaitGroup (a documented misuse — Add may not
+	// start from zero concurrently with Wait, which is exactly what a
+	// dispatch loop does). One implementation is the fix; the twin's was
+	// the one that was right.
+	inFlight queue.Inflight
 }
 
 // New returns a queue on a fresh broker of its own — the single-process case,
@@ -919,60 +925,20 @@ func normalizeReason(reason string) string {
 
 // InFlightCount reports handler invocations currently mid-flight — the number
 // an operator watches converge to zero during a drain.
-func (q *Queue) InFlightCount() int {
-	q.broker.mu.Lock()
-	defer q.broker.mu.Unlock()
-	return q.inFlight
-}
+func (q *Queue) InFlightCount() int { return q.inFlight.Count() }
 
 // WaitForHandlers waits for in-flight handlers, returning how many were still
 // running when the wait ended. Zero means a clean drain; non-zero means the
 // timeout expired, which is not an error — the caller owns any "too long"
 // policy. A non-positive timeout waits until the handlers finish or ctx ends.
 func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error) {
-	q.broker.mu.Lock()
-	if q.inFlight == 0 {
-		q.broker.mu.Unlock()
-		return 0, nil
-	}
-	idle := q.idle
-	q.broker.mu.Unlock()
-
-	var expired <-chan time.Time
-	if timeout > 0 {
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		expired = timer.C
-	}
-	select {
-	case <-idle:
-	case <-expired:
-	case <-ctx.Done():
-	}
-
-	q.broker.mu.Lock()
-	defer q.broker.mu.Unlock()
-	return q.inFlight, nil
+	return q.inFlight.Wait(ctx, timeout)
 }
 
-func (q *Queue) enterHandlerLocked() {
-	q.inFlight++
-	if q.idle == nil {
-		q.idle = make(chan struct{})
-	}
-}
-
-func (q *Queue) exitHandlerLocked() {
-	q.inFlight--
-	if q.inFlight > 0 {
-		return
-	}
-	q.inFlight = 0
-	if q.idle != nil {
-		close(q.idle)
-		q.idle = nil
-	}
-}
+// enterHandlerLocked and exitHandlerLocked keep their names and their
+// broker-lock callers; the counting itself no longer needs that lock.
+func (q *Queue) enterHandlerLocked() { q.inFlight.Begin() }
+func (q *Queue) exitHandlerLocked()  { q.inFlight.End() }
 
 // --- inspection -----------------------------------------------------------
 //

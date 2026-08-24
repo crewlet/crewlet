@@ -444,6 +444,17 @@ const (
 	// settleFor and on a signal.
 	quietFor = 150 * time.Millisecond
 
+	// overlapRounds is how many publish/drain pairs the overlap case races
+	// against each other.
+	//
+	// Enough that the interleaving it hunts — a handler starting exactly
+	// while a drain observes an empty queue — happens many times in one
+	// run, and small enough that the case costs a fraction of a second on
+	// every backend. The bug it exists for surfaced roughly once in thirty
+	// full-suite runs by accident; thirty deliberate attempts per backend
+	// per run is a different order of likelihood.
+	overlapRounds = 200
+
 	// lingerFor is the batch linger window the batching subtests use. It
 	// has to be long enough that several publishes land inside one window,
 	// and short enough that a test waiting out several windows stays quick.

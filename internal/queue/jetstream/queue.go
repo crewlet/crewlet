@@ -118,8 +118,7 @@ type Queue struct {
 
 	// inFlight counts handler invocations, which is the number an
 	// operator watches converge to zero during a drain.
-	inFlight  sync.WaitGroup
-	inFlightN atomicCounter
+	inFlight queue.Inflight
 }
 
 type attachKey struct{ topic, group string }
@@ -482,7 +481,7 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 }
 
 // InFlightCount reports handler invocations currently mid-flight.
-func (q *Queue) InFlightCount() int { return q.inFlightN.load() }
+func (q *Queue) InFlightCount() int { return q.inFlight.Count() }
 
 // PauseDelivery stops dispatching new events while leaving Publish working,
 // so in-flight handlers can still emit their terminal events. One-way: once
@@ -503,26 +502,7 @@ func (q *Queue) PauseDelivery(context.Context) error {
 // means the timeout expired, which is not an error — the caller owns any
 // "too long" policy.
 func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error) {
-	done := make(chan struct{})
-	go func() {
-		q.inFlight.Wait()
-		close(done)
-	}()
-
-	var timer <-chan time.Time
-	if timeout > 0 {
-		t := time.NewTimer(timeout)
-		defer t.Stop()
-		timer = t.C
-	}
-	select {
-	case <-done:
-		return 0, nil
-	case <-timer:
-		return q.inFlightN.load(), nil
-	case <-ctx.Done():
-		return q.inFlightN.load(), ctx.Err()
-	}
+	return q.inFlight.Wait(ctx, timeout)
 }
 
 // stopGrace bounds how long Stop waits for one consume loop to exit.
