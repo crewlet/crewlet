@@ -61,6 +61,16 @@ func (e *Engine) equip(c *Company) error {
 	// than on that skill's next edit, which might be never.
 	e.refreshSkillVariables(c)
 	e.auditSkills(c)
+
+	// THE EMBEDDER IS BUILT AT THE APPLY, which is what makes a width
+	// change fail where somebody is watching rather than weeks later at
+	// the first recall. A company with none configured gets nil, and every
+	// consumer treats that as "no similarity search" rather than a fault.
+	embedder, err := e.buildEmbedder(c)
+	if err != nil {
+		return err
+	}
+	e.embeddings.Store(&embedder)
 	return nil
 }
 

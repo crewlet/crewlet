@@ -41,11 +41,11 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 		src.Skills = learning.NewSkills(db)
 		src.Onboarding = learning.NewOnboarding(db)
 	}
-	// Embed is left nil: this node has no embeddings client yet, so the
-	// similarity half of the memory pool and the whole of episode recall
-	// degrade — to recency-only and to an empty block respectively, both
-	// of which the prefetch treats as first-class states rather than
-	// failures. See providers.embeddings.
+	// Nil where a company configured no embeddings, which degrades the
+	// similarity half of the memory pool to recency alone and episode
+	// recall to an empty block — both first-class states in the prefetch
+	// rather than failures.
+	src.Embed = e.embedder()
 	return prefetch.New(src)
 }
 

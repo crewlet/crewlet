@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -73,6 +75,13 @@ type Engine struct {
 	// and leave seats running without their company's guidance until the
 	// next sync walk — which on a webhook-driven sync could be never.
 	skills *skills.Registry
+
+	// embeddings is the company's vector backend, swapped on apply. An
+	// atomic pointer rather than a mutex because it is read on the Plan
+	// phase's hot path and written only by an apply: the read must not
+	// queue behind anything, and there is nothing else to hold a lock
+	// across.
+	embeddings atomic.Pointer[embeddings.Embedder]
 
 	// maintenance is the retention sweep for the short-horizon tables. On
 	// the engine for the same reason the sandbox machinery is: it is a

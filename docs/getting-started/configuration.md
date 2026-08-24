@@ -251,14 +251,48 @@ providers:
                                         #   vendor renames a flag (validated here, so a
                                         #   typo fails `crewlet validate`)
 
-  embeddings:                           # required for the agent-learning subsystem
-                                        # (agent_diary vector candidate selection AND episodes vector recall)
+  embeddings:                           # optional — similarity search for the
+                                        #   agent-learning subsystem (agent_diary
+                                        #   candidate selection AND episode recall).
+                                        #   Omit it and both fall back to recency;
+                                        #   nothing else changes.
     type: openai                        # openai | openai-compatible
-    model: text-embedding-3-small       # default — 1536 dimensions
-    api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references
-    base_url: "..."                     # optional — custom endpoint
-    dimensions: 1536                    # must match the model's output dimensions
+    model: text-embedding-3-small       # required — no default, because a default
+                                        #   here would be a width the store was not
+                                        #   sized for
+    api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references; empty falls
+                                        #   back to OPENAI_API_KEY, the same variable
+                                        #   the chat backend reads
+    base_url: "..."                     # optional — custom endpoint. This is the only
+                                        #   difference between `openai` and
+                                        #   `openai-compatible`, so a local embedding
+                                        #   server needs nothing else
+    dimensions: 1536                    # the vector width. Requested from the API
+                                        #   (third-generation models truncate on
+                                        #   request), and checked against what comes
+                                        #   back on every call
 ```
+
+**The width is a contract with the store, not with the model.** The pgvector
+columns are sized from `dimensions` when migrations run, so a vector of any
+other width is not a degraded search — it is a row that can be written and
+never read back, silently and permanently. Two checks follow from that, and
+both refuse rather than adapt:
+
+- **At the apply.** A revision whose `dimensions` differs from the width this
+  node's store was opened at is rejected, with an error naming both widths.
+  Changing the width means a restart (and a re-embed of what is already
+  stored), which is a decision for an operator who is watching rather than a
+  silent divergence discovered at the first recall weeks later.
+- **On every call.** A vector that comes back at the wrong width is refused
+  rather than stored — on every call and not just the first, because a
+  gateway or aggregator can move models mid-deployment.
+
+Everything else about an embedding failure is cheap: a timed-out or refused
+call is *no vector*, which every caller reads as "no similarity search this
+turn" and carries on with recency. Nothing here retries — the caller's
+degradation costs less than a retry spent inside a Plan-phase prefetch
+somebody is waiting on.
 
 Tier A (`config.yaml`, restart-only) provides the queue / database /
 knowledge backend.  Example:
