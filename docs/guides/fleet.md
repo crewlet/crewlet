@@ -3,7 +3,7 @@
 One `crewlet run` is a whole company. Everything below is about running
 more than one, and the honest summary is: you probably do not need to.
 A single engine handles many concurrent turns — agent handlers are
-`asyncio` tasks, so the practical ceiling is LLM provider rate limits and
+goroutines, so the practical ceiling is LLM provider rate limits and
 host memory, not process count. **Scale up before you scale out.**
 
 Run a fleet when one of these is true:

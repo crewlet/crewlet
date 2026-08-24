@@ -63,15 +63,16 @@ The three overrides are the fields whose right value depends on *where the proce
 
 Publishing knowledge and tool skills is its own command rather than a flag on `run`: an engine that published on every boot would rewrite a company's knowledge base from whatever tree the deploying machine happened to have. Use [`crewlet plane import`](#crewlet-plane-import), and [`crewlet config import`](#crewlet-config-import) to load the first company revision.
 
-Press `Ctrl+C` for graceful shutdown — signals escalate in three tiers:
+Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
-1. **First `Ctrl+C`** — graceful: event delivery pauses, running LLM turns finish their rounds (no internal timeout — `drain_in_progress` logs the in-flight count every 10 s), turns still queued behind the concurrency limit are returned to the broker for the next boot, and the embedded dashboard stays up through the drain so you can watch the in-flight pill converge to 0.
-2. **Second `Ctrl+C`** — force-stop: in-flight turns are cancelled and NAK'd for redelivery on the next boot, followed by a fast best-effort cleanup.
-3. **Third `Ctrl+C`** — hard exit (`os._exit(1)`), the escape hatch for a wedged process.
+1. **First `Ctrl+C`** — graceful: every held seat quiesces, running LLM turns finish their rounds (no internal timeout — `drain_in_progress` logs the in-flight count every 10 s), turns still queued behind the concurrency limit are returned to the broker for prompt redelivery, and the embedded dashboard stays up through the drain so you can watch the in-flight pill converge to 0.
+2. **Second `Ctrl+C`** — the process exits immediately. The first signal hands signal handling back to the operating system precisely so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses.
+
+There is no third tier, because the second is already an unconditional exit rather than something the engine has to be well enough to perform.
 
 Under an orchestrator, SIGTERM follows the same tiers; the host's grace period (k8s `terminationGracePeriodSeconds`, systemd `TimeoutStopSec`) is the SIGKILL backstop. See [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
 
-The per-tier console notices are best-effort: each press schedules its shutdown action *before* printing, so a dead stderr can never stall the ladder. When piping output, prefer `tee -i` — Ctrl+C reaches the whole pipeline, and a plain `tee` dies on the first press, taking the drain logs with it (the shutdown itself is unaffected).
+When piping output, prefer `tee -i` — Ctrl+C reaches the whole pipeline, and a plain `tee` dies on the first press, taking the drain logs with it (the shutdown itself is unaffected).
 
 ---
 

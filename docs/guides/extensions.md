@@ -104,7 +104,7 @@ an unwired engine is. `ctx.node_id` names the process, matching the logs,
 
 ## Writing an Extension
 
-See `src/crewlet/extensions/template.py` for a documented starting point — copy the class, implement the hooks you need, and either pass an instance to the engine or declare the module in config.
+See `internal/agent/extension/extension.go` for the contract — implement the hooks you need and register the extension, which gets a `for_origin` view of the tool registry so anything it registers is recorded as its own rather than as a builtin.
 
 ### YAML Configuration
 

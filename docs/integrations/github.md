@@ -120,7 +120,7 @@ The webhook parser extracts the GitHub login from the PR payload and resolves it
 
 ### GitHub Notification Prompts
 
-GitHub webhooks use the `GitHubNotificationPrompt` class (`src/crewlet/notifications/notification_prompts/github.py`) which differentiates event types:
+A GitHub notification prompt would differentiate event types (this build ships none — see the note at the top):
 
 | Event | Prompt behaviour |
 |-------|-----------------|

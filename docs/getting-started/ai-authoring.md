@@ -131,7 +131,7 @@ reference with everything connected:
 
 Two reasons the raw docs aren't enough on their own.
 
-**The surface is large and strict.** Tier B validates through Pydantic
+**The surface is large and strict.** Tier B validates against the typed config models
 models that forbid unknown keys, so a plausible-but-invented field name
 (`responsibilites`, `leed`, `commnad`) is a hard error, not a silent
 no-op. An assistant working from prose will occasionally invent one.
@@ -177,7 +177,7 @@ check them by reading:
 | Cron *semantics* (`99 * * * *` has the right shape) | Needs a cron parser |
 
 The two encodings are held in sync by
-`tests/test_cli/test_schema_rules.py`, which runs every rule through
+`internal/config/schema_test.go`, which runs every rule through
 both paths and fails if they disagree — a schema that quietly diverges
 from the loader would be worse than no schema, because an assistant
 would trust it.

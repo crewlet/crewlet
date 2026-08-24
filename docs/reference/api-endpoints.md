@@ -1,10 +1,14 @@
 # API Endpoints
 
-The Crewlet API is a Starlette app served by any node with the `ingress` role (`api.port > 0` in the Tier A config). By default a node has every role, so it runs alongside the agents in one process; a node with `--roles ingress` serves only these routes and talks to the rest of the fleet over Pulsar. The routes below are identical either way.
+The Crewlet API is served by any node with the `ingress` role (`api.port > 0`
+in the Tier A config). By default a node has every role, so it runs alongside
+the agents in one process; a node with `-roles ingress` serves only these
+routes and reaches the rest of the fleet over the event stream. The routes
+below are identical either way.
 
-Install with the `api` extra: `pip install "crewlet[api]"` — which pins a
-WebSocket implementation alongside `uvicorn`, because the dashboard's data
-plane is a WebSocket (see [`WS /ws/stream`](#ws-wsstream)).
+There is nothing to install for it — it is compiled into the binary, along
+with the dashboard it serves and the WebSocket that is the dashboard's data
+plane (see [`WS /ws/stream`](#ws-wsstream)).
 
 ---
 
@@ -113,7 +117,7 @@ All `/config/*` routes require `Authorization: Bearer <token>` matching one of t
 
 - `200 OK` — successful read
 - `201 Created` — write produced a new revision; body has `{"revision_id": ..., "summary": ...}`
-- `400 Bad Request` — invalid body / validation error (Pydantic detail in `detail`); `summary_required` if `X-Summary` missing on full PUT
+- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` if `X-Summary` missing on full PUT
 - `401 Unauthorized` — missing or invalid bearer token (`{"error": "invalid_token"}`)
 - `404 Not Found` — `no_active_revision` (read on unconfigured) or revision not found
 - `409 Conflict` — `revision_advanced` (stale `If-Match` or TOCTOU race with a concurrent writer) or `company_not_initialised` (per-entity write on unconfigured)
@@ -404,13 +408,16 @@ never arrives.
 Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 `{"kind": "...", "data": ..., "ts": "<iso8601>"}`.
 
-> **The `api` extra pins a WebSocket implementation on purpose.** Bare
-> `uvicorn` ships none and answers the upgrade with a 404. The dashboard
-> survives that — it falls back to polling `/stream/snapshot` every five
-> seconds — which is exactly what made the gap easy to miss: nothing looked
-> broken, the whole dashboard was just permanently in degraded mode. So
-> `crewlet[api]` installs `websockets` alongside `uvicorn`, and
-> `tests/test_packaging` asserts it stays that way.
+> **The socket is the dashboard's only data channel.** Everything it draws
+> arrives here — pushes plus a request/response query channel — and the
+> REST snapshot exists only for degraded mode, when the socket is down. The
+> dashboard survives losing it by polling `/stream/snapshot` every five
+> seconds, which is exactly the kind of failure that is easy to miss:
+> nothing looks broken, the page is simply always a few seconds stale.
+> `internal/e2e` closes that gap by replaying the frames a real server
+> produced through the dashboard's own `store.js`, so both halves of the
+> protocol are checked against each other rather than each against its own
+> idea of the other.
 
 **Server → client kinds**
 

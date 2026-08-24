@@ -1,6 +1,6 @@
 # Turn Engine
 
-Each agent turn in Crewlet runs through a three-phase **Plan → Execute → Review** loop orchestrated by the `TurnEngine` (`src/crewlet/agent/turn.py`). Each phase is an LLM call with a different system prompt, a different tool surface, and optionally a different model. The turn engine also owns ephemeral sub-agent spawning and enforces the delegation-depth / stall / sub-agent allowlist invariants in code.
+Each agent turn in Crewlet runs through a three-phase **Plan → Execute → Review** loop orchestrated by the `TurnEngine` (`internal/agent/turn/loop.go`). Each phase is an LLM call with a different system prompt, a different tool surface, and optionally a different model. The turn engine also owns ephemeral sub-agent spawning and enforces the delegation-depth / stall / sub-agent allowlist invariants in code.
 
 ---
 
@@ -11,7 +11,7 @@ A single LLM call with a generic system prompt and every tool's schema loaded in
 The turn engine instead splits the turn into phases with different purposes:
 
 - **Onboarding** (first turn only, conditional) runs *before* Plan when the agent has no onboarding marker for its current org chain. It reads the team's `Onboarding` pages, captures conventions via `reflect_and_persist`, and calls `mark_onboarded`. It has its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10) so onboarding never competes with the Plan budget — if it ran inside Plan it could consume every Plan round before the planner ever called `submit_plan`, silently dropping a first-turn request. Skipped on resume turns and once the agent is marked. See [First-turn onboarding](#first-turn-onboarding).
-- **Plan** decides *what* to do. Output: an `ExecutionPlan` Pydantic artifact with `reasoning`, ordered `steps`, `tools_needed`, and `success_criteria`. May short-circuit to `direct` for trivial tasks.
+- **Plan** decides *what* to do. Output: an execution plan with `reasoning`, ordered `steps`, `tools_needed`, and `success_criteria`. May short-circuit to `direct` for trivial tasks.
 - **Execute** runs the plan. The tools the plan named (plus a small always-on set) are exposed as schemas upfront; Execute can additionally discover and activate tools the planner missed via the `activate_tool` / `list_mcp_server_tools` meta-tools — the executor is not locked to the planner's predictions.
 - **Review** judges the outcome: `done` | `self_iterate`. No domain tools; a single `submit_review` structured-output tool forces the decision enum. There is no handoff decision: when the turn is blocked and needs a manager or peer, Review picks `self_iterate` and the note tells Plan to add an outreach step so Execute reaches the colleague with its own colleague-surface tools — the same tools a human teammate would use (there is no special escalation mechanism).
 
@@ -21,7 +21,7 @@ Sub-agents (`spawn_subagent`) are bespoke short-lived workers with a parent-chos
 
 ## Phase-specific tool surfaces
 
-Each phase gets a filtered view over the shared `ToolRegistry` via `ToolSurface` (`src/crewlet/tools/surface.py`). This is the key constraint that keeps LLM payloads tight while still letting each phase recover from incomplete plans / under-specified catalogues.
+Each phase gets a filtered view over the shared `ToolRegistry` via `ToolSurface` (`internal/tools/surface.go`). This is the key constraint that keeps LLM payloads tight while still letting each phase recover from incomplete plans / under-specified catalogues.
 
 | Phase | `tools=[...]` | System prompt | Notes |
 |-------|---------------|---------------|-------|
@@ -29,13 +29,13 @@ Each phase gets a filtered view over the shared `ToolRegistry` via `ToolSurface`
 | **Plan** | `submit_plan`, `activate_tool`, `list_mcp_server_tools`, `load_tool_skill` meta-tools, plus any catalogue tool the planner has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + compact plan contract + **slim** tool catalogue (builtin tool names + MCP server names only) | The slim catalogue lists every builtin tool but only the names of MCP servers — individual MCP tool names (often 50–150 per role) stay out of the prompt. To use an MCP tool the planner calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to promote it into `tools=[...]` so its schema arrives on the next round (in-Plan recon: reading threads, issues, or docs; agent lookup). Action / write tools should NOT be activated here — name them in `submit_plan`'s `tools_needed` and let Execute run them under Review. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the Plan prompt from the in-memory `Organization` model — no DB seed step. |
 | **Execute** | `plan.tools_needed ∪ executor_always_on_tools ∪ {activate_tool, list_mcp_server_tools}` | One-line identity + plan summary + execute contract + same slim catalogue Plan sees | Execute carries the same discover-then-activate flow Plan does, so the executor can recover when the planner missed an action tool — call `list_mcp_server_tools(server)`, then `activate_tool(name)`, then call the activated tool normally on the next round. Successful mid-run activations fan out a `phase.tool_activated` event (with `phase="execute"`, plus `turn_id` / `iteration` for correlation with the surrounding phase events) so operators can see when plans are chronically under-specified. Activated tools are also appended to the parent's `parent_tool_names` snapshot so a sub-agent the parent spawns later in the same turn inherits them. Calls to names that are neither in the surface nor in the role's catalogue still fire `execute.missing_tool`; Review catches that as a true plan-incompleteness signal. |
 | **Review** | `submit_review` meta-tool only | One-line identity + plan summary + Execute artifact + decision-enum contract | No catalogue, no policies. Policy-sensitive constraints ride on the plan's `success_criteria`. |
-| **Sub-agent** | Parent-named allowlist minus the engine-control denylist (`spawn_subagent`, `a2a_ask`, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface | Parent's task prompt + mandated preamble | Fresh context; asyncio timeout; runtime-clamped `max_turns`. Sub-agents have a fixed parent-chosen surface and cannot grow it via `activate_tool` / `list_mcp_server_tools` — those names are on the first-party control denylist. External-write tools are denied by *capability* (derived from MCP annotations), not by a hardcoded tool-name list, so the guard holds for any tool stack. |
+| **Sub-agent** | Parent-named allowlist minus the engine-control denylist (`spawn_subagent`, `a2a_ask`, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface | Parent's task prompt + mandated preamble | Fresh context; a wall-clock timeout; runtime-clamped `max_turns`. Sub-agents have a fixed parent-chosen surface and cannot grow it via `activate_tool` / `list_mcp_server_tools` — those names are on the first-party control denylist. External-write tools are denied by *capability* (derived from MCP annotations), not by a hardcoded tool-name list, so the guard holds for any tool stack. |
 
 ---
 
 ## First-turn onboarding
 
-A fresh agent (no onboarding marker for its current org chain) needs to read its team's `Onboarding` knowledge-base pages and internalise the conventions before doing real work. This runs as a **dedicated phase before Plan** (`src/crewlet/agent/onboarding_phase.py`), gated on the marker store (`agent_onboarding_markers`):
+A fresh agent (no onboarding marker for its current org chain) needs to read its team's `Onboarding` knowledge-base pages and internalise the conventions before doing real work. This runs as a **dedicated phase before Plan** (`internal/agent/runner/onboarding.go`), gated on the marker store (`agent_onboarding_markers`):
 
 1. The engine checks the marker. The read is **tri-state**: `True` (marked for the current chain) skips; `False` (definitively unmarked) runs the pass; `None` (the lookup *failed* — state unknown) **skips this turn and retries the check next turn**. Collapsing a failed lookup into "not onboarded" would re-run a full onboarding pass for an already-marked agent on any transient DB error. Two further guards make onboarding strictly run-once per org chain: a **process-local latch** (`AgentInstance.onboarded_chain_hash`, set the moment a pass marks or a read confirms the marker) short-circuits before any DB read, and a **single-flight lock** (`AgentInstance.onboarding_lock`) holds a concurrent turn at the gate while a pass runs — turns are normally serialized per agent, but the sandbox busy-state transitions can free the agent while an earlier turn is still mid-flight, and without the lock both turns would read "unmarked" and run duplicate passes.
 2. Otherwise it runs `run_onboarding_phase` with its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10). The agent discovers its knowledge-base tools (`list_mcp_server_tools` → `activate_tool`), reads the pages, captures conventions with `reflect_and_persist`, and calls `mark_onboarded` (which terminates the phase). Onboarding is a **discovery-capable phase** — its surface exposes the slim tool catalogue and supports `activate_tool` exactly like Plan/Execute. (Without that, the agent could *see* its knowledge-base tools via `list_mcp_server_tools` but every `activate_tool` would hit an "availability gate" — it would never read its pages, never mark, and the pass would re-fire every turn.) Its rounds are governed by the same round-cap **extension judge** as Plan/Execute: the base cap can be extended up to `onboarding_max_tool_rounds_ceiling` (default 20) when the agent is still making progress, so a near-done pass isn't cut off mid-read.
@@ -83,11 +83,11 @@ This avoids double-posting (a real delivery via the discovered tool reads as del
 
 `skip` never runs Execute and therefore never runs Review.
 
-`skip` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), the planner must instead emit `decision="plan"` with a single step that posts a brief explanation via the originating channel's reply tool. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. `PLAN_HEADER` enforces this in prose, and the per-source notification prompts (`slack.py`, `jira.py`, `confluence.py`, `base.py`) carry the same rule on the triage side.
+`skip` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), the planner must instead emit `decision="plan"` with a single step that posts a brief explanation via the originating channel's reply tool. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. `PLAN_HEADER` enforces this in prose, and each vendor's notification prompt carries the same rule on the triage side, along with the generic fallback the spine uses for a source no vendor has written one for.
 
-The Plan-phase prompt header (`PLAN_HEADER` in `src/crewlet/agent/prompts.py`) nudges planners to **list both recon and likely action tools** in `tools_needed` upfront so Execute can act in a single pass — a latency / token-cost optimisation, not a correctness requirement. Review→`self_iterate` is the slower fallback when the planner couldn't predict the action.
+The Plan-phase prompt header (`PLAN_HEADER` in `internal/agent/prompts/`) nudges planners to **list both recon and likely action tools** in `tools_needed` upfront so Execute can act in a single pass — a latency / token-cost optimisation, not a correctness requirement. Review→`self_iterate` is the slower fallback when the planner couldn't predict the action.
 
-The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `test_prompts.py` holds them under explicit token budgets (Plan < 2400, Execute < 300, Review < 450) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
+The per-phase headers are deliberately verbose — each rule traces to an observed turn-ending failure, and `internal/agent/prompts/budget_test.go` holds them under explicit token budgets (Plan < 2400, Execute < 300, Review < 450) so the prose can't grow unchecked. The repeated cost of re-sending these static headers on every round of the tool loop is absorbed by **[provider prompt caching](overview.md#llm-provider)**, not by trimming the guidance: the `system + tools` prefix is byte-stable within a phase and across an agent's turns, so it is cached and re-read cheaply rather than re-billed each round. Slimming a header to save tokens is therefore the wrong trade — it re-opens the incidents the rules were added to close, for a saving caching already captures.
 
 ---
 
@@ -110,7 +110,7 @@ When a turn is blocked and needs a manager or peer — a capability gap requirin
 
 Every phase rebuilds its LLM conversation from scratch on each iteration — Plan and Execute start from `[system, user]`, and `turn.plan_tool_executions` is deliberately reset per iteration so the delivery gate can't read iteration 1's calls as iteration 2's delivery. Without a record kept *outside* those conversations, a `self_iterate` round starts blind: it cannot tell that iteration 1 already posted to Slack, so it plans the post again and the side effect fires twice.
 
-`TurnContext.iteration_history` is that record. The engine appends one `IterationRecord` (`src/crewlet/agent/iteration_log.py`) immediately before each loop-back, and `render_iteration_ledger` renders the accumulated records into three places:
+`TurnContext.iteration_history` is that record. The engine appends one `IterationRecord` (`internal/agent/ledger/iteration.go`) immediately before each loop-back, and `render_iteration_ledger` renders the accumulated records into three places:
 
 | Consumer | Where | Why |
 |---|---|---|
@@ -137,7 +137,7 @@ The budgets are guards, not a diet. Prompt caching keys on the system+tools pref
 | `LEDGER_VALUE_LIMIT` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so the whole discriminator survives while bodies are cut by an order of magnitude |
 | `LEDGER_BLOB_LIMIT` | 800 | ~12 identifier-shaped arguments — more than any real delivery tool takes |
 | `LEDGER_PLAN_SUMMARY_LIMIT` | 1200 | A realistic 6-step plan renders ~850 chars; 1200 covers ~8 |
-| `LEDGER_ARTIFACT_LIMIT` | 2000 | Matches `review.py`'s own `execute_summary[:2000]` — same content, same question |
+| `LEDGER_ARTIFACT_LIMIT` | 2000 | Matches `internal/agent/runner/phases.go`'s own `execute_summary[:2000]` — same content, same question |
 | `LEDGER_NOTE_LIMIT` | 2000 | `notes` is the correction and the ledger is its only carrier, so it gets the artifact's budget |
 | `LEDGER_MAX_READ_CALLS` | 12 | The recon a normal round does; only reads are ever dropped |
 
@@ -181,7 +181,7 @@ The engine prompts never name these tools (see [Tool Capabilities](tool-capabili
 | `jira_add_comment` / `jira_update_issue` | Jira | In-ticket collaboration and reassignment |
 | `confluence_add_footer_comment` / `confluence_add_comment` | Confluence | Page discussion; `@mention` uses the [platform-mentions skill](tool-skills.md) markup. The exact comment tool name is mcp-atlassian-version dependent; the LLM discovers whichever name the deployed server registered via `list_mcp_server_tools` |
 | `request_copilot_review` | GitHub | Request an automated review on an existing PR (an un-promoted lightweight option; code authoring goes through the [code sandbox](code-sandbox.md), not here) |
-| `a2a_ask` | Private A2A channel | The one engine builtin (`tools/colleague.py`). Narrowly scoped: tight-loop / mechanical sync only — one ask, one answer, then the channel closes. The answering turn's final response *is* the reply; there is no send/close tool. See the tool description |
+| `a2a_ask` | Private A2A channel | The one engine builtin (`internal/agent/builtin/colleague.go`). Narrowly scoped: tight-loop / mechanical sync only — one ask, one answer, then the channel closes. The answering turn's final response *is* the reply; there is no send/close tool. See the tool description |
 
 ### What a delegation records
 
@@ -309,13 +309,13 @@ unset, the judge runs on whatever the role's primary model is.
 
 ## Runtime invariants
 
-Every invariant is enforced in code, not in prompts (`src/crewlet/agent/guards.py`, `src/crewlet/tools/surface.py`, `src/crewlet/agent/skills/guard.py`):
+Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards.go`, `internal/tools/surface.go`, `internal/agent/skills/guard.go`):
 
 1. **Sub-agents cannot spawn sub-agents, contact colleagues, or write to shared surfaces.** Their `ToolSurface.for_subagent` denies the first-party control tools (`spawn_subagent`, `a2a_ask`) and any tool whose [MCP annotations](tool-capabilities.md) classify it a write to an external shared surface — regardless of the parent's allowlist. The latter is derived from capability, not a tool-name list, so it covers any tool stack. Sub-agents **can** discover and activate *read-only* tools themselves (see invariant 7): the discovery catalogue (`subagent_safe_tools`) is pre-filtered by these same rules, so a sub-agent can find the read tool it needs (e.g. a Jira JQL search) but can never widen itself into a write or a control tool.
 2. **No recruitment.** Colleague tools require an explicit handle / channel / issue_key / PR URL. There is no "find someone to help me" primitive that would auto-create a role.
 3. **Delegation depth cap.** The trigger event carries `delegation_depth`. When it meets `turn_engine.delegation_depth_limit` (default 3), the engine publishes a `turn.guard_breach(kind="depth_cap")` and terminates the turn as `failed` before any phase runs. This is the always-on backstop against runaway / circular delegation: it is checked at the top of every turn regardless of how the turn was triggered, and `a2a_ask` propagates the chain so the recipient's turn inherits the accumulated depth.
 4. **Per-turn budget cascade.** Agent budget → phase budgets → sub-agent budget (default 20% of parent's remaining). Exhaustion publishes `budget_exhausted` and marks the turn failed. A *batched* `spawn_subagent` shares one fractional-budget wrapper across all children; the wrapper reserves tokens under a lock before charging, so concurrent children can't both pass the cap check and overshoot.
-5. **Sub-agent timeout.** `asyncio.wait_for` with `turn_engine.subagent_timeout_seconds` (default 120 s). A batched call additionally has an aggregate `subagent_batch_timeout_seconds` cap and a `subagent_max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard the children that already finished — they come back with their real answers, and only the ones still running are reported as timed out. Their tokens were spent either way.
+5. **Sub-agent timeout.** A per-call deadline from `turn_engine.subagent_timeout_seconds` (default 120 s). A batched call additionally has an aggregate `subagent_batch_timeout_seconds` cap and a `subagent_max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard the children that already finished — they come back with their real answers, and only the ones still running are reported as timed out. Their tokens were spent either way.
 6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed`. Max-iteration exhaustion (Plan/Execute/Review loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same terminal effect.
 7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch. Plan, Execute, and Sub-agents carry the same *slim* catalogue (builtins + MCP server names) and the same `activate_tool` / `list_mcp_server_tools` discovery meta-tools — a sub-agent's catalogue is the safety-filtered `subagent_safe_tools` set (read-only / non-control / non-shared-write), so discovery cannot breach invariant 1. Review and Judge carry no catalogue and cannot discover tools.
 8. **Required-skill guard (load-before-use).** A [tool skill](tool-skills.md) gates the tools its trigger covers (the `required: true` default; `required: false` opts out for advisory content): within one phase session, calls to those tools are rejected (with an instructive error and a `phase.tool_skill_blocked` event) until the LLM has loaded the skill body via `load_tool_skill`. Enforced at the shared dispatch gate (`execute_tool` consults `ToolSurface.skill_guard`); tracked per LLM session because Plan / Execute / Sub-agent run on separate message histories.
@@ -480,24 +480,26 @@ All fields are optional; defaults apply when absent.
 
 ## Implementation map
 
-| Module | Role |
+| Package / file | Role |
 |--------|------|
-| `agent/turn.py` | `TurnEngine.run_turn` entry point and phase orchestrator |
-| `agent/turn_context.py` | Per-turn state (ids, depth, chain, budgets, model keys) |
-| `agent/phase_model.py` | `resolve_phase_provider(role, phase, providers)` |
-| `agent/prompts.py` | `build_plan_prompt` / `build_execute_prompt` / `build_review_prompt` / `build_subagent_prompt` |
-| `agent/plan.py` | Plan phase runner + `ExecutionPlan` model + `submit_plan` / `activate_tool` meta-tools |
-| `agent/execute.py` | Execute phase runner + `ExecuteResult` |
-| `agent/review.py` | Review phase runner + `ReviewOutcome` model + `submit_review` meta-tool |
-| `agent/subagent.py` | `spawn_subagent` with its runtime invariants |
-| `agent/guards.py` | Depth cap, stall detector |
-| `agent/iteration_log.py` | Prior-work ledger: `IterationRecord`, `format_tool_calls`, `render_iteration_ledger` |
-| `agent/skills/guard.py` | Required-skill guard: `SkillGuard`, `build_skill_guard` (load-before-use enforcement for `required: true` tool skills) |
-| `agent/extension.py` | Round-cap extension judge: `ExtensionDecision`, `judge_extension`, `maybe_extend` |
-| `agent/llm_loop.py` | Shared `run_tool_loop` (one call + tool-loop body across every phase) |
-| `tools/surface.py` | Phase-specific `ToolSurface` (filter + catalogue) |
-| `tools/colleague.py` | `a2a_ask` (the only surviving colleague wrapper — Slack/Jira/Confluence/GitHub outreach goes through the upstream MCP tools directly) |
-| `notifications/typing_status.py` | Slack working-status sessions: conversation resolution, `addressed` gating, heartbeat + clear |
+| `internal/agent/turn/loop.go` | The turn entry point and phase orchestrator |
+| `internal/agent/turnctx/` | Per-turn state (ids, depth, chain, budgets, model keys), carried as a context value |
+| `internal/agent/phase/registry.go` | Which provider chain serves a role's phase — `Chain` and `Head` |
+| `internal/agent/prompts/` | The per-phase prompt builders: `plan.go`, `execute.go`, `review.go`, `subagent.go`, `onboarding.go`, and `sections.go` for the org detail every one of them shares |
+| `internal/agent/runner/phases.go` | The Plan, Execute and Review phase runners, and the one `runPhase` body they share |
+| `internal/agent/runner/submit.go` | The `submit_plan` / `submit_review` meta-tools |
+| `internal/agent/runner/discovery.go` | The `activate_tool` / `list_mcp_server_tools` meta-tools |
+| `internal/agent/runner/resume.go` | Re-entering a suspended Execute loop when a detached run completes |
+| `internal/agent/subagent/` | `spawn_subagent` and its runtime invariants |
+| `internal/agent/turn/guards.go` | Depth cap, stall detector |
+| `internal/agent/ledger/iteration.go` | Prior-work ledger: the iteration record and how it renders into the next round |
+| `internal/agent/ledger/conversation.go` | The cross-turn ledger — what this seat already said in one thread |
+| `internal/agent/skills/guard.go` | Required-skill guard: load-before-use enforcement for `required: true` tool skills |
+| `internal/agent/extension/` | Round-cap extension judge |
+| `internal/agent/toolloop/` | The shared tool loop — one call plus its tool round-trips, across every phase — and the suspend primitive a detached run returns through |
+| `internal/tools/surface.go` | Phase-specific tool surface (filter + catalogue) |
+| `internal/agent/builtin/colleague.go` | `a2a_ask` — the only surviving colleague wrapper; outreach to a vendor goes through that vendor's MCP tools directly |
+| `internal/notify/status.go` | Working-status sessions: conversation resolution, `addressed` gating, heartbeat + clear |
 
 ---
 

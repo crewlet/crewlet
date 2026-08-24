@@ -55,7 +55,7 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
   plan_max_tool_rounds: 16              # max tool-call rounds within a single Plan-phase run
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass before Plan (0 = disabled)
   subagent_max_turns: 20                # maximum tool rounds per spawn_subagent call
-  subagent_timeout_seconds: 120         # wall-clock timeout per sub-agent (asyncio.wait_for)
+  subagent_timeout_seconds: 120         # wall-clock timeout per sub-agent
   subagent_budget_fraction: 0.2         # fraction of parent's remaining tokens a sub-agent may consume
                                         #   (for a batched call, the TOTAL slice shared across children)
   subagent_max_parallel: 3              # max children a batched spawn_subagent runs concurrently

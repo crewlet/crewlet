@@ -224,7 +224,7 @@ Five bands, top to bottom, in order of urgency:
 |---|---|---|
 | **Needs you** | Is anything waiting on me, and how long has the oldest waited? — the [attention queue](#the-attention-queue) | No other room aggregates obligations across sandboxes, seats, budgets and config |
 | **Engine** | What is the *engine* doing — turns in flight, posture, event store, draining | Most of it reached no pixel outside a popover you had to know to click |
-| **Stuck** | Which turns stopped producing rounds, and which seats hold a lease whose teardown was never proven | `runtime.py` calls the second "the one to alert on" and it reached no screen at all |
+| **Stuck** | Which turns stopped producing rounds, and which seats hold a lease whose teardown was never proven | `internal/api/runtime.go` calls the second "the one to alert on" and it reached no screen at all |
 | **Recent record** | Did anything break, and how far back can this page even see? | One company-wide track, not one row per seat — the per-seat view is the Agents room's |
 | **Cost** | What is this costing, in the two spans that are honest | The 24h rollup and the org meter-against-its-own-cap; per-seat detail is Spend's |
 

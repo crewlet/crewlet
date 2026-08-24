@@ -355,23 +355,25 @@ absent from that list — it has no usable inbound webhook, so the **engine**
 holds one outbound websocket per agent seat instead, and its inbound path
 does not go through the API process at all.
 
-## Programmatic setup
+## There is no programmatic setup
 
-```python
-import asyncio
-from crewlet import Engine
-from crewlet.config import load_bootstrap_config, load_company_config
+The engine has no importable API: every package lives under `internal/`, so
+the CLI, the config format and the wire protocol are the whole public
+surface. That is deliberate — it means the two-tier config is the only way
+to describe a company, and nothing can drift between what a YAML file says
+and what an embedding program set up by hand.
 
+Automating a deployment means driving `crewlet` and the REST API:
 
-async def main():
-    bootstrap = load_bootstrap_config("config.yaml")
-    engine = Engine.from_bootstrap(bootstrap)
-    await engine.apply_config(load_company_config("company.yaml"))
-    await engine.run()  # blocks until Ctrl+C
-
-
-asyncio.run(main())
+```bash
+crewlet validate                       # check both tiers in CI
+crewlet config import company.yaml     # write a new active revision
+crewlet run -config config.yaml        # start the node
 ```
+
+See [Configure via the API](../guides/configure-via-api.md) for editing a
+live company, and [Extensions](../guides/extensions.md) for adding
+behaviour inside the process.
 
 ## Next steps
 

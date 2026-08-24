@@ -15,7 +15,7 @@ of the org via `engine.reload_config()`.
 
 ## How it works
 
-A single asyncio loop ticks on a short interval (default 10s). Each tick:
+A single loop ticks on a short interval (default 10s). Each tick:
 
 1. Enumerates every `Schedule` across the **live** org (all roles and all
    units — read fresh each tick, so hot-reload is free).

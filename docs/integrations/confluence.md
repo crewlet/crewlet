@@ -265,7 +265,7 @@ When the **only** candidate recipient is the trigger user (the sole watcher, or 
 
 ### Lead-fallback prompt hint
 
-When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the [`ConfluenceNotificationPrompt`](https://github.com/crewlet/crewlet/blob/main/src/crewlet/notifications/notification_prompts/confluence.py) adds a `## Why You Received This` section that names the space, warns the lead that no one else is watching the page, and lays out three explicit decisions:
+When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the Confluence notification prompt adds a `## Why You Received This` section that names the space, warns the lead that no one else is watching the page, and lays out three explicit decisions:
 
 - **Delegate** — `@mention` the right teammate in a comment on the page; the mention markup auto-adds them as a watcher so they pick up future events.
 - **Act yourself** — if the page concerns the lead's own work or needs a lead-level response, reply directly.

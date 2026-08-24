@@ -199,7 +199,7 @@ When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the engine exports OTel spans to the 
 
 ## Code Runtime (Sandbox, Optional)
 
-Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated E2B sandbox — see [Code Sandbox](../concepts/code-sandbox.md). Requires the `sandbox` extra — `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout) — which pulls in the `e2b` SDK. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
+Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated sandbox — see [Code Sandbox](../concepts/code-sandbox.md). Requires the `sandbox` extra — `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout) — which pulls in the `e2b` SDK. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|

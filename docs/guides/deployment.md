@@ -254,8 +254,8 @@ Both communicate through Pulsar. Both accept `--debug` for verbose logging.
 ### Replica count
 
 **Run one `crewlet run`, and scale up before you scale out.** A single
-engine handles many concurrent turns — agent handlers are `asyncio`
-tasks, so the practical ceiling is LLM provider rate limits and host
+engine handles many concurrent turns — agent handlers are
+goroutines, so the practical ceiling is LLM provider rate limits and host
 memory, not process count. One node is the design's degenerate case, not
 a lesser path: it holds every lease, and everything a fleet does works
 exactly the same way.

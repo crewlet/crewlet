@@ -154,7 +154,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 
 - The Tier A resources — the stream, the store file, the API socket — all up.
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
-- Structlog with `state=unconfigured` so the unconfigured posture is obvious in logs and on the dashboard.
+- A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.
 
 **What returns degraded responses:**
 

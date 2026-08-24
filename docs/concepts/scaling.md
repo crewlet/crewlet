@@ -7,7 +7,7 @@ exactly the same code down exactly the same paths, with the leases held by more
 than one process.
 
 So the standing advice is **scale up before you scale out**. Agent handlers are
-`asyncio` tasks, so a single engine's practical ceiling is LLM provider rate
+goroutines, so a single engine's practical ceiling is LLM provider rate
 limits and host memory, not process count. A fleet buys availability, traffic
 separation, and placement — not throughput. [Running a Fleet](../guides/fleet.md)
 is the operator guide; this page is the model underneath it.
@@ -138,7 +138,7 @@ no connected consumer and both reapers delete exactly that. See
 
 The seat-handover numbers are measured against **Apache Pulsar 4.2.4
 standalone** — the bundled `docker-compose.yml`'s own configuration — by
-`tests/test_queue/test_broker_behavior.py`, which fails the build if the broker
+`internal/queue/pulsar/conformance_test.go`, which fails the build if the broker
 stops behaving this way:
 
 | Measurement | Result |

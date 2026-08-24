@@ -140,7 +140,7 @@ The `routed_via` value appears in the lead's prompt under **Event Metadata**, so
 
 ### Lead-fallback prompt hint
 
-When a lead receives an event via `project_lead_fallback`, the [`JiraNotificationPrompt`](https://github.com/crewlet/crewlet/blob/main/src/crewlet/notifications/notification_prompts/jira.py) adds a `## Why You Received This` section that names the project, warns the lead that no one else is watching the issue, and lays out three explicit decisions:
+When a lead receives an event via `project_lead_fallback`, the Jira notification prompt adds a `## Why You Received This` section that names the project, warns the lead that no one else is watching the issue, and lays out three explicit decisions:
 
 - **Delegate** — use `lookup_colleague` to find the right teammate and resolve their Jira account ID, then set the assignee (future updates route to them, not back to the lead).
 - **Take it yourself** — assign the issue to yourself so the routing reflects reality.

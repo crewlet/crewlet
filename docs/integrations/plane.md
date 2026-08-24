@@ -182,7 +182,7 @@ Bursts on the same work item collapse into one digest turn via **inbox coalescin
 
 ### Notification prompts
 
-Plane webhooks use `PlaneNotificationPrompt` (`src/crewlet/notifications/notification_prompts/plane.py`), which dispatches on `routed_via` — *why* the recipient was woken:
+Plane webhooks use `PlaneNotificationPrompt` (`internal/plane/prompt.go`), which dispatches on `routed_via` — *why* the recipient was woken:
 
 | `routed_via` | Prompt behaviour |
 |---|---|

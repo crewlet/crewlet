@@ -324,7 +324,7 @@ movement rather than a fixed label:
 | Review | *is re-crewleting…* · *is double-checking…* · *is marking its own homework…* · … |
 
 The full pools are `PHASE_PHRASES` in
-`src/crewlet/notifications/typing_status.py`; replace any of them with
+`internal/notify/status.go`; replace any of them with
 your own wording via [`status_phrases`](#custom-status-phrases) below.
 
 Every line describes the **phase**, never a specific action. The pick is

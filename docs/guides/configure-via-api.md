@@ -737,7 +737,7 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 | Status | Error | Meaning |
 |--------|-------|---------|
 | `400` | `invalid_body` | Body isn't JSON / YAML, or wrong `Content-Type` |
-| `400` | `validation_error` | Pydantic rejected the merged config — `detail` carries the message |
+| `400` | `validation_error` | The merged config failed validation — `detail` carries the message |
 | `400` | `summary_required` | Full PUT without `X-Summary` header or body `_summary` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
