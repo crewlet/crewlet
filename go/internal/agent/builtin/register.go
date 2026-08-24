@@ -31,6 +31,12 @@ type Deps struct {
 	Diary      DiaryStore
 	Onboarding OnboardingStore
 
+	// ToolSkills is the operator-authored tool guidance. Nil omits
+	// load_tool_skill, which is what a company that has published none
+	// has — and omitting it also disarms the required-skill guard, since
+	// a guard with no unlock would refuse tools the model cannot free.
+	ToolSkills ToolSkills
+
 	// Sandbox launches a detached coding run. Nil omits run_sandbox, which
 	// is what a build with no providers.sandbox has — and omitting it is
 	// the point: a seat offered a code tool that cannot start a box would
@@ -69,6 +75,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
+		{&loadToolSkill{skills: deps.ToolSkills}, deps.ToolSkills != nil},
 	}
 
 	var names []string
@@ -100,7 +107,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 // docs/concepts/tool-capabilities.md.
 func annotationsFor(name string) tools.Annotations {
 	switch name {
-	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool:
+	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
+		LoadToolSkillTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing, which is what lets a phase retry one safely.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}

@@ -31,9 +31,34 @@ type Surface struct {
 	// tools refuse rather than guessing, which is the honest answer.
 	turn *turnctx.Turn
 
+	// guard is the required-skill gate, or nil where nothing is enforced.
+	// Set once by the runner after the surface is built — the guard needs
+	// the finished surface to know which skills it is gating, and the
+	// surface needs the guard to gate anything, so one of them has to be
+	// installed second.
+	guard Guard
+
 	mu     sync.Mutex
 	active []string
 	called []Call
+}
+
+// Guard decides whether a tool may be called yet.
+//
+// Consumer-defined and one method wide, so the tool layer knows nothing
+// about skills: it asks whether this call is allowed and reports whatever
+// reason comes back. Nil allows everything, which is the ordinary case.
+type Guard interface {
+	// Check reports why a call must be refused, or "" to allow it. The
+	// server is passed because a rule may be about everything one MCP
+	// server publishes rather than about one tool name.
+	Check(tool, server string) string
+}
+
+// WithGuard installs the required-skill gate and returns the surface.
+func (s *Surface) WithGuard(g Guard) *Surface {
+	s.guard = g
+	return s
 }
 
 // SeatCallable is a tool that needs to know which seat is calling it.
@@ -214,6 +239,18 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		}
 		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true})
 		return toolloop.ToolResult{Output: msg, Failed: true}, nil
+	}
+
+	if s.guard != nil {
+		server, _ := e.FromMCP()
+		if reason := s.guard.Check(call.Name, server); reason != "" {
+			// RECORDED AS A FAILED CALL, deliberately: the model sees the
+			// reason and can act on it, and the ledger shows an operator
+			// that the turn spent a round here rather than that the tool
+			// silently did nothing.
+			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true})
+			return toolloop.ToolResult{Output: reason, Failed: true}, nil
+		}
 	}
 
 	res, err := s.invoke(ctx, e.Tool, args)
