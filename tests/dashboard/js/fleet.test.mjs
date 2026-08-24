@@ -56,7 +56,7 @@ function makeRoot() {
  *
  * The `finally` is not tidiness. `mount` starts a 15 s poll, and node
  * will not exit while an interval is pending — so a test that threw
- * before its `destroy()` left the whole suite hanging until the pytest
+ * before its `destroy()` left the whole suite hanging until the Go
  * wrapper's timeout killed it, reporting a hang instead of the
  * assertion that actually failed.
  *

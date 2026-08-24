@@ -4,8 +4,8 @@
 // package.json, which is a deliberate property of the project — the API
 // serves the files as they are written. Pulling in a test runner would
 // undo that for the sake of `describe`/`it`, so tests here register with
-// `test()` and a pytest wrapper (tests/test_dashboard/test_dashboard_js.py)
-// runs each file under whatever `node` is on PATH.
+// `test()`, and a Go wrapper (internal/api/dashboardjs_test.go) runs each
+// file under whatever `node` is on PATH.
 
 const registered = [];
 
@@ -24,7 +24,7 @@ export function test(name, fn) {
  * clean run — the process still exited non-zero, so CI would catch it,
  * but the output pointed at nothing and the count was a lie.
  *
- * A caller may `await run()`; the pytest wrapper only reads the exit
+ * A caller may `await run()`; the wrapper only reads the exit
  * code and the summary, both of which are now written after the last
  * test has actually finished.
  */
