@@ -316,6 +316,19 @@ func runEngine(args []string, stderr io.Writer) error {
 	go reconciler.Run(ctx)
 
 	<-ctx.Done()
+
+	// HAND THE SIGNALS BACK before draining, so a SECOND interrupt kills
+	// the process. Until this runs, signal.NotifyContext is still the
+	// installed handler and has already cancelled its context, so every
+	// further SIGINT is swallowed — leaving an operator watching a drain
+	// they cannot abort from the terminal they started it in, with SIGKILL
+	// from somewhere else as the only way out.
+	//
+	// That escape hatch is what makes the unbounded drain below safe to
+	// offer: the bound belongs to whoever supervises the process, and for
+	// an operator at a terminal the second press IS their bound.
+	stop()
+
 	if surface != nil {
 		surface.stop(context.WithoutCancel(ctx), log)
 	}
@@ -327,8 +340,9 @@ func runEngine(args []string, stderr io.Writer) error {
 	// graceful.
 	//
 	// The bound belongs to whatever supervises the process: a container
-	// runtime's kill grace, an operator's second interrupt. Both already
-	// have one and can see things this process cannot.
+	// runtime's kill grace, or the operator's second interrupt that the
+	// stop() above just re-armed. Both already have one and can see
+	// things this process cannot.
 	log.Info("engine_draining")
 	e.Stop(context.WithoutCancel(ctx))
 	return nil
