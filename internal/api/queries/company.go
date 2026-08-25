@@ -32,25 +32,48 @@ const RecentRunsLimit = 50
 // first fire. The history is the dispatch ledger, which is the only thing that
 // knows what actually happened.
 func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
+	return map[string]any{
+		"schedules":   s.ConfiguredSchedules(),
+		"recent_runs": s.recentRuns(ctx),
+	}, nil
+}
+
+// ConfiguredSchedules is the schedule rows a company's org declares, with no
+// store read at all.
+//
+// Exported because the dashboard's handshake snapshot carries them too, and
+// the two must be ONE implementation: the screen renders its rows from the
+// snapshot slice and fetches only the dispatch ledger through the question
+// above, so a second derivation here would be a screen whose contents changed
+// depending on which of the two arrived last.
+//
+// The ledger half stays out. It is a store read, and the snapshot is built
+// without one — see stream.Service.Snapshot.
+func (s Sources) ConfiguredSchedules() []schedule.Row {
+	// The FUNC, not just its answer: a process with no company source at
+	// all is the state a node is in before its first revision activates,
+	// and every other config-derived surface guards it the same way.
+	if s.Company == nil {
+		return []schedule.Row{}
+	}
 	company := s.Company()
 	if company == nil {
-		return map[string]any{"schedules": []any{}, "recent_runs": []any{}}, nil
+		return []schedule.Row{}
 	}
 	organization, err := company.Organization()
 	if err != nil {
-		return nil, err
+		// A company that will not resolve into an org is one no node is
+		// running. Empty is the honest answer and the screen says so.
+		return []schedule.Row{}
 	}
 	rows := schedule.Describe(organization, schedule.DescribeOptions{
 		DefaultTimezone: company.Scheduling.DefaultTimezone,
 		Now:             s.clock(),
 	})
 	if rows == nil {
-		rows = []schedule.Row{}
+		return []schedule.Row{}
 	}
-	return map[string]any{
-		"schedules":   rows,
-		"recent_runs": s.recentRuns(ctx),
-	}, nil
+	return rows
 }
 
 // recentRuns is the dispatch history, or an empty list.
@@ -420,6 +443,31 @@ const (
 // Both halves, because they answer different questions. The diary is what this
 // seat chose to remember; the episodes are what it did, summarised. A page
 // showing one without the other reads as a seat with half a history.
+// agentIDOf resolves a seat handle to the derived agent id the diary is keyed
+// by, passing anything else through — a caller that already holds an id is
+// unaffected.
+func (s Sources) agentIDOf(handle string) string {
+	if handle == "" || s.Company == nil {
+		return handle
+	}
+	company := s.Company()
+	if company == nil {
+		return handle
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		return handle
+	}
+	role := organization.AgentSeatByHandle(handle)
+	if role == nil {
+		return handle
+	}
+	if id, ok := organization.AgentIDFor(role); ok {
+		return id.String()
+	}
+	return handle
+}
+
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	id := p.String("id")
 	if id == "" {
@@ -428,7 +476,13 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	out := map[string]any{"id": id, "diary": []any{}, "episodes": []any{}}
 	now := s.clock()
 	if s.Diary != nil {
-		entries, err := s.Diary.Recent(ctx, id, now, MemoryPageLimit)
+		// RESOLVED, not passed through. The diary is keyed by the derived
+		// AGENT ID and the dashboard's one identifier for a seat is its
+		// handle, so handing the handle straight to the diary asked it
+		// about a seat it has no rows for — and answered an empty memory
+		// rather than the seat's, which reads identically to a seat that
+		// has not learned anything yet.
+		entries, err := s.Diary.Recent(ctx, s.agentIDOf(id), now, MemoryPageLimit)
 		if err != nil {
 			return nil, err
 		}

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"sort"
 	"strconv"
@@ -57,6 +58,22 @@ func FromQuery(q url.Values) Params {
 			values[key] = list[0]
 		}
 	}
+	return Params{values: values}
+}
+
+// With returns a copy carrying one more parameter.
+//
+// The PATH WINS over the query string, which is what a caller means: in
+// GET /agents/{id} the id IS the route, so /agents/abc?id=xyz answers about
+// abc. Silently answering about xyz would make a stray query parameter
+// redirect a request to a different seat's memory.
+//
+// A copy rather than a mutation: Params is passed by value and a route that
+// wrote into the map it was handed would be editing the caller's request.
+func (p Params) With(key, value string) Params {
+	values := make(map[string]any, len(p.values)+1)
+	maps.Copy(values, p.values)
+	values[key] = value
 	return Params{values: values}
 }
 

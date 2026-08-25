@@ -206,9 +206,18 @@ func Register(r *Registry, s Sources) {
 
 // agent answers one seat's live state.
 func (s Sources) agent(_ context.Context, p Params) (any, error) {
-	role := p.String("role")
+	// EITHER NAME, and the seat may be addressed by handle or by role.
+	//
+	// The dashboard sends `id`, carrying the handle — `query("agent", {id})`
+	// from the seat page, and /agents/{id} from the REST table — while the
+	// projection keys its overlays by ROLE NAME, which is what the engine's
+	// `agents` push carries. Reading only `role` meant every seat page
+	// answered 400 and rendered its error state; the client is the
+	// compatibility reference for a frame's shape (d-502), so the answer
+	// takes what the client sends and resolves it.
+	role := s.roleOf(firstOf(p.String("id"), p.String("role")))
 	if role == "" {
-		return nil, fmt.Errorf("%w: agent needs a role", ErrBadParams)
+		return nil, fmt.Errorf("%w: agent needs a handle or a role", ErrBadParams)
 	}
 	overlay := s.State.AgentOverlay(role)
 	if overlay == nil {
@@ -218,6 +227,41 @@ func (s Sources) agent(_ context.Context, p Params) (any, error) {
 		return map[string]any{"role": role, "live": nil}, nil
 	}
 	return map[string]any{"role": role, "live": overlay}, nil
+}
+
+// firstOf returns the first non-empty value.
+func firstOf(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// roleOf resolves a seat identifier to the ROLE NAME the projection keys on.
+//
+// A handle resolves through the org; anything else is passed through as a role
+// name, so a caller that already had one is unaffected. An unknown identifier
+// comes back unchanged rather than empty: the answer for a seat the projection
+// has never seen is a live-state-free row, not an error, and a company that
+// renamed a role should not turn a bookmarked page into a failure.
+func (s Sources) roleOf(id string) string {
+	if id == "" || s.Company == nil {
+		return id
+	}
+	company := s.Company()
+	if company == nil {
+		return id
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		return id
+	}
+	if role := organization.AgentSeatByHandle(id); role != nil {
+		return role.Name
+	}
+	return id
 }
 
 // tokens answers the live spend window.

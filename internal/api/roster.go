@@ -76,11 +76,20 @@ func roster(company func() *config.Company, runtime NodeRuntime) []map[string]an
 		}
 		handle := role.Handle()
 		row := map[string]any{
-			// id is the DERIVED agent id, the same one every node
-			// computes, so a row links to the same seat page everywhere.
-			"id":     id.String(),
-			"role":   role.Name,
-			"handle": handle,
+			// THE HANDLE IS THE CLIENT'S ONE IDENTIFIER FOR A SEAT. Every
+			// screen that addresses one sends `row.id`, and both answers
+			// behind it resolve from a handle: the diary is keyed by the
+			// agent id, which is DERIVED from the handle, and the
+			// episodes by the handle itself. Putting the derived uuid
+			// here instead would give the seat page an identifier that
+			// links to the right page and answers nothing on it.
+			//
+			// The agent id rides along under its own name for the callers
+			// that genuinely need it — a budget scope is keyed by it.
+			"id":       handle,
+			"agent_id": id.String(),
+			"role":     role.Name,
+			"handle":   handle,
 		}
 		// SET ONLY WHERE IT IS KNOWN. The client already reads a missing
 		// state as offline (state.js, effectiveAgentState), so a seat

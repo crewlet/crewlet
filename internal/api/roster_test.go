@@ -223,3 +223,48 @@ func TestANodeWithNoCompanyAnswersEmptySurfaces(t *testing.T) {
 		t.Errorf("agents = %v with no company", got)
 	}
 }
+
+// THE CONFIGURED SCHEDULES ARE ON THE SNAPSHOT.
+//
+// The schedules screen renders its table from this slice and fetches only the
+// dispatch ledger itself. The slice was never sent, and the client reads a
+// missing one as "not here yet" — which was permanently true, so the screen
+// sat on five skeleton rows for ever, with nothing in the console or the logs
+// because nothing had failed.
+//
+// The CONFIGURED half only: the ledger is a store read and the snapshot is
+// built without one.
+func TestTheSnapshotCarriesTheConfiguredSchedules(t *testing.T) {
+	t.Parallel()
+	a := rosterApp(t, nil)
+
+	snap := a.Stream().Snapshot()
+	if _, present := snap["schedules"]; !present {
+		t.Fatal("the snapshot carries no schedules slice, so the screen " +
+			"cannot tell 'none configured' from 'not loaded yet'")
+	}
+	// This company declares none, and an empty ARRAY is the answer that
+	// says so — null would leave the screen on its skeleton.
+	if got := rows(t, snap["schedules"]); got == nil {
+		t.Error("schedules = null; the client reads that as still loading")
+	}
+}
+
+// AND THE PUSH KEEPS THE LEDGER THE SCREEN ALREADY FETCHED.
+//
+// applySchedules assigns each half only when present, so a re-send that
+// carried an empty recent_runs would blank the history a reader was looking
+// at every time an unrelated config field changed.
+func TestTheSchedulesPushCarriesOnlyTheConfiguredHalf(t *testing.T) {
+	t.Parallel()
+	a := rosterApp(t, nil)
+
+	push := a.Stream().Schedules()
+	if _, present := push["schedules"]; !present {
+		t.Error("the push carries no configured rows")
+	}
+	if _, present := push["recent_runs"]; present {
+		t.Error("the push carries recent_runs; a re-send would blank the " +
+			"ledger the screen fetched for itself")
+	}
+}

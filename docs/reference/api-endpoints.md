@@ -41,8 +41,8 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
-| `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
-| `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
+| `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
+| `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500; keyset-paged, see below) |
@@ -199,6 +199,14 @@ The REST endpoints below remain a public read API, and
 upgrade to a WebSocket (corporate proxies). They are no longer part of
 the dashboard's normal operation.
 
+Every named read route is an **adapter**, never a second implementation: it
+resolves its path values and hands them to the same answer the socket's query
+channel reaches. The generic form `GET /query/{what}?a=b` reaches the same
+answers by name and is what the socket's own frames map onto, so the two can
+never drift. A question whose source this node lacks — an event log, a
+schedule ledger — is left *unregistered* rather than answered empty, so its
+route replies `404` with a JSON error code rather than a bare mux miss.
+
 ### What the handshake snapshot carries
 
 One frame, `kind: "snapshot"`, with every section a screen needs on first
@@ -228,12 +236,16 @@ could learn from, and an overlay merge cannot express a row going away.
 ### Live-state projection (`api/stream` + `LiveState`)
 
 The API process maintains an **in-memory projection** of every agent's
-current state (`crewlet.api.live_state.LiveState`, owned by
-`crewlet.api.streaming.StreamService`).  It is fed by the same event
-stream the WebSocket fan-out consumes, hydrated once from the event
-store at startup, and read in O(1) thereafter — so `/agents`,
-`/stream/snapshot`, and the WebSocket handshake never re-derive
-state from a multi-query event scan on a request.
+current state (`internal/api/livestate.LiveState`, owned by
+`internal/api/stream.Service`).  It is fed by the same event stream the
+WebSocket fan-out consumes and read in O(1) thereafter — so `/agents`,
+`/stream/snapshot`, and the WebSocket handshake never re-derive state from a
+multi-query event scan on a request.
+
+What the projection holds is what has **happened**: a phase, an in-flight
+call, a spend. Who the seats *are*, how they are organised, what tools they
+can reach and what they are scheduled to do all come from the company
+document instead — see [the handshake snapshot](#what-the-handshake-snapshot-carries).
 
 What the projection computes, it also **pushes**. A dashboard mirrors
 it rather than re-deriving it: before this, every tab ran its own copy

@@ -136,6 +136,10 @@ func New(opts Options) *App {
 		Roster: func() []map[string]any { return roster(opts.Sources.Company, opts.Runtime) },
 		Org:    func() map[string]any { return orgTree(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
+		// The CONFIGURED rows only. The dispatch ledger is a store read
+		// and the snapshot makes none; the screen fetches that half
+		// itself through the `schedules` question.
+		Schedules: func() any { return opts.Sources.ConfiguredSchedules() },
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
@@ -177,6 +181,9 @@ func New(opts Options) *App {
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
 	mux.Handle("GET /query/{what}", http.HandlerFunc(a.serveQuery))
+	// The NAMED read routes — the public REST API. Adapters over the same
+	// registry the generic form above reaches; see rest.go.
+	a.mountReads(mux)
 	// The one WRITE outside /config and the webhook edge. A POST, so the
 	// anonymous-read posture never opens it: clearing a company's spend
 	// ceiling is not a read, whatever a laptop deployment allows.
@@ -351,10 +358,19 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	// filter being honoured on one transport and ignored on the other.
 	data, err := a.queries.AnswerWith(r.Context(), what,
 		queries.FromQuery(r.URL.Query()), operatorID)
-	if err == nil {
-		writeJSON(w, http.StatusOK, data)
+	if err != nil {
+		writeQueryError(w, what, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// writeQueryError maps one failed question onto a status.
+//
+// SHARED by the generic /query/{what} form and every named route, because a
+// caller must not learn that a seat does not exist from one path and that the
+// server broke from the other.
+func writeQueryError(w http.ResponseWriter, what string, err error) {
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
@@ -364,7 +380,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeQueryFailed})
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
-		// database path or a driver's own message, and this route is
+		// database path or a driver's own message, and these routes are
 		// reachable under the anonymous read posture.
 		log.Warn("api_query_failed", "what", what, "error", err)
 		writeJSON(w, http.StatusInternalServerError,

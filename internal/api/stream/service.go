@@ -63,9 +63,10 @@ type Service struct {
 	handles HandleFunc
 
 	// roster, org and tools are the config-derived surfaces. See Options.
-	roster func() []map[string]any
-	org    func() map[string]any
-	tools  func() []map[string]any
+	roster    func() []map[string]any
+	org       func() map[string]any
+	tools     func() []map[string]any
+	schedules func() any
 
 	now      func() time.Time
 	interval time.Duration
@@ -107,9 +108,10 @@ type Options struct {
 	//
 	// Nil is an empty surface rather than a fault: a standalone API has no
 	// engine to ask for tools, and that screen says so.
-	Roster func() []map[string]any
-	Org    func() map[string]any
-	Tools  func() []map[string]any
+	Roster    func() []map[string]any
+	Org       func() map[string]any
+	Tools     func() []map[string]any
+	Schedules func() any
 
 	// Now is injectable so a test can pin the timestamps envelopes carry.
 	Now func() time.Time
@@ -127,15 +129,16 @@ type Options struct {
 // NewService builds the fan-out over a projection.
 func NewService(state *livestate.LiveState, opts Options) *Service {
 	s := &Service{
-		hub:      NewHub(),
-		state:    state,
-		health:   opts.Health,
-		handles:  opts.Handles,
-		roster:   opts.Roster,
-		org:      opts.Org,
-		tools:    opts.Tools,
-		now:      opts.Now,
-		interval: opts.HealthInterval,
+		hub:       NewHub(),
+		state:     state,
+		health:    opts.Health,
+		handles:   opts.Handles,
+		roster:    opts.Roster,
+		org:       opts.Org,
+		tools:     opts.Tools,
+		schedules: opts.Schedules,
+		now:       opts.Now,
+		interval:  opts.HealthInterval,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -207,9 +210,15 @@ func (s *Service) Snapshot() map[string]any {
 		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
 		// MergeAgents walks what it is GIVEN, so passing nil here — which
 		// it did — produced an empty list whatever the projection held.
-		"agents":    s.state.MergeAgents(s.currentRoster()),
-		"org":       s.currentOrg(),
-		"tools":     s.currentTools(),
+		"agents": s.state.MergeAgents(s.currentRoster()),
+		"org":    s.currentOrg(),
+		"tools":  s.currentTools(),
+		// THE CONFIGURED ROWS, not the dispatch ledger. The screen renders
+		// its table from this slice and fetches the ledger itself, so
+		// without it the table stayed on its skeleton for ever — the
+		// client reads null as "not here yet", which was permanently
+		// true.
+		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
 		"sandboxes": s.state.ActiveSandboxes(),
 		"tokens":    s.TokenRollup(),
@@ -231,6 +240,16 @@ func (s *Service) Org() map[string]any { return s.currentOrg() }
 // apply too — a revision that adds an MCP server adds its tools.
 func (s *Service) Tools() []map[string]any { return s.currentTools() }
 
+// Schedules is the configured rows as the `schedules` push carries them.
+//
+// Wrapped in the push's own object shape rather than sent bare: the client
+// reads `schedules` and `recent_runs` off it and assigns each only when
+// present, so omitting the ledger here LEAVES what the screen already
+// fetched rather than blanking it.
+func (s *Service) Schedules() map[string]any {
+	return map[string]any{"schedules": s.currentSchedules()}
+}
+
 func (s *Service) currentRoster() []map[string]any {
 	if s.roster == nil {
 		return nil
@@ -243,6 +262,13 @@ func (s *Service) currentOrg() map[string]any {
 		return map[string]any{}
 	}
 	return s.org()
+}
+
+func (s *Service) currentSchedules() any {
+	if s.schedules == nil {
+		return []any{}
+	}
+	return s.schedules()
 }
 
 func (s *Service) currentTools() []map[string]any {

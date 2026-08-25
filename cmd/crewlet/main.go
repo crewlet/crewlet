@@ -583,6 +583,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		app.Stream().Broadcast("seats", app.Stream().Roster())
 		app.Stream().Broadcast("org", app.Stream().Org())
 		app.Stream().Broadcast("tools", app.Stream().Tools())
+		app.Stream().Broadcast("schedules", app.Stream().Schedules())
 	})
 
 	return &httpSurface{app: app, server: server, projector: projector}, nil
