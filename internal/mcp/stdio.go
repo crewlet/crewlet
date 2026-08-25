@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
 // childProcess is the stdio half of a client: the process and the pipe its
@@ -41,7 +43,7 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 	cmd := exec.Command(spec.Command, spec.Args...) //nolint:gosec // the command IS the operator's config
 	cmd.Env = mergedEnv(spec, log)
 	cmd.Stderr = relay.writer()
-	setProcessGroup(cmd)
+	procgroup.Set(cmd)
 
 	return &sdk.CommandTransport{
 		Command:           cmd,

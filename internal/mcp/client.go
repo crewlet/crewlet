@@ -11,6 +11,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -388,7 +389,7 @@ func (c *client) reapChild(cleanClose bool) {
 	// Worth an operator event: this server left something behind, which is
 	// usually a package runner's grandchild and always worth knowing about.
 	c.log.Info("server_tree_reaped", "server", c.name, "pgid", ch.pgid, "clean_close", cleanClose)
-	if err := killProcessGroup(ch.pgid); err != nil {
+	if err := procgroup.Kill(ch.pgid); err != nil {
 		c.log.Warn("server_group_kill_failed", "server", c.name, "error", err.Error())
 	}
 	if ch.relay.drained(stderrReapGrace) {
