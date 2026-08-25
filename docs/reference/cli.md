@@ -32,6 +32,7 @@ subcommand below is served by it.
 | `crewlet plane import <company.yaml> <directory>` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) — `trigger:` ⇒ skill in the Tool Skills project, otherwise ⇒ doc in its parent-directory project. Idempotent by `external_id`; `-prune` removes orphaned skill pages. |
 | `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
+| `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). A re-run leaves a working token alone; `-rotate` mints fresh ones. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits, a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
@@ -536,3 +537,32 @@ read as finished. A run that changed nothing prints no follow-up.
 An account this run created is rolled back by revoking every token on it — nothing else has ever minted there. On an account that already existed, only the token this run minted is revoked: sweeping it would take an administrator's own token with no way to tell that it had. Both go through a detached context, because the failure is often the cancellation itself.
 
 See [GitLab Integration — Provisioning](../integrations/gitlab.md#provisioning) for the permission matrix and the full walkthrough.
+
+## `crewlet jira provision`
+
+```
+crewlet jira provision <company.yaml> [-secret-store | -env-file PATH | -print]
+                                      [-public-url URL]
+                                      [-recreate-webhook] [-dry-run]
+```
+
+The Atlassian tracker's reconcile, and it is a different shape from its peers: **Jira issues no credentials on a provisioner's behalf.** A Cloud API token is created by the person it belongs to at Atlassian's own account site, and a Data Center personal access token can only be minted for the calling user — so a command that offered to provision accounts would be printing instructions dressed as actions. What it does instead is the three things Jira genuinely allows, each answering a question that is otherwise invisible until an issue reaches nobody:
+
+1. **Which account each seat's credential authenticates as.** It calls `/myself` with every seat's own token, read from `mcp_env.atlassian` or `mcp_env.jira`, and reports the seats that resolved and the seats that did not. A seat with no account id receives **no Jira events at all** — the routing gate drops every target that names it — and nothing else in the engine says so. Human seats are never probed: they hold no tool credential and are reached by `contact.atlassian_account_id` or by email.
+2. **Whether every project the org chart names exists**, and whether Jira's own project lead agrees with the org chart's. A key with a typo in it is a routing gap that produces no error anywhere; a disagreement about the lead is reported and never failed, because a human manager owning the project while an agent triages it is an ordinary arrangement.
+3. **The inbound webhook**, on Data Center only, at `<public-url>/webhooks/jira` — subscribed to exactly the events the parser routes, delivering the whole body, signed with an HMAC secret. On **Cloud** the step is skipped with a note rather than attempted: a dynamic webhook there belongs to an app, so the endpoint refuses an API token however privileged it is, and reporting that 403 would send an operator to rotate a credential that is fine. Cloud events arrive through the [Forge app](../integrations/jira.md#jira-cloud--forge-app) instead.
+
+**A working webhook secret is never replaced.** If `integrations.jira.webhook_secret` already resolves, that value is registered as-is. Minting on every run would be an outage: the engine holds the *old* secret, so the instance would start signing every delivery with a key nothing can verify. A secret that resolves to nothing is minted into the `${VAR}` the config points at and recorded in the sink you chose; `-recreate-webhook` forces a rotation, which invalidates the secret every other deployment of this company holds.
+
+| Flag | Description |
+|------|-------------|
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
+| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. Omit to skip registration — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
+| `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. |
+| `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
+
+A hook somebody else registered is reported and never touched: an instance may carry integrations that are none of this run's business, and taking over the first one found by name would break one.
+
+The run refuses outright when the org credential in `integrations.jira.token` is rejected — nothing else it reported would be trustworthy.
+
+See [Jira Integration — Provisioning](../integrations/jira.md#provisioning) for the full walkthrough.

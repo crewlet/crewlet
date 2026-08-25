@@ -16,8 +16,9 @@ Organization
     ├── name, type, purpose, lead, goals, knowledge_refs
     ├── channel: str                       (team channel on the company's chat
     │                                       surface, inherited by children)
-    ├── jira_project: str                  (REFUSED in this build — integrations.jira is
-    │                                       not served, so nothing consults this identity)
+    ├── jira_project: str                  (integrations.jira.project — the unit's Jira
+    │                                       project identity: lead-fallback webhook
+    │                                       routing + the project the team files under)
     ├── confluence_space: str              (REFUSED in this build — integrations.confluence
     │                                       is not served, so nothing consults this
     │                                       identity)
@@ -48,9 +49,9 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                                      GitHub MCP. Tool creds only; the
 │                                      project/space identity is the
 │                                      integrations block below)
-├── jira_project: str  (REFUSED in this build — integrations.jira is not
-│                       served, so nothing consults this identity; see
-│                       [Jira](../integrations/jira.md))
+├── jira_project: str  (root-level roles — integrations.jira.project;
+│                       the role's Jira project identity: lead-fallback
+│                       webhook routing + write home, NOT an MCP credential)
 ├── confluence_space: str (REFUSED in this build — integrations.confluence
 │                          is not served, so nothing consults this identity;
 │                          see [Confluence](../integrations/confluence.md))
@@ -77,7 +78,7 @@ Roles can live in two places:
 - **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.plane.project`](../integrations/plane.md#project-identity) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
 - **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.plane.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.PlaneProjects` only.
 
-> The `integrations.jira` and `integrations.confluence` identities, on a unit or a role, are **refused** by this build — no parser routes a delivery from either and no searcher reads a Confluence space, so the identity would be recorded and never consulted. `knowledge.confluence_spaces` is refused for the same reason. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
+> A unit's or a role's `integrations.jira.project` and `integrations.plane.project` are both consulted: each tracker routes an item that names nobody to the lead of the unit that owns the project. The `integrations.confluence` identity is **refused** by this build — no searcher reads a Confluence space, so the identity would be recorded and never consulted, and `knowledge.confluence_spaces` is refused for the same reason. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
 ---
 

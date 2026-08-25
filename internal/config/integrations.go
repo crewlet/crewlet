@@ -22,7 +22,7 @@ import (
 // integration off. An empty block is not the same thing — `slack: {}` is
 // how Slack is enabled with nothing overridden.
 type Integrations struct {
-	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Jira delivery. The tracker this build serves is integrations.plane."`
+	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
 	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser. The knowledge base this build serves is integrations.plane."`
 	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Slack delivery. The chat surface this build serves is integrations.mattermost."`
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
@@ -33,7 +33,7 @@ type Integrations struct {
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
 	// the endpoint rejects every request without it.
-	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: the Forge route carries Jira and Confluence Cloud, and neither is wired."`
+	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" desc:"Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud."`
 }
 
 func (i *Integrations) validate(path string) error {
@@ -45,6 +45,9 @@ func (i *Integrations) validate(path string) error {
 	// either way. See [unservedIntegrations].
 	if refused := i.refuseUnserved(&p, path); refused {
 		return p.err()
+	}
+	if i.Jira != nil {
+		p.wrap(i.Jira.validate(at(path, "jira")))
 	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
@@ -61,11 +64,11 @@ func (i *Integrations) validate(path string) error {
 // The integrations this build VALIDATES and does not SERVE, with what fills
 // the same role instead.
 //
-// The engine wires exactly three vendors — Mattermost for chat, Plane for the
-// tracker and the knowledge base, GitLab for the code host
-// (decisions/701). The other four have config models, webhook routes
-// and generated schema, and no parser, no transport and no searcher behind
-// them: startNotifications builds its parser and prompt lists from those three
+// The engine wires Mattermost for chat, Plane and Jira for the tracker, and
+// GitLab for the code host (decisions/701, decisions/703). The
+// remaining three have config models, webhook routes and generated schema,
+// and no parser, no transport and no searcher behind them:
+// startNotifications builds its parser and prompt lists from the served
 // blocks alone.
 //
 // So a company naming one got a block that validated, appeared in the
@@ -81,15 +84,13 @@ func (i *Integrations) validate(path string) error {
 var unservedIntegrations = []struct {
 	field string
 	// active reports whether the block is switched on, in that block's own
-	// terms: three of the four are on by their mere presence, and GitHub
+	// terms: two of the three are on by their mere presence, and GitHub
 	// carries an Enabled flag.
 	active func(*Integrations) bool
 	// instead names the role and what serves it, because an error a person
 	// reads has to say what to do about it.
 	instead string
 }{
-	{"jira", func(i *Integrations) bool { return i.Jira != nil },
-		"the tracker this build serves is Plane (integrations.plane)"},
 	{"confluence", func(i *Integrations) bool { return i.Confluence != nil },
 		"the knowledge base this build serves is Plane (integrations.plane)"},
 	{"slack", func(i *Integrations) bool { return i.Slack != nil },
@@ -110,18 +111,6 @@ func (i *Integrations) refuseUnserved(p *problems, path string) bool {
 					"be verified, stored, and then reach nobody — %s",
 				entry.instead)
 		}
-	}
-	// forge_app_id is the Atlassian CLOUD delivery path for Jira and
-	// Confluence and has no other consumer, so it is inert for exactly the
-	// same reason. Reported only when neither of those was already
-	// reported, so one config does not collect three errors saying one
-	// thing.
-	if i.ForgeAppID != "" && !unserved {
-		p.add(at(path, "forge_app_id"), ErrUnimplemented,
-			"the Forge route carries Jira and Confluence Cloud, and neither "+
-				"is wired in this build, so nothing would read a delivery it "+
-				"accepted")
-		return true
 	}
 	return unserved
 }
@@ -147,6 +136,12 @@ type Jira struct {
 	// Token is the admin account's API token or PAT.
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Admin API token or PAT; ${VAR} supported."`
 
+	// SiteURL is the human-readable base for shareable links, needed only
+	// with a cloud id — the API gateway URL is not something to hand a
+	// person, and a link built from it looks right and opens nothing.
+	// With a direct URL this defaults to it.
+	SiteURL string `yaml:"site_url,omitempty" json:"site_url,omitempty" desc:"Human-readable base for shareable links; needed with cloud_id."`
+
 	// Email switches authentication to Basic base64(email:token), which is
 	// what Cloud requires. Omitted uses a bearer token, which is what a
 	// service account and a Data Center PAT want.
@@ -165,6 +160,67 @@ func (j *Jira) BaseURL() string {
 		return atlassianJiraGateway + "/" + j.CloudID
 	}
 	return j.URL
+}
+
+// ShareableBaseURL is the base for links handed to a person.
+//
+// With a cloud id and no site url there is NONE, and the empty answer is the
+// honest one: the API gateway is not a place a browser can go, so a link
+// built from it looks right and opens nothing. A prompt omits the link
+// rather than printing a dead one.
+func (j *Jira) ShareableBaseURL() string {
+	if j.SiteURL != "" {
+		return j.SiteURL
+	}
+	return j.URL
+}
+
+// validate checks the org account.
+//
+// The one refusal that matters is the ADDRESS. url and cloud_id are two ways
+// to say where the instance is, and giving both is an ambiguity the engine
+// would resolve silently — BaseURL prefers the gateway — so a company that
+// moved from Data Center to Cloud and left the old url behind would keep
+// looking correct while every read went to the new place and every link to
+// the old one.
+func (j *Jira) validate(path string) error {
+	var probs problems
+	url, cloud := strings.TrimSpace(j.URL), strings.TrimSpace(j.CloudID)
+	switch {
+	case url == "" && cloud == "":
+		probs.add(path, ErrMissing,
+			"give url (a Data Center instance or a Cloud site) or cloud_id "+
+				"(an Atlassian Cloud id) — without one there is nowhere to read "+
+				"an issue's watchers from")
+	case url != "" && cloud != "":
+		probs.add(path, ErrConflict,
+			"url (%q) and cloud_id (%q) are two ways to name one instance; "+
+				"give one. The engine reads through the cloud gateway when both "+
+				"are set, so the url would be used for links only", j.URL, j.CloudID)
+	case url != "" && !hasHTTPScheme(j.URL):
+		probs.add(at(path, "url"), ErrUnknownValue,
+			"%q must start with http:// or https://", j.URL)
+	}
+	if site := strings.TrimSpace(j.SiteURL); site != "" && !hasHTTPScheme(j.SiteURL) {
+		probs.add(at(path, "site_url"), ErrUnknownValue,
+			"%q must start with http:// or https://", j.SiteURL)
+	}
+	if strings.TrimSpace(j.Token) == "" {
+		probs.add(at(path, "token"), ErrMissing,
+			"required — the org account is what reads an issue's watchers, "+
+				"which is the one routing input a Jira webhook never carries")
+	}
+	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" {
+		// CLOUD IS EXEMPT: its events arrive through the Forge app on
+		// /webhooks/forge, verified by the app's invocation token, and
+		// there is no HMAC secret in that path at all. Requiring one
+		// would refuse the correct Cloud config.
+		probs.add(at(path, "webhook_secret"), ErrMissing,
+			"required for a Data Center instance — the /webhooks/jira route "+
+				"has nothing to verify a delivery with otherwise, and answers "+
+				"503 to every one")
+	}
+	return probs.err()
 }
 
 // Confluence is the org-level Confluence admin account.

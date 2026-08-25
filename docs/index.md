@@ -61,7 +61,7 @@ How the engine works, one subsystem per page:
 Connecting the external surfaces agents work on:
 
 - **[Plane](integrations/plane.md)** — Self-hosted tracker **and** knowledge backend in one product: webhook routing, per-role MCP tools, knowledge search, `crewlet plane import`, tool-skill sync, skill promotion, `crewlet plane provision`, and a complete local docker-compose loop
-- **[Jira](integrations/jira.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
+- **[Jira](integrations/jira.md)** — Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
 - **[Confluence](integrations/confluence.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring
 - **[GitHub](integrations/github.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead

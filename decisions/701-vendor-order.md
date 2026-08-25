@@ -63,10 +63,13 @@ they are simply not what the driving deployment runs, which is the tie-breaker.
 
 ## What this does not decide
 
-Whether a SaaS vendor ships in v1 at all. That was a product call and stayed
-open until [`d-703`](703-unserved-integrations.md) answered it: they do not,
-and config refuses their blocks by name rather than accepting them and routing
-nothing.
+Whether a SaaS vendor ships in v1 at all. That was a product call, and
+[`d-703`](703-unserved-integrations.md) carries its history: first they did
+not, and config refused their blocks by name rather than accepting them and
+routing nothing; then the project owner reversed it, and they ship one at a
+time. What this decision settled — which vendor the engine is BUILT AROUND —
+is unaffected either way. Plane is the tracker the knowledge base and the
+skill sync are built on; Jira is a tracker the engine also routes.
 
 It was never on the critical path, because a vendor added after the spine is a
 parser, a transport and a prompt, which is the shape the vendor layer is built

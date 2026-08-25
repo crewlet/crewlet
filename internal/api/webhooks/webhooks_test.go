@@ -200,6 +200,13 @@ func githubDelivery(body []byte, secret string) map[string]string {
 	}
 }
 
+func jiraDelivery(body []byte, secret string) map[string]string {
+	return map[string]string{
+		"X-Hub-Signature":                "sha256=" + hexMAC(secret, body),
+		"X-Atlassian-Webhook-Identifier": "jira-delivery-1",
+	}
+}
+
 func planeDelivery(body []byte, secret string) map[string]string {
 	return map[string]string{
 		"X-Plane-Signature": hexMAC(secret, body),
@@ -571,6 +578,35 @@ func TestARedeliveryDoesNotWakeTheSeatTwice(t *testing.T) {
 	second := e.post(t, "/webhooks/github", issueBody, headers)
 	if second.Code != http.StatusOK {
 		t.Fatalf("the retry got %d, want a 200 so the provider stops retrying", second.Code)
+	}
+	if !strings.Contains(second.Body.String(), "duplicate") {
+		t.Errorf("the retry's answer does not say it was a duplicate: %s", second.Body)
+	}
+	if n := e.published.count(); n != 1 {
+		t.Errorf("%d events published for one delivery and its retry, want 1", n)
+	}
+}
+
+// THE TRACKER'S REDELIVERIES ARE CLAIMED TOO.
+//
+// Jira states a per-delivery identifier on both deployments and repeats it on
+// its own retries, so a delivery it re-sends after a slow response — or one an
+// operator replays from the admin page — must not wake the seat a second
+// time. The route once read no key at all, which made every retry a fresh
+// wake and the seat answer again.
+func TestATrackerRedeliveryDoesNotWakeTheSeatTwice(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	body := []byte(`{"webhookEvent":"jira:issue_created",` +
+		`"issue":{"key":"ENG-42","fields":{"summary":"Fix the login redirect"}}}`)
+	headers := jiraDelivery(body, "jira-secret")
+
+	if first := e.post(t, "/webhooks/jira", body, headers); first.Code != http.StatusOK {
+		t.Fatalf("first delivery got %d", first.Code)
+	}
+	second := e.post(t, "/webhooks/jira", body, headers)
+	if second.Code != http.StatusOK {
+		t.Fatalf("the retry got %d, want a 200 so Jira stops retrying", second.Code)
 	}
 	if !strings.Contains(second.Body.String(), "duplicate") {
 		t.Errorf("the retry's answer does not say it was a duplicate: %s", second.Body)

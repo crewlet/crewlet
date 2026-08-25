@@ -59,7 +59,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
-| `POST` | `/webhooks/jira` | Receive Jira webhooks — **inert**: the config block is refused, so 503 |
+| `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack webhooks (per-agent) — **inert**: the config block is refused, so 503 |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — **inert**: the config block is refused, so 503 |
@@ -1050,11 +1050,11 @@ Notes:
 
 ### `/webhooks/jira`
 
-Receives Jira webhook payloads (issue created, updated, commented). Verifies HMAC-SHA256 signature if `webhook_secret` is configured. Publishes parsed events to `crewlet.notifications.inbound`. **This build refuses the config block this route verifies against**, so it answers 503 to everything — see the integration page. It comes alive in the same change that ships the vendor's parser.
+Receives Jira webhook payloads (issue created, updated, commented). Verifies HMAC-SHA256 signature if `webhook_secret` is configured. Publishes parsed events to `crewlet.notifications.inbound`. Jira Cloud rides this route and is served end to end; Confluence Cloud is relayed and stored, and reaches nobody until this build ships a Confluence parser — see the integration pages.
 
 ### `/webhooks/slack/{handle}`
 
-Receives Slack Events API payloads for a specific agent (identified by handle). Verifies the signing secret for that agent's Slack app. Publishes to `crewlet.notifications.inbound`. Slack's `url_verification` challenge is answered unconditionally (no engine or company config needed), so a freshly provisioned app's Request URL verifies even before the engine is configured. **This build refuses the config block this route verifies against**, so it answers 503 to everything — see the integration page. It comes alive in the same change that ships the vendor's parser.
+Receives Slack Events API payloads for a specific agent (identified by handle). Verifies the signing secret for that agent's Slack app. Publishes to `crewlet.notifications.inbound`. Slack's `url_verification` challenge is answered unconditionally (no engine or company config needed), so a freshly provisioned app's Request URL verifies even before the engine is configured. Jira Cloud rides this route and is served end to end; Confluence Cloud is relayed and stored, and reaches nobody until this build ships a Confluence parser — see the integration pages.
 
 ### `GET /webhooks/slack-oauth`
 
@@ -1062,7 +1062,7 @@ The OAuth install landing page for [`crewlet slack provision`](../integrations/s
 
 ### `/webhooks/github`
 
-Receives GitHub webhook payloads. Verifies HMAC-SHA256 signature via the `x-hub-signature-256` header using the required `webhook_secret` from the `github` config block. Invalid or missing signatures are rejected with 401. Returns 500 if the server has no `webhook_secret` configured. Publishes to `crewlet.notifications.inbound`. **This build refuses the config block this route verifies against**, so it answers 503 to everything — see the integration page. It comes alive in the same change that ships the vendor's parser.
+Receives GitHub webhook payloads. Verifies HMAC-SHA256 signature via the `x-hub-signature-256` header using the required `webhook_secret` from the `github` config block. Invalid or missing signatures are rejected with 401. Returns 500 if the server has no `webhook_secret` configured. Publishes to `crewlet.notifications.inbound`. Jira Cloud rides this route and is served end to end; Confluence Cloud is relayed and stored, and reaches nobody until this build ships a Confluence parser — see the integration pages.
 
 ### `/webhooks/gitlab`
 
@@ -1074,11 +1074,11 @@ Receives Plane webhook payloads from the [Plane fork](../integrations/plane.md).
 
 ### `/webhooks/confluence`
 
-Receives Confluence webhook payloads (page created/updated, comments). Publishes to `crewlet.notifications.inbound`. **This build refuses the config block this route verifies against**, so it answers 503 to everything — see the integration page. It comes alive in the same change that ships the vendor's parser.
+Receives Confluence webhook payloads (page created/updated, comments). Publishes to `crewlet.notifications.inbound`. Jira Cloud rides this route and is served end to end; Confluence Cloud is relayed and stored, and reaches nobody until this build ships a Confluence parser — see the integration pages.
 
 ### `/webhooks/forge`
 
-Receives events from the Atlassian Forge app. Every request must carry a Forge Invocation Token (FIT) as an `Authorization: Bearer` JWT; the token is verified against Atlassian's JWKS endpoint and its `aud` claim must match the configured `forge_app_id` (401 on failure, 500 when no app id is configured). The request body is drained **before** FIT verification — verification can block on a JWKS fetch, and the body must be off the socket before the sender's delivery deadline aborts the request. Maps `avi:jira:*` / `avi:confluence:*` events onto the native Jira/Confluence pipeline and publishes to `crewlet.notifications.inbound`. Self-generated events (an agent's own actions echoed back by Forge) are acknowledged and dropped. **This build refuses the config block this route verifies against**, so it answers 503 to everything — see the integration page. It comes alive in the same change that ships the vendor's parser.
+Receives events from the Atlassian Forge app. Every request must carry a Forge Invocation Token (FIT) as an `Authorization: Bearer` JWT; the token is verified against Atlassian's JWKS endpoint and its `aud` claim must match the configured `forge_app_id` (401 on failure, 500 when no app id is configured). The request body is drained **before** FIT verification — verification can block on a JWKS fetch, and the body must be off the socket before the sender's delivery deadline aborts the request. Maps `avi:jira:*` / `avi:confluence:*` events onto the native Jira/Confluence pipeline and publishes to `crewlet.notifications.inbound`. Self-generated events (an agent's own actions echoed back by Forge) are acknowledged and dropped. Jira Cloud rides this route and is served end to end; Confluence Cloud is relayed and stored, and reaches nobody until this build ships a Confluence parser — see the integration pages.
 
 ### Aborted deliveries (client disconnects)
 

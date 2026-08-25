@@ -207,10 +207,6 @@ type refusedField struct {
 // to say "off", which the validator accepts and the schema must too.
 func refusedDocuments() map[string]refusedField {
 	return map[string]refusedField{
-		"company:integrations.jira": {tier: TierCompany,
-			off: "name: Acme\n",
-			on:  "name: Acme\nintegrations:\n  jira: {url: https://acme.example.com, token: \"${JIRA_TOKEN}\"}\n",
-		},
 		"company:integrations.confluence": {tier: TierCompany,
 			off: "name: Acme\n",
 			on:  "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: \"${CONFLUENCE_TOKEN}\"}\n",
@@ -228,14 +224,7 @@ func refusedDocuments() map[string]refusedField {
 			off: "name: Acme\nintegrations:\n  github: {enabled: false, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
 			on:  "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
 		},
-		// A scalar is off at its zero value, and an explicit empty string is
-		// how a config that once carried a Forge app id says it no longer
-		// does.
-		"company:integrations.forge_app_id": {tier: TierCompany,
-			off: "name: Acme\nintegrations:\n  forge_app_id: \"\"\n",
-			on:  "name: Acme\nintegrations:\n  forge_app_id: acme-forge\n",
-		},
-		// And a list is off when it is empty — an unscoped read scope, which
+		// A list is off when it is empty — an unscoped read scope, which
 		// is the documented default rather than a mistake.
 		"company:knowledge.confluence_spaces": {tier: TierCompany,
 			off: "name: Acme\nknowledge:\n  confluence_spaces: []\n",
@@ -249,30 +238,18 @@ func refusedDocuments() map[string]refusedField {
 			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
 			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}]}\n",
 		},
-		// The tracker project and wiki space a seat or a unit claims. Not
-		// credentials — WHERE work files and where deliveries route — which
-		// is why leaving them standing is the same silence as the org block:
-		// recorded, rendered, never consulted. Four paths, because both a
-		// seat and a unit can claim one and a seat can live in either place.
-		"company:roles[].integrations.jira": {tier: TierCompany,
-			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
-			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {jira: {project: ENG}}}\n",
-		},
+		// The wiki space a seat or a unit claims. Not a credential — WHERE
+		// work files and where deliveries route — which is why leaving it
+		// standing is the same silence as the org block: recorded,
+		// rendered, never consulted. Three paths, because both a seat and a
+		// unit can claim one and a seat can live in either place.
 		"company:roles[].integrations.confluence": {tier: TierCompany,
 			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
 			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {confluence: {space: HANDBOOK}}}\n",
 		},
-		"company:units[].integrations.jira": {tier: TierCompany,
-			off: "name: Acme\nunits:\n  - {name: Engineering, integrations: {}}\n",
-			on:  "name: Acme\nunits:\n  - {name: Engineering, integrations: {jira: {project: ENG}}}\n",
-		},
 		"company:units[].integrations.confluence": {tier: TierCompany,
 			off: "name: Acme\nunits:\n  - {name: Engineering, integrations: {}}\n",
 			on:  "name: Acme\nunits:\n  - {name: Engineering, integrations: {confluence: {space: HANDBOOK}}}\n",
-		},
-		"company:units[].roles[].integrations.jira": {tier: TierCompany,
-			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
-			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {jira: {project: ENG}}}]}\n",
 		},
 		"company:units[].roles[].integrations.confluence": {tier: TierCompany,
 			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
@@ -577,10 +554,6 @@ units:
 		// rule it exercised can no longer be reached — a document that sets
 		// both is refused for the block, not for the overlap.
 		{
-			name: "an unserved tracker", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nintegrations:\n  jira: {url: https://acme.example.com/jira, token: t}\n",
-		},
-		{
 			name: "an unserved knowledge base", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: t}\n",
 		},
@@ -592,9 +565,21 @@ units:
 			name: "an unserved code host", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s}\n",
 		},
+		// The Atlassian tracker, which IS served: a Cloud site named by its
+		// cloud id, delivering through the Forge app. Neither layer may
+		// refuse it — the schema because it would underline a working file,
+		// the validator because the engine boots on it.
 		{
-			name: "a forge app with nothing behind it", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nintegrations:\n  forge_app_id: acme-forge\n",
+			name: "a jira cloud site behind a forge app", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  jira: {cloud_id: acme-cloud, token: \"${T}\"}\n  forge_app_id: acme-forge\n",
+		},
+		// The url-or-cloud-id rule is a validator one: a JSON Schema can
+		// express "one of these two" only by restructuring the object, and
+		// the restructured shape gives an author a worse message than the
+		// error does.
+		{
+			name: "a jira block naming its instance twice", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", cloud_id: acme-cloud, token: t, webhook_secret: s}\n",
 		},
 		// The per-seat half of the same refusal. Leaving it standing while
 		// the org block was refused would provision an app, hand the seat a

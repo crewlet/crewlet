@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -287,5 +288,52 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 	// empty — the same answer a node mid-boot gives.
 	if s := e.WebhookSecrets(); s.GitLab != "" || s.GitHub != "" || s.Plane != "" {
 		t.Errorf("secrets appeared with no integration configured: %+v", s)
+	}
+}
+
+// A CONFIGURED VENDOR MUST ACTUALLY ROUTE, which is the whole distinction
+// RoutedSources exists to draw.
+//
+// Four vendors once had config models, webhook routes and generated schema
+// and no parser behind any of them, so a company naming one got a block that
+// validated, appeared on the dashboard's Integrations room beside the
+// working ones, and woke nobody. This is what catches a vendor whose config
+// ships without its wiring — and, in the other direction, a vendor whose
+// wiring is dropped from startNotifications by a refactor.
+func TestAConfiguredTrackerActuallyRoutes(t *testing.T) {
+	t.Parallel()
+	doc := companyDoc + `
+integrations:
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: jira-secret
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "jira") {
+		t.Fatalf("a company on the Atlassian tracker routes %v", e.RoutedSources())
+	}
+	// And the inbound route has something to verify with, which is the
+	// other half: a parser with no secret behind it answers 503 to every
+	// delivery it would have routed.
+	if got := e.WebhookSecrets().Jira; got != "jira-secret" {
+		t.Errorf("jira webhook secret = %q", got)
+	}
+}
+
+// A COMPANY WITH NO TRACKER BLOCK ROUTES NO TRACKER EVENTS. The parser list
+// is built from the config, so a source that appeared without one would mean
+// the wiring stopped reading it.
+func TestAnAbsentTrackerRoutesNothing(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if slices.Contains(e.RoutedSources(), "jira") {
+		t.Fatalf("a company with no jira block routes %v", e.RoutedSources())
 	}
 }

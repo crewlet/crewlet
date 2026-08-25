@@ -1,6 +1,9 @@
 # d-703 — An integration this build cannot serve is refused
 
-Status: **decided by the project owner, implemented.**
+Status: **decided by the project owner, implemented — and being unwound,
+vendor by vendor.** The refusal was never the destination: each entry is
+deleted by the change that ships that vendor. Jira is done; Slack, Confluence
+and GitHub follow.
 Implementation: `internal/config/integrations.go`, `internal/config/roles.go`,
 `internal/config/company.go`, `internal/config/schema.go` ·
 Answers the question [`d-701`](701-vendor-order.md) left open.
@@ -11,11 +14,32 @@ d-701 chose the vendor order and closed with: *"What this does not decide:
 whether a SaaS vendor ships in v1 at all. That is a product call and stays
 open."*
 
-It has been answered: they do not, and the config says so.
+It has been answered twice, and the second answer is the one that stands.
+
+**First:** they do not ship, and the config says so — which is what the rest
+of this document describes and what the code did.
+
+**Then the project owner reversed it.** All four had working implementations
+in the Python engine that this build replaced, and dropping them was a
+regression rather than a scoping decision. So they ship, and this document
+becomes the record of an interim state and of the ONE rule that outlives it:
+**a config field ships with the code that reads it.** A vendor's row leaves
+`unservedIntegrations` in the same commit that gives it a parser — not
+before, because a field the engine accepts and never reads is exactly the
+silence this decision exists to end.
+
+### What has shipped since
+
+| Vendor | State |
+|---|---|
+| `integrations.jira` | **Served.** Parser, prompt, client, seat-identity resolution, lead map and `crewlet jira provision`. `integrations.forge_app_id` came back with it: Jira Cloud is what rides the Forge route. `role.integrations.jira` and `unit.integrations.jira` are consulted again — they are the lead-fallback map. |
+| `integrations.slack` | Refused. |
+| `integrations.confluence` | Refused, with `knowledge.confluence_spaces`. |
+| `integrations.github` | Refused when enabled. |
 
 ## What the state actually was
 
-The engine wires exactly three vendors. `startNotifications` builds its
+The engine wired exactly three vendors. `startNotifications` built its
 parser and prompt lists from `integrations.mattermost`, `integrations.gitlab`
 and `integrations.plane`, and from nothing else.
 
@@ -38,22 +62,24 @@ message saying what serves that role instead:
 
 | Refused | Because | Instead |
 |---|---|---|
-| `integrations.jira` | no parser | `integrations.plane` |
+| ~~`integrations.jira`~~ | *served — see the table above* | — |
 | `integrations.confluence` | no parser, no searcher | `integrations.plane` |
 | `integrations.slack` | no parser | `integrations.mattermost` |
 | `integrations.github` (enabled) | no parser | `integrations.gitlab` |
-| `integrations.forge_app_id` | carries Jira and Confluence Cloud only | — |
+| ~~`integrations.forge_app_id`~~ | *served — Jira Cloud rides it* | — |
 | `role.integrations.slack` | no parser | `role.integrations.mattermost` |
-| `role.integrations.jira`, `unit.integrations.jira` | no parser | `…integrations.plane` |
+| ~~`role.integrations.jira`, `unit.integrations.jira`~~ | *served — the lead-fallback map* | — |
 | `role.integrations.confluence`, `unit.integrations.confluence` | no parser, no searcher | `…integrations.plane` |
 | `knowledge.confluence_spaces` | a scope for a backend with no searcher | `knowledge.plane_projects` |
 
-The last three rows are not credentials — they are WHERE a seat or unit files
-work and where its deliveries route. That is precisely why they could not be
-left standing: an operator writes `jira: {project: ENG}` to say this unit owns
-ENG, and the identity is recorded, rendered on the dashboard, and never
-consulted. Refusing only the org-level block would have left the same silence
-one level down, in a smaller place.
+The per-seat and per-unit rows are not credentials — they are WHERE a seat or
+unit files work and where its deliveries route. That is precisely why they
+could not be left standing: an operator writes `confluence: {space: ENG}` to
+say this unit owns ENG, and the identity is recorded, rendered on the
+dashboard, and never consulted. Refusing only the org-level block would have
+left the same silence one level down, in a smaller place. And it is why they
+come back with their vendor rather than after it: `jira: {project: ENG}` is
+now read on every unrouted issue.
 
 `ErrUnimplemented` is its own sentinel rather than reusing `ErrUnknownValue`
 or `ErrConflict`, because it is the one failure that is **not the operator's
@@ -97,6 +123,11 @@ Deleting them would throw away correct, tested work (the Forge JWT
 verification against Atlassian's published keys is real engineering) that
 comes straight back when a vendor ships. They are marked inert in the API
 reference so nobody reads a live endpoint into them.
+
+That prediction is what actually happened, and it is the strongest argument
+for the shape: `POST /webhooks/jira` and `POST /webhooks/forge` came alive in
+the commit that shipped the parser, with no change to either route beyond the
+delivery-id key Jira had been sending all along.
 
 **MCP is untouched.** Agents still reach Jira, Confluence, GitHub and Slack
 through their MCP servers, which is a different surface entirely: `mcp_servers`

@@ -39,6 +39,13 @@ type notifications struct {
 	// that enrich routing and never takes a surface down.
 	plane planeParts
 
+	// jira remembers which account each seat credential authenticates as.
+	// Outside the mutex above for the same reason the code host's is: it
+	// OUTLIVES an epoch, because identity is a function of the credential
+	// and a revision that changed something else must not re-spend a
+	// request per seat to re-learn what it already knows.
+	jira jiraIdentities
+
 	// gitlab remembers which account each seat credential authenticates
 	// as. Outside the mutex above because it has its own, and because it
 	// OUTLIVES an epoch: identity is a function of the credential, so a
@@ -131,6 +138,12 @@ func (e *Engine) refreshParties(c *Company) {
 	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
 		e.notify.gitlab.register(reg, c, e.resolver())
 	}
+	// THE TRACKER'S ARE TOO, and for the same reason: a Jira account id is
+	// what a webhook names a seat by, and the mapping is derived from the
+	// seat's own credential rather than declared anywhere in the org.
+	if j := c.Config.Integrations.Jira; j != nil {
+		e.notify.jira.register(reg, c, e.resolver())
+	}
 
 	e.notify.mu.Lock()
 	e.notify.registry = reg
@@ -187,6 +200,19 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if parser != nil {
 			parsers = append(parsers, parser)
 			prompts = append(prompts, gitlabPrompt())
+		}
+	}
+	if j := c.Config.Integrations.Jira; j != nil {
+		parser, err := e.startJira(ctx, c, j)
+		if err != nil {
+			// Same posture as the other surfaces: the company runs
+			// WITHOUT its Atlassian tracker rather than not at all.
+			log.Error("jira_unavailable", "error", err.Error(),
+				"detail", "the company is running without its Atlassian tracker")
+		}
+		if parser != nil {
+			parsers = append(parsers, parser)
+			prompts = append(prompts, jiraPrompt())
 		}
 	}
 	if p := c.Config.Integrations.Plane; p != nil && p.Enabled {

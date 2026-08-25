@@ -393,8 +393,7 @@
           "not": {}
         },
         "forge_app_id": {
-          "const": "",
-          "description": "NOT IMPLEMENTED in this build: the Forge route carries Jira and Confluence Cloud, and neither is wired.",
+          "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
           "type": "string"
         },
         "github": {
@@ -418,8 +417,8 @@
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
         },
         "jira": {
-          "description": "NOT IMPLEMENTED in this build: no parser routes a Jira delivery. The tracker this build serves is integrations.plane.",
-          "not": {}
+          "$ref": "#/$defs/Jira",
+          "description": "Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."
         },
         "mattermost": {
           "$ref": "#/$defs/Mattermost",
@@ -445,6 +444,10 @@
         },
         "email": {
           "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
+          "type": "string"
+        },
+        "site_url": {
+          "description": "Human-readable base for shareable links; needed with cloud_id.",
           "type": "string"
         },
         "token": {
@@ -1307,8 +1310,8 @@
           "not": {}
         },
         "jira": {
-          "description": "NOT IMPLEMENTED in this build: no parser routes a Jira delivery, so nothing ever consults this routing identity. Use role.integrations.plane.",
-          "not": {}
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Jira project this seat owns."
         },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
@@ -2034,8 +2037,8 @@
           "not": {}
         },
         "jira": {
-          "description": "NOT IMPLEMENTED in this build: no parser routes a Jira delivery, so nothing ever consults this routing identity. Use unit.integrations.plane.",
-          "not": {}
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Jira project this unit owns."
         },
         "plane": {
           "$ref": "#/$defs/ProjectRef",

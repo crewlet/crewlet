@@ -198,6 +198,12 @@ func (r *Receiver) jira(w http.ResponseWriter, req *http.Request) {
 		summary: jiraSummary(body),
 		body:    body,
 		raw:     raw,
+		// Jira sends a stable per-delivery identifier on both
+		// deployments, and it is the same across its own retries — which
+		// is what makes it a dedupe key rather than a request id. A
+		// Cloud event relayed through Forge carries none, and that route
+		// answers for its own deliveries.
+		key:     req.Header.Get("X-Atlassian-Webhook-Identifier"),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }

@@ -234,17 +234,41 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"roles[0].name", ErrMissing,
 		},
 		{
-			// EACH REFUSED BLOCK REPLACES ITS OWN RULES. These used to be
-			// five cases — a blank Slack status phrase, an unknown typing
-			// mode, GitHub enabled with no secret, Jira with neither url
-			// nor cloud id, Jira with no token. Every one exercised a
-			// validator that no longer runs, because the block carrying it
-			// is refused before its own rules are reached. An operator
-			// gets the error that matters instead of a field to fix on an
-			// integration they cannot use.
+			// A REFUSED BLOCK REPLACES ITS OWN RULES. Confluence carries a
+			// url-or-cloud-id rule and a token rule, and neither runs: the
+			// block is refused before its own validation is reached, so an
+			// operator gets the error that matters instead of a field to
+			// fix on an integration they cannot use either way.
 			"an unserved block, refused before its own rules",
-			"name: Acme\nintegrations:\n  jira: {}\n",
-			"integrations.jira", ErrUnimplemented,
+			"name: Acme\nintegrations:\n  confluence: {}\n",
+			"integrations.confluence", ErrUnimplemented,
+		},
+		// The Atlassian tracker's own rules, which DO run now that it is
+		// served.
+		{
+			"a jira block naming the instance twice",
+			"name: Acme\nintegrations:\n  jira: {url: \"https://acme.example.com\", cloud_id: abc, token: t, webhook_secret: s}\n",
+			"integrations.jira", ErrConflict,
+		},
+		{
+			"a jira block naming the instance nowhere",
+			"name: Acme\nintegrations:\n  jira: {token: t, webhook_secret: s}\n",
+			"integrations.jira", ErrMissing,
+		},
+		{
+			"a jira block with no org token",
+			"name: Acme\nintegrations:\n  jira: {url: \"https://acme.example.com\", webhook_secret: s}\n",
+			"integrations.jira.token", ErrMissing,
+		},
+		{
+			"a data centre jira with nothing to verify a delivery with",
+			"name: Acme\nintegrations:\n  jira: {url: \"https://acme.example.com\", token: t}\n",
+			"integrations.jira.webhook_secret", ErrMissing,
+		},
+		{
+			"a jira site url that is not a url",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, site_url: acme.example.com, token: t}\n",
+			"integrations.jira.site_url", ErrUnknownValue,
 		},
 		{
 			// A PER-SEAT SLACK APP IS REFUSED BEFORE ITS OWN RULES RUN.
@@ -418,11 +442,11 @@ func TestMinimalCompanyLoads(t *testing.T) {
 
 // AN INTEGRATION THIS BUILD CANNOT SERVE IS REFUSED, NOT ACCEPTED AND IGNORED.
 //
-// The engine wires three vendors — Mattermost for chat, Plane for the tracker
-// and knowledge, GitLab for the code host. The other four had config models,
-// webhook routes and generated schema, and no parser, transport or searcher
-// behind them, so a company naming one got a block that validated, rendered
-// in the dashboard, and did nothing.
+// The engine wires Mattermost for chat, Plane and Jira for the tracker, and
+// GitLab for the code host. The remaining three have config models, webhook
+// routes and generated schema, and no parser, transport or searcher behind
+// them, so a company naming one gets a block that validates, renders in the
+// dashboard, and does nothing.
 //
 // Silently, which is the part that mattered: integrations.confluence is how
 // an operator says where the company's knowledge lives, and the answer was an
@@ -430,11 +454,9 @@ func TestMinimalCompanyLoads(t *testing.T) {
 func TestAnIntegrationThisBuildCannotServeIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, yaml, path, instead string }{
-		{"jira", "  jira: {url: \"https://x\", token: t}", "integrations.jira", "Plane"},
 		{"confluence", "  confluence: {url: \"https://x/wiki\", token: t}", "integrations.confluence", "Plane"},
 		{"slack", "  slack: {}", "integrations.slack", "Mattermost"},
 		{"github", "  github: {enabled: true, webhook_secret: s}", "integrations.github", "GitLab"},
-		{"forge", "  forge_app_id: an-app", "integrations.forge_app_id", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -461,18 +483,40 @@ func TestADisabledUnservedIntegrationIsInert(t *testing.T) {
 	mustCompany(t, "name: Acme\nintegrations:\n  github: {enabled: false}\n")
 }
 
-// ONE CONFIG, ONE ERROR ABOUT FORGE. forge_app_id is the Atlassian Cloud
-// delivery path for Jira and Confluence and has no other consumer, so a
-// config naming all three should not collect three errors saying one thing.
-func TestForgeIsReportedOnlyWhenItIsTheOnlyFinding(t *testing.T) {
+// FORGE IS A JIRA CLOUD CONFIG, NOT A REFUSAL. forge_app_id is the Atlassian
+// Cloud delivery path, and Jira Cloud rides it — so the config that names a
+// cloud id and an app id is the CORRECT one and must load. It carries no
+// webhook secret on purpose: a relayed Cloud event is verified by its
+// invocation token, and there is no HMAC anywhere on that path.
+func TestJiraCloudRidesTheForgeRoute(t *testing.T) {
 	t.Parallel()
-	err := rejects(t, `
+	cfg := mustCompany(t, `
 name: Acme
 integrations:
-  jira: {url: "https://x", token: t}
+  jira: {cloud_id: "acme-cloud", site_url: "https://acme.atlassian.net", token: "${T}"}
   forge_app_id: an-app
-`, "integrations.jira")
-	if strings.Contains(err.Error(), "forge_app_id") {
-		t.Errorf("forge was reported beside the Jira block it exists for: %v", err)
+`)
+	jira := cfg.Integrations.Jira
+	if got := jira.BaseURL(); got != "https://api.atlassian.com/ex/jira/acme-cloud" {
+		t.Errorf("base url = %q", got)
+	}
+	// THE TWO BASES ARE DIFFERENT PLACES, and that is the point of
+	// site_url: the gateway is where the engine reads, and it is not
+	// somewhere a browser can go.
+	if got := jira.ShareableBaseURL(); got != "https://acme.atlassian.net" {
+		t.Errorf("shareable base = %q", got)
+	}
+}
+
+// A DATA CENTRE JIRA WITH A SECRET IS A COMPLETE CONFIG, and its shareable
+// base defaults to the instance url — there is only one address.
+func TestJiraDataCentreNeedsNoSeparateSiteURL(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t,
+		"name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", token: \"${T}\", webhook_secret: \"${S}\"}\n")
+	jira := cfg.Integrations.Jira
+	if jira.BaseURL() != "https://jira.example.com" ||
+		jira.ShareableBaseURL() != "https://jira.example.com" {
+		t.Errorf("base = %q, shareable = %q", jira.BaseURL(), jira.ShareableBaseURL())
 	}
 }

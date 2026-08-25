@@ -35,7 +35,7 @@ const gitLabFixtureSecret = "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 // a new key, never a new shape.
 const rotatedGitLabSecret = "whsec_YS1yb3RhdGVkLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 
-// servedYAML is a whole company on the three vendors this build serves.
+// servedYAML is a whole company on the vendors this build serves.
 var servedYAML = `
 name: Acme
 providers:
@@ -58,6 +58,11 @@ integrations:
     url: https://plane.example.com
     workspace: acme
     webhook_secret: pl
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: jr
+  forge_app_id: forge-app
 roles:
   - name: CEO
     handle: ceo
@@ -111,6 +116,11 @@ integrations:
     url: https://plane.example.com
     workspace: acme
     webhook_secret: ${PL}
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: ${JR}
+  forge_app_id: ${FORGE}
 roles:
   - name: CEO
     handle: ceo
@@ -128,7 +138,6 @@ providers:
       model: claude-sonnet-5
       api_keys: ["key"]
 integrations:
-  forge_app_id: forge-app
   github:
     enabled: true
     webhook_secret: gh
@@ -163,10 +172,6 @@ providers:
       model: claude-sonnet-5
       api_keys: ["key"]
 integrations:
-  jira:
-    url: https://acme.atlassian.net
-    token: t
-    webhook_secret: jira
   confluence:
     url: https://acme.atlassian.net/wiki
     token: t
@@ -179,7 +184,7 @@ roles:
 
 // unserved is the verification material for the vendors this build validates
 // and does not serve.
-type unserved struct{ forgeAppID, github, jira, confluence, slack string }
+type unserved struct{ github, confluence, slack string }
 
 // secrets reads that material out of the epoch a build serving them would
 // have had.
@@ -201,12 +206,7 @@ func (u unserved) secrets(resolve func(string) string) webhooks.Secrets {
 	company := &config.Company{
 		Name: "Acme",
 		Integrations: config.Integrations{
-			ForgeAppID: u.forgeAppID,
-			GitHub:     &config.GitHub{Enabled: true, WebhookSecret: u.github},
-			Jira: &config.Jira{
-				URL: "https://acme.atlassian.net", Token: "t",
-				WebhookSecret: u.jira,
-			},
+			GitHub: &config.GitHub{Enabled: true, WebhookSecret: u.github},
 			Confluence: &config.Confluence{
 				URL: "https://acme.atlassian.net/wiki", Token: "t",
 				WebhookSecret: u.confluence,
@@ -243,17 +243,16 @@ func TestSecretsComeFromTheEpoch(t *testing.T) {
 	t.Parallel()
 	served := secretsFor(t, servedYAML)
 	unwired := unserved{
-		forgeAppID: "forge-app", github: "gh", jira: "jira",
-		confluence: "conf", slack: "ceo-signing",
+		github: "gh", confluence: "conf", slack: "ceo-signing",
 	}.secrets(literal)
 
 	for _, tc := range []struct{ name, got, want string }{
 		{"gitlab", served.GitLab, gitLabFixtureSecret},
 		{"plane", served.Plane, "pl"},
+		{"jira", served.Jira, "jr"},
+		{"forge app id", served.ForgeAppID, "forge-app"},
 		{"github", unwired.GitHub, "gh"},
-		{"jira", unwired.Jira, "jira"},
 		{"confluence", unwired.Confluence, "conf"},
-		{"forge app id", unwired.ForgeAppID, "forge-app"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
@@ -317,8 +316,8 @@ func TestNoConfigCanSupplyAnUnservedSecret(t *testing.T) {
 	}{
 		{"github, and the per-seat Slack app", refusedSelfHostedYAML,
 			[]string{"integrations.github", "roles[0].integrations.slack"}},
-		{"jira and confluence", refusedAtlassianYAML,
-			[]string{"integrations.jira", "integrations.confluence"}},
+		{"confluence", refusedAtlassianYAML,
+			[]string{"integrations.confluence"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -495,13 +494,12 @@ func TestEveryVerifierGetsAResolvedSecret(t *testing.T) {
 
 	got := webhooks.SecretsOf(company, organization, resolve)
 	unwired := unserved{
-		forgeAppID: "${FORGE}", github: "${GH}", jira: "${JR}",
-		confluence: "${CF}", slack: "${SLACK_CEO}",
+		github: "${GH}", confluence: "${CF}", slack: "${SLACK_CEO}",
 	}.secrets(resolve)
 	for label, value := range map[string]string{
 		"gitlab": got.GitLab, "plane": got.Plane,
-		"github": unwired.GitHub, "jira": unwired.Jira,
-		"confluence": unwired.Confluence, "forge app id": unwired.ForgeAppID,
+		"jira": got.Jira, "forge app id": got.ForgeAppID,
+		"github": unwired.GitHub, "confluence": unwired.Confluence,
 		"slack/ceo": unwired.Slack["ceo"],
 	} {
 		if strings.Contains(value, "${") {
@@ -523,15 +521,13 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	got := webhooks.SecretsOf(company, nil, nil)
-	if got.GitLab != "" || got.Plane != "" {
+	if got.GitLab != "" || got.Plane != "" || got.Jira != "" || got.ForgeAppID != "" {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", got)
 	}
 	unwired := unserved{
-		forgeAppID: "${FORGE}", github: "${GH}", jira: "${JR}",
-		confluence: "${CF}", slack: "${SLACK_CEO}",
+		github: "${GH}", confluence: "${CF}", slack: "${SLACK_CEO}",
 	}.secrets(nil)
-	if unwired.GitHub != "" || unwired.Jira != "" || unwired.Confluence != "" ||
-		unwired.ForgeAppID != "" || unwired.Slack != nil {
+	if unwired.GitHub != "" || unwired.Confluence != "" || unwired.Slack != nil {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", unwired)
 	}
 }
