@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -108,6 +109,16 @@ func (s Spec) requestTimeout() time.Duration {
 	}
 	return s.RequestTimeout
 }
+
+// equal reports whether two specs describe the same running server.
+//
+// DEEP, and every field: an apply that changed only Env — a rotated token —
+// must restart the child, because the environment is handed to it once at
+// exec and there is no other way in. Compared with reflect.DeepEqual rather
+// than field by field precisely so a field ADDED to Spec is covered the day
+// it is added; a hand-written comparison would silently keep answering "same"
+// for the one thing nobody remembered to list.
+func (s Spec) equal(other Spec) bool { return reflect.DeepEqual(s, other) }
 
 func (s Spec) validate() error {
 	if s.Name == "" {

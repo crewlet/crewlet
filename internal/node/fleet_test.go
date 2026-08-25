@@ -153,6 +153,11 @@ type fleet struct {
 	mkQueue func(*testing.T) queue.EventQueue
 	backend coord.Backend
 
+	// pinned constrains a seat's placement, for the cases about a seat
+	// nobody can claim. Written before any node starts, read by the
+	// hosts' sweeps afterwards, so it needs no lock of its own.
+	pinned map[string]placement.SeatPlacement
+
 	mu    sync.Mutex
 	turns []turnRecord
 }
@@ -173,9 +178,18 @@ func newFleet(t *testing.T, sub substrate, seats ...string) *fleet {
 func (f *fleet) seatList() []placement.Seat {
 	out := make([]placement.Seat, len(f.seats))
 	for i, h := range f.seats {
-		out[i] = placement.Seat{Handle: h}
+		out[i] = placement.Seat{Handle: h, Placement: f.pinned[h]}
 	}
 	return out
+}
+
+// pin sends a seat somewhere no node in this fleet is, so it stays unclaimed
+// for the life of the test.
+func (f *fleet) pin(handle, node string) {
+	if f.pinned == nil {
+		f.pinned = map[string]placement.SeatPlacement{}
+	}
+	f.pinned[handle] = placement.SeatPlacement{Node: node}
 }
 
 // start brings up a node and returns it.
@@ -218,9 +232,14 @@ func (f *fleet) start(id string) *node.Node {
 // ensureMailboxes creates every seat's subscription with nothing attached.
 //
 // This is what makes an unclaimed seat's mail survivable at all, and it is
-// deliberately explicit in the suite: the engine does it behind a singleton
-// duty, and a test that let attachment create the subscription would never
-// exercise the case the property is about.
+// deliberately explicit in the suite: a test that let attachment create the
+// subscription would never exercise the case the property is about.
+//
+// It used to say the engine did this behind a singleton duty. Nothing did —
+// EnsureSubscription had no caller anywhere outside this file — and the suite
+// doing it by hand is exactly why nobody noticed. [node.Node.Start] does it
+// now, for every seat in the company, which is what
+// an_unplaceable_seat_still_retains_its_mail below certifies.
 func (f *fleet) ensureMailboxes() {
 	f.t.Helper()
 	q := f.mkQueue(f.t)
@@ -322,6 +341,54 @@ func TestFleet(t *testing.T) {
 				if len(slices.Compact(slices.Clone(held))) != len(held) {
 					t.Errorf("a seat is held by both nodes: %v", held)
 				}
+			})
+
+			// A SEAT NOBODY CAN CLAIM STILL KEEPS ITS MAIL.
+			//
+			// The quiet-loss case, and the one nothing covered because the
+			// harness created every mailbox by hand. A durable subscription
+			// IS the mailbox: publish to a topic no subscription covers and
+			// the broker DROPS the event, silently, with nothing anywhere
+			// reporting a loss. So a seat's mail existed only from the
+			// moment some node attached a consumer to it.
+			//
+			// A pinned seat makes that permanent and is a real
+			// configuration — a role pinned to a node that is down, or
+			// carrying a label nobody has. The sweep already reports it as
+			// unplaceable; what it could not do was keep the work. Every
+			// trigger aimed at such a seat vanished, and it vanished the
+			// same way during the seconds of a boot or a rollout when a
+			// live seat has not been claimed yet.
+			//
+			// Note the harness does NOT pre-create mailboxes here: the
+			// node's own start is what has to do it.
+			t.Run("an_unplaceable_seat_still_retains_its_mail", func(t *testing.T) {
+				f := newFleet(t, sub, "ceo", "ghost")
+				f.pin("ghost", "node-that-does-not-exist")
+				a := f.start("node-a")
+
+				eventually(t, "the claimable seat to be held", func() bool {
+					return len(a.Attached()) == 1
+				})
+				if held := a.Attached(); held[0] != "ceo" {
+					t.Fatalf("attached %v, want only the placeable seat", held)
+				}
+
+				f.send("ghost", "w1", "w2")
+
+				// Nothing runs it — that is the point, and correct. What
+				// must be true is that the work is still THERE, so the seat
+				// does its backlog the moment a matching node appears.
+				if got := f.workSeen("ghost"); len(got) != 0 {
+					t.Fatalf("an unplaceable seat ran %v", got)
+				}
+				b := f.start("node-that-does-not-exist")
+				eventually(t, "the pinned seat to be claimed", func() bool {
+					return len(b.Attached()) == 1
+				})
+				eventually(t, "the retained mail to be delivered", func() bool {
+					return len(f.workSeen("ghost")) == 2
+				})
 			})
 
 			t.Run("a_trigger_reaches_only_the_owner", func(t *testing.T) {

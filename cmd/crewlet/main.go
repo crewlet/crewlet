@@ -294,21 +294,44 @@ func runEngine(args []string, stderr io.Writer) error {
 		return string(reconciler.Posture(ctx))
 	})
 
+	// MERGED: one process is both engine and API, sharing one broker and
+	// one store. The API half is what makes the node reachable at all —
+	// every inbound webhook arrives through it — so an engine that ran
+	// without it would hold seats and hear nothing.
+	//
+	// BOUND BEFORE THE ENGINE STARTS, and the order is a fix rather than a
+	// preference. Starting the engine first means claiming seats first, and
+	// a seat is not claimed until its per-role MCP children are up — one
+	// subprocess per server per seat, each a spawn and a handshake and a
+	// tools/list. On the Nimbus example that is 21 children, and the whole
+	// inbound edge — dashboard, REST, every vendor's webhook — was dark for
+	// as long as they took. Measured at 37 seconds with four seats and every
+	// vendor failing FAST; a company whose vendors actually answer takes
+	// minutes, and it scales with seats times servers.
+	//
+	// Nothing here needs a started engine: the node exists, /health and
+	// /ready report honestly that it holds no seats yet, and a webhook that
+	// arrives in the window is retained rather than dropped because the
+	// mailboxes are created before any claiming — see Node.Start.
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, log)
+	if err != nil {
+		e.Stop(context.WithoutCancel(ctx))
+		return err
+	}
+
 	if err = e.Start(ctx); err != nil {
 		// Everything the engine opened comes down with it. Returning
 		// without this leaves a broker, a store and a set of held seat
 		// leases behind — and the leases are the expensive half, because
 		// a peer cannot take those seats until they lapse at the TTL.
-		e.Stop(context.WithoutCancel(ctx))
-		return err
-	}
-
-	// MERGED: one process is both engine and API, sharing one broker and
-	// one store. The API half is what makes the node reachable at all —
-	// every inbound webhook arrives through it — so an engine that ran
-	// without it would hold seats and hear nothing.
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, log)
-	if err != nil {
+		//
+		// The listener goes first, for the same reason it does in the
+		// ordinary shutdown below: it is already accepting, and a node
+		// whose engine failed to start must stop answering before it
+		// gives up whatever it holds.
+		if surface != nil {
+			surface.stop(context.WithoutCancel(ctx), log)
+		}
 		e.Stop(context.WithoutCancel(ctx))
 		return err
 	}

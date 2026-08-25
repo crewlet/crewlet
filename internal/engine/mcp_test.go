@@ -206,3 +206,103 @@ func TestAServerThatCannotStartLeavesTheSeatItsBuiltins(t *testing.T) {
 		t.Errorf("a failed server took the builtins with it: %v", names)
 	}
 }
+
+// A SHARED SERVER SURVIVES A CONFIG APPLY, and this is the case the suite
+// above could not see because every one of them builds exactly one epoch.
+//
+// An apply builds a FRESH registry for the new epoch and equips it. The
+// bridge's children are already running, so the engine has to be told about
+// them again — and it asked the bridge to ADD them, which refuses a name it
+// already runs. The refusal was logged as a failed server and the epoch went
+// live with the builtins alone.
+//
+// It is not a rare path. `crewlet run` seeds its company config at boot and
+// the reconciler applies it immediately, so on the Nimbus example the shared
+// servers reached exactly one epoch — the one replaced a second later — and
+// no seat ever saw a shared tool.
+func TestASharedServersToolsSurviveAConfigApply(t *testing.T) {
+	t.Parallel()
+	doc := mcpCompany(true, "PATH")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+
+	before := surfaceOf(t, e, "ceo")
+	if !slices.Contains(before, "tracker_probe") {
+		t.Fatalf("the boot epoch never had the shared tool: %v", before)
+	}
+
+	// The same document, re-applied — the rotation gesture an operator
+	// makes, and what the reconciler does at boot straight after seeding.
+	if _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	after := surfaceOf(t, e, "ceo")
+	if !slices.Contains(after, "tracker_probe") {
+		t.Fatalf("the applied epoch lost the shared server's tools: %v\n"+
+			"the child is still running; only the new epoch's registry was "+
+			"never told about it", after)
+	}
+	for _, builtin := range []string{"lookup_colleague", "reflect_and_persist"} {
+		if !slices.Contains(after, builtin) {
+			t.Errorf("the applied epoch lost the %s builtin: %v", builtin, after)
+		}
+	}
+}
+
+// AND THE CHILD IS NOT RESTARTED FOR AN UNCHANGED SPEC.
+//
+// The tempting fix is to restart every server on every apply, which would
+// make the case above pass while tearing down every working child — on a
+// company with several seats and real vendors, seconds of every seat's tools
+// being absent for a config edit that touched none of them.
+func TestAnUnchangedServerIsNotRestartedByAnApply(t *testing.T) {
+	t.Parallel()
+	doc := mcpCompany(true, "PATH")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+
+	// The tool OBJECT identifies the child behind it: a restart builds new
+	// ones, so an unchanged pointer is proof the same process is serving.
+	first, ok := e.Company().Tools.Lookup("tracker_probe")
+	if !ok {
+		t.Fatal("the boot epoch has no shared tool to compare")
+	}
+	if _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	second, ok := e.Company().Tools.Lookup("tracker_probe")
+	if !ok {
+		t.Fatal("the applied epoch has no shared tool")
+	}
+	if first.Tool != second.Tool {
+		t.Error("an apply that changed nothing replaced the server's tools, " +
+			"which means it restarted a healthy child")
+	}
+}
+
+// A CHANGED SPEC DOES RESTART IT, which is the other half: without it an
+// operator can edit a shared server's environment, watch the apply report
+// success, and keep being served by the child that holds the old value.
+func TestAChangedServerSpecIsRestartedByAnApply(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{
+		Company: parsedCompany(t, mcpCompany(true, "PATH")),
+	})
+	if _, ok := e.Company().Tools.Lookup("tracker_probe"); !ok {
+		t.Fatal("the boot epoch has no shared tool")
+	}
+
+	// The echo variable is what the child reports in its tool description,
+	// so a changed one is visible from outside only if the child was
+	// actually replaced.
+	next := strings.Replace(mcpCompany(true, "PATH"),
+		toolServerEchoEnv+`: "PATH"`, toolServerEchoEnv+`: "SEAT_TOKEN"`, 1)
+	if _, err := e.Apply(t.Context(), parsedCompany(t, next)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	got := describes(t, e, "ceo", "tracker_probe")
+	if !strings.HasPrefix(got, "SEAT_TOKEN=") {
+		t.Errorf("the tool still reports %q: the edited spec never reached a "+
+			"child, so the apply reported a change it did not make", got)
+	}
+}

@@ -257,6 +257,77 @@ func (b *Bridge) Restart(ctx context.Context, spec Spec) (Change, error) {
 	return mergeChanges(stopChange, addChange), nil
 }
 
+// Reconcile brings one server to spec, whichever state it is already in, and
+// reports what the catalogue must change.
+//
+// THIS IS THE VERB A CONFIG APPLY WANTS, and Add is not. An apply builds a
+// FRESH tool registry for the new epoch and then equips it, so it has to be
+// told this server's tools again even when nothing about the server changed —
+// while the CHILD must keep running, because it is a process and restarting
+// every one of them on every apply would tear down working servers to arrive
+// back where it started.
+//
+// Add cannot do that. It refuses a name it already runs, and the caller that
+// treated the refusal as a failed server got an epoch whose catalogue silently
+// lacked every shared server's tools. Measured on the Nimbus example: the
+// engine seeds its company at boot and immediately applies it, so the shared
+// servers reached exactly one epoch — the one that was replaced a second
+// later — and no seat ever saw them.
+//
+// Three cases, one call:
+//
+//   - not running        -> Add
+//   - running, same spec -> the live tools it contributes, no restart
+//   - running, new spec  -> Restart, so a config edit actually takes effect
+//
+// The third is the other half of the same bug: without it an operator could
+// change a shared server's command, args or environment and the apply would
+// report success while the old child kept serving.
+func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
+	if err := spec.validate(); err != nil {
+		return Change{}, err
+	}
+	b.mu.RLock()
+	entry, running := b.servers[spec.Name]
+	var same bool
+	if running {
+		same = entry.spec.equal(spec)
+	}
+	b.mu.RUnlock()
+
+	switch {
+	case !running:
+		return b.Add(ctx, spec)
+	case same:
+		// Added, not Removed: this is a fresh registry being told what
+		// already exists, not the catalogue changing. Anything this
+		// server contributes that another server currently shadows is
+		// left out, so the registry ends up with the same surface the
+		// bridge is actually serving.
+		return Change{Added: b.liveToolsOf(spec.Name)}, nil
+	default:
+		return b.Restart(ctx, spec)
+	}
+}
+
+// liveToolsOf is one server's contribution to the LIVE catalogue — its tools
+// minus any that another server currently wins the name for.
+func (b *Bridge) liveToolsOf(name string) []*Tool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	entry, ok := b.servers[name]
+	if !ok {
+		return nil
+	}
+	out := make([]*Tool, 0, len(entry.tools))
+	for _, t := range entry.tools {
+		if b.tools[t.Name()] == t {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // Has reports whether the bridge runs a server by this name.
 //
 // A server that is still starting is NOT one the bridge has. That is the whole

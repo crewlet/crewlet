@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -72,6 +73,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		return
 	}
 	env := e.resolver()
+	specs := make([]mcp.Spec, 0, len(c.Config.MCPServers))
 	for _, server := range c.Config.MCPServers {
 		if !server.IsShared() {
 			continue
@@ -82,8 +84,14 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 				"detail", "this server contributes no tools; the rest of the company still starts")
 			continue
 		}
-		register(ctx, e.mcp, c.Tools, spec)
+		specs = append(specs, spec)
 	}
+	// RECONCILED, not added. This runs on every apply against a bridge
+	// whose children are already up — and the epoch it is filling is a
+	// brand-new registry that has to be told about them again. Add refuses
+	// a name it already runs, which cost the applied epoch every shared
+	// server's tools; see Bridge.Reconcile.
+	startAll(ctx, c.Tools, specs, e.mcp.Reconcile)
 }
 
 // stopSharedServers tears down what startSharedServers brought up.
@@ -133,10 +141,44 @@ func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string
 	// CLONED, not shared: the seat's own tools must not reach a peer seat,
 	// and the epoch's registry is read by every other seat on this node.
 	reg := c.Tools.Clone()
-	for _, spec := range specs {
-		register(ctx, bridge, reg, spec)
-	}
+	startAll(ctx, reg, specs, bridge.Add)
 	return reg
+}
+
+// startAll brings a set of servers up CONCURRENTLY and files what they
+// contribute into reg in SPEC ORDER.
+//
+// Concurrent because each one is a subprocess spawn, a protocol handshake and
+// a tools/list — hundreds of milliseconds at best and seconds against a vendor
+// that is slow or absent — and they have nothing to do with each other. Done
+// one at a time, a seat with three servers took three times as long to attach
+// as its slowest one, and a seat is not consuming its mailbox until it does.
+//
+// Filed in SPEC ORDER regardless of which finished first, because the registry
+// is keyed by tool name and a collision is resolved by who registered last.
+// Filing in completion order would hand a seat a different surface depending
+// on which vendor happened to answer first — a company whose behaviour changes
+// between restarts for no reason anybody can see.
+func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec,
+	start func(context.Context, mcp.Spec) (mcp.Change, error),
+) {
+	type outcome struct {
+		change mcp.Change
+		err    error
+	}
+	out := make([]outcome, len(specs))
+	var wg sync.WaitGroup
+	for i, spec := range specs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i].change, out[i].err = start(ctx, spec)
+		}()
+	}
+	wg.Wait()
+	for i, spec := range specs {
+		file(ctx, reg, spec.Name, out[i].change, out[i].err)
+	}
 }
 
 // setSeatBridge installs a seat's bridge, stopping any predecessor.
@@ -206,13 +248,13 @@ func (e *Engine) stopSeatServers(ctx context.Context, handle string) {
 // The registrations carry their own origin, so nothing here can file a
 // server's tool as a builtin — which is the reading that makes a failed
 // server look like a missing builtin instead.
-func register(ctx context.Context, bridge *mcp.Bridge, reg *tools.Registry, spec mcp.Spec) {
-	change, err := bridge.Add(ctx, spec)
+// file applies one bridge change to one registry.
+func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Change, err error) {
 	if err != nil {
 		// Logged, not returned. One vendor's server failing to start
 		// costs that server's tools; failing the apply over it would
 		// take the whole company down with it.
-		log.ErrorContext(ctx, "mcp_server_failed", "server", spec.Name, "error", err,
+		log.ErrorContext(ctx, "mcp_server_failed", "server", server, "error", err,
 			"detail", "this server's tools are absent; its group is missing from the "+
 				"catalogue rather than the builtins shrinking")
 		return
@@ -227,12 +269,12 @@ func register(ctx context.Context, bridge *mcp.Bridge, reg *tools.Registry, spec
 	for _, registration := range change.Registrations() {
 		if err := reg.RegisterMCP(registration); err != nil {
 			log.WarnContext(ctx, "mcp_tool_refused",
-				"server", spec.Name, "tool", registration.Tool.Name(), "error", err)
+				"server", server, "tool", registration.Tool.Name(), "error", err)
 			continue
 		}
 		filed++
 	}
-	log.InfoContext(ctx, "mcp_server_started", "server", spec.Name, "tools", filed)
+	log.InfoContext(ctx, "mcp_server_started", "server", server, "tools", filed)
 }
 
 // seatSpecs is every per-role child this seat needs.

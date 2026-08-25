@@ -168,12 +168,76 @@ func (n *Node) ID() string { return n.cfg.NodeID }
 func (n *Node) Owner() string { return n.cfg.Owner }
 
 // Start begins claiming seats and consuming their mail.
+//
+// The mailboxes come up BEFORE the claiming, and that ordering is the point —
+// see [Node.ensureMailboxes].
 func (n *Node) Start(ctx context.Context) error {
 	if err := n.cfg.Queue.Start(ctx); err != nil {
 		return fmt.Errorf("node: start queue: %w", err)
 	}
+	n.EnsureMailboxes(ctx)
 	n.host.Start(ctx)
 	return nil
+}
+
+// EnsureMailboxes creates the durable subscription behind every agent seat in
+// the company — not just the ones this node claims.
+//
+// A DURABLE SUBSCRIPTION IS A SEAT'S MAILBOX: it exists without a consumer and
+// retains what is published while nothing is attached. Its absence is not an
+// error anybody sees, because publishing to a topic no subscription covers
+// DROPS THE EVENT SILENTLY. The queue contract documents EnsureSubscription
+// for exactly this and nothing in the engine ever called it, so a seat's mail
+// existed only from the moment some node happened to attach a consumer to it.
+//
+// That is a whole class of quiet loss. A company's seats are claimed a few at
+// a time across successive sweeps, so every webhook, notification and
+// scheduled trigger aimed at a seat this fleet had not reached yet went
+// nowhere — during boot, during a rollout, and permanently for any seat no
+// live node's placement matches.
+//
+// EVERY seat, not this node's share: a mailbox is a fact about the company,
+// and the node that ends up serving a seat may not be this one. Creating one
+// is idempotent, so every node doing it costs a no-op.
+//
+// Best effort, per seat. A subscription that cannot be created is logged and
+// the rest still get theirs — the alternative is a node that refuses to start
+// because one topic was unreachable, which loses strictly more mail.
+//
+// Exported so a config apply can run it again: a revision that ADDS a role
+// adds a seat, and that seat's mail is dropped until somebody makes it a
+// mailbox.
+func (n *Node) EnsureMailboxes(ctx context.Context) {
+	created := 0
+	for _, seat := range n.cfg.Seats() {
+		inbox, group := topics.AgentInbox(seat.Handle), topics.AgentInboxGroup(seat.Handle)
+		if inbox == "" || group == "" {
+			continue
+		}
+		made, err := n.cfg.Queue.EnsureSubscription(ctx, inbox, group)
+		if errors.Is(err, queue.ErrNotLive) {
+			// The queue is not up yet, which is not a fault: the boot
+			// apply runs before Start and Start does this again a moment
+			// later. Returning rather than continuing, because every
+			// remaining seat would report the same thing — one honest
+			// line beats seven identical warnings about a state that is
+			// about to resolve itself.
+			n.log.Debug("seat_mailboxes_deferred",
+				"detail", "the broker client is not started yet; the node's "+
+					"own start creates these")
+			return
+		}
+		if err != nil {
+			n.log.Warn("seat_mailbox_unavailable", "handle", seat.Handle, "error", err,
+				"detail", "mail published to this seat before it is claimed is "+
+					"dropped rather than retained")
+			continue
+		}
+		if made {
+			created++
+		}
+	}
+	n.log.Info("seat_mailboxes_ready", "seats", len(n.cfg.Seats()), "created", created)
 }
 
 // Stop gives up every seat and stops consuming.

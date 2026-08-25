@@ -139,6 +139,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	previous := e.Company()
 	e.epoch.current.Store(next)
 
+	// AFTER the epoch is published, because this reads the seat list off
+	// the CURRENT company: a revision that adds a role adds a seat, and
+	// until something creates its mailbox every event published to it is
+	// dropped rather than retained. Nil on an engine built without a node
+	// — `crewlet validate` applies to nothing.
+	if e.node != nil {
+		e.node.EnsureMailboxes(ctx)
+	}
+
 	log.InfoContext(ctx, "config_applied",
 		"company", next.Config.Name, "seats", len(next.Seats()),
 		"previous_seats", seatCount(previous))
