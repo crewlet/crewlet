@@ -277,9 +277,17 @@ func (f *fleet) nodesThatRan(handle string) []string {
 }
 
 // eventually polls until cond holds or the deadline passes.
+//
+// The budget is a MULTIPLE OF THE LEASE TTL, not a wall-clock number: every
+// convergence this test waits on is counted in sweeps (TTL/8) and heartbeats
+// (TTL/4), so a fixed number silently stops meaning the same thing the moment
+// fleetTTL changes. 30x is deliberately generous — the suite runs 77 packages
+// in parallel, and a goroutine on a loaded CI box can lose the scheduler for
+// whole seconds at a time. The old fixed 20 s (10x) passed every run in
+// isolation and failed under full-suite load.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(30 * fleetTTL)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

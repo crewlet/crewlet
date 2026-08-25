@@ -53,7 +53,7 @@ func TestPerValueElisionKeepsTheDiscriminator(t *testing.T) {
 	got := FormatCalls([]Call{{
 		Name: "slack_post",
 		Args: map[string]any{"channel": "C0ENGINEERING", "text": body},
-	}}, LedgerFormat(nil, nil))
+	}}, Format(nil, nil))
 
 	if !strings.Contains(got, "C0ENGINEERING") {
 		t.Errorf("the discriminating argument was lost:\n%s", got)
@@ -71,7 +71,7 @@ func TestValuesThatFitKeepTheirNativeType(t *testing.T) {
 	// A number that survives must stay a number. Round-tripping every value
 	// through its JSON rendering would turn 42 into "42", and a ledger that
 	// restates the arguments with different types misreports what was sent.
-	got := renderArgs(map[string]any{"count": 42, "ok": true}, LedgerFormat(nil, nil))
+	got := renderArgs(map[string]any{"count": 42, "ok": true}, Format(nil, nil))
 	var back map[string]any
 	if err := json.Unmarshal([]byte(got), &back); err != nil {
 		t.Fatalf("rendered args are not JSON: %v (%s)", err, got)
@@ -166,7 +166,7 @@ func TestOnlyReadsAreEverDropped(t *testing.T) {
 	}
 	calls = append(calls, Call{Name: "slack_post", Args: map[string]any{"channel": "C1"}})
 
-	got := FormatCalls(calls, LedgerFormat(nil, []string{"jira_get_issue"}))
+	got := FormatCalls(calls, Format(nil, []string{"jira_get_issue"}))
 	if strings.Count(got, "jira_get_issue") != MaxReadCalls {
 		t.Errorf("reads rendered = %d, want the cap %d", strings.Count(got, "jira_get_issue"), MaxReadCalls)
 	}
@@ -183,7 +183,7 @@ func TestOnlyReadsAreEverDropped(t *testing.T) {
 	for range 20 {
 		writes = append(writes, Call{Name: "slack_post"})
 	}
-	if n := strings.Count(FormatCalls(writes, LedgerFormat(nil, nil)), "slack_post"); n != 20 {
+	if n := strings.Count(FormatCalls(writes, Format(nil, nil)), "slack_post"); n != 20 {
 		t.Errorf("writes rendered = %d, want all 20", n)
 	}
 }
@@ -197,7 +197,7 @@ func TestReadsAreMarkedSoTheNextRoundMayRerunThem(t *testing.T) {
 	got := FormatCalls([]Call{
 		{Name: "jira_get_issue"},
 		{Name: "slack_post"},
-	}, LedgerFormat(nil, []string{"jira_get_issue"}))
+	}, Format(nil, []string{"jira_get_issue"}))
 
 	if !strings.Contains(got, "jira_get_issue() → success (read)") {
 		t.Errorf("the read carries no marker:\n%s", got)
@@ -229,7 +229,7 @@ func TestFailureRendersAsFailureNotSuccess(t *testing.T) {
 	got := FormatCalls([]Call{
 		{Name: "slack_post", Failed: true, Result: "channel_not_found"},
 		{Name: "jira_note", Result: "error: none found, which is fine"},
-	}, LedgerFormat(nil, nil))
+	}, Format(nil, nil))
 
 	if !strings.Contains(got, "slack_post() → error: channel_not_found") {
 		t.Errorf("a failed call did not render as an error:\n%s", got)

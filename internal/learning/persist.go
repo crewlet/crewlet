@@ -8,13 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/google/uuid"
 )
 
 // PersistDecider is the post-turn classifier that decides what, if anything,
@@ -619,7 +620,7 @@ func DescribeSender(id types.CanonicalIdentity) string {
 // Anything else — null, a word, a negative — takes the default: the tier was
 // chosen, only its duration was not.
 func coerceTTLDays(v any) int {
-	days := 0
+	var days int
 	switch n := v.(type) {
 	case float64:
 		days = int(n)

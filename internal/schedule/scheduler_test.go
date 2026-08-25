@@ -143,7 +143,7 @@ func roleOrg(schedules ...org.Schedule) *org.Organization {
 func unitOrg(target org.ScheduleTarget) *org.Organization {
 	return &org.Organization{
 		Name: "Acme",
-		Units: []*org.OrgUnit{{
+		Units: []*org.Unit{{
 			Name: "Quality",
 			Type: org.UnitTypeTeam,
 			Lead: "QA Lead",
@@ -489,7 +489,7 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 		Name: "Sarah Chen", Kind: org.KindHuman,
 		Contact: &org.HumanContact{SlackUserID: "U0HUMAN"},
 	}
-	each := &org.Organization{Name: "Acme", Units: []*org.OrgUnit{{
+	each := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
 		Roles: []*org.Role{{Name: "QA Lead", DeclaredHandle: "qa-lead"}, human},
 		Schedules: []org.Schedule{{
@@ -503,7 +503,7 @@ func TestAHumanSeatIsNeverARunner(t *testing.T) {
 	}
 	requireTopics(t, h.q.inboxTopics(), "crewlet.agent.qa-lead.inbox")
 
-	lead := &org.Organization{Name: "Acme", Units: []*org.OrgUnit{{
+	lead := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Quality", Type: org.UnitTypeTeam, Lead: "Sarah Chen",
 		Roles: []*org.Role{human, {Name: "QA Dev", DeclaredHandle: "qa-dev"}},
 		Schedules: []org.Schedule{{

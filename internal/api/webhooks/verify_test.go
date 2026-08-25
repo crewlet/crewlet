@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/gitlab"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/gitlab"
 )
 
 // The scheme-by-scheme checks. They go through the ROUTES rather than through

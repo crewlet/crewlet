@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// The prompt: what a code-host event asks of the seat it reached.
+// Prompt is what a code-host event asks of the seat it reached.
 //
 // Like the tracker's, it dispatches on the ROUTING REASON the parser
 // stamped, because one merge request event reaches a reviewer, an assignee

@@ -76,7 +76,7 @@ func BuildSession(in SessionInput) Session {
 		Trigger:       elide(in.Trigger, TriggerLimit),
 		PlanSummary:   elide(in.PlanSummary, PlanSummaryLimit),
 		PlanReasoning: elide(in.PlanReasoning, ReasoningLimit),
-		Calls:         FormatCalls(in.Calls, LedgerFormat(in.Skip, in.Reads)),
+		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
 		Reply:         elide(in.Reply, ReplyLimit),
 		Decision:      in.Decision,
 		CompletedWork: elide(in.CompletedWork, NoteLimit),

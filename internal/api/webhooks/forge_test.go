@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 )
 
 // The Forge tests mint a REAL RSA key and sign REAL tokens with it. Verifying

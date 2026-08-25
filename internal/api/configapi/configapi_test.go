@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
-	"gopkg.in/yaml.v3"
 )
 
 var pinned = time.Date(2026, 8, 23, 15, 0, 0, 0, time.UTC)

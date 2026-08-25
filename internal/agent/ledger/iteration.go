@@ -52,8 +52,8 @@ type FormatOptions struct {
 	MaxReadCalls int
 }
 
-// LedgerFormat is the budgeted form the cross-round and cross-turn ledgers use.
-func LedgerFormat(skip, reads []string) FormatOptions {
+// Format is the budgeted form the cross-round and cross-turn ledgers use.
+func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
 		Skip: skip, Reads: reads,
 		ValueLimit: ValueLimit, BlobLimit: BlobLimit, MaxReadCalls: MaxReadCalls,
@@ -169,7 +169,7 @@ func RenderIterations(records []Iteration, skip []string) string {
 		if rec.PlanSummary != "" {
 			lines = append(lines, "Planned: "+elide(rec.PlanSummary, PlanSummaryLimit))
 		}
-		opts := LedgerFormat(skip, rec.Reads)
+		opts := Format(skip, rec.Reads)
 		for _, group := range []struct {
 			label string
 			calls []Call

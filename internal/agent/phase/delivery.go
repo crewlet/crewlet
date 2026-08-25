@@ -8,6 +8,10 @@ import "slices"
 // Phase names one pass of the turn engine.
 type Phase string
 
+// The phases. Plan, Execute and Review are the turn's own three passes;
+// Subagent, Auxiliary, Judge and Sandbox are the scopes a seat's work spills
+// into, each with its own provider chain so an operator can point cheap work
+// at a cheap model.
 const (
 	Plan      Phase = "plan"
 	Execute   Phase = "execute"

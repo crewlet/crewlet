@@ -32,14 +32,14 @@ import (
 type FollowReason string
 
 const (
-	// FollowMention: the seat was named personally.
+	// FollowMention means the seat was named personally.
 	FollowMention FollowReason = "mention"
-	// FollowCollective: an @channel / @here / @all style address.
+	// FollowCollective means an @channel / @here / @all style address.
 	FollowCollective FollowReason = "collective"
-	// FollowParticipated: the seat posted in the thread, which is what
+	// FollowParticipated means the seat posted in the thread, which is what
 	// every chat client does when a person replies.
 	FollowParticipated FollowReason = "participated"
-	// FollowExplicit: something subscribed the seat directly.
+	// FollowExplicit means something subscribed the seat directly.
 	FollowExplicit FollowReason = "explicit"
 )
 
@@ -111,22 +111,22 @@ type ChatMessage struct {
 type Targeting int
 
 const (
-	// TargetingUnknown: the backend has no answer, so the text decides
+	// TargetingUnknown means the backend has no answer, so the text decides
 	// alone. The ordinary case, and the one a backfilled message re-read
 	// over a REST API always falls into — those carry no mention list.
 	TargetingUnknown Targeting = iota
 
-	// TargetingPersonal: this seat is the addressee whatever the text
+	// TargetingPersonal means this seat is the addressee whatever the text
 	// says. A direct message, where there is nobody else it could be for
 	// — so even an "@channel" typed into one is addressed to this seat.
 	TargetingPersonal
 
-	// TargetingIncluded: this seat was among the targets, but the backend
+	// TargetingIncluded means this seat was among the targets, but the backend
 	// cannot say whether personally. The text decides why; being included
 	// at all is enough to follow the thread.
 	TargetingIncluded
 
-	// TargetingExcluded: this seat was NOT a target, and this VETOES the
+	// TargetingExcluded means this seat was NOT a target, and this VETOES the
 	// text. The backend resolved the addressees and this seat is not among
 	// them, which outranks anything a pattern thinks it found.
 	TargetingExcluded

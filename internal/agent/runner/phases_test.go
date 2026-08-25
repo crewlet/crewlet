@@ -134,7 +134,7 @@ func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry
 		}
 	}
 	if err := reg.RegisterWith(stubTool{name: "slack_post", out: "posted"},
-		tools.MCPOrigin("slack"), tools.Annotations{}); err != nil {
+		tools.Origin("slack"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// A MULTI-LINE description, because a real MCP server publishes
@@ -144,13 +144,13 @@ func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry
 	if err := reg.RegisterWith(stubTool{
 		name: "slack_history", out: "history",
 		desc: "Read a channel's history.\n\nAccepts a cursor for paging, and\nreturns up to 200 messages.",
-	}, tools.MCPOrigin("slack"), tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
+	}, tools.Origin("slack"), tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// A SECOND server, so "list one server's tools" is distinguishable from
 	// "list every MCP tool". With one server the filter is unobservable.
 	if err := reg.RegisterWith(stubTool{name: "jira_create", out: "created"},
-		tools.MCPOrigin("jira"), tools.Annotations{}); err != nil {
+		tools.Origin("jira"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

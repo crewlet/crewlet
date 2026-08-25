@@ -28,7 +28,7 @@ type Entry struct {
 	// resolution needs the unit itself — its direct members, its lead — and
 	// looking it up again by name on every fire would walk the tree twice
 	// and could disagree with the walk that produced this entry.
-	Unit *org.OrgUnit
+	Unit *org.Unit
 
 	// Schedule is the declaration as written in config.
 	Schedule org.Schedule

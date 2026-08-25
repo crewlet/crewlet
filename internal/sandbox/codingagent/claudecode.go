@@ -32,6 +32,7 @@ var _ CLI = ClaudeCode{}
 // NewClaudeCode returns the runner.
 func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 
+// Name is the coding agent's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
 // Command builds the headless `claude -p` invocation.

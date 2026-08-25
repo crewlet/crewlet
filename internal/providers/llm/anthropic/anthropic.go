@@ -283,7 +283,7 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 		maxTokens = int64(req.MaxTokens)
 	}
 	params := sdk.MessageNewParams{
-		Model:    sdk.Model(p.model),
+		Model:    p.model,
 		Messages: messages,
 	}
 

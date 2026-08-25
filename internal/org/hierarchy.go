@@ -66,7 +66,7 @@ func (o *Organization) Ancestors(r *Role) []*Role {
 
 // UnitFor returns the unit that holds r as a DIRECT member, or nil for a
 // root-level seat.
-func (o *Organization) UnitFor(r *Role) *OrgUnit {
+func (o *Organization) UnitFor(r *Role) *Unit {
 	for u := range o.AllUnits() {
 		if u.Role(r.Name) != nil {
 			return u
@@ -81,7 +81,7 @@ func (o *Organization) UnitFor(r *Role) *OrgUnit {
 // The chain is what onboarding walks (a seat reads the Onboarding page of
 // every scope above it) and what the engine hashes to decide that a seat
 // has MOVED and must onboard again.
-func (o *Organization) UnitChainFor(r *Role) []*OrgUnit {
+func (o *Organization) UnitChainFor(r *Role) []*Unit {
 	for _, u := range o.Units {
 		if chain := buildUnitChain(u, r.Name); chain != nil {
 			slices.Reverse(chain)
@@ -94,9 +94,9 @@ func (o *Organization) UnitChainFor(r *Role) []*OrgUnit {
 // buildUnitChain collects the units from the one holding roleName back up
 // to u, innermost first. Reversing once at the end beats prepending at
 // every level.
-func buildUnitChain(u *OrgUnit, roleName string) []*OrgUnit {
+func buildUnitChain(u *Unit, roleName string) []*Unit {
 	if u.Role(roleName) != nil {
-		return []*OrgUnit{u}
+		return []*Unit{u}
 	}
 	for _, c := range u.Children {
 		if chain := buildUnitChain(c, roleName); chain != nil {
@@ -109,10 +109,10 @@ func buildUnitChain(u *OrgUnit, roleName string) []*OrgUnit {
 // EffectiveLead returns the seat leading u, including a lead inherited from
 // an ancestor.
 //
-// [OrgUnit.LeadRole] answers only for a lead inside u's own subtree; an
+// [Unit.LeadRole] answers only for a lead inside u's own subtree; an
 // inherited one lives outside it, so this falls back to an org-wide lookup.
 // Nil means the unit has no lead, or names one that does not exist yet.
-func (o *Organization) EffectiveLead(u *OrgUnit) *Role {
+func (o *Organization) EffectiveLead(u *Unit) *Role {
 	if u.Lead == "" {
 		return nil
 	}
@@ -147,7 +147,7 @@ func (o *Organization) LeadDepth(r *Role) int {
 	return -1
 }
 
-func leadDepth(u *OrgUnit, roleName string, depth int) int {
+func leadDepth(u *Unit, roleName string, depth int) int {
 	if u.Lead == roleName {
 		return depth
 	}

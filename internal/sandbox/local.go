@@ -204,22 +204,27 @@ func collectCredentials(l boxLayout, files map[string]string) {
 
 // recordCredentialMap persists the box's credential map so Connect can sync it
 // back.
-func recordCredentialMap(l boxLayout, files map[string]string) {
+//
+// It RETURNS its failure rather than logging it, even though the caller only
+// logs: the previous shape wrote the WriteFile error into an `if err :=`
+// binding that shadowed the one being checked, so the warning this function
+// exists to emit could never fire and no test could have caught it. A
+// returned error is the shape a test can assert on.
+func recordCredentialMap(l boxLayout, files map[string]string) error {
 	if len(files) == 0 {
-		return
+		return nil
 	}
 	blob, err := json.Marshal(files)
 	if err != nil {
-		return
+		return fmt.Errorf("encoding the credential map: %w", err)
 	}
-	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err == nil {
-		err = os.WriteFile(l.credentialsFile(), blob, hostbox.FileMode)
+	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err != nil {
+		return fmt.Errorf("preparing %q: %w", l.meta(), err)
 	}
-	if err != nil {
-		// The map names paths, not secrets, but losing it means a refreshed
-		// login is not written back — worth saying out loud.
-		log.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", l.id, "error", err.Error())
+	if err := os.WriteFile(l.credentialsFile(), blob, hostbox.FileMode); err != nil {
+		return fmt.Errorf("writing %q: %w", l.credentialsFile(), err)
 	}
+	return nil
 }
 
 // readCredentialMap is the map recorded at Create; empty when absent.
@@ -398,7 +403,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	seedCredentials(layout, spec.CredentialFiles)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
-	recordCredentialMap(layout, spec.CredentialFiles)
+	if err := recordCredentialMap(layout, spec.CredentialFiles); err != nil {
+		// The map names paths, not secrets, but losing it means a
+		// refreshed login is never written back to the shared directory
+		// — worth saying out loud, and not worth failing the box for.
+		log.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", layout.id, "error", err.Error())
+	}
 	touchAlive(layout)
 
 	if l.opts.Containment == Direct {

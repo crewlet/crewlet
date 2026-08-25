@@ -11,10 +11,10 @@ import (
 func hierarchyOrg() *Organization {
 	return normalized(&Organization{
 		Name: "Acme AI",
-		Units: []*OrgUnit{
+		Units: []*Unit{
 			{
 				Name: "Engineering", Type: UnitTypeDepartment, Lead: "VP Engineering",
-				Children: []*OrgUnit{{
+				Children: []*Unit{{
 					Name: "Backend", Type: UnitTypeTeam, Lead: "VP Engineering",
 					Roles: []*Role{
 						{Name: "VP Engineering", Manages: []string{"Tech Lead"}},
@@ -27,7 +27,7 @@ func hierarchyOrg() *Organization {
 			},
 			{
 				Name: "Product", Type: UnitTypeDepartment,
-				Children: []*OrgUnit{{
+				Children: []*Unit{{
 					Name: "PM Team", Type: UnitTypeTeam, Lead: "Product Manager",
 					Roles: []*Role{{Name: "Product Manager"}},
 				}},
@@ -118,7 +118,7 @@ func TestAncestorsClimbThroughARootSeat(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "CEO", Manages: []string{"VP"}}},
-		Units: []*OrgUnit{{Name: "Eng", Lead: "VP", Roles: []*Role{
+		Units: []*Unit{{Name: "Eng", Lead: "VP", Roles: []*Role{
 			{Name: "VP", Manages: []string{"Dev"}}, {Name: "Dev"},
 		}}},
 	})
@@ -159,11 +159,11 @@ func TestUnitForAndUnitChain(t *testing.T) {
 
 func TestUnitChainReachesEveryLevel(t *testing.T) {
 	t.Parallel()
-	o := normalized(&Organization{Name: "BigCorp", Units: []*OrgUnit{{
+	o := normalized(&Organization{Name: "BigCorp", Units: []*Unit{{
 		Name: "Technology", Type: UnitTypeDivision,
-		Children: []*OrgUnit{{
+		Children: []*Unit{{
 			Name: "Engineering", Type: UnitTypeDepartment,
-			Children: []*OrgUnit{{
+			Children: []*Unit{{
 				Name: "Platform", Lead: "Platform Lead",
 				Roles: []*Role{{Name: "Platform Lead"}, {Name: "Platform Dev"}},
 			}},
@@ -183,7 +183,7 @@ func TestRootSeatHasNoUnit(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "CEO", Manages: []string{"Dev"}}},
-		Units: []*OrgUnit{{Name: "Team", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+		Units: []*Unit{{Name: "Team", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
 	})
 	ceo := o.Role("CEO")
 	if got := o.UnitFor(ceo); got != nil {
@@ -226,16 +226,16 @@ func TestEffectiveLeadResolvesEveryPlacement(t *testing.T) {
 	}{
 		{
 			name: "a direct member",
-			org: &Organization{Name: "T", Units: []*OrgUnit{{
+			org: &Organization{Name: "T", Units: []*Unit{{
 				Name: "Backend", Lead: "Lead", Roles: []*Role{{Name: "Lead"}, {Name: "Dev"}},
 			}}},
 			unit: "Backend", want: "Lead",
 		},
 		{
 			name: "a seat in a descendant unit",
-			org: &Organization{Name: "T", Units: []*OrgUnit{{
+			org: &Organization{Name: "T", Units: []*Unit{{
 				Name: "Engineering", Lead: "Dev Lead",
-				Children: []*OrgUnit{{Name: "Backend", Roles: []*Role{{Name: "Dev Lead"}, {Name: "Dev"}}}},
+				Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev Lead"}, {Name: "Dev"}}}},
 			}}},
 			unit: "Engineering", want: "Dev Lead",
 		},
@@ -243,15 +243,15 @@ func TestEffectiveLeadResolvesEveryPlacement(t *testing.T) {
 			// Inherited leads live OUTSIDE the unit's own subtree, which is
 			// the case the unit-local lookup cannot answer.
 			name: "a lead inherited from an ancestor",
-			org: &Organization{Name: "T", Units: []*OrgUnit{{
+			org: &Organization{Name: "T", Units: []*Unit{{
 				Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
-				Children: []*OrgUnit{{Name: "Backend", Roles: []*Role{{Name: "Dev A"}}}},
+				Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev A"}}}},
 			}}},
 			unit: "Backend", want: "VP Eng",
 		},
 		{
 			name: "no lead anywhere",
-			org: &Organization{Name: "T", Units: []*OrgUnit{{
+			org: &Organization{Name: "T", Units: []*Unit{{
 				Name: "Backend", Roles: []*Role{{Name: "Dev"}},
 			}}},
 			unit: "Backend", want: "",
@@ -275,9 +275,9 @@ func TestInheritedLeadIsAFullLead(t *testing.T) {
 	t.Parallel()
 	// Nothing downstream distinguishes an inherited lead from a declared
 	// one — that is the point of the cascade.
-	o := normalized(&Organization{Name: "T", Units: []*OrgUnit{{
+	o := normalized(&Organization{Name: "T", Units: []*Unit{{
 		Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
-		Children: []*OrgUnit{{Name: "Backend", Roles: []*Role{{Name: "Dev"}}}},
+		Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev"}}}},
 	}}})
 	vp := o.Role("VP Eng")
 	backend := o.Unit("Backend")

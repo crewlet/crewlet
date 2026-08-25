@@ -264,12 +264,19 @@ func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) 
 // result files that do not exist until the job finishes, and a poll is not an
 // error.
 func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	// The RESOLVE failure is raised, unlike the read below. It means the
+	// path left the box — a caller bug, or an escape attempt — and
+	// answering "empty" would report a refused traversal as a file that
+	// merely is not there yet, which is the one reading a poller acts on.
 	target, err := b.resolve(path)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	content, err := os.ReadFile(target)
 	if err != nil {
+		//nolint:nilerr // Empty-on-missing IS the contract here: the
+		// detached runner polls for marker and result files that do not
+		// exist until the job finishes, and a poll is not an error.
 		return nil, nil
 	}
 	return content, nil
@@ -525,12 +532,15 @@ func (b *containerBox) WriteFile(ctx context.Context, path string, content []byt
 }
 
 func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	// Same split as directBox.ReadFile: an escaped path is an error, a
+	// file that is not there yet is empty.
 	target, err := b.hostPath(path)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	content, err := os.ReadFile(target)
 	if err != nil {
+		//nolint:nilerr // Empty-on-missing IS the contract; see directBox.ReadFile.
 		return nil, nil
 	}
 	return content, nil

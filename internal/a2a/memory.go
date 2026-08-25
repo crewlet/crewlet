@@ -18,6 +18,7 @@ type MemoryStore struct {
 	channels map[string]Channel
 }
 
+// NewMemoryStore returns the in-process twin of the durable A2A store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{channels: make(map[string]Channel)}
 }
@@ -44,6 +45,7 @@ func (m *MemoryStore) Open(_ context.Context, ch Channel) error {
 	return nil
 }
 
+// Get returns one channel by key.
 func (m *MemoryStore) Get(_ context.Context, id string) (Channel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,6 +60,7 @@ func (m *MemoryStore) Get(_ context.Context, id string) (Channel, error) {
 	return ch, nil
 }
 
+// Close ends a channel, so no further ask can land on it.
 func (m *MemoryStore) Close(_ context.Context, id string, at time.Time) (Channel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,6 +76,7 @@ func (m *MemoryStore) Close(_ context.Context, id string, at time.Time) (Channel
 	return ch, nil
 }
 
+// CountMessage records one message against a channel's own budget.
 func (m *MemoryStore) CountMessage(_ context.Context, id string, at time.Time) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -86,6 +90,7 @@ func (m *MemoryStore) CountMessage(_ context.Context, id string, at time.Time) (
 	return ch.Messages, nil
 }
 
+// CloseIdle ends every channel with no traffic since the cutoff.
 func (m *MemoryStore) CloseIdle(_ context.Context, cutoff, at time.Time) ([]Channel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -102,6 +107,7 @@ func (m *MemoryStore) CloseIdle(_ context.Context, cutoff, at time.Time) ([]Chan
 	return closed, nil
 }
 
+// Purge removes channels closed before the cutoff.
 func (m *MemoryStore) Purge(_ context.Context, cutoff time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

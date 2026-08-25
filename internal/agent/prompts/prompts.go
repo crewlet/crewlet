@@ -110,7 +110,7 @@ func (s Seat) reports() []*org.Role {
 	return s.Org.Reports(s.Role)
 }
 
-func (s Seat) unit() *org.OrgUnit {
+func (s Seat) unit() *org.Unit {
 	if !s.ok() {
 		return nil
 	}

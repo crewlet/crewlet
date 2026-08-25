@@ -224,6 +224,7 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 			// An unreadable liveness probe is not proof of death, and
 			// declaring the run over on one would collect a partial result
 			// from a job that is still working. The next tick asks again.
+			//nolint:nilerr // Deliberate: see the paragraph above.
 			return false, nil
 		}
 		if !alive {

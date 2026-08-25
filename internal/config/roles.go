@@ -521,15 +521,15 @@ func (u *Unit) validate(path string) error {
 	return p.err()
 }
 
-// OrgUnit transforms the authored unit into the runtime one, recursively.
+// Unit transforms the authored unit into the runtime one, recursively.
 //
 // It does NOT apply inheritance — credentials, leads and channels cascade
 // in [org.Organization.Normalize], which runs once over the whole tree.
 // Applying them here as well would be a second implementation of the same
 // rules, reached only on the load path, and the two would drift the first
 // time one was fixed.
-func (u *Unit) OrgUnit() *org.OrgUnit {
-	unit := &org.OrgUnit{
+func (u *Unit) Unit() *org.Unit {
+	unit := &org.Unit{
 		Name:          u.Name,
 		Type:          u.Type,
 		Purpose:       u.Purpose,
@@ -547,7 +547,7 @@ func (u *Unit) OrgUnit() *org.OrgUnit {
 		unit.Roles = append(unit.Roles, u.Roles[i].Seat())
 	}
 	for i := range u.Children {
-		unit.Children = append(unit.Children, u.Children[i].OrgUnit())
+		unit.Children = append(unit.Children, u.Children[i].Unit())
 	}
 	return unit
 }

@@ -519,7 +519,7 @@ func TestNoWorkIsAdmittedUntilTheAcquireHookReturns(t *testing.T) {
 	wantAdmits(t, h, "ceo", true)
 }
 
-func undeadAlarm(h *SeatHost, handle string) time.Time {
+func undeadAlarm(h *Host, handle string) time.Time {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if entry := h.undead[handle]; entry != nil {
@@ -528,7 +528,7 @@ func undeadAlarm(h *SeatHost, handle string) time.Time {
 	return time.Time{}
 }
 
-func undeadAttempts(h *SeatHost, handle string) int {
+func undeadAttempts(h *Host, handle string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if entry := h.undead[handle]; entry != nil {

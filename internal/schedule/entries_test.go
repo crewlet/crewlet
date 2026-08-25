@@ -20,7 +20,7 @@ func describeOrg() *org.Organization {
 			Name: "Ops", DeclaredHandle: "ops",
 			Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *", Task: "rotate"}},
 		}},
-		Units: []*org.OrgUnit{{
+		Units: []*org.Unit{{
 			Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
 			Roles: []*org.Role{
 				{Name: "QA Lead", DeclaredHandle: "qa-lead"},
@@ -194,7 +194,7 @@ func TestDescribeAndTheTickResolveRunnersIdentically(t *testing.T) {
 
 func TestEachRunnersExcludeHumanSeats(t *testing.T) {
 	t.Parallel()
-	o := &org.Organization{Name: "Acme", Units: []*org.OrgUnit{{
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Quality", Type: org.UnitTypeTeam, Lead: "QA Lead",
 		Roles: []*org.Role{
 			{Name: "QA Lead", DeclaredHandle: "qa-lead"},
@@ -216,7 +216,7 @@ func TestLeadRunnerIsEmptyWhenTheEffectiveLeadIsHuman(t *testing.T) {
 	// so this covers the lenient piecewise-bootstrap window: the runtime
 	// filter is what keeps a fire from being addressed to an inbox nothing
 	// consumes.
-	o := &org.Organization{Name: "Acme", Units: []*org.OrgUnit{{
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Quality", Type: org.UnitTypeTeam, Lead: "Sarah Chen",
 		Roles: []*org.Role{
 			{Name: "Sarah Chen", Kind: org.KindHuman, Contact: &org.HumanContact{SlackUserID: "U0HUMAN"}},
@@ -240,10 +240,10 @@ func TestALeadInheritedFromAnAncestorStillResolves(t *testing.T) {
 	t.Parallel()
 	// The reason `lead` survives as a target at all: it is DYNAMIC, and an
 	// inherited lead lives outside the unit's own subtree.
-	o := &org.Organization{Name: "Acme", Units: []*org.OrgUnit{{
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "VP Eng",
 		Roles: []*org.Role{{Name: "VP Eng", DeclaredHandle: "vp-eng"}},
-		Children: []*org.OrgUnit{{
+		Children: []*org.Unit{{
 			Name:  "Quality",
 			Type:  org.UnitTypeTeam,
 			Roles: []*org.Role{{Name: "QA Dev", DeclaredHandle: "qa-dev"}},
@@ -268,13 +268,13 @@ func TestEachResolvesDirectMembersOnly(t *testing.T) {
 	// A standup that fanned out to every descendant of a division would wake
 	// the whole company. Schedules are not inherited downward either, which
 	// is the same rule seen from the other end.
-	o := &org.Organization{Name: "Acme", Units: []*org.OrgUnit{{
+	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
 		Name: "Engineering", Type: org.UnitTypeDepartment, Lead: "VP Eng",
 		Roles: []*org.Role{{Name: "VP Eng", DeclaredHandle: "vp-eng"}},
 		Schedules: []org.Schedule{{
 			Name: "sync", Cron: "0 9 * * *", Task: "sync", Target: org.TargetEach,
 		}},
-		Children: []*org.OrgUnit{{
+		Children: []*org.Unit{{
 			Name:  "Quality",
 			Type:  org.UnitTypeTeam,
 			Roles: []*org.Role{{Name: "QA Dev", DeclaredHandle: "qa-dev"}},

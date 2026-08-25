@@ -174,12 +174,6 @@ func (t *Transport) lookup(handle string) (Seat, bool) {
 	return s.seat, ok
 }
 
-// Start connects every configured seat.
-//
-// A SEAT THAT FAILS DOES NOT STOP THE OTHERS. One bot's token being revoked
-// is an ordinary state — an operator rotating credentials one at a time —
-// and refusing to start the company over it would turn a one-seat problem
-// into a whole-company outage. The failure is reported per seat.
 // URL is the instance this transport talks to, resolved.
 //
 // Exported for the same reason [Client.URL] is: a caller diagnosing a chat
@@ -187,6 +181,13 @@ func (t *Transport) lookup(handle string) (Seat, bool) {
 // config holds — that one is usually a ${VAR}.
 func (t *Transport) URL() string { return t.cfg.URL }
 
+// Start connects every configured seat, opening the websocket fleet that
+// delivers to the seats this node holds.
+//
+// A SEAT THAT FAILS DOES NOT STOP THE OTHERS. One bot's token being revoked
+// is an ordinary state — an operator rotating credentials one at a time —
+// and refusing to start the company over it would turn a one-seat problem
+// into a whole-company outage. The failure is reported per seat.
 func (t *Transport) Start(ctx context.Context) error {
 	if len(t.cfg.Seats) == 0 {
 		log.Info("mattermost_no_seats_configured")

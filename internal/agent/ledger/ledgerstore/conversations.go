@@ -73,6 +73,7 @@ func NewConversations(db *store.DB) *SQLConversations { return &SQLConversations
 
 var _ Conversations = (*SQLConversations)(nil)
 
+// Append adds one turn to a thread's history. Writes fail open.
 func (s *SQLConversations) Append(ctx context.Context, handle, conversation string,
 	entry ledger.Session, workKey string, at time.Time, maxEntries int,
 ) error {
@@ -112,6 +113,9 @@ func (s *SQLConversations) Append(ctx context.Context, handle, conversation stri
 	})
 }
 
+// History returns a thread's prior turns, most recent last. Reads RAISE:
+// "unreadable" and "nothing said yet" are different facts, and a screen
+// that drew a database outage as a silent seat is why.
 func (s *SQLConversations) History(ctx context.Context, handle, conversation string, limit int) ([]ledger.Session, error) {
 	query := `SELECT entry FROM conversation_sessions
 	          WHERE agent_handle = ? AND conversation_key = ?
@@ -193,6 +197,7 @@ func (s *SQLConversations) Threads(ctx context.Context, handle string, limit int
 	return out, nil
 }
 
+// Purge deletes turns recorded before cutoff.
 func (s *SQLConversations) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := s.db.SQL().ExecContext(ctx,
 		`DELETE FROM conversation_sessions WHERE created_at < ?`, store.EncodeTime(cutoff))

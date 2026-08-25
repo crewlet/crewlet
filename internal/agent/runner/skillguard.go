@@ -69,8 +69,10 @@ func (g *reportingGuard) report(tool string) {
 		TurnID:    g.emit.turn.ID,
 		Iteration: g.round,
 	}, g.emit.turn.Trace)
-	// The turn's own context, not the call's: a refusal is worth recording
-	// even when the call that triggered it is being torn down, and the
-	// publish is fire-and-forget either way.
-	g.emit.publish(context.WithoutCancel(context.Background()), ev)
+	// A BACKGROUND context, because tools.Guard has none to inherit — the
+	// interface is called from a tool dispatch that passes only names. A
+	// refusal is worth recording even when the call that triggered it is
+	// being torn down, and the publish is fire-and-forget either way, so
+	// there is nothing here a cancellation should reach.
+	g.emit.publish(context.Background(), ev)
 }

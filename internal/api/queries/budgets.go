@@ -39,6 +39,8 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	}
 	organization, err := company.Organization()
 	if err != nil {
+		//nolint:nilerr // An unbuildable org means nothing on this screen can
+		// be stated; zeros with durable:false say exactly that.
 		return out, nil
 	}
 
@@ -49,6 +51,7 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	if s.Budget != nil {
 		rows, err := s.Budget.List(ctx)
 		if err != nil {
+			//nolint:nilerr // Deliberate: see the paragraph above.
 			return out, nil
 		}
 		for _, u := range rows {

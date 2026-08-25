@@ -116,7 +116,7 @@ func TestBrokerBehavior(t *testing.T) {
 	out.record("nats-server / nats.go", "2.14.5 / 1.53.1 (see go.mod)")
 	out.record("bucket TTL (MaxAge) under test", behaviorTTL)
 
-	leases := newBucket(t, js, "beh_leases", jetstream.KeyValueConfig{TTL: behaviorTTL})
+	leases := newBucket(ctx, t, js, "beh_leases", jetstream.KeyValueConfig{TTL: behaviorTTL})
 
 	t.Run("create_on_an_existing_key_is_refused", func(t *testing.T) {
 		// The exclusivity CAS. Without this, two nodes claiming one seat on
@@ -232,7 +232,7 @@ func TestBrokerBehavior(t *testing.T) {
 		// lease key it would be DELETED with it, and the next owner would be
 		// handed epoch 1 — the token a zombie from the previous tenure is
 		// still stamping its writes with.
-		epochs := newBucket(t, js, "beh_epochs", jetstream.KeyValueConfig{})
+		epochs := newBucket(ctx, t, js, "beh_epochs", jetstream.KeyValueConfig{})
 		if _, err := epochs.Create(ctx, "counter", []byte(`{"epoch":7}`)); err != nil {
 			t.Fatalf("Create in the untimed bucket: %v", err)
 		}
@@ -240,7 +240,7 @@ func TestBrokerBehavior(t *testing.T) {
 		if _, err := leases.Create(ctx, key, []byte("held")); err != nil {
 			t.Fatalf("Create in the timed bucket: %v", err)
 		}
-		waitReaped(t, leases, key)
+		waitReaped(ctx, t, leases, key)
 
 		kve, err := epochs.Get(ctx, "counter")
 		if err != nil {
@@ -262,7 +262,7 @@ func TestBrokerBehavior(t *testing.T) {
 		//
 		// Both halves are asserted. The first proves KeyTTL works at all, so
 		// the second cannot be explained away as a broken fixture.
-		marked := newBucket(t, js, "beh_perkey", jetstream.KeyValueConfig{
+		marked := newBucket(ctx, t, js, "beh_perkey", jetstream.KeyValueConfig{
 			LimitMarkerTTL: time.Minute,
 		})
 
@@ -270,7 +270,7 @@ func TestBrokerBehavior(t *testing.T) {
 			t.Skipf("this broker does not support per-key TTL (%v); the trap cannot be "+
 				"measured here, and skipping is not passing", err)
 		}
-		waitReaped(t, marked, "untouched")
+		waitReaped(ctx, t, marked, "untouched")
 		out.record("per-key TTL (KeyTTL), never renewed", "expires")
 
 		rev, err := marked.Create(ctx, "renewed", []byte("v"), jetstream.KeyTTL(behaviorTTL))
@@ -304,7 +304,7 @@ func TestBrokerBehavior(t *testing.T) {
 		// Not a property, a budget. Every one of these is on the seat
 		// heartbeat's path, and the claim path pays several — which is what
 		// makes a scan-per-renew the thing to avoid rather than a detail.
-		bucket := newBucket(t, js, "beh_cost", jetstream.KeyValueConfig{TTL: time.Minute})
+		bucket := newBucket(ctx, t, js, "beh_cost", jetstream.KeyValueConfig{TTL: time.Minute})
 		const samples = 40
 		for i := range 20 {
 			if _, err := bucket.Create(ctx, fmt.Sprintf("seat=3Aagent-%02d", i), []byte(`{"owner":"n"}`)); err != nil {
@@ -343,10 +343,10 @@ func TestBrokerBehavior(t *testing.T) {
 	})
 }
 
-func newBucket(t *testing.T, js jetstream.JetStream, name string, cfg jetstream.KeyValueConfig) jetstream.KeyValue {
+func newBucket(ctx context.Context, t *testing.T, js jetstream.JetStream, name string, cfg jetstream.KeyValueConfig) jetstream.KeyValue {
 	t.Helper()
 	cfg.Bucket = name
-	kv, err := js.CreateOrUpdateKeyValue(context.Background(), cfg)
+	kv, err := js.CreateOrUpdateKeyValue(ctx, cfg)
 	if err != nil {
 		t.Fatalf("create bucket %s: %v", name, err)
 	}
@@ -355,11 +355,11 @@ func newBucket(t *testing.T, js jetstream.JetStream, name string, cfg jetstream.
 
 // waitReaped blocks until the broker has removed a key, failing the test if it
 // never does.
-func waitReaped(t *testing.T, kv jetstream.KeyValue, key string) {
+func waitReaped(ctx context.Context, t *testing.T, kv jetstream.KeyValue, key string) {
 	t.Helper()
 	deadline := time.Now().Add(behaviorTTL + 10*time.Second)
 	for time.Now().Before(deadline) {
-		_, err := kv.Get(context.Background(), key)
+		_, err := kv.Get(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return
 		}

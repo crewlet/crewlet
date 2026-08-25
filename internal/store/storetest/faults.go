@@ -63,7 +63,10 @@ func (f *Fault) Wrap(d driver.Driver) driver.Driver {
 //
 // Armed separately from Wrap because the fault would otherwise fire during
 // migration and the database would never open.
-func (f *Fault) Arm()    { f.armed.Store(true) }
+func (f *Fault) Arm() { f.armed.Store(true) }
+
+// Disarm stops the fault firing, so a test can assert the recovery path
+// on the same handle that failed.
 func (f *Fault) Disarm() { f.armed.Store(false) }
 
 type faultDriver struct {

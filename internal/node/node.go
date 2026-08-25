@@ -104,7 +104,7 @@ type Config struct {
 type Node struct {
 	cfg  Config
 	log  *slog.Logger
-	host *seat.SeatHost
+	host *seat.Host
 
 	// attached records which seats this node currently consumes, so a
 	// release detaches exactly what an acquire attached. Guarded because
@@ -153,7 +153,7 @@ func New(cfg Config) (*Node, error) {
 
 // Host exposes the seat host, for callers that need to inspect ownership or
 // drive a sweep directly.
-func (n *Node) Host() *seat.SeatHost { return n.host }
+func (n *Node) Host() *seat.Host { return n.host }
 
 // ID is the STABLE node identity, the same across restarts. It is the
 // stickiness hint a duty claim carries, so a restarted node tends to get its

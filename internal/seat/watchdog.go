@@ -14,7 +14,7 @@ import (
 var watchLog = logging.Get("seat.watchdog")
 
 // The watchdog's own cadence. Both are CEILINGS, scaled down against the
-// threshold — see [SeatHost.beatInterval] for the other half of the same
+// threshold — see [Host.beatInterval] for the other half of the same
 // rule and rewrite/decisions/301-watchdog.md for why the threshold is not a
 // knob.
 const (
@@ -305,4 +305,4 @@ func hardExit(s Stall) {
 	os.Exit(WatchdogExitCode)
 }
 
-var _ Pulse = (*SeatHost)(nil)
+var _ Pulse = (*Host)(nil)

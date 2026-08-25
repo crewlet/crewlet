@@ -52,7 +52,7 @@ func TestOriginIsRecordedBecauseItCannotBeRecovered(t *testing.T) {
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("reflect"), tools.OriginBuiltin)
 	mustRegister(t, r, tool("deploy"), tools.ExtensionOrigin("ops"))
-	mustRegister(t, r, tool("slack_post"), tools.MCPOrigin("slack"))
+	mustRegister(t, r, tool("slack_post"), tools.Origin("slack"))
 
 	for name, want := range map[string]string{
 		"reflect":    "builtin",
@@ -151,9 +151,9 @@ func TestUnregisteringAnOriginLeavesNothingBehind(t *testing.T) {
 	// because nothing looked the survivors up by name.
 	r := tools.NewRegistry()
 	for _, n := range []string{"gh_a", "gh_b", "gh_c"} {
-		mustRegister(t, r, tool(n), tools.MCPOrigin("github"))
+		mustRegister(t, r, tool(n), tools.Origin("github"))
 	}
-	r.UnregisterOrigin(tools.MCPOrigin("github"))
+	r.UnregisterOrigin(tools.Origin("github"))
 	for _, n := range []string{"gh_a", "gh_b", "gh_c"} {
 		if _, ok := r.Lookup(n); ok {
 			t.Errorf("%s is gone from the listing but still resolves", n)
@@ -190,11 +190,11 @@ func TestUnregisteringAnOriginTakesExactlyItsTools(t *testing.T) {
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("keep"), tools.OriginBuiltin)
 	for _, n := range []string{"gh_a", "gh_b", "gh_c"} {
-		mustRegister(t, r, tool(n), tools.MCPOrigin("github"))
+		mustRegister(t, r, tool(n), tools.Origin("github"))
 	}
-	mustRegister(t, r, tool("slack_post"), tools.MCPOrigin("slack"))
+	mustRegister(t, r, tool("slack_post"), tools.Origin("slack"))
 
-	got := r.UnregisterOrigin(tools.MCPOrigin("github"))
+	got := r.UnregisterOrigin(tools.Origin("github"))
 	if !slices.Equal(got, []string{"gh_a", "gh_b", "gh_c"}) {
 		t.Errorf("removed %v, want all three github tools", got)
 	}
@@ -202,7 +202,7 @@ func TestUnregisteringAnOriginTakesExactlyItsTools(t *testing.T) {
 		t.Errorf("survivors = %v", r.Names())
 	}
 	// And the name is free again, which is what makes a restart work.
-	if err := r.Register(tool("gh_a"), tools.MCPOrigin("github")); err != nil {
+	if err := r.Register(tool("gh_a"), tools.Origin("github")); err != nil {
 		t.Errorf("re-registering after a restart: %v", err)
 	}
 }
@@ -243,10 +243,10 @@ func TestMCPToolsAndKnownReadsAreReportedSeparately(t *testing.T) {
 	// through one is still recon.
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("reflect"), tools.OriginBuiltin)
-	if err := r.RegisterWith(tool("slack_post"), tools.MCPOrigin("slack"), tools.Annotations{}); err != nil {
+	if err := r.RegisterWith(tool("slack_post"), tools.Origin("slack"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := r.RegisterWith(tool("slack_history"), tools.MCPOrigin("slack"),
+	if err := r.RegisterWith(tool("slack_history"), tools.Origin("slack"),
 		tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestOnlyAPositiveReadHintCounts(t *testing.T) {
 		"denied":      mcp.No,
 		"asserted":    mcp.Yes,
 	} {
-		if err := r.RegisterWith(tool(name), tools.MCPOrigin("s"),
+		if err := r.RegisterWith(tool(name), tools.Origin("s"),
 			tools.Annotations{ReadOnly: hint}); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
@@ -289,7 +289,7 @@ func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 	first.desc = "Record a lesson.\nMore detail on a second line."
 	mustRegister(t, r, first, tools.OriginBuiltin)
 	for _, n := range []string{"gh_a", "gh_b"} {
-		mustRegister(t, r, tool(n), tools.MCPOrigin("github"))
+		mustRegister(t, r, tool(n), tools.Origin("github"))
 	}
 
 	got := r.Catalogue()
@@ -327,11 +327,11 @@ func TestASnapshotDoesNotMoveUnderAPhase(t *testing.T) {
 	// A server restarting mid-turn would otherwise change what a phase is
 	// judged against between the call and the delivery gate.
 	r := tools.NewRegistry()
-	mustRegister(t, r, tool("slack_post"), tools.MCPOrigin("slack"))
+	mustRegister(t, r, tool("slack_post"), tools.Origin("slack"))
 	snap := r.Snapshot()
 
-	r.UnregisterOrigin(tools.MCPOrigin("slack"))
-	mustRegister(t, r, tool("jira_create"), tools.MCPOrigin("jira"))
+	r.UnregisterOrigin(tools.Origin("slack"))
+	mustRegister(t, r, tool("jira_create"), tools.Origin("jira"))
 
 	if !slices.Equal(snap.Names(), []string{"slack_post"}) {
 		t.Errorf("the snapshot moved: %v", snap.Names())

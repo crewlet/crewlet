@@ -43,9 +43,9 @@ func ExtensionOrigin(extension string) string {
 	return OriginExtensionPrefix + extension
 }
 
-// MCPOrigin is the origin string for a tool served by an MCP server. Pass the
+// Origin is the origin string for a tool served by an MCP server. Pass the
 // bare server name; ServerName turns an instance name into one.
-func MCPOrigin(server string) string {
+func Origin(server string) string {
 	return OriginMCPPrefix + server
 }
 

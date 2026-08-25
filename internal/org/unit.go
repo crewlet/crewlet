@@ -25,13 +25,13 @@ const (
 	UnitTypeUnit       UnitType = "unit"
 )
 
-// OrgUnit is a grouping in the hierarchy that nests to any depth: a
+// Unit is a grouping in the hierarchy that nests to any depth: a
 // division holding departments holding teams, a flat squad, a pod. A unit
 // holds seats directly, child units, or both.
 //
 // Used by pointer: normalisation writes inherited leads and channels into
 // it, and callers compare units by identity.
-type OrgUnit struct {
+type Unit struct {
 	Name string   `yaml:"name" json:"name"`
 	Type UnitType `yaml:"type,omitempty" json:"type,omitempty"`
 
@@ -44,7 +44,7 @@ type OrgUnit struct {
 	// The name may resolve to a seat in this unit, in a descendant, or —
 	// after inheritance — in an ancestor. A unit with no lead of its own
 	// inherits its parent's, cascading to any depth. Read the resolved seat
-	// through [OrgUnit.LeadRole] or [Organization.EffectiveLead]; a
+	// through [Unit.LeadRole] or [Organization.EffectiveLead]; a
 	// reference that resolves to nothing reads as no lead.
 	Lead string `yaml:"lead,omitempty" json:"lead,omitempty"`
 
@@ -70,8 +70,8 @@ type OrgUnit struct {
 	// [Organization.Normalize] for why it stops at one level.
 	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
-	Roles    []*Role    `yaml:"roles,omitempty" json:"roles,omitempty"`
-	Children []*OrgUnit `yaml:"children,omitempty" json:"children,omitempty"`
+	Roles    []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`
+	Children []*Unit `yaml:"children,omitempty" json:"children,omitempty"`
 
 	// Schedules is this unit's recurring work. NOT inherited by child
 	// units: a standup that fanned out to every descendant of a division
@@ -80,7 +80,7 @@ type OrgUnit struct {
 }
 
 // Role returns the direct member with this name, or nil.
-func (u *OrgUnit) Role(name string) *Role {
+func (u *Unit) Role(name string) *Role {
 	for _, r := range u.Roles {
 		if r.Name == name {
 			return r
@@ -90,7 +90,7 @@ func (u *OrgUnit) Role(name string) *Role {
 }
 
 // Child returns the direct child unit with this name, or nil.
-func (u *OrgUnit) Child(name string) *OrgUnit {
+func (u *Unit) Child(name string) *Unit {
 	for _, c := range u.Children {
 		if c.Name == name {
 			return c
@@ -101,7 +101,7 @@ func (u *OrgUnit) Child(name string) *OrgUnit {
 
 // AllRoles iterates this unit's seats and every descendant's, direct
 // members first. Stopping early stops the walk.
-func (u *OrgUnit) AllRoles() iter.Seq[*Role] {
+func (u *Unit) AllRoles() iter.Seq[*Role] {
 	return func(yield func(*Role) bool) {
 		for _, r := range u.Roles {
 			if !yield(r) {
@@ -120,8 +120,8 @@ func (u *OrgUnit) AllRoles() iter.Seq[*Role] {
 
 // AllUnits iterates this unit and every descendant, depth-first, parents
 // before children.
-func (u *OrgUnit) AllUnits() iter.Seq[*OrgUnit] {
-	return func(yield func(*OrgUnit) bool) {
+func (u *Unit) AllUnits() iter.Seq[*Unit] {
+	return func(yield func(*Unit) bool) {
 		if !yield(u) {
 			return
 		}
@@ -137,7 +137,7 @@ func (u *OrgUnit) AllUnits() iter.Seq[*OrgUnit] {
 
 // FindRole returns the seat with this name anywhere in this subtree, or
 // nil.
-func (u *OrgUnit) FindRole(name string) *Role {
+func (u *Unit) FindRole(name string) *Role {
 	for r := range u.AllRoles() {
 		if r.Name == name {
 			return r
@@ -147,7 +147,7 @@ func (u *OrgUnit) FindRole(name string) *Role {
 }
 
 // FindUnit returns this unit or the descendant with this name, or nil.
-func (u *OrgUnit) FindUnit(name string) *OrgUnit {
+func (u *Unit) FindUnit(name string) *Unit {
 	for d := range u.AllUnits() {
 		if d.Name == name {
 			return d
@@ -160,7 +160,7 @@ func (u *OrgUnit) FindUnit(name string) *OrgUnit {
 // then descendants. It returns nil when the unit has no lead, or when the
 // lead was inherited and therefore lives in an ancestor — use
 // [Organization.EffectiveLead] to resolve that case too.
-func (u *OrgUnit) LeadRole() *Role {
+func (u *Unit) LeadRole() *Role {
 	if u.Lead == "" {
 		return nil
 	}
@@ -176,12 +176,12 @@ func (u *OrgUnit) LeadRole() *Role {
 }
 
 // IsLedBy reports whether this unit designates r as its lead.
-func (u *OrgUnit) IsLedBy(r *Role) bool { return u.Lead != "" && u.Lead == r.Name }
+func (u *Unit) IsLedBy(r *Role) bool { return u.Lead != "" && u.Lead == r.Name }
 
 // hasDirectAgent reports whether any DIRECT member is an agent seat — the
 // question a fan-out schedule asks, since it never reaches descendants and
 // humans run no turns.
-func (u *OrgUnit) hasDirectAgent() bool {
+func (u *Unit) hasDirectAgent() bool {
 	for _, r := range u.Roles {
 		if r.IsAgent() {
 			return true
@@ -198,7 +198,7 @@ func (u *OrgUnit) hasDirectAgent() bool {
 // before the seat that leads it — and every reader already treats a
 // dangling lead as no lead. See [Organization.DanglingRefs] for what to
 // report instead.
-func (u *OrgUnit) Validate() error {
+func (u *Unit) Validate() error {
 	var errs []error
 	name := strings.TrimSpace(u.Name)
 	if name == "" {

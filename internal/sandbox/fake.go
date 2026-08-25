@@ -49,9 +49,15 @@ func NewFakeSandbox(id string) *FakeSandbox {
 	return &FakeSandbox{id: id, home: DefaultHome, files: map[string][]byte{}}
 }
 
-func (s *FakeSandbox) ID() string   { return s.id }
+// ID is the box's identifier.
+func (s *FakeSandbox) ID() string { return s.id }
+
+// Home is the box's root directory, which for a fake is a fixed path
+// nothing on disk backs.
 func (s *FakeSandbox) Home() string { return s.home }
 
+// Exec records the command and returns whatever the test queued for it,
+// or an empty success.
 func (s *FakeSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
 	if s.ExecFunc != nil {
 		return s.ExecFunc(ctx, cmd, opts)
@@ -62,6 +68,8 @@ func (s *FakeSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (E
 	return ExecResult{}, nil
 }
 
+// StartBackground records the command and hands back a handle whose job
+// finishes when a test calls [FakeRunner.Finish].
 func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,6 +77,8 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	return strconv.Itoa(len(s.background)), nil
 }
 
+// WriteFile stores the content in memory, where [FakeSandbox.Put] and
+// ReadFile can see it.
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,6 +97,8 @@ func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	return slices.Clone(s.files[path.Clean(p)]), nil
 }
 
+// SetTimeout is accepted and ignored: nothing in a fake box can outrun a
+// deadline.
 func (s *FakeSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,6 +106,7 @@ func (s *FakeSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	return nil
 }
 
+// Pause marks the box snapshotted; [FakeSandbox.Paused] reports it.
 func (s *FakeSandbox) Pause(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,6 +114,7 @@ func (s *FakeSandbox) Pause(ctx context.Context) error {
 	return nil
 }
 
+// Close marks the box torn down; [FakeSandbox.Closed] reports it.
 func (s *FakeSandbox) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -174,8 +188,11 @@ func NewFakeProvider() *FakeProvider {
 	return &FakeProvider{boxes: map[string]*FakeSandbox{}, Vanished: map[string]bool{}}
 }
 
+// Kind names the backend, for the messages a real provider's errors carry.
 func (p *FakeProvider) Kind() string { return "fake" }
 
+// Create mints a box and remembers it, so a later Connect hands back the
+// same one.
 func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -188,6 +205,8 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	return box, nil
 }
 
+// Connect returns a previously created box, which is what makes a
+// reconnect across a simulated restart testable.
 func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -205,6 +224,7 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 	return box, nil
 }
 
+// Kill records the id and forgets the box.
 func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -254,8 +274,10 @@ func NewFakeRunner(name string) *FakeRunner {
 	return &FakeRunner{name: name, installed: map[string]bool{}}
 }
 
+// Name is the coding agent's key in the runner registry.
 func (r *FakeRunner) Name() string { return r.name }
 
+// Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -263,6 +285,8 @@ func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
 	return nil
 }
 
+// Start records the brief and hands back a handle that stays unfinished
+// until a test calls [FakeRunner.Finish].
 func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (RunHandle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -274,6 +298,7 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	return RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}, nil
 }
 
+// Poll reports done only once [FakeRunner.Finish] has been called.
 func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -283,6 +308,7 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (b
 	return r.done, nil
 }
 
+// Collect returns the result a test queued with [FakeRunner.Finish].
 func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

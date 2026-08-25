@@ -78,7 +78,7 @@ func newFleet(t *testing.T) *fleet {
 
 // newHost builds a host on this fleet's store and clock, defaulting the
 // identity fields from the node id.
-func (f *fleet) newHost(node string, cfg Config) *SeatHost {
+func (f *fleet) newHost(node string, cfg Config) *Host {
 	f.t.Helper()
 	cfg.NodeID = node
 	if cfg.Backend == nil {
@@ -254,7 +254,7 @@ func wantStrings(t *testing.T, got, want []string, what string) {
 	}
 }
 
-func wantHeld(t *testing.T, h *SeatHost, want ...string) {
+func wantHeld(t *testing.T, h *Host, want ...string) {
 	t.Helper()
 	slices.Sort(want)
 	wantStrings(t, h.Held(), want, "held")
@@ -267,7 +267,7 @@ func wantInt(t *testing.T, got, want int, what string) {
 	}
 }
 
-func wantAdmits(t *testing.T, h *SeatHost, handle string, want bool) {
+func wantAdmits(t *testing.T, h *Host, handle string, want bool) {
 	t.Helper()
 	if _, ok := h.MayStart(handle); ok != want {
 		t.Errorf("MayStart(%q) = %v, want %v", handle, ok, want)

@@ -50,11 +50,11 @@ func orgWithChain(company string, units []string, seat string) (*org.Organizatio
 		o.Roles = []*org.Role{r}
 		return o, r
 	}
-	u := &org.OrgUnit{Name: units[len(units)-1], Roles: []*org.Role{r}}
+	u := &org.Unit{Name: units[len(units)-1], Roles: []*org.Role{r}}
 	for i := len(units) - 2; i >= 0; i-- {
-		u = &org.OrgUnit{Name: units[i], Children: []*org.OrgUnit{u}}
+		u = &org.Unit{Name: units[i], Children: []*org.Unit{u}}
 	}
-	o.Units = []*org.OrgUnit{u}
+	o.Units = []*org.Unit{u}
 	return o, r
 }
 

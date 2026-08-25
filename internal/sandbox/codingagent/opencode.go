@@ -39,6 +39,7 @@ var _ CLI = OpenCode{}
 // NewOpenCode returns the runner.
 func NewOpenCode() *Runner { return New(OpenCode{}) }
 
+// Name is the coding agent's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
 // Command builds the non-interactive `opencode run` invocation.

@@ -49,6 +49,7 @@ func (s *submitted[T]) Call(_ context.Context, args map[string]any) (tools.Resul
 		// the phase. It is the one tool failure the model can reliably
 		// fix, and refusing the turn over a malformed submission throws
 		// away everything the phase already did.
+		//nolint:nilerr // Deliberate: see the paragraph above.
 		return tools.Result{Output: "Invalid submission: " + err.Error(), Failed: true}, nil
 	}
 	// LAST WRITE WINS, and the call is still accepted. A model that

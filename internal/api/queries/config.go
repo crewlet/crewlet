@@ -57,7 +57,7 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 			// A BAD REQUEST, not a server fault: both are things the
 			// caller named, and reporting them as failures would have the
 			// room show "the query failed" for a typo.
-			return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+			return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 		case err != nil:
 			return nil, err
 		}
@@ -68,7 +68,7 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		return nil, nil
 	case errors.Is(err, configapi.ErrUnknownEntityKind):
-		return nil, fmt.Errorf("%w: %s", ErrBadParams, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
 		return nil, err
 	}

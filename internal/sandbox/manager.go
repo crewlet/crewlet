@@ -203,7 +203,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	}
 	if err := runner.Install(ctx, box); err != nil {
 		log.Error("sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
-		m.discard(box)
+		m.discard(ctx, box)
 		return nil, nil, err
 	}
 	// Setup commands run WITH the run env so recipes can reference the
@@ -213,7 +213,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 		// Logged distinctly from an install failure so the operator debugs
 		// the right subsystem: this one is their config.
 		log.Error("sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
-		m.discard(box)
+		m.discard(ctx, box)
 		return nil, nil, err
 	}
 	names := make([]string, 0, len(setup))
@@ -229,10 +229,14 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 // the box is already unusable, and the caller is holding a turn open.
 const discardGrace = 30 * time.Second
 
-func (m *Manager) discard(box Sandbox) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), discardGrace)
+func (m *Manager) discard(ctx context.Context, box Sandbox) {
+	// WithoutCancel(ctx), not Background(): a teardown must survive the
+	// cancellation it is undoing — often the very one that failed the
+	// provision — but it should keep the caller's VALUES, so the warning
+	// below still names the turn that was provisioning this box.
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
-	if err := box.Close(ctx); err != nil {
+	if err := box.Close(closeCtx); err != nil {
 		log.Warn("sandbox_discard_failed", "sandbox_id", box.ID(), "error", err.Error())
 	}
 }

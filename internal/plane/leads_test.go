@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-func company(units []*org.OrgUnit, roots ...*org.Role) *org.Organization {
+func company(units []*org.Unit, roots ...*org.Role) *org.Organization {
 	o := &org.Organization{Name: "Nimbus", Units: units, Roles: roots}
 	o.Normalize()
 	return o
@@ -15,7 +15,7 @@ func company(units []*org.OrgUnit, roots ...*org.Role) *org.Organization {
 
 func TestAUnitsProjectIsOwnedByItsLead(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng", PlaneProject: "eng",
 		Roles: []*org.Role{{Name: "VP Eng"}, {Name: "Engineer"}},
 	}})
@@ -30,11 +30,11 @@ func TestAUnitsProjectIsOwnedByItsLead(t *testing.T) {
 // one whose project would otherwise route to nobody.
 func TestAnInheritedLeadOwnsTheProject(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng",
 		Roles: []*org.Role{{Name: "VP Eng"}},
-		Children: []*org.OrgUnit{{
-			Name: "Platform", Children: []*org.OrgUnit{{
+		Children: []*org.Unit{{
+			Name: "Platform", Children: []*org.Unit{{
 				Name: "Runtime", PlaneProject: "RUN",
 				Roles: []*org.Role{{Name: "Runtime Engineer"}},
 			}},
@@ -60,7 +60,7 @@ func TestARootSeatOwnsItsOwnProject(t *testing.T) {
 // would hand the fallback to whichever teammate the walk reached first.
 func TestAUnitMemberDoesNotBecomeTheOwner(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng", PlaneProject: "ENG",
 		Roles: []*org.Role{
 			{Name: "VP Eng"},
@@ -77,7 +77,7 @@ func TestAUnitMemberDoesNotBecomeTheOwner(t *testing.T) {
 // reached the other way round.
 func TestASeatAttachedToAUnitStopsBeingARootOwner(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng",
 		Roles: []*org.Role{{Name: "VP Eng"}},
 	}}, &org.Role{Name: "Engineer", UnitRef: "Engineering", PlaneProject: "ENG"})
@@ -91,7 +91,7 @@ func TestASeatAttachedToAUnitStopsBeingARootOwner(t *testing.T) {
 // webhook saying "ENG" must be the same project.
 func TestIdentifiersFoldToOneCase(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng", PlaneProject: "  eNg  ",
 		Roles: []*org.Role{{Name: "VP Eng"}},
 	}})
@@ -105,10 +105,10 @@ func TestIdentifiersFoldToOneCase(t *testing.T) {
 // naming one project must resolve, silently, to that lead.
 func TestSeveralUnitsUnderOneLeadShareTheProject(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng", PlaneProject: "ENG",
 		Roles: []*org.Role{{Name: "VP Eng"}},
-		Children: []*org.OrgUnit{
+		Children: []*org.Unit{
 			{Name: "Backend", PlaneProject: "ENG"},
 			{Name: "Frontend", PlaneProject: "ENG"},
 		},
@@ -125,7 +125,7 @@ func TestSeveralUnitsUnderOneLeadShareTheProject(t *testing.T) {
 // description of today's loop order.
 func TestAUnitOutranksARootSeatForTheSameProject(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng", PlaneProject: "ENG",
 		Roles: []*org.Role{{Name: "VP Eng"}},
 	}}, &org.Role{Name: "Chief of Staff", PlaneProject: "ENG"})
@@ -138,10 +138,10 @@ func TestAUnitOutranksARootSeatForTheSameProject(t *testing.T) {
 // owns it even when a team beneath it names the same one under its own lead.
 func TestAParentUnitOutranksItsChildForTheSameProject(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Engineering", Lead: "VP Eng", PlaneProject: "ENG",
 		Roles: []*org.Role{{Name: "VP Eng"}},
-		Children: []*org.OrgUnit{{
+		Children: []*org.Unit{{
 			Name: "Backend", Lead: "Tech Lead", PlaneProject: "ENG",
 			Roles: []*org.Role{{Name: "Tech Lead"}},
 		}},
@@ -158,7 +158,7 @@ func TestAParentUnitOutranksItsChildForTheSameProject(t *testing.T) {
 func TestAnAmbiguousProjectResolvesTheSameWayEveryTime(t *testing.T) {
 	t.Parallel()
 	build := func() *org.Organization {
-		return company([]*org.OrgUnit{
+		return company([]*org.Unit{
 			{Name: "Engineering", Lead: "VP Eng", PlaneProject: "SHARED",
 				Roles: []*org.Role{{Name: "VP Eng"}}},
 			{Name: "Product", Lead: "VP Product", PlaneProject: "SHARED",
@@ -182,7 +182,7 @@ func TestAnAmbiguousProjectResolvesTheSameWayEveryTime(t *testing.T) {
 // that work it does not own is its problem.
 func TestAUnitWithNoLeadOwnsNothing(t *testing.T) {
 	t.Parallel()
-	o := company([]*org.OrgUnit{{
+	o := company([]*org.Unit{{
 		Name: "Skunkworks", PlaneProject: "SKUNK",
 		Roles: []*org.Role{{Name: "Researcher"}},
 	}})

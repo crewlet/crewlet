@@ -250,7 +250,7 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 		return sdk.ChatCompletionNewParams{}, err
 	}
 	params := sdk.ChatCompletionNewParams{
-		Model:    shared.ChatModel(p.model),
+		Model:    p.model,
 		Messages: messages,
 	}
 

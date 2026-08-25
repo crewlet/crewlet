@@ -31,7 +31,7 @@ func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
-		Units: []*org.OrgUnit{{
+		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
 			Lead: "Lead",
@@ -74,7 +74,7 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name: "Acme",
-		Units: []*org.OrgUnit{{
+		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
 			Lead: "Lead",

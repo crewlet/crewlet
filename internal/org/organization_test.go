@@ -42,13 +42,13 @@ func TestLeadCascadesThroughEveryLevel(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name: "BigCorp",
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Technology", Type: UnitTypeDivision, Lead: "CTO",
 			Channel: "C_TECH",
 			Roles:   []*Role{{Name: "CTO"}},
-			Children: []*OrgUnit{{
+			Children: []*Unit{{
 				Name: "Engineering", Type: UnitTypeDepartment,
-				Children: []*OrgUnit{{
+				Children: []*Unit{{
 					Name:  "Backend",
 					Roles: []*Role{{Name: "Dev"}},
 				}},
@@ -75,9 +75,9 @@ func TestExplicitLeadIsNeverOverwritten(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name: "T",
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
-			Children: []*OrgUnit{
+			Children: []*Unit{
 				{Name: "Backend", Lead: "Tech Lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
 				{Name: "Frontend", Roles: []*Role{{Name: "Dev C"}}},
 			},
@@ -102,7 +102,7 @@ func TestUnresolvedLeadIsKeptAndReported(t *testing.T) {
 	// warning, not a rejection.
 	o := normalized(&Organization{
 		Name:  "T",
-		Units: []*OrgUnit{{Name: "Engineering", Lead: "Ghost", Roles: []*Role{{Name: "Dev"}}}},
+		Units: []*Unit{{Name: "Engineering", Lead: "Ghost", Roles: []*Role{{Name: "Dev"}}}},
 	})
 	if got := o.Unit("Engineering").Lead; got != "Ghost" {
 		t.Errorf("lead = %q, want the reference kept verbatim", got)
@@ -125,13 +125,13 @@ func TestLeadAutoManagesOnlyUnmanagedMembers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		unit *OrgUnit
+		unit *Unit
 		lead string
 		want []string
 	}{
 		{
 			name: "flat unit",
-			unit: &OrgUnit{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			unit: &Unit{Name: "Backend", Lead: "Lead", Roles: []*Role{
 				{Name: "Lead"}, {Name: "Dev A"}, {Name: "Dev B"},
 			}},
 			lead: "Lead", want: []string{"Dev A", "Dev B"},
@@ -140,7 +140,7 @@ func TestLeadAutoManagesOnlyUnmanagedMembers(t *testing.T) {
 			// The VP gets the tech lead, not the tech lead's reports:
 			// claiming them would flatten a chart the operator drew.
 			name: "skips members another member manages",
-			unit: &OrgUnit{Name: "Backend", Lead: "VP", Roles: []*Role{
+			unit: &Unit{Name: "Backend", Lead: "VP", Roles: []*Role{
 				{Name: "VP"}, {Name: "Tech Lead", Manages: []string{"Dev A", "Dev B"}},
 				{Name: "Dev A"}, {Name: "Dev B"},
 			}},
@@ -148,21 +148,21 @@ func TestLeadAutoManagesOnlyUnmanagedMembers(t *testing.T) {
 		},
 		{
 			name: "explicit entries are kept and extended",
-			unit: &OrgUnit{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			unit: &Unit{Name: "Backend", Lead: "Lead", Roles: []*Role{
 				{Name: "Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}, {Name: "Dev B"},
 			}},
 			lead: "Lead", want: []string{"Dev A", "Dev B"},
 		},
 		{
 			name: "a unit of one has nobody to manage",
-			unit: &OrgUnit{Name: "Solo", Lead: "PM", Roles: []*Role{{Name: "PM"}}},
+			unit: &Unit{Name: "Solo", Lead: "PM", Roles: []*Role{{Name: "PM"}}},
 			lead: "PM", want: nil,
 		},
 		{
 			// A tech lead who manages the VP that leads their unit is an
 			// ordinary chart; auto-managing back would make it a cycle.
 			name: "never claims a member that manages the lead",
-			unit: &OrgUnit{Name: "Backend", Lead: "Senior Engineer A", Roles: []*Role{
+			unit: &Unit{Name: "Backend", Lead: "Senior Engineer A", Roles: []*Role{
 				{Name: "Tech Lead", Manages: []string{"Senior Engineer A"}},
 				{Name: "Senior Engineer A"},
 			}},
@@ -171,7 +171,7 @@ func TestLeadAutoManagesOnlyUnmanagedMembers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			o := normalized(&Organization{Name: "T", Units: []*OrgUnit{tc.unit}})
+			o := normalized(&Organization{Name: "T", Units: []*Unit{tc.unit}})
 			if got := sortedManages(t, o, tc.lead); !slices.Equal(got, tc.want) {
 				t.Errorf("%s manages %v, want %v", tc.lead, got, tc.want)
 			}
@@ -183,9 +183,9 @@ func TestInheritedLeadAutoManagesTheChildUnit(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name: "T",
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
-			Children: []*OrgUnit{{Name: "Backend", Roles: []*Role{
+			Children: []*Unit{{Name: "Backend", Roles: []*Role{
 				{Name: "Tech Lead", Manages: []string{"Dev A"}},
 				{Name: "Dev A"},
 				{Name: "Dev B"},
@@ -206,7 +206,7 @@ func TestHumanLeadAutoManagesAgentMembers(t *testing.T) {
 	// exactly as it would under an agent lead.
 	o := normalized(&Organization{
 		Name: "Acme",
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Core", Lead: "Sarah Chen",
 			Roles: []*Role{human(), {Name: "Dev A"}, {Name: "Dev B"}},
 		}},
@@ -237,7 +237,7 @@ func TestManagesExpansion(t *testing.T) {
 			org: &Organization{
 				Name:  "T",
 				Roles: []*Role{{Name: "CEO", Manages: []string{"Backend"}}},
-				Units: []*OrgUnit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+				Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
 					{Name: "Lead", Manages: []string{"Dev A", "Dev B"}}, {Name: "Dev A"}, {Name: "Dev B"},
 				}}},
 			},
@@ -248,9 +248,9 @@ func TestManagesExpansion(t *testing.T) {
 			org: &Organization{
 				Name:  "T",
 				Roles: []*Role{{Name: "CTO", Manages: []string{"Engineering"}}},
-				Units: []*OrgUnit{{
+				Units: []*Unit{{
 					Name: "Engineering", Roles: []*Role{{Name: "VP Eng"}},
-					Children: []*OrgUnit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+					Children: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
 				}},
 			},
 			seat: "CTO", want: []string{"Dev", "VP Eng"},
@@ -259,7 +259,7 @@ func TestManagesExpansion(t *testing.T) {
 			name: "a seat inside the unit it manages does not manage itself",
 			org: &Organization{
 				Name: "T",
-				Units: []*OrgUnit{{Name: "Team", Roles: []*Role{
+				Units: []*Unit{{Name: "Team", Roles: []*Role{
 					{Name: "Lead", Manages: []string{"Team"}}, {Name: "Dev A"}, {Name: "Dev B"},
 				}}},
 			},
@@ -275,7 +275,7 @@ func TestManagesExpansion(t *testing.T) {
 					{Name: "Backend", Goal: "Cross-cutting backend advisor"},
 					{Name: "CEO", Manages: []string{"Backend"}},
 				},
-				Units: []*OrgUnit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
 			},
 			seat: "CEO", want: []string{"Backend"},
 		},
@@ -294,7 +294,7 @@ func TestManagesExpansion(t *testing.T) {
 			org: &Organization{
 				Name:  "T",
 				Roles: []*Role{{Name: "CEO", Manages: []string{"Dev", "Backend"}}},
-				Units: []*OrgUnit{{Name: "Backend", Lead: "Dev", Roles: []*Role{
+				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{
 					{Name: "Dev", Manages: []string{"Junior"}}, {Name: "Junior"},
 				}}},
 			},
@@ -319,7 +319,7 @@ func TestManagesKeepsExplicitEntriesFirst(t *testing.T) {
 			{Name: "CEO", Manages: []string{"CTO", "Product"}},
 			{Name: "CTO"},
 		},
-		Units: []*OrgUnit{{Name: "Product", Lead: "PM", Roles: []*Role{{Name: "PM"}, {Name: "Designer"}}}},
+		Units: []*Unit{{Name: "Product", Lead: "PM", Roles: []*Role{{Name: "PM"}, {Name: "Designer"}}}},
 	})
 	got := o.Role("CEO").Manages
 	if len(got) == 0 || got[0] != "CTO" {
@@ -338,7 +338,7 @@ func TestMCPEnvInheritanceAndOverride(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{
 		Name: "T",
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name:   "Engineering",
 			MCPEnv: MCPEnv{"atlassian": {"JIRA_URL": "https://acme.example.com", "JIRA_API_TOKEN": "${TEAM}"}},
 			Roles: []*Role{
@@ -347,7 +347,7 @@ func TestMCPEnvInheritanceAndOverride(t *testing.T) {
 			},
 			// Not inherited across a unit boundary: a child unit declares
 			// what its own team shares.
-			Children: []*OrgUnit{{Name: "Backend", Roles: []*Role{{Name: "Dev"}}}},
+			Children: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Dev"}}}},
 		}},
 	})
 	vp := o.Role("VP Eng").MCPEnv["atlassian"]
@@ -377,7 +377,7 @@ func TestRootSeatMovesIntoItsNamedUnit(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "Dev", UnitRef: "Backend"}, {Name: "CEO"}},
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Backend", Lead: "Lead",
 			MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 			Roles:  []*Role{{Name: "Lead"}},
@@ -406,7 +406,7 @@ func TestUnresolvedUnitRefKeepsTheSeatAtRoot(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "Dev", UnitRef: "Nowhere"}},
-		Units: []*OrgUnit{{Name: "Backend", Roles: []*Role{{Name: "Lead"}}}},
+		Units: []*Unit{{Name: "Backend", Roles: []*Role{{Name: "Lead"}}}},
 	})
 	if got := roleNames(o.Roles); !slices.Equal(got, []string{"Dev"}) {
 		t.Errorf("root seats = %v, want the seat kept", got)
@@ -428,11 +428,11 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 		return &Organization{
 			Name:  "Acme",
 			Roles: []*Role{{Name: "CEO", Manages: []string{"Engineering"}}, {Name: "Dev C", UnitRef: "Backend"}},
-			Units: []*OrgUnit{{
+			Units: []*Unit{{
 				Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
 				MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 				Roles:  []*Role{{Name: "VP Eng"}, {Name: "Analyst"}},
-				Children: []*OrgUnit{{
+				Children: []*Unit{{
 					Name:  "Backend",
 					Roles: []*Role{{Name: "Tech Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}},
 				}},
@@ -463,7 +463,7 @@ func identityOrg() *Organization {
 	return normalized(&Organization{
 		Name:  "TestCo",
 		Roles: []*Role{{Name: "Founder Bot", Goal: "oversee"}},
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "eng", Lead: "Tech Lead",
 			Roles: []*Role{
 				{Name: "Tech Lead", Manages: []string{"Developer"}},
@@ -607,7 +607,7 @@ func TestDuplicateHandlesAreFatal(t *testing.T) {
 			t.Parallel()
 			o := &Organization{Name: "T", Roles: tc.roles}
 			if tc.name == "derived collision across levels" {
-				o.Units = []*OrgUnit{{Name: "Eng", Roles: []*Role{{Name: "tech lead"}}}}
+				o.Units = []*Unit{{Name: "Eng", Roles: []*Role{{Name: "tech lead"}}}}
 			}
 			o.Normalize()
 			err := o.Validate()
@@ -624,7 +624,7 @@ func TestLeadScheduleUnderAHumanLeadIsRejected(t *testing.T) {
 
 	t.Run("direct human lead", func(t *testing.T) {
 		t.Parallel()
-		o := normalized(&Organization{Name: "T", Units: []*OrgUnit{{
+		o := normalized(&Organization{Name: "T", Units: []*Unit{{
 			Name: "Team", Lead: "Sarah Chen",
 			Roles:     []*Role{human(), {Name: "Dev"}},
 			Schedules: []Schedule{report},
@@ -638,9 +638,9 @@ func TestLeadScheduleUnderAHumanLeadIsRejected(t *testing.T) {
 		t.Parallel()
 		// The inheritance is what makes this worth checking at org level:
 		// the unit naming the schedule names no lead at all.
-		o := normalized(&Organization{Name: "T", Units: []*OrgUnit{{
+		o := normalized(&Organization{Name: "T", Units: []*Unit{{
 			Name: "Dept", Lead: "Sarah Chen", Roles: []*Role{human()},
-			Children: []*OrgUnit{{
+			Children: []*Unit{{
 				Name: "Team", Roles: []*Role{{Name: "Dev"}}, Schedules: []Schedule{report},
 			}},
 		}}})
@@ -657,7 +657,7 @@ func TestLeadScheduleUnderAHumanLeadIsRejected(t *testing.T) {
 		t.Parallel()
 		held := report
 		held.Enabled = Off()
-		o := normalized(&Organization{Name: "T", Units: []*OrgUnit{{
+		o := normalized(&Organization{Name: "T", Units: []*Unit{{
 			Name: "Team", Lead: "Sarah Chen",
 			Roles:     []*Role{human(), {Name: "Dev"}},
 			Schedules: []Schedule{held},
@@ -673,7 +673,7 @@ func TestValidateWalksTheWholeTree(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "CEO", DeclaredHandle: "CEO"}},
-		Units: []*OrgUnit{{Name: "Eng", Children: []*OrgUnit{{
+		Units: []*Unit{{Name: "Eng", Children: []*Unit{{
 			Name: "Backend", Roles: []*Role{human(func(r *Role) { r.TokenBudget = 5 })},
 		}}}},
 	})
@@ -690,7 +690,7 @@ func TestAWellFormedOrgValidates(t *testing.T) {
 	o := normalized(&Organization{
 		Name: "Acme AI", Mission: "Build the best widgets",
 		Roles: []*Role{human(func(r *Role) { r.Name = "Jane Founder"; r.Manages = []string{"CEO"} })},
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Engineering", Type: UnitTypeDepartment, Lead: "CEO",
 			Roles:     []*Role{{Name: "CEO"}, {Name: "Engineer", LLM: ProviderKeys{"claude-sonnet", "gpt-4o"}}},
 			Schedules: []Schedule{{Name: "standup", Cron: "0 9 * * 1-5", Task: "post standup", Timezone: "UTC"}},
@@ -818,9 +818,9 @@ func TestTraversalCoversRootAndUnits(t *testing.T) {
 	o := normalized(&Organization{
 		Name:  "T",
 		Roles: []*Role{{Name: "CEO"}, {Name: "CTO"}},
-		Units: []*OrgUnit{{
+		Units: []*Unit{{
 			Name: "Engineering", Roles: []*Role{{Name: "VP Eng"}},
-			Children: []*OrgUnit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
+			Children: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{{Name: "Dev"}}}},
 		}},
 	})
 	if got := roleNames(slices.Collect(o.AllRoles())); !slices.Equal(got, []string{"CEO", "CTO", "VP Eng", "Dev"}) {

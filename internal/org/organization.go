@@ -33,8 +33,8 @@ type Organization struct {
 	Policies []string `yaml:"policies,omitempty" json:"policies,omitempty"`
 
 	// Roles are the seats that belong to no unit.
-	Roles []*Role    `yaml:"roles,omitempty" json:"roles,omitempty"`
-	Units []*OrgUnit `yaml:"units,omitempty" json:"units,omitempty"`
+	Roles []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`
+	Units []*Unit `yaml:"units,omitempty" json:"units,omitempty"`
 
 	// TokenBudget is the org-wide cap; 0 is unlimited. It lives on the
 	// domain model for the same reason the per-seat cap does: the API
@@ -75,8 +75,8 @@ func (o *Organization) AllRoles() iter.Seq[*Role] {
 }
 
 // AllUnits iterates every unit, depth-first, parents before children.
-func (o *Organization) AllUnits() iter.Seq[*OrgUnit] {
-	return func(yield func(*OrgUnit) bool) {
+func (o *Organization) AllUnits() iter.Seq[*Unit] {
+	return func(yield func(*Unit) bool) {
 		for _, u := range o.Units {
 			for d := range u.AllUnits() {
 				if !yield(d) {
@@ -99,7 +99,7 @@ func (o *Organization) Role(name string) *Role {
 }
 
 // Unit returns the unit with this name from anywhere in the tree, or nil.
-func (o *Organization) Unit(name string) *OrgUnit {
+func (o *Organization) Unit(name string) *Unit {
 	for u := range o.AllUnits() {
 		if u.Name == name {
 			return u
@@ -229,7 +229,7 @@ func (o *Organization) attachRootSeats() {
 // A child inherits what its parent RESOLVED to, not what the parent
 // literally declared, so a lead set on a division reaches a team three
 // levels down through units that named nothing themselves.
-func propagateDownward(u *OrgUnit, parentLead, parentChannel string) {
+func propagateDownward(u *Unit, parentLead, parentChannel string) {
 	if u.Type == "" {
 		u.Type = UnitTypeTeam
 	}

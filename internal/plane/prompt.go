@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// The prompt: what a Plane webhook asks of the seat it reached.
+// Prompt is what a Plane webhook asks of the seat it reached.
 //
 // # It tailors to the ROUTING REASON, not to the event type
 //

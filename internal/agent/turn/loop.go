@@ -218,6 +218,8 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		return Result{}, fmt.Errorf("turn: no phases")
 	}
 	if err := CheckDepth(in.Depth, set.DelegationDepthLimit); err != nil {
+		//nolint:nilerr // A breach is a turn OUTCOME, not a broken process — the
+		// distinction this function's doc comment exists to keep.
 		return Result{
 			Decision: phase.Failed,
 			Breach:   &Breach{Kind: BreachDepth, Detail: err.Error()},

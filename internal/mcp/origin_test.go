@@ -13,8 +13,8 @@ func TestOriginGrammar(t *testing.T) {
 	if got := ExtensionOrigin("standup"); got != "extension:standup" {
 		t.Fatalf("ExtensionOrigin = %q", got)
 	}
-	if got := MCPOrigin("github"); got != "mcp:github" {
-		t.Fatalf("MCPOrigin = %q", got)
+	if got := Origin("github"); got != "mcp:github" {
+		t.Fatalf("Origin = %q", got)
 	}
 	// A tool an extension registers is structurally identical to a builtin.
 	// The origin is the only thing that tells them apart, so it must not
@@ -31,8 +31,8 @@ func TestMCPOriginNamesTheBareServerNotTheInstance(t *testing.T) {
 	// Two seats' children of one template are the same INTEGRATION to a
 	// reader grouping the catalogue. Keying the origin on the instance would
 	// split that view per seat.
-	eng := MCPOrigin(ServerName(InstanceName("github", "Engineer")))
-	pm := MCPOrigin(ServerName(InstanceName("github", "Product Manager")))
+	eng := Origin(ServerName(InstanceName("github", "Engineer")))
+	pm := Origin(ServerName(InstanceName("github", "Product Manager")))
 	if eng != pm {
 		t.Fatalf("per-role children reported different origins: %q vs %q", eng, pm)
 	}

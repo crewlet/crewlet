@@ -225,11 +225,18 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 				res.Updated = append(res.Updated, item.Title)
 			}
 		default:
-			var page PageRef
-			page, err = opts.Client.CreatePage(ctx, project.ID,
+			_, err = opts.Client.CreatePage(ctx, project.ID,
 				item.Title, item.HTML, item.ExternalID)
 			if err == nil {
-				existing = page
+				// The created page is deliberately NOT written
+				// back into the index. The index answers
+				// create-versus-update for the items still to
+				// come, and no later item can match this page:
+				// Walk refuses a plan whose files collide on one
+				// page, so two items in one container never share
+				// an external id or a title. Re-indexing here
+				// would be machinery for a state the planner
+				// makes unreachable.
 				res.Created = append(res.Created, item.Title)
 			}
 		}

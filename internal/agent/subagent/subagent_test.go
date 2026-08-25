@@ -225,10 +225,10 @@ func newWorld(t *testing.T) *world {
 	}
 	add("read_file", tools.OriginBuiltin, tools.Annotations{ReadOnly: mcp.Yes})
 	add("load_tool_skill", tools.OriginBuiltin, tools.Annotations{ReadOnly: mcp.Yes})
-	add("web_search", tools.MCPOrigin("research"), tools.Annotations{ReadOnly: mcp.Yes})
-	add("jira_lookup", tools.MCPOrigin("jira"), tools.Annotations{})
-	add("slack_post", tools.MCPOrigin("slack"), tools.Annotations{ReadOnly: mcp.No, OpenWorld: mcp.Yes})
-	add("delete_page", tools.MCPOrigin("wiki"), tools.Annotations{Destructive: mcp.Yes})
+	add("web_search", tools.Origin("research"), tools.Annotations{ReadOnly: mcp.Yes})
+	add("jira_lookup", tools.Origin("jira"), tools.Annotations{})
+	add("slack_post", tools.Origin("slack"), tools.Annotations{ReadOnly: mcp.No, OpenWorld: mcp.Yes})
+	add("delete_page", tools.Origin("wiki"), tools.Annotations{Destructive: mcp.Yes})
 	// The engine-control surface a parent's Execute phase really does hold.
 	add(subagent.ToolName, tools.OriginBuiltin, tools.Annotations{})
 	add("activate_tool", tools.OriginBuiltin, tools.Annotations{})

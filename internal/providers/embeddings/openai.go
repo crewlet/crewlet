@@ -141,7 +141,7 @@ func (p *Provider) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, ErrEmpty
 	}
 	res, err := p.client.Embeddings.New(ctx, sdk.EmbeddingNewParams{
-		Model: sdk.EmbeddingModel(p.model),
+		Model: p.model,
 		Input: sdk.EmbeddingNewParamsInputUnion{OfString: sdk.String(normalized)},
 		// THE WIDTH IS ASKED FOR, not just checked. The third-generation
 		// models support truncation to a shorter width, so a company that

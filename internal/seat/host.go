@@ -15,7 +15,7 @@ import (
 
 // --- internal state -------------------------------------------------------
 
-// heldSeat is a seat this node holds. Every field is guarded by SeatHost.mu.
+// heldSeat is a seat this node holds. Every field is guarded by Host.mu.
 type heldSeat struct {
 	lease coord.Lease
 
@@ -68,12 +68,12 @@ type undeadSeat struct {
 // prune never drops a lock somebody is about to take.
 type seatLock struct {
 	mu      sync.Mutex
-	waiters int // guarded by SeatHost.mu
+	waiters int // guarded by Host.mu
 }
 
 // --- the host -------------------------------------------------------------
 
-// Config builds a [SeatHost]. Everything unset takes the measured default.
+// Config builds a [Host]. Everything unset takes the measured default.
 type Config struct {
 	// Backend is the lease store. Required.
 	Backend coord.Backend
@@ -153,8 +153,8 @@ type Config struct {
 	Clock func() time.Time
 }
 
-// SeatHost claims, holds and releases the seats this node runs.
-type SeatHost struct {
+// Host claims, holds and releases the seats this node runs.
+type Host struct {
 	backend  coord.Backend
 	owner    string
 	nodeID   string
@@ -208,7 +208,7 @@ type SeatHost struct {
 	draining  bool
 
 	// lastBeat is when the heartbeat goroutine last proved it was turning.
-	// It is what the watchdog reads; see [SeatHost.Beat].
+	// It is what the watchdog reads; see [Host.Beat].
 	lastBeat time.Time
 
 	cancel context.CancelFunc
@@ -216,7 +216,7 @@ type SeatHost struct {
 }
 
 // New builds a host, defaulting every unset knob to its measured constant.
-func New(cfg Config) (*SeatHost, error) {
+func New(cfg Config) (*Host, error) {
 	switch {
 	case cfg.Backend == nil:
 		return nil, fmt.Errorf("%w: backend is required", ErrInvalidConfig)
@@ -232,7 +232,7 @@ func New(cfg Config) (*SeatHost, error) {
 	profile.ID = cfg.NodeID
 	ttl := orDuration(cfg.TTL, SeatLeaseTTL)
 
-	h := &SeatHost{
+	h := &Host{
 		backend:      cfg.Backend,
 		owner:        cfg.Owner,
 		nodeID:       cfg.NodeID,
@@ -279,13 +279,13 @@ func orInt(v, fallback int) int {
 	return v
 }
 
-func (h *SeatHost) now() time.Time { return h.clock() }
+func (h *Host) now() time.Time { return h.clock() }
 
 // NodeID is the stable node id this host registers presence under.
-func (h *SeatHost) NodeID() string { return h.nodeID }
+func (h *Host) NodeID() string { return h.nodeID }
 
 // Owner is this process incarnation — the owner string every lease carries.
-func (h *SeatHost) Owner() string { return h.owner }
+func (h *Host) Owner() string { return h.owner }
 
 // lockSeat takes this seat's lock, returning the release.
 //
@@ -297,7 +297,7 @@ func (h *SeatHost) Owner() string { return h.owner }
 // same seat — and the release then tears down the consumer the claim just
 // created, leaving a seat that is owned in the lease table and dead in this
 // process, with nothing to notice.
-func (h *SeatHost) lockSeat(handle string) func() {
+func (h *Host) lockSeat(handle string) func() {
 	h.mu.Lock()
 	l := h.seatLocks[handle]
 	if l == nil {
@@ -336,7 +336,7 @@ func (h *SeatHost) lockSeat(handle string) func() {
 // This is an OPTIMIZATION, not the safety property. Correctness comes from
 // epoch-fenced writes: the returned epoch is the fencing token, and a write
 // without it is a write a zombie can also make.
-func (h *SeatHost) MayStart(handle string) (int64, bool) {
+func (h *Host) MayStart(handle string) (int64, bool) {
 	h.mu.Lock()
 	held := h.held[handle]
 	if held == nil || held.establishing {
@@ -357,11 +357,11 @@ func (h *SeatHost) MayStart(handle string) (int64, bool) {
 
 // EpochFor is the fencing token for a seat, or false if not held here.
 //
-// Unlike [SeatHost.MayStart] this does NOT check freshness: it is for
+// Unlike [Host.MayStart] this does NOT check freshness: it is for
 // fencing a write that belongs to work already under way, where refusing
 // would abandon a turn mid-flight for no gain — the fence in the write
 // itself is what makes the write safe.
-func (h *SeatHost) EpochFor(handle string) (int64, bool) {
+func (h *Host) EpochFor(handle string) (int64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	held := h.held[handle]
@@ -396,7 +396,7 @@ func (h *SeatHost) EpochFor(handle string) (int64, bool) {
 // No hook fires here: the consumer is already stopping, which is what got us
 // called. This records the edge so the RESUME can fire on the next
 // successful renew.
-func (h *SeatHost) NoteDeliveryDeferred(handle string) {
+func (h *Host) NoteDeliveryDeferred(handle string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, held := h.held[handle]
@@ -411,8 +411,8 @@ func (h *SeatHost) NoteDeliveryDeferred(handle string) {
 // It EXCLUDES the undead by design — nothing new starts on a seat whose
 // teardown was never proven — and INCLUDES a seat whose acquire hook is
 // still running, because that lease is genuinely held and genuinely renewed.
-// "May a turn start here?" is [SeatHost.MayStart], never this.
-func (h *SeatHost) Held() []string {
+// "May a turn start here?" is [Host.MayStart], never this.
+func (h *Host) Held() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Sorted(maps.Keys(h.held))
@@ -420,13 +420,13 @@ func (h *SeatHost) Held() []string {
 
 // CompanySeats is the seat set this host currently sees, sorted by handle.
 //
-// Distinct from [SeatHost.Held], and the distinction is the first thing to
+// Distinct from [Host.Held], and the distinction is the first thing to
 // check when a node is claiming nothing: Held answers what this node WON, and
 // this answers whether the seat is in the company at all. A node reading a
 // stale seat set — bound to the epoch it booted on rather than the one it is
 // serving — looks identical to a node losing every race, and only these two
 // together tell them apart.
-func (h *SeatHost) CompanySeats() []placement.Seat {
+func (h *Host) CompanySeats() []placement.Seat {
 	out := slices.Clone(h.seats())
 	slices.SortFunc(out, func(a, b placement.Seat) int {
 		return strings.Compare(a.Handle, b.Handle)
@@ -439,7 +439,7 @@ func (h *SeatHost) CompanySeats() []placement.Seat {
 //
 // Operationally the most important number on this object: each one is a seat
 // this process may still be consuming, holding a lease no peer can take.
-func (h *SeatHost) Unproven() []string {
+func (h *Host) Unproven() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Sorted(maps.Keys(h.undead))
@@ -451,7 +451,7 @@ func (h *SeatHost) Unproven() []string {
 // Existence is normal for a moment — a release that fails once and succeeds
 // on the next heartbeat is a working system. Duration never is, so this is
 // what an alert should read.
-func (h *SeatHost) UnprovenAges() map[string]time.Duration {
+func (h *Host) UnprovenAges() map[string]time.Duration {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now()
@@ -463,7 +463,7 @@ func (h *SeatHost) UnprovenAges() map[string]time.Duration {
 }
 
 // LastSweep is the most recent placement pass, if there has been one.
-func (h *SeatHost) LastSweep() (SweepResult, bool) {
+func (h *Host) LastSweep() (SweepResult, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.last == nil {
@@ -478,13 +478,13 @@ func (h *SeatHost) LastSweep() (SweepResult, bool) {
 // Both in one call, deliberately. Read separately they race, and a host that
 // has STOPPED read as one that is WEDGED is exactly the suicide timer the
 // watchdog must never arm.
-func (h *SeatHost) Beat() (time.Time, bool) {
+func (h *Host) Beat() (time.Time, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.lastBeat, h.running
 }
 
-func (h *SeatHost) stampBeat() {
+func (h *Host) stampBeat() {
 	h.mu.Lock()
 	h.lastBeat = h.now()
 	h.mu.Unlock()
@@ -505,7 +505,7 @@ func (h *SeatHost) stampBeat() {
 // act on: an unreachable store means this node claims nothing yet and
 // retries on its own loops, which is what it would do with any error a
 // caller handed back to it.
-func (h *SeatHost) Start(ctx context.Context) {
+func (h *Host) Start(ctx context.Context) {
 	h.mu.Lock()
 	if h.running {
 		h.mu.Unlock()
@@ -532,7 +532,7 @@ func (h *SeatHost) Start(ctx context.Context) {
 //
 // The first half of a graceful shutdown: readiness flips off, no new seats
 // are taken, and the seats in hand keep their leases alive so their turns
-// can finish. [SeatHost.ReleaseAll] is the second half.
+// can finish. [Host.ReleaseAll] is the second half.
 //
 // Presence is dropped immediately. A draining node that keeps its presence
 // lease stays in every peer's divisor, so they compute a share that reserves
@@ -540,7 +540,7 @@ func (h *SeatHost) Start(ctx context.Context) {
 // stay dark for the whole drain plus the takeover ramp. With 3 nodes and 10
 // seats the two healthy peers each compute ceil(10/3)=4, and two of the
 // draining node's seats are claimable by nobody for the entire window.
-func (h *SeatHost) BeginDrain(ctx context.Context) {
+func (h *Host) BeginDrain(ctx context.Context) {
 	h.mu.Lock()
 	h.draining = true
 	held := len(h.held)
@@ -549,12 +549,12 @@ func (h *SeatHost) BeginDrain(ctx context.Context) {
 	log.Info("seat_host_draining", "node", h.nodeID, "held", held)
 }
 
-// ResumeClaiming undoes [SeatHost.BeginDrain]: claim again, and count again.
+// ResumeClaiming undoes [Host.BeginDrain]: claim again, and count again.
 //
 // The posture path needs this — a node that shed its seats on config
 // divergence and then converged must rejoin the fleet rather than sit out
 // until it restarts.
-func (h *SeatHost) ResumeClaiming(ctx context.Context) {
+func (h *Host) ResumeClaiming(ctx context.Context) {
 	h.mu.Lock()
 	if !h.draining {
 		h.mu.Unlock()
@@ -567,14 +567,14 @@ func (h *SeatHost) ResumeClaiming(ctx context.Context) {
 }
 
 // Draining reports whether this node has stopped claiming.
-func (h *SeatHost) Draining() bool {
+func (h *Host) Draining() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.draining
 }
 
 // Stop halts the loops, hands every seat back, and gives up presence.
-func (h *SeatHost) Stop(ctx context.Context) {
+func (h *Host) Stop(ctx context.Context) {
 	h.mu.Lock()
 	if !h.running {
 		h.mu.Unlock()
@@ -628,7 +628,7 @@ func (h *SeatHost) Stop(ctx context.Context) {
 // Failures are per seat: a teardown that cannot be proven keeps THAT seat's
 // lease and says nothing about the others, so one stuck consumer must not
 // strand eleven healthy seats.
-func (h *SeatHost) ReleaseAll(ctx context.Context, reason ReleaseReason) {
+func (h *Host) ReleaseAll(ctx context.Context, reason ReleaseReason) {
 	handles := h.Held()
 	if len(handles) == 0 {
 		return
@@ -649,10 +649,10 @@ func (h *SeatHost) ReleaseAll(ctx context.Context, reason ReleaseReason) {
 //
 // False means one of three things and the caller must not read it as "the
 // seat moved": the seat was not held here, teardown could not be proven (so
-// the lease is deliberately kept — see [SeatHost.Unproven]), or the store
+// the lease is deliberately kept — see [Host.Unproven]), or the store
 // could not be reached to give the row back, in which case the seat is torn
 // down locally and the row simply lapses on its own.
-func (h *SeatHost) Release(ctx context.Context, handle string, reason ReleaseReason) bool {
+func (h *Host) Release(ctx context.Context, handle string, reason ReleaseReason) bool {
 	unlock := h.lockSeat(handle)
 	defer unlock()
 	return h.releaseLocked(ctx, handle, reason)
@@ -668,7 +668,7 @@ func (h *SeatHost) Release(ctx context.Context, handle string, reason ReleaseRea
 // releasing one while still serving the seat hands a peer permission to run
 // the agent concurrently, which is the single failure ownership exists to
 // prevent.
-func (h *SeatHost) releaseLocked(ctx context.Context, handle string, reason ReleaseReason) bool {
+func (h *Host) releaseLocked(ctx context.Context, handle string, reason ReleaseReason) bool {
 	h.mu.Lock()
 	entry := h.held[handle]
 	delete(h.held, handle)
@@ -694,7 +694,7 @@ func (h *SeatHost) releaseLocked(ctx context.Context, handle string, reason Rele
 // the seat for the life of the process: out of the held set so this node
 // never ran it, leased so no peer could, counted against this node's
 // capacity forever, and announced exactly once.
-func (h *SeatHost) finishRelease(ctx context.Context, handle string, entry *heldSeat, reason ReleaseReason) bool {
+func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat, reason ReleaseReason) bool {
 	if err := h.notifyRelease(ctx, handle, entry.lease, reason); err != nil {
 		now := h.now()
 		h.mu.Lock()
@@ -723,7 +723,7 @@ func (h *SeatHost) finishRelease(ctx context.Context, handle string, entry *held
 // Called once per heartbeat, which is the whole rate limit it needs: the
 // hook is the expensive part, and a seat that could not close 15 s ago is
 // not helped by being asked again in 15 ms.
-func (h *SeatHost) retryUndeadTeardown(ctx context.Context, handle string) bool {
+func (h *Host) retryUndeadTeardown(ctx context.Context, handle string) bool {
 	unlock := h.lockSeat(handle)
 	defer unlock()
 
@@ -767,7 +767,7 @@ func (h *SeatHost) retryUndeadTeardown(ctx context.Context, handle string) bool 
 // — so logging it every tick would bury the fleet's other signals under one
 // seat. What IS news is that it is STILL happening, which is why the elapsed
 // time is the payload.
-func (h *SeatHost) alarmUndead(handle string, cause error, now time.Time) {
+func (h *Host) alarmUndead(handle string, cause error, now time.Time) {
 	h.mu.Lock()
 	entry := h.undead[handle]
 	if entry == nil || now.Sub(entry.lastAlarm) < UndeadAlarmInterval {
@@ -787,7 +787,7 @@ func (h *SeatHost) alarmUndead(handle string, cause error, now time.Time) {
 
 // --- hook plumbing --------------------------------------------------------
 
-func (h *SeatHost) notifyAcquire(ctx context.Context, handle string, lease coord.Lease) error {
+func (h *Host) notifyAcquire(ctx context.Context, handle string, lease coord.Lease) error {
 	if h.hooks == nil {
 		return nil
 	}
@@ -801,7 +801,7 @@ func (h *SeatHost) notifyAcquire(ctx context.Context, handle string, lease coord
 // consumer and MCP children alive in this process while the lease goes to a
 // peer — two live consumers on one inbox, the exact state ownership exists
 // to prevent.
-func (h *SeatHost) notifyRelease(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error {
+func (h *Host) notifyRelease(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error {
 	if h.hooks == nil {
 		return nil
 	}
@@ -815,7 +815,7 @@ func (h *SeatHost) notifyRelease(ctx context.Context, handle string, lease coord
 // not one per heartbeat, so the consumer is stopped once and resumed once. A
 // hook failure is logged and swallowed — it cannot be allowed to abort the
 // heartbeat, which is what keeps every OTHER seat on this node alive.
-func (h *SeatHost) noteAdmission(ctx context.Context, handle string, admitted bool) {
+func (h *Host) noteAdmission(ctx context.Context, handle string, admitted bool) {
 	h.mu.Lock()
 	_, wasUnproven := h.unprovenAdmission[handle]
 	switch {
@@ -861,7 +861,7 @@ func callHook(name, handle string, fn func() error) (err error) {
 // A tick that takes the process down with it trades one broken pass for
 // every seat on this node — the same isolation the Python loops got from
 // catching Exception per tick.
-func (h *SeatHost) safely(event string, fn func()) {
+func (h *Host) safely(event string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error(event, "node", h.nodeID, "panic", r)

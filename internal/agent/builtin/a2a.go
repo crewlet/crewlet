@@ -76,6 +76,7 @@ func (t *a2aAsk) Call(ctx context.Context, args map[string]any) (tools.Result, e
 func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
 		return failed("a2a_ask can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.svc == nil {

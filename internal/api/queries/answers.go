@@ -318,7 +318,7 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 	if before := p.String("before_id"); before != "" {
 		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
 		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %v", ErrBadParams, err)
+			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
 		}
 		q.Before = &store.Cursor{Time: at, ID: before}
 	}

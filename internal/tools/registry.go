@@ -62,8 +62,8 @@ const (
 // ExtensionOrigin is the origin for a tool an extension registered.
 func ExtensionOrigin(extension string) string { return mcp.ExtensionOrigin(extension) }
 
-// MCPOrigin is the origin for a tool served by an MCP server.
-func MCPOrigin(server string) string { return mcp.MCPOrigin(server) }
+// Origin is the origin for a tool served by an MCP server.
+func Origin(server string) string { return mcp.Origin(server) }
 
 // Entry is a registered tool with everything the engine knows about it.
 type Entry struct {

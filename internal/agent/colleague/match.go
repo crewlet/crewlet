@@ -45,6 +45,10 @@ const (
 // Method names how a candidate was matched, so the caller can say why.
 type Method string
 
+// The match methods, strongest first. The ORDER is the resolution order: an
+// exact handle beats an external id beats a role name, and the fuzzy pass runs
+// only when nothing above it matched — so a seat is never resolved by an
+// approximate match while an exact one exists.
 const (
 	MethodExactHandle     Method = "exact_handle"
 	MethodExternalID      Method = "external_id"

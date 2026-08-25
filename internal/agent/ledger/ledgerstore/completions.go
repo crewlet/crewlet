@@ -57,6 +57,8 @@ func NewCompletions(db *store.DB) *SQLCompletions { return &SQLCompletions{db: d
 
 var _ Completions = (*SQLCompletions)(nil)
 
+// Worked returns the subset of keys already recorded for this seat, and
+// FAILS OPEN — see the [Completions] contract.
 func (s *SQLCompletions) Worked(ctx context.Context, handle string, keys []string) map[string]bool {
 	found, err := s.lookup(ctx, handle, keys)
 	if err != nil {
@@ -115,6 +117,7 @@ func (s *SQLCompletions) lookup(ctx context.Context, handle string, keys []strin
 	return found, nil
 }
 
+// Record marks a key worked. Best effort, for the same reason as Worked.
 func (s *SQLCompletions) Record(ctx context.Context, handle, key, turnID string, at time.Time) error {
 	if key == "" {
 		return nil
@@ -128,6 +131,7 @@ func (s *SQLCompletions) Record(ctx context.Context, handle, key, turnID string,
 	return nil
 }
 
+// Purge deletes rows completed before cutoff.
 func (s *SQLCompletions) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := s.db.SQL().ExecContext(ctx,
 		`DELETE FROM turn_completions WHERE completed_at < ?`, store.EncodeTime(cutoff))

@@ -139,21 +139,21 @@ func SoleVar(value string) (string, bool) {
 type Verdict int
 
 const (
-	// VerdictUnknown: the probe could not reach a conclusion — a
+	// VerdictUnknown means the probe could not reach a conclusion — a
 	// transport failure, a 5xx. The seat is LEFT ALONE and reported:
 	// re-minting on "cannot tell" destroys a credential that works, and
 	// the recovery for one that does not is one -rotate away.
 	VerdictUnknown Verdict = iota
 
-	// VerdictSelf: the value authenticates as this seat's own account.
+	// VerdictSelf means the value authenticates as this seat's own account.
 	// Nothing to do.
 	VerdictSelf
 
-	// VerdictRejected: the vendor refused it. Whatever is in the variable
+	// VerdictRejected means the vendor refused it. Whatever is in the variable
 	// is not a credential, so minting is unambiguously right.
 	VerdictRejected
 
-	// VerdictOther: it authenticates as a DIFFERENT account. This is a
+	// VerdictOther means it authenticates as a DIFFERENT account. This is a
 	// copy-pasted variable, and minting over it would hand this seat a
 	// second identity while the other seat keeps authenticating as one
 	// account from two places. It stops the run.

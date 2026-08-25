@@ -258,6 +258,7 @@ func (d *Date) UnmarshalJSON(raw []byte) error {
 		// listing over a format nobody anticipated would break a run
 		// that has nothing to do with expiry.
 		d.Time = time.Time{}
+		//nolint:nilerr // Deliberate: see the paragraph above.
 		return nil
 	}
 	d.Time = parsed
@@ -548,13 +549,12 @@ func isConflict(err error) bool {
 }
 
 // asAPIError unwraps to an APIError.
+//
+// errors.As rather than a type assertion: every caller in this package wraps
+// the client's error with the operation it was doing, so a bare assertion
+// found the APIError only on the one path that had not wrapped yet — and a
+// 404 that stopped being recognised reads as a hard failure of a reconcile
+// that should simply have created the thing.
 func asAPIError(err error, target **APIError) bool {
-	if err == nil {
-		return false
-	}
-	if e, ok := err.(*APIError); ok {
-		*target = e
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }

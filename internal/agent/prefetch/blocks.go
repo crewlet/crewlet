@@ -14,15 +14,14 @@ import (
 // The four blocks with no auxiliary judgement in them — plus one optional
 // summary pass over the episodes.
 
+// RecallCharBudget, ProfileCharBudget and SkillsCharBudget cap each rendered
+// block.
+//
+// Smaller than memory's and knowledge's, and deliberately: these three are
+// BACKGROUND — what happened before, who this is, what procedures exist —
+// while those two are the ones the planner reasons from. A prompt where the
+// background outweighs the task is one where the model plans the background.
 const (
-	// RecallCharBudget, ProfileCharBudget and SkillsCharBudget cap each
-	// rendered block.
-	//
-	// Smaller than memory's and knowledge's, and deliberately: these three
-	// are BACKGROUND — what happened before, who this is, what procedures
-	// exist — while those two are the ones the planner reasons from. A
-	// prompt where the background outweighs the task is one where the
-	// model plans the background.
 	RecallCharBudget  = 1200
 	ProfileCharBudget = 1200
 	SkillsCharBudget  = 1200

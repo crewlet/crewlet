@@ -32,11 +32,6 @@ import (
 // an UPDATE of one row, and if the environment could shadow it the rotation
 // would appear to work and change nothing.
 
-// resolver is the chain this node resolves ${VAR} through.
-//
-// Never nil: a node with no store, or no keyring, resolves from the
-// environment alone — which is the pre-store behaviour and a supported
-// deployment, not a degraded one.
 // Resolve answers what a config value's ${VAR} references currently resolve
 // to, through this node's own chain — the secret store, then the environment.
 //
@@ -46,6 +41,11 @@ import (
 // vendor sends.
 func (e *Engine) Resolve(value string) string { return e.resolver().Value(value) }
 
+// resolver is the chain this node resolves ${VAR} through.
+//
+// Never nil: a node with no store, or no keyring, resolves from the
+// environment alone — which is the pre-store behaviour and a supported
+// deployment, not a degraded one.
 func (e *Engine) resolver() *config.Resolver {
 	if r := e.env.Load(); r != nil && *r != nil {
 		return *r

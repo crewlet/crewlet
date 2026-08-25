@@ -24,7 +24,7 @@ const (
 
 func registry(t *testing.T) *notify.Registry {
 	t.Helper()
-	o := &org.Organization{Name: "Nimbus", Units: []*org.OrgUnit{{
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
 		Name: "Engineering", Lead: "Tech Lead",
 		Roles: []*org.Role{
 			{Name: "Tech Lead", DeclaredHandle: "lead"},

@@ -101,7 +101,7 @@ func TestEverySpeakerInACoalescedTriggerIsASender(t *testing.T) {
 // half-profiles under two platform ids.
 func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 	t.Parallel()
-	o := &org.Organization{Name: "Nimbus", Units: []*org.OrgUnit{{
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
 		Name: "Engineering", Lead: "Tech Lead",
 		Roles: []*org.Role{{Name: "Tech Lead", DeclaredHandle: "lead"}},
 	}}}

@@ -46,6 +46,7 @@ const (
 // category with one member.
 type RefinementKind string
 
+// The refinement kinds, by who wrote the note.
 const (
 	// RefineObserved and RefineCounterExample are the post-turn auto-refiner's
 	// two notes: the turn went well and confirmed the skill, or it did not.

@@ -464,7 +464,7 @@ func promptMessages(msgs []llm.Message) []types.PromptMessage {
 		if m.Role != llm.RoleSystem && m.Role != llm.RoleUser {
 			continue
 		}
-		out = append(out, types.PromptMessage{Role: string(m.Role), Content: m.Content})
+		out = append(out, types.PromptMessage{Role: m.Role, Content: m.Content})
 	}
 	if len(out) == 0 {
 		return nil

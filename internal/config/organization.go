@@ -42,7 +42,7 @@ func (c *Company) organization() *org.Organization {
 		o.Roles = append(o.Roles, c.Roles[i].Seat())
 	}
 	for i := range c.Units {
-		o.Units = append(o.Units, c.Units[i].OrgUnit())
+		o.Units = append(o.Units, c.Units[i].Unit())
 	}
 	o.Normalize()
 	return o

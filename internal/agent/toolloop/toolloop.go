@@ -141,6 +141,8 @@ func (e *BudgetError) Error() string {
 	return fmt.Sprintf("%s (%s budget: %d/%d)", ErrBudgetExhausted, e.Scope, e.Used, e.Limit)
 }
 
+// Is makes every budget breach match [ErrBudget], so a caller can test the
+// class without naming which ceiling was hit.
 func (e *BudgetError) Is(target error) bool { return target == ErrBudgetExhausted }
 
 // Progress is the in-flight view of a running loop.

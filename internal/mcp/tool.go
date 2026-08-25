@@ -101,7 +101,7 @@ func (t *Tool) Server() string { return ServerName(t.client.name) }
 
 // Origin is this tool's entry in the tool-origin grammar, ready for whatever
 // registry the caller keeps. See origin.go.
-func (t *Tool) Origin() string { return MCPOrigin(t.Server()) }
+func (t *Tool) Origin() string { return Origin(t.Server()) }
 
 // Call runs the tool on its server.
 //

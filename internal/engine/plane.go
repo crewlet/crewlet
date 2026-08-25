@@ -178,6 +178,7 @@ func (e *Engine) reindexSkill(project string) plane.PageIndexer {
 			// this page must stop serving a skill, and a caller that
 			// treated it as an error would leave the last body in place.
 			e.evictSkillPage(pageID)
+			//nolint:nilerr // Deliberate: see the paragraph above.
 			return nil
 		}
 		text := plane.DecodeSkillPage(page.HTML)

@@ -45,6 +45,7 @@ const selectSQL = `
 SELECT channel_id, requester, target, message_count, opened_at, closed_at, last_at
 FROM a2a_channels WHERE channel_id = ?`
 
+// Get returns one channel by key.
 func (s *SQLStore) Get(ctx context.Context, id string) (Channel, error) {
 	row := s.db.SQL().QueryRowContext(ctx, selectSQL, id)
 	ch, err := scanChannel(row)

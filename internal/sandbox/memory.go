@@ -46,6 +46,7 @@ func (m *MemoryStore) clock() time.Time {
 	return time.Now().UTC()
 }
 
+// Create records a new run row.
 func (m *MemoryStore) Create(_ context.Context, run PendingRun) error {
 	if run.TurnID == "" {
 		return fmt.Errorf("sandbox: a pending run needs a turn id")
@@ -69,6 +70,7 @@ func (m *MemoryStore) Create(_ context.Context, run PendingRun) error {
 	return nil
 }
 
+// Get returns one run by turn id.
 func (m *MemoryStore) Get(_ context.Context, turnID string) (PendingRun, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -79,6 +81,7 @@ func (m *MemoryStore) Get(_ context.Context, turnID string) (PendingRun, bool, e
 	return clone(run), true, nil
 }
 
+// ClaimForResume takes ownership of a run whose node has gone.
 func (m *MemoryStore) ClaimForResume(_ context.Context, turnID string) (PendingRun, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -96,6 +99,7 @@ func (m *MemoryStore) ClaimForResume(_ context.Context, turnID string) (PendingR
 	return out, true, nil
 }
 
+// MarkAwaiting parks a run until its coding agent answers.
 func (m *MemoryStore) MarkAwaiting(_ context.Context, turnID string, q Clarification) error {
 	return m.mutate(turnID, func(run *PendingRun) {
 		run.Status = StatusAwaiting
@@ -106,6 +110,7 @@ func (m *MemoryStore) MarkAwaiting(_ context.Context, turnID string, q Clarifica
 	})
 }
 
+// ClaimOwnership moves a run to this node.
 func (m *MemoryStore) ClaimOwnership(_ context.Context, turnID, owner string, epoch int64) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +125,7 @@ func (m *MemoryStore) ClaimOwnership(_ context.Context, turnID, owner string, ep
 	return true, nil
 }
 
+// SetStatus moves a run to a new lifecycle state.
 func (m *MemoryStore) SetStatus(_ context.Context, turnID, status string, fence Fence) error {
 	if !slices.Contains(allStatuses, status) {
 		return fmt.Errorf("sandbox: unknown status %q", status)
@@ -150,6 +156,7 @@ func (m *MemoryStore) ExpirePause(_ context.Context, turnID string) (bool, error
 	return true, nil
 }
 
+// AttachSandbox records which box a run is using.
 func (m *MemoryStore) AttachSandbox(_ context.Context, turnID string, box BoxRef, fence Fence) error {
 	return m.fenced(turnID, fence, func(run *PendingRun) {
 		run.SandboxID = box.SandboxID
@@ -160,6 +167,8 @@ func (m *MemoryStore) AttachSandbox(_ context.Context, turnID string, box BoxRef
 	})
 }
 
+// MarkBoxPaused stamps the box as snapshotted, with the instant the
+// pause TTL runs from.
 func (m *MemoryStore) MarkBoxPaused(_ context.Context, turnID string, at time.Time) error {
 	return m.mutate(turnID, func(run *PendingRun) {
 		if at.IsZero() {
@@ -169,6 +178,7 @@ func (m *MemoryStore) MarkBoxPaused(_ context.Context, turnID string, at time.Ti
 	})
 }
 
+// ReleaseBox forgets the box a run was using.
 func (m *MemoryStore) ReleaseBox(_ context.Context, turnID string) error {
 	return m.mutate(turnID, func(run *PendingRun) {
 		// Both together — a paused_at pointing at no box is a snapshot the
@@ -177,22 +187,27 @@ func (m *MemoryStore) ReleaseBox(_ context.Context, turnID string) error {
 	})
 }
 
+// SaveExecuteState persists the suspended Execute loop a resume splices
+// the coding agent's answer back into.
 func (m *MemoryStore) SaveExecuteState(_ context.Context, turnID string, state map[string]any) error {
 	return m.mutate(turnID, func(run *PendingRun) {
 		run.ExecuteState = maps.Clone(state)
 	})
 }
 
+// ListActive returns every run that has not finished.
 func (m *MemoryStore) ListActive(_ context.Context) ([]PendingRun, error) {
 	return m.list(func(r PendingRun) bool { return slices.Contains(Active, r.Status) }), nil
 }
 
+// ListActiveForSeat returns one seat's unfinished runs.
 func (m *MemoryStore) ListActiveForSeat(_ context.Context, handle string) ([]PendingRun, error) {
 	return m.list(func(r PendingRun) bool {
 		return r.AgentHandle == handle && slices.Contains(Active, r.Status)
 	}), nil
 }
 
+// FindAwaitingByConversation finds the parked run a reply belongs to.
 func (m *MemoryStore) FindAwaitingByConversation(_ context.Context, handle, conversation string) (PendingRun, bool, error) {
 	if conversation == "" {
 		return PendingRun{}, false, nil
@@ -209,6 +224,7 @@ func (m *MemoryStore) FindAwaitingByConversation(_ context.Context, handle, conv
 	return got[len(got)-1], true, nil
 }
 
+// ListPausedBefore returns the boxes whose pause TTL has expired.
 func (m *MemoryStore) ListPausedBefore(_ context.Context, cutoff time.Time) ([]PendingRun, error) {
 	got := m.list(func(r PendingRun) bool {
 		return r.Paused() && r.HasBox() && r.PausedAt.Before(cutoff)
@@ -217,6 +233,7 @@ func (m *MemoryStore) ListPausedBefore(_ context.Context, cutoff time.Time) ([]P
 	return got, nil
 }
 
+// Delete removes a run row.
 func (m *MemoryStore) Delete(_ context.Context, turnID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

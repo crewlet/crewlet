@@ -1037,8 +1037,10 @@ var _ tools.Callable = (*Tool)(nil)
 // NewTool binds the tool to a turn's config.
 func NewTool(cfg Config) *Tool { return &Tool{cfg: cfg} }
 
+// Name is the tool's name in the registry.
 func (t *Tool) Name() string { return ToolName }
 
+// Description is what the model is told this tool does.
 func (t *Tool) Description() string {
 	return "Spawn an ephemeral sub-agent to do a narrowly-scoped task on your " +
 		"behalf (for example: web research, code execution, large-doc " +
@@ -1050,6 +1052,7 @@ func (t *Tool) Description() string {
 		"belongs with a colleague."
 }
 
+// Parameters is the tool's JSON Schema.
 func (t *Tool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",

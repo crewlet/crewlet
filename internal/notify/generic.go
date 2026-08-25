@@ -29,8 +29,12 @@ var _ Prompt = Generic{}
 // vendor whose name somebody left blank.
 func (Generic) Source() string { return "" }
 
+// RequiresRecon is false: an unrecognised source has no API to read a
+// conversation's membership from, so the text has to decide alone.
 func (Generic) RequiresRecon(Inbound) bool { return false }
 
+// ConversationKey is empty for an unrecognised source, which coalesces
+// nothing — the honest answer when the backend cannot say what a thread is.
 func (Generic) ConversationKey(map[string]string, string) string { return "" }
 
 // WakesActor is false for an unrecognised source: an event type nobody has
@@ -38,6 +42,8 @@ func (Generic) ConversationKey(map[string]string, string) string { return "" }
 // one that goes unheard costs a single notification.
 func (Generic) WakesActor(string) bool { return false }
 
+// DigestBody passes the body through unchanged: a backend with no message
+// format of its own has nothing to render a digest into.
 func (Generic) DigestBody(_, body string) string { return body }
 
 // Build renders the notification and then tells the seat how to decide whether

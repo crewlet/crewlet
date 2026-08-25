@@ -71,16 +71,15 @@ func (s *Surface) WithGuard(g Guard) *Surface {
 	return s
 }
 
-// SeatCallable is a tool that needs to know which seat is calling it.
+// Detached is a tool whose work outlives the call that started it.
 //
-// The tools that speak FOR a seat: asking a colleague, marking an onboarding
-// step, loading a skill this agent synthesized, recalling this agent's own
-// episodes. Every one of them is an authorization decision, and every one of
-// them would be forgeable if the seat arrived in the model's arguments.
+// The one tool in the engine that has any use for this is run_sandbox: it
+// starts a coding run and asks the loop to SUSPEND with the call unanswered,
+// so the conversation can be persisted and re-entered — minutes later,
+// possibly after a restart, possibly on another node — when the run finishes.
 //
-// Optional, and checked at the one frame that holds both halves. A plain
-// Callable — every MCP tool, every discovery meta-tool — is unaffected and
-// knows nothing about turns.
+// Optional, like [SeatCallable], and for the same reason: a plain Callable is
+// unaffected and knows nothing about turns.
 type Detached interface {
 	Callable
 
@@ -111,6 +110,16 @@ type DetachedResult struct {
 	Payload map[string]any
 }
 
+// SeatCallable is a tool that needs to know which seat is calling it.
+//
+// The tools that speak FOR a seat: asking a colleague, marking an onboarding
+// step, loading a skill this agent synthesized, recalling this agent's own
+// episodes. Every one of them is an authorization decision, and every one of
+// them would be forgeable if the seat arrived in the model's arguments.
+//
+// Optional, and checked at the one frame that holds both halves. A plain
+// Callable — every MCP tool, every discovery meta-tool — is unaffected and
+// knows nothing about turns.
 type SeatCallable interface {
 	Callable
 

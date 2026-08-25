@@ -59,6 +59,7 @@ func (f *Faulty) fault() error {
 	return f.err
 }
 
+// TryAcquire delegates, or fails with the configured error.
 func (f *Faulty) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
@@ -66,6 +67,7 @@ func (f *Faulty) TryAcquire(ctx context.Context, resource string, opts coord.Acq
 	return f.inner.TryAcquire(ctx, resource, opts)
 }
 
+// Renew delegates, or fails with the configured error.
 func (f *Faulty) Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error) {
 	if err := f.fault(); err != nil {
 		return false, err
@@ -73,6 +75,7 @@ func (f *Faulty) Renew(ctx context.Context, resource, owner string, epoch int64,
 	return f.inner.Renew(ctx, resource, owner, epoch, ttl)
 }
 
+// Release delegates, or fails with the configured error.
 func (f *Faulty) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
 	if err := f.fault(); err != nil {
 		return false, err
@@ -80,6 +83,7 @@ func (f *Faulty) Release(ctx context.Context, resource, owner string, epoch int6
 	return f.inner.Release(ctx, resource, owner, epoch)
 }
 
+// Get delegates, or fails with the configured error.
 func (f *Faulty) Get(ctx context.Context, resource string) (*coord.Lease, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
@@ -87,6 +91,7 @@ func (f *Faulty) Get(ctx context.Context, resource string) (*coord.Lease, error)
 	return f.inner.Get(ctx, resource)
 }
 
+// ListOwned delegates, or fails with the configured error.
 func (f *Faulty) ListOwned(ctx context.Context, owner string) ([]coord.Lease, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
@@ -94,6 +99,7 @@ func (f *Faulty) ListOwned(ctx context.Context, owner string) ([]coord.Lease, er
 	return f.inner.ListOwned(ctx, owner)
 }
 
+// ListLive delegates, or fails with the configured error.
 func (f *Faulty) ListLive(ctx context.Context, prefix string) ([]coord.Lease, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
@@ -101,6 +107,7 @@ func (f *Faulty) ListLive(ctx context.Context, prefix string) ([]coord.Lease, er
 	return f.inner.ListLive(ctx, prefix)
 }
 
+// PreferredResources delegates, or fails with the configured error.
 func (f *Faulty) PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
@@ -108,6 +115,7 @@ func (f *Faulty) PreferredResources(ctx context.Context, prefix, nodeID string) 
 	return f.inner.PreferredResources(ctx, prefix, nodeID)
 }
 
+// FleetProtocolFloor delegates, or fails with the configured error.
 func (f *Faulty) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 	if err := f.fault(); err != nil {
 		return 0, false, err

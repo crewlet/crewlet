@@ -33,6 +33,19 @@ linters:
     govet:
       enable:
         - shadow
+    misspell:
+      # Three words this tree spells "wrong" ON PURPOSE, and correcting any
+      # of them would break what it is for:
+      #   noteable — GitLab's own wire field (`noteable_type`). The parser
+      #              must spell it the way the vendor sends it.
+      #   requred  — the typo in a doc comment ABOUT typos, and the fixture
+      #              that proves a misspelled frontmatter key is refused.
+      #   enginer  — a fuzzy-match test input; spelling it correctly would
+      #              stop testing the fuzzy match.
+      ignore-rules:
+        - noteable
+        - requred
+        - enginer
     revive:
       rules:
         - name: exported

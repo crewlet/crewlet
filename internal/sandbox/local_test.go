@@ -1033,3 +1033,53 @@ func TestKillWaitsForTheGroupBeforeRemovingTheBox(t *testing.T) {
 		t.Fatalf("the box survived its own teardown: %v", err)
 	}
 }
+
+// The credential map is how a RECONNECTED box knows which files to sync back
+// after the run refreshed them, so losing it silently loses the refresh — and
+// the fleet is logged out at the next token expiry with nothing in the log to
+// say why.
+//
+// This is the case the previous shape could not report: the WriteFile error
+// went into an `if err :=` binding that shadowed the variable being checked,
+// so the warning never fired and no test could see it.
+func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	layout := boxLayout{id: "box-1", root: root}
+
+	// A FILE where the metadata directory belongs, so MkdirAll cannot win.
+	if err := os.WriteFile(layout.meta(), []byte("in the way"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := recordCredentialMap(layout, map[string]string{".claude/.credentials.json": "/host/creds"})
+	if err == nil {
+		t.Fatal("an unwritable credential map was reported as recorded")
+	}
+	if !strings.Contains(err.Error(), layout.meta()) {
+		t.Errorf("the error does not name the path: %v", err)
+	}
+}
+
+// And it records cleanly when it can, or the check above proves nothing.
+func TestTheCredentialMapRoundTrips(t *testing.T) {
+	t.Parallel()
+	layout := boxLayout{id: "box-2", root: t.TempDir()}
+	files := map[string]string{".claude/.credentials.json": "/host/creds.json"}
+	if err := recordCredentialMap(layout, files); err != nil {
+		t.Fatalf("recordCredentialMap: %v", err)
+	}
+	got := readCredentialMap(layout)
+	if got[".claude/.credentials.json"] != "/host/creds.json" {
+		t.Errorf("the map did not round-trip: %v", got)
+	}
+}
+
+// Nothing to record is not a failure: a seat with no subscription login is
+// the ordinary case for an API-key company.
+func TestAnEmptyCredentialMapIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	layout := boxLayout{id: "box-3", root: t.TempDir()}
+	if err := recordCredentialMap(layout, nil); err != nil {
+		t.Errorf("recordCredentialMap(nil): %v", err)
+	}
+}

@@ -49,7 +49,7 @@
 // Three more properties, each of which replaced something that looked
 // reasonable and was not:
 //
-//   - Admission is FRESHNESS, not membership. [SeatHost.MayStart] answers
+//   - Admission is FRESHNESS, not membership. [Host.MayStart] answers
 //     "may a new turn start on this seat?" from how long ago the last
 //     successful renew was, not from whether the handle is in a local map.
 //     That map is refreshed on a heartbeat against a TTL three times longer,

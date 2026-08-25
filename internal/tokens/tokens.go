@@ -75,17 +75,22 @@ func (b *Bucket) add(r Record) {
 	b.Calls++
 }
 
-// PhaseRow, ModelRow and WorkerRow are the flat breakdowns.
+// PhaseRow is the per-phase breakdown of a rollup.
 type PhaseRow struct {
 	Phase string `json:"phase"`
 	Bucket
 }
 
+// ModelRow is the per-model breakdown of a rollup. It is built from each
+// completion's own reported model, never from a provider's configured name:
+// a fallback chain serves several models under one key.
 type ModelRow struct {
 	Model string `json:"model"`
 	Bucket
 }
 
+// WorkerRow is the per-worker breakdown of a rollup — the background duties
+// (reflection, summarisation) that spend tokens outside any seat's turn.
 type WorkerRow struct {
 	Worker string `json:"worker"`
 	Bucket

@@ -131,7 +131,7 @@ func (p *Parser) base(body, data map[string]any, identifier string, parties noti
 		"timestamp":       firstOf(str(data, "updated_at"), str(data, "created_at")),
 	}
 
-	var body_, link string
+	var text, link string
 	name := str(data, "name")
 
 	switch event {
@@ -163,12 +163,12 @@ func (p *Parser) base(body, data map[string]any, identifier string, parties noti
 		case event == "issue_comment":
 			meta["comment_id"] = refID(data["id"])
 			markup := str(data, "comment_html")
-			body_ = Flatten(markup, parties)
+			text = Flatten(markup, parties)
 			if mentions := MentionIDs(markup); len(mentions) > 0 {
 				meta["mention_ids"] = strings.Join(mentions, ",")
 			}
 		case event == "issue" && action == "created":
-			body_ = Flatten(str(data, "description_html"), parties)
+			text = Flatten(str(data, "description_html"), parties)
 		}
 		if event == "issue" || event == "issue_comment" {
 			// "ENG-42", for the subject line and the prompt. DISPLAY
@@ -191,7 +191,7 @@ func (p *Parser) base(body, data map[string]any, identifier string, parties noti
 		EventType: eventType,
 		Sender:    firstOf(actorName(activity), str(activity, "actor_id")),
 		Subject:   subject(name, meta["work_item_key"], identifier, workspace, eventType),
-		Body:      body_,
+		Body:      text,
 		Metadata:  meta,
 	}, true
 }

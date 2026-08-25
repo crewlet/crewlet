@@ -13,7 +13,7 @@ import (
 // sweepLoop re-evaluates placement on its own cadence, separate from the
 // heartbeat because the two answer different questions: the heartbeat keeps
 // what this node has, the sweep looks for what it should take.
-func (h *SeatHost) sweepLoop(ctx context.Context) {
+func (h *Host) sweepLoop(ctx context.Context) {
 	ticker := time.NewTicker(h.sweepEvery)
 	defer ticker.Stop()
 	for {
@@ -36,7 +36,7 @@ func (h *SeatHost) sweepLoop(ctx context.Context) {
 // every peer that joins later computes a share it can never reach because
 // the seats it should take are already held by a node with no reason to let
 // go. Scaling out would then do nothing at all until something died.
-func (h *SeatHost) Sweep(ctx context.Context) SweepResult {
+func (h *Host) Sweep(ctx context.Context) SweepResult {
 	h.sweepMu.Lock()
 	defer h.sweepMu.Unlock()
 
@@ -148,7 +148,7 @@ func (h *SeatHost) Sweep(ctx context.Context) SweepResult {
 
 // currentSeats reads the org, converting a panicking provider into a pass
 // that does nothing rather than one that reads "the company has no seats".
-func (h *SeatHost) currentSeats() (seats []placement.Seat, ok bool) {
+func (h *Host) currentSeats() (seats []placement.Seat, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("seat_lookup_failed", "node", h.nodeID, "panic", r,
@@ -164,7 +164,7 @@ func (h *SeatHost) currentSeats() (seats []placement.Seat, ok bool) {
 // claim. One mutex accumulated per handle ever seen, including every seat
 // removed by a live config apply — unbounded growth in a long-lived process
 // that reconfigures often.
-func (h *SeatHost) pruneSeatLocks(seats map[string]placement.Seat) {
+func (h *Host) pruneSeatLocks(seats map[string]placement.Seat) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for handle, lock := range h.seatLocks {
@@ -203,7 +203,7 @@ func (h *SeatHost) pruneSeatLocks(seats map[string]placement.Seat) {
 // are ceil(seats/nodes), so they sum to at least the seat count, and a node
 // that has shed down to its share has no room to immediately re-claim what
 // it just gave up. The excess moves once and stops.
-func (h *SeatHost) shedToCapacity(ctx context.Context, capacity int) []string {
+func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 	h.mu.Lock()
 	over := len(h.held) + len(h.undead) - capacity
 	h.mu.Unlock()
@@ -246,7 +246,7 @@ func (h *SeatHost) shedToCapacity(ctx context.Context, capacity int) []string {
 
 // claimUpTo takes at most room seats, and reports the fleet's protocol floor
 // when it took none because an older-protocol peer is live.
-func (h *SeatHost) claimUpTo(ctx context.Context, eligible []string, room int) ([]string, int) {
+func (h *Host) claimUpTo(ctx context.Context, eligible []string, room int) ([]string, int) {
 	var claimed []string
 	for _, handle := range h.claimOrder(ctx, eligible) {
 		if len(claimed) >= room {
@@ -271,7 +271,7 @@ func (h *SeatHost) claimUpTo(ctx context.Context, eligible []string, room int) (
 
 // tryClaim takes one seat, reporting whether it was established and whether
 // the pass must stop claiming altogether.
-func (h *SeatHost) tryClaim(ctx context.Context, handle string) (took, stop bool) {
+func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 	unlock := h.lockSeat(handle)
 	defer unlock()
 
@@ -367,7 +367,7 @@ func (h *SeatHost) tryClaim(ctx context.Context, handle string) (took, stop bool
 // Seats this node recently failed to acquire are skipped until their backoff
 // expires — negative stickiness, the mirror of the positive kind. Peers are
 // unaffected.
-func (h *SeatHost) claimOrder(ctx context.Context, seats []string) []string {
+func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 	now := h.now()
 	h.mu.Lock()
 	for handle, until := range h.acquireBackoffs {
@@ -409,7 +409,7 @@ func (h *SeatHost) claimOrder(ctx context.Context, seats []string) []string {
 
 // protocolBlock reports the fleet's protocol floor when it is what stopped
 // this node claiming, and zero otherwise.
-func (h *SeatHost) protocolBlock(ctx context.Context) int {
+func (h *Host) protocolBlock(ctx context.Context) int {
 	floor, found, err := h.backend.FleetProtocolFloor(ctx)
 	if err != nil || !found || floor >= h.protocol {
 		return 0
@@ -436,7 +436,7 @@ func (h *SeatHost) protocolBlock(ctx context.Context) int {
 // undoing the balance for no reason. Before the first successful read there
 // is nothing to reuse, and a fleet of one — this node — is the honest
 // assumption.
-func (h *SeatHost) plan(ctx context.Context, seats []placement.Seat) (placement.Plan, int) {
+func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan, int) {
 	var live []placement.NodeProfile
 
 	leases, err := h.backend.ListLive(ctx, coord.NodePrefix)
@@ -474,7 +474,7 @@ func (h *SeatHost) plan(ctx context.Context, seats []placement.Seat) (placement.
 //
 // Edge-triggered. A fleet missing workers for an hour should say so once,
 // and again when it comes back — not 720 times.
-func (h *SeatHost) checkFleetRoles(live []placement.NodeProfile) {
+func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 	unmanned := map[placement.NodeRole]struct{}{}
 	for _, role := range []placement.NodeRole{placement.RoleIngress, placement.RoleSeats, placement.RoleWorkers} {
 		manned := false
@@ -529,7 +529,7 @@ func (h *SeatHost) checkFleetRoles(live []placement.NodeProfile) {
 // would hold the beat until the watchdog shot the process, to publish a
 // display column. Overrunning it publishes the placement half alone, which
 // the reading side already renders as "did not say".
-func (h *SeatHost) presenceMeta(ctx context.Context) map[string]any {
+func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	meta := h.profile.Meta()
 	if h.status == nil {
 		return meta
@@ -545,7 +545,7 @@ func (h *SeatHost) presenceMeta(ctx context.Context) map[string]any {
 }
 
 // statusBudget is how long one beat lets the status hook run.
-func (h *SeatHost) statusBudget() time.Duration {
+func (h *Host) statusBudget() time.Duration {
 	d := h.heartbeat / StatusBudgetRatio
 	if d <= 0 {
 		// A host configured with a heartbeat under the divisor still has
@@ -571,7 +571,7 @@ func (h *SeatHost) statusBudget() time.Duration {
 // mixed-version gate makes a newer-protocol node invisible during the exact
 // rolling upgrade the gate exists for — its peers then divide the seats by a
 // count that excludes it, and its own capacity excludes it too.
-func (h *SeatHost) renewNodePresence(ctx context.Context) {
+func (h *Host) renewNodePresence(ctx context.Context) {
 	if h.Draining() {
 		return
 	}
@@ -614,7 +614,7 @@ func (h *SeatHost) renewNodePresence(ctx context.Context) {
 	}
 }
 
-func (h *SeatHost) releaseNodePresence(ctx context.Context) {
+func (h *Host) releaseNodePresence(ctx context.Context) {
 	h.mu.Lock()
 	lease := h.nodeLease
 	h.nodeLease = nil
@@ -624,7 +624,7 @@ func (h *SeatHost) releaseNodePresence(ctx context.Context) {
 	}
 }
 
-func (h *SeatHost) giveUpLease(ctx context.Context, lease coord.Lease) {
+func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
 		log.Warn("node_presence_release_unavailable", "node", h.nodeID, "error", err)
 	}

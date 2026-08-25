@@ -77,14 +77,16 @@ func (w *SkillUse) Skip(t Turn) string {
 // this reports is a telemetry write that did not land — which an operator
 // needs to see BEFORE the curator archives a skill whose stamp stopped
 // refreshing.
-func (w *SkillUse) Reflect(_ context.Context, t Turn) ([]events.Payload, error) {
+func (w *SkillUse) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
 	now := w.now()
 	out := make([]events.Payload, 0, len(t.Event.SkillsUsed))
 	for _, id := range t.Event.SkillsUsed {
-		// Context deliberately dropped: this must run to completion even
-		// as the pass's context is cancelled. A half-stamped catalogue
-		// ages unevenly, and the write is a single bounded UPDATE.
-		use := w.skills.MarkUsed(context.WithoutCancel(context.Background()), id, now)
+		// The pass's CANCELLATION is dropped, not its values: this must
+		// run to completion even as the pass is torn down — a half-stamped
+		// catalogue ages unevenly, and the write is a single bounded
+		// UPDATE — but the store's own log lines should still name the
+		// turn that drove it.
+		use := w.skills.MarkUsed(context.WithoutCancel(ctx), id, now)
 		if !use.Recorded {
 			out = append(out, types.SkillTelemetryWriteFailed{
 				AgentHandle: t.Event.AgentHandle, SkillID: id,

@@ -19,7 +19,7 @@ import (
 // stamp, and past the lease TTL that means this node's seats have moved to a
 // peer while its queue client is still attached and still holding their
 // mail. See [Watchdog] and rewrite/decisions/301-watchdog.md.
-func (h *SeatHost) heartbeatLoop(ctx context.Context) {
+func (h *Host) heartbeatLoop(ctx context.Context) {
 	beat := h.beatInterval()
 	ticksPerPass := int((h.heartbeat + beat - 1) / beat)
 	if ticksPerPass < 1 {
@@ -53,7 +53,7 @@ func (h *SeatHost) heartbeatLoop(ctx context.Context) {
 // perfectly healthy node report itself a whole threshold behind and shoot
 // itself. Invisible at the shipped values (45 s vs 1 s) and lethal to anyone
 // who lowers the TTL, so it is enforced rather than documented.
-func (h *SeatHost) beatInterval() time.Duration {
+func (h *Host) beatInterval() time.Duration {
 	d := WatchdogBeatInterval
 	if scaled := h.ttl / WatchdogBeatsPerThreshold; scaled < d {
 		d = scaled
@@ -87,7 +87,7 @@ type heartbeatTarget struct {
 // peer may already be running it, so anything this node does for it from
 // here is a zombie's work. Fencing catches the writes; this is what stops
 // the rest.
-func (h *SeatHost) Heartbeat(ctx context.Context) []string {
+func (h *Host) Heartbeat(ctx context.Context) []string {
 	h.beatMu.Lock()
 	defer h.beatMu.Unlock()
 
@@ -186,7 +186,7 @@ func (h *SeatHost) Heartbeat(ctx context.Context) []string {
 // heartbeatTargets snapshots what to renew: the living and the undead, in a
 // stable order. The undead are renewed alongside the living because their
 // teardown was never proven, so a peer must not be able to claim them.
-func (h *SeatHost) heartbeatTargets() []heartbeatTarget {
+func (h *Host) heartbeatTargets() []heartbeatTarget {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := make([]heartbeatTarget, 0, len(h.held)+len(h.undead))
@@ -205,7 +205,7 @@ func (h *SeatHost) heartbeatTargets() []heartbeatTarget {
 // record: a sweep may have re-claimed the seat at a new epoch while the
 // store call was in flight, and writing here would stamp an orphaned object
 // while the live one kept the older timestamp.
-func (h *SeatHost) recordRenew(t heartbeatTarget, now time.Time) {
+func (h *Host) recordRenew(t heartbeatTarget, now time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	current := h.held[t.handle]
@@ -221,7 +221,7 @@ func (h *SeatHost) recordRenew(t heartbeatTarget, now time.Time) {
 
 // dropLostSeat gives up a seat whose lease is definitively gone, reporting
 // whether this node actually held it at that epoch.
-func (h *SeatHost) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
+func (h *Host) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
 	unlock := h.lockSeat(t.handle)
 	defer unlock()
 

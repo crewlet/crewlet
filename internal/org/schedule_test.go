@@ -85,7 +85,7 @@ func TestDuplicateScheduleNamesRejected(t *testing.T) {
 	if err := r.Validate(); !errors.Is(err, ErrInvalidSchedule) {
 		t.Errorf("role Validate() = %v, want ErrInvalidSchedule", err)
 	}
-	u := &OrgUnit{Name: "Team", Roles: []*Role{{Name: "Dev"}}, Schedules: []Schedule{standup, standup}}
+	u := &Unit{Name: "Team", Roles: []*Role{{Name: "Dev"}}, Schedules: []Schedule{standup, standup}}
 	if err := u.Validate(); !errors.Is(err, ErrInvalidSchedule) {
 		t.Errorf("unit Validate() = %v, want ErrInvalidSchedule", err)
 	}
@@ -99,37 +99,37 @@ func TestFanOutNeedsADirectAgentMember(t *testing.T) {
 	standup := Schedule{Name: "standup", Cron: "0 9 * * *", Task: "post the standup"}
 	for _, tc := range []struct {
 		name    string
-		unit    *OrgUnit
+		unit    *Unit
 		wantErr bool
 	}{
 		{
 			name:    "humans only",
-			unit:    &OrgUnit{Name: "Team", Roles: []*Role{human()}, Schedules: []Schedule{standup}},
+			unit:    &Unit{Name: "Team", Roles: []*Role{human()}, Schedules: []Schedule{standup}},
 			wantErr: true,
 		},
 		{
 			name: "agents live in a child unit only",
-			unit: &OrgUnit{
+			unit: &Unit{
 				Name: "Dept", Schedules: []Schedule{standup},
-				Children: []*OrgUnit{{Name: "Team", Roles: []*Role{{Name: "Dev"}}}},
+				Children: []*Unit{{Name: "Team", Roles: []*Role{{Name: "Dev"}}}},
 			},
 			wantErr: true,
 		},
 		{
 			name: "mixed unit is fine — the fan-out skips the human",
-			unit: &OrgUnit{Name: "Team", Roles: []*Role{human(), {Name: "Dev"}}, Schedules: []Schedule{standup}},
+			unit: &Unit{Name: "Team", Roles: []*Role{human(), {Name: "Dev"}}, Schedules: []Schedule{standup}},
 		},
 		{
 			name: "a lead target does not fan out at all",
-			unit: &OrgUnit{
+			unit: &Unit{
 				Name: "Dept", Lead: "Dev",
 				Schedules: []Schedule{{Name: "report", Cron: "0 17 * * 5", Task: "report", Target: TargetLead}},
-				Children:  []*OrgUnit{{Name: "Team", Roles: []*Role{{Name: "Dev"}}}},
+				Children:  []*Unit{{Name: "Team", Roles: []*Role{{Name: "Dev"}}}},
 			},
 		},
 		{
 			name: "a disabled schedule is config an operator is holding",
-			unit: &OrgUnit{
+			unit: &Unit{
 				Name: "Team", Roles: []*Role{human()},
 				Schedules: []Schedule{{Name: "standup", Cron: "0 9 * * *", Task: "post", Enabled: Off()}},
 			},

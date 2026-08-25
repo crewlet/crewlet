@@ -16,12 +16,14 @@ type MemoryCompletions struct {
 	rows map[string]map[string]time.Time // handle -> key -> completed at
 }
 
+// NewMemoryCompletions returns the in-process twin of the completion ledger.
 func NewMemoryCompletions() *MemoryCompletions {
 	return &MemoryCompletions{rows: make(map[string]map[string]time.Time)}
 }
 
 var _ Completions = (*MemoryCompletions)(nil)
 
+// Worked returns the subset of keys already recorded for this seat.
 func (m *MemoryCompletions) Worked(_ context.Context, handle string, keys []string) map[string]bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -38,6 +40,7 @@ func (m *MemoryCompletions) Worked(_ context.Context, handle string, keys []stri
 	return out
 }
 
+// Record marks a key worked.
 func (m *MemoryCompletions) Record(_ context.Context, handle, key, _ string, at time.Time) error {
 	if key == "" {
 		return nil
@@ -58,6 +61,7 @@ func (m *MemoryCompletions) Record(_ context.Context, handle, key, _ string, at 
 	return nil
 }
 
+// Purge deletes rows completed before cutoff.
 func (m *MemoryCompletions) Purge(_ context.Context, cutoff time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -91,6 +95,8 @@ type MemoryConversations struct {
 	seq  int
 }
 
+// NewMemoryConversations returns the in-process twin of the conversation
+// ledger.
 func NewMemoryConversations() *MemoryConversations {
 	return &MemoryConversations{rows: make(map[string][]memoryEntry)}
 }
@@ -104,6 +110,7 @@ var _ Conversations = (*MemoryConversations)(nil)
 // its own.
 func convKey(handle, conversation string) string { return handle + "\x00" + conversation }
 
+// Append adds one turn to a thread's history.
 func (m *MemoryConversations) Append(_ context.Context, handle, conversation string,
 	entry ledger.Session, workKey string, at time.Time, maxEntries int,
 ) error {
@@ -131,6 +138,7 @@ func (m *MemoryConversations) Append(_ context.Context, handle, conversation str
 	return nil
 }
 
+// History returns a thread's prior turns, most recent last.
 func (m *MemoryConversations) History(_ context.Context, handle, conversation string, limit int) ([]ledger.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -151,6 +159,7 @@ func (m *MemoryConversations) History(_ context.Context, handle, conversation st
 	return out, nil
 }
 
+// Threads lists the conversation keys this seat has history for.
 func (m *MemoryConversations) Threads(_ context.Context, handle string, limit int) ([]Thread, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -184,6 +193,7 @@ func (m *MemoryConversations) Threads(_ context.Context, handle string, limit in
 	return out, nil
 }
 
+// Purge deletes turns recorded before cutoff.
 func (m *MemoryConversations) Purge(_ context.Context, cutoff time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

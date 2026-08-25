@@ -17,7 +17,7 @@ func acme() *org.Organization {
 		Mission:  "Build great things.",
 		Vision:   "Be the best.",
 		Policies: []string{"Respect teammates.", "No secrets in code."},
-		Units: []*org.OrgUnit{{
+		Units: []*org.Unit{{
 			Name:    "Eng Team",
 			Type:    org.UnitTypeTeam,
 			Purpose: "Build the thing.",
@@ -75,7 +75,7 @@ func noEnv(string) (string, bool) { return "", false }
 func mixedAcme() *org.Organization {
 	o := &org.Organization{
 		Name: "Acme",
-		Units: []*org.OrgUnit{{
+		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
 			Lead: "Sarah Chen",
