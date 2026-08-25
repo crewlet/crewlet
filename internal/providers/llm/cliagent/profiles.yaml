@@ -12,6 +12,7 @@
 
 claude-code:
   binary: claude
+  vendor: anthropic
   written_for: "Claude Code CLI 2.x (`claude --version`)"
   version_args: ["--version"]
   # --no-session-persistence and --safe-mode are the isolation the rest of
@@ -87,6 +88,7 @@ claude-code:
 
 codex:
   binary: codex
+  vendor: openai
   written_for: "Codex CLI 0.5x (`codex --version`)"
   version_args: ["--version"]
   # read-only sandbox for the same reason as Claude's tool denials, and
@@ -127,6 +129,7 @@ codex:
 
 gemini-cli:
   binary: gemini
+  vendor: google
   written_for: "Gemini CLI 0.1x (`gemini --version`)"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
@@ -158,6 +161,7 @@ gemini-cli:
 
 qwen-code:
   binary: qwen
+  vendor: openai
   written_for: "Qwen Code 0.1x (`qwen --version`), a Gemini CLI fork"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
@@ -180,6 +184,7 @@ qwen-code:
 
 opencode:
   binary: opencode
+  vendor: anthropic
   written_for: "OpenCode 0.4x (`opencode --version`)"
   version_args: ["--version"]
   complete_args: ["run", "--print-logs=false"]
@@ -209,6 +214,7 @@ opencode:
 
 cursor-agent:
   binary: cursor-agent
+  vendor: anthropic
   written_for: "Cursor Agent 2.x (`cursor-agent --version`)"
   version_args: ["--version"]
   complete_args: ["-p", "--output-format", "json"]
@@ -235,6 +241,7 @@ cursor-agent:
 
 copilot:
   binary: copilot
+  vendor: openai
   written_for: "GitHub Copilot CLI 0.3x (`copilot --version`)"
   version_args: ["--version"]
   complete_args: ["-p"]
@@ -262,6 +269,7 @@ copilot:
 
 grok:
   binary: grok
+  vendor: openai
   written_for: "Grok CLI 0.1x (`grok --version`)"
   version_args: ["--version"]
   complete_args: ["-p"]

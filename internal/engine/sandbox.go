@@ -9,12 +9,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -353,10 +355,16 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 
 	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
+	// The seat's own model and login, resolved from llm_sandbox — which
+	// falls back to llm_execute, because sandboxed work IS this seat's
+	// Execute phase running somewhere else.
+	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
+	env := underlay(e.sandboxEnv(company, seat, gate, setup), credentialEnv)
 	spec := manager.BuildSpec(sandbox.SpecInput{
-		CodingAgent: string(gate.CodingAgent),
-		PauseTTL:    pauseTTL(gate),
-		Env:         e.sandboxEnv(company, seat, gate, setup),
+		CodingAgent:     string(gate.CodingAgent),
+		PauseTTL:        pauseTTL(gate),
+		Env:             env,
+		CredentialFiles: credentials,
 	})
 
 	agentID := ""
@@ -371,6 +379,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		Brief:      brief,
 		Setup:      setup,
 		Spec:       spec,
+		LLM:        agentLLM,
 		MCPServers: servers,
 		ReuseBox:   reuse,
 	})
@@ -679,4 +688,77 @@ func (e *Engine) AwaitingSandbox(handle string) bool {
 		return false
 	}
 	return e.sandboxCoordinator.AwaitingSandbox(handle)
+}
+
+// sandboxLLM resolves the model a coding run works under, and the credential
+// that lets it reach one.
+//
+// THREE things travel, and they travel differently on purpose:
+//
+//   - The MODEL and its endpoint, so an agent that resolves
+//     "<family>/<model>" against a catalogue addresses the right vendor at
+//     the right host rather than the catalogue's default.
+//   - A TOKEN, in the run environment, which reaches any box including a
+//     remote one: it is one scoped, revocable variable.
+//   - The credential FILES, only as a host-path map the LOCAL backend seeds
+//     and writes back. They carry a refresh token whose rotation is shared
+//     fleet state, so pushing them onto somebody else's VM is a materially
+//     larger trust step than the token — which is why the map is offered and
+//     each backend decides, rather than being exported like the rest.
+//
+// A seat with no resolvable sandbox model is not an error here: the phase
+// registry already refuses a company with no models at build, and a run whose
+// agent reads its credential from the environment needs none of this.
+func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
+	if c == nil || c.Models == nil {
+		return nil, nil, nil
+	}
+	member, err := c.Models.Head(seat, phase.Sandbox)
+	if err != nil {
+		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(), "error", err)
+		return nil, nil, nil
+	}
+	spec, ok := c.Config.Providers.LLM[member.Key]
+	if !ok {
+		return nil, nil, nil
+	}
+
+	out := &sandbox.AgentLLM{
+		Model:        spec.Model,
+		ProviderType: string(spec.Type),
+		BaseURL:      spec.BaseURL,
+	}
+	agent, isCLI := member.Provider.(*cliagent.Provider)
+	if !isCLI {
+		return out, nil, nil
+	}
+	// Every subscription entry shares one providers.llm type, so the type
+	// does not name the family. The profile's vendor does.
+	if vendor := agent.Vendor(); vendor != "" {
+		out.ProviderType = vendor
+	}
+	// A cli-agent entry has no base URL of its own: the CLI talks to its
+	// vendor, and declaring a custom provider for it would point a coding
+	// agent at an endpoint nothing is serving.
+	out.BaseURL = ""
+	return out, agent.SandboxCredentials(), agent.SandboxEnv()
+}
+
+// underlay adds defaults to env WITHOUT overwriting what is already there.
+//
+// The direction is the decision: an operator who named a variable in
+// role.sandbox.env meant that value, and the engine silently replacing it
+// with a resolved subscription token would override a deliberate choice —
+// including the deliberate choice to point one seat's coding runs at a
+// different account.
+func underlay(env, defaults map[string]string) map[string]string {
+	if env == nil {
+		env = map[string]string{}
+	}
+	for name, value := range defaults {
+		if _, declared := env[name]; !declared {
+			env[name] = value
+		}
+	}
+	return env
 }

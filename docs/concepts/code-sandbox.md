@@ -3,10 +3,7 @@
 > **v1 status — local backends only.** This build ships `type: local` —
 > `direct` (a process tree) and `container` (Docker or Podman). The E2B
 > backend is not here yet, so the remote-sandbox passages below describe the
-> intended contract rather than something you can configure today. The
-> [`cli-agent`](subscription-llm-backends.md) provider itself ships, but a
-> coding run does not yet receive its login — the credential seeding and the
-> resolved-model passages below describe the intended contract. Nor is the
+> intended contract rather than something you can configure today. Nor is the
 > engine-fronted OTLP receiver — a coding run's own telemetry has no
 > collector to export to yet, though the run's engine-side lifecycle events
 > and its published transcript are all here.

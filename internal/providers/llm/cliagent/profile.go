@@ -126,6 +126,16 @@ type Profile struct {
 	// Binary is the executable, resolved on PATH unless it is a path.
 	Binary string `yaml:"binary,omitempty"`
 
+	// Vendor is the model FAMILY this CLI addresses — anthropic, openai or
+	// google.
+	//
+	// Needed because every cli-agent entry shares one providers.llm type,
+	// so a coding agent that resolves "<family>/<model>" against a
+	// catalogue would address a Claude subscription's "sonnet" as an
+	// OpenAI model. The provider type names the family for an API entry;
+	// this names it for a subscription one.
+	Vendor string `yaml:"vendor,omitempty"`
+
 	// WrittenFor is the CLI version this profile was written against,
 	// printed by `crewlet llm doctor` beside the version actually
 	// installed. A profile that silently stopped matching its CLI is the

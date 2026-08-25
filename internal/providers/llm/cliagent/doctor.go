@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -263,4 +264,82 @@ func (p *Provider) LoginState() string {
 	default:
 		return "none"
 	}
+}
+
+// Vendor is the model FAMILY this provider's CLI addresses.
+//
+// Not the providers.llm type, which is "cli-agent" for every one of them: a
+// coding agent that resolves "<family>/<model>" against a catalogue would
+// otherwise address a Claude subscription's "sonnet" as an OpenAI model.
+func (p *Provider) Vendor() string { return p.profile.Vendor }
+
+// SandboxCredentials maps this provider's login onto a coding box's home:
+// each credential path RELATIVE to the box home, against the absolute path of
+// the shared file on the engine host.
+//
+// Empty when there is no login on disk, which is the correct answer rather
+// than a set of paths that do not exist — a box seeded with missing files
+// would report a puzzling failure inside the run instead of the plain "not
+// authenticated" the CLI gives when it finds nothing.
+//
+// A LOCAL box seeds these and writes a refreshed one back. A remote box must
+// ignore them: they carry a refresh token whose rotation is shared fleet
+// state, and pushing that onto somebody else's VM is a materially larger
+// trust step than the scoped headless token the run env already exports.
+func (p *Provider) SandboxCredentials() map[string]string {
+	shared := p.ws.CredentialsDir()
+	out := map[string]string{}
+	for _, rel := range p.profile.CredentialPaths {
+		host := filepath.Join(shared, filepath.Base(rel))
+		if info, err := os.Stat(host); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		out[rel] = host
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// SandboxEnv is the credential a coding run carries in its ENVIRONMENT — the
+// headless subscription token, where one is configured.
+//
+// A token travels to any box, including a remote one, because it is a single
+// scoped and revocable variable rather than a rotating refresh secret. An
+// api-key entry contributes its key here instead, and a subscription entry
+// with neither contributes nothing at all: the run then needs the credential
+// files, which is why a CLI that mints no token needs a local box.
+func (p *Provider) SandboxEnv() map[string]string {
+	out := map[string]string{}
+	switch p.auth.Mode {
+	case AuthAPIKey:
+		if p.profile.APIKeyEnv != "" && p.auth.APIKey != "" {
+			out[p.profile.APIKeyEnv] = p.auth.APIKey
+		}
+	case AuthInheritEnv:
+		for _, name := range []string{p.profile.TokenEnv, p.profile.APIKeyEnv} {
+			if name == "" {
+				continue
+			}
+			if value, ok := os.LookupEnv(name); ok {
+				out[name] = value
+			}
+		}
+	default:
+		if p.profile.TokenEnv != "" && p.auth.Token != "" {
+			out[p.profile.TokenEnv] = p.auth.Token
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// MintsHeadlessToken reports whether this CLI can produce a token that
+// travels to a remote box, for the error that has to distinguish the two
+// cases an operator can be in.
+func (p *Provider) MintsHeadlessToken() bool {
+	return p.profile.TokenEnv != "" && len(p.profile.CaptureTokenArgs) > 0
 }
