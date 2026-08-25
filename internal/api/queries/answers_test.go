@@ -641,3 +641,106 @@ func parsed(t *testing.T, doc string) *config.Company {
 	}
 	return cfg
 }
+
+// A SEAT'S ANSWER CARRIES ITS FINISHED CALLS, not only the one in flight.
+//
+// The live overlay and the history are two different sources and always were:
+// the projection holds the call happening now, the event store holds the ones
+// that completed. The answer carried only the first, so a seat page rendered
+// the round in progress and nothing before it — while the spend chart beside
+// it, which reads the same store, reported every phase the turn had already
+// finished. Two panels on one screen disagreeing about whether a seat had done
+// anything.
+func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	seedPhases(t, log, "Lead", "agent-lead")
+
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+
+	history, _ := got["llm_history"].([]map[string]any)
+	if len(history) != 2 {
+		t.Fatalf("llm_history = %v, want both finished phases", got["llm_history"])
+	}
+	// The PAYLOAD's fields, under the names the client reads. They are the
+	// same names the live row carries, which is why one renderer draws
+	// both.
+	for _, key := range []string{"turn_id", "phase", "model", "total_tokens", "response"} {
+		if _, present := history[0][key]; !present {
+			t.Errorf("history row has no %q: %v", key, history[0])
+		}
+	}
+	// And the envelope's own two, which the payload cannot carry.
+	if history[0]["timestamp"] == nil || history[0]["timestamp"] == "" {
+		t.Errorf("history row has no timestamp: %v", history[0])
+	}
+	// Newest first, which is the order the list renders in.
+	if history[0]["phase"] != "execute" {
+		t.Errorf("first row is %v, want the newest", history[0]["phase"])
+	}
+}
+
+// A SEAT ADDRESSED BY HANDLE FINDS THE SAME HISTORY. The dashboard holds the
+// handle; the store rows are keyed by the derived agent id and the role.
+func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	seedPhases(t, log, "Lead", "agent-lead")
+
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	if history, _ := got["llm_history"].([]map[string]any); len(history) != 2 {
+		t.Fatalf("asking by role found %v", got["llm_history"])
+	}
+}
+
+// AN UNREADABLE OR ABSENT LOG COSTS THE HISTORY AND NOTHING ELSE. The live
+// half is the answer's point and comes from memory; refusing the seat page
+// because the event log is missing would turn a degraded panel into no screen.
+func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
+	t.Parallel()
+	r := registryOver(t, queries.Sources{State: livestate.New()})
+	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+
+	if got["role"] != "Lead" {
+		t.Fatalf("answer = %v", got)
+	}
+	history, ok := got["llm_history"].([]map[string]any)
+	if !ok || len(history) != 0 {
+		t.Errorf("llm_history = %v, want an empty list rather than a missing key",
+			got["llm_history"])
+	}
+}
+
+// seedPhases writes two finished phases for one seat, plus one for another so
+// the filter has something to exclude.
+func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
+	t.Helper()
+	base := time.Now().UTC().Add(-time.Hour)
+	rows := []struct {
+		id, phase, role, agent string
+		at                     time.Time
+	}{
+		{"p1", "plan", role, agentID, base},
+		{"p2", "execute", role, agentID, base.Add(time.Second)},
+		{"p3", "plan", "Someone Else", "agent-other", base.Add(2 * time.Second)},
+	}
+	for _, row := range rows {
+		payload := `{"turn_id":"t-1","phase":"` + row.phase + `","iteration":1,` +
+			`"model":"claude-sonnet-5","total_tokens":10,"response":"ok"}`
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:      row.id,
+			Type:    "agent_phase_completed",
+			Source:  "engine",
+			Time:    row.at,
+			Actor:   row.role,
+			Tags:    map[string]string{"agent_role": row.role, "agent_id": row.agent},
+			Payload: json.RawMessage(payload),
+		}); err != nil {
+			t.Fatalf("append %s: %v", row.id, err)
+		}
+	}
+}

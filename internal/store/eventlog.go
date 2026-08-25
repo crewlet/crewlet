@@ -76,24 +76,38 @@ const (
 // they never select the column, because thirty days of serialized events is a
 // large amount of JSON to move for a listing that shows a summary line.
 type EventRecord struct {
-	ID           string
-	Type         string
-	Source       string
-	Time         time.Time
-	Category     string
-	Summary      string
-	Actor        string
-	TraceID      string
-	SpanID       string
-	ParentSpanID string
+	// THE TAGS ARE THE WIRE CONTRACT, and the names are the DASHBOARD's.
+	//
+	// This struct is what /events, /events/{id} and /events/trace/{id}
+	// answer with, and the client reads id, type, source, timestamp,
+	// category, summary, trace_id and payload off it. Untagged, Go
+	// marshalled it as ID, Type, Source, Time, TraceID, Payload — so
+	// every one of those screens rendered a blank event with an empty
+	// payload, and none of them failed: the fields were simply not the
+	// ones being read.
+	//
+	// The names match livestate.FeedRow field for field on purpose. The
+	// same screens show a live row from the projection and a historical
+	// one from here, and two spellings of one event would make the two
+	// halves of one list render differently.
+	ID           string    `json:"id"`
+	Type         string    `json:"type"`
+	Source       string    `json:"source"`
+	Time         time.Time `json:"timestamp"`
+	Category     string    `json:"category"`
+	Summary      string    `json:"summary"`
+	Actor        string    `json:"actor"`
+	TraceID      string    `json:"trace_id"`
+	SpanID       string    `json:"span_id"`
+	ParentSpanID string    `json:"parent_span_id"`
 
 	// Tags are the filterable dimensions the writer extracted. The
 	// promoted columns (agent_id, agent_role, task_id, channel_id, sender)
 	// are copies of five of these; the rest exist only here.
-	Tags map[string]string
+	Tags map[string]string `json:"tags,omitempty"`
 
 	// Payload is the full serialized event. Nil on a listing — see above.
-	Payload json.RawMessage
+	Payload json.RawMessage `json:"payload,omitempty"`
 
 	// Failed says whether the work this event reports failed. Derived on
 	// read from the event type plus the stored `failed` tag, because a
@@ -101,7 +115,7 @@ type EventRecord struct {
 	// into history. Events written before the writer stamped that tag read
 	// back as not-failed — a real discontinuity at that point in the
 	// timeline, not a bug to paper over.
-	Failed bool
+	Failed bool `json:"failed"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -474,6 +488,68 @@ const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role, payload
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+
+// AgentPhaseLimit bounds a seat's phase history.
+//
+// Sized to the screen rather than to the table: the seat page renders these as
+// an expandable list and each row carries the phase's prompts and its whole
+// response verbatim, so a hundred of them is already megabytes on the wire for
+// a list nobody scrolls to the end of. The dashboard keeps its own cap at the
+// same number, so the page and the answer agree about where history stops.
+const AgentPhaseLimit = 50
+
+const agentPhaseSQL = `
+SELECT ` + listColumns + `, payload
+FROM crewlet_events
+WHERE event_type = 'agent_phase_completed' AND (agent_id = ? OR agent_role = ?)
+ORDER BY event_time DESC, event_id DESC LIMIT ?`
+
+// AgentPhases returns one seat's durable per-phase records, newest first,
+// PAYLOAD INCLUDED.
+//
+// The seat page's LLM-invocation list. It is a separate method rather than a
+// flag on ListQuery precisely because of the payload: the feed's own listing
+// deliberately never selects it — a page of events with every payload attached
+// is the query that makes an activity screen slow — and a boolean on the
+// shared query type would put that mistake one keystroke away.
+//
+// Matched on EITHER identifier, because a caller holds whichever the seat page
+// gave it: the roster carries the handle-derived agent id and the projection
+// keys on the role name. Both are promoted columns, so neither is a scan.
+//
+// agent_phase_completed only. That is the durable record — the prompts, the
+// response, the tools, the tokens — while agent_turn_progress is stream-only
+// by design, so history here is exactly the calls that finished.
+func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string) ([]EventRecord, error) {
+	if agentID == "" && agentRole == "" {
+		return nil, nil
+	}
+	rows, err := l.db.sql.QueryContext(ctx, agentPhaseSQL, agentID, agentRole, AgentPhaseLimit)
+	if err != nil {
+		return nil, fmt.Errorf("store: agent phases: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []EventRecord
+	for rows.Next() {
+		var rec EventRecord
+		var micros int64
+		var tagJSON, payload string
+		if err := rows.Scan(&micros, &rec.ID, &rec.Type, &rec.Source, &rec.Category,
+			&rec.Summary, &rec.Actor, &rec.TraceID, &rec.SpanID, &rec.ParentSpanID,
+			&tagJSON, &payload,
+		); err != nil {
+			return nil, fmt.Errorf("store: agent phases: scan: %w", err)
+		}
+		finishRecord(&rec, micros, tagJSON)
+		rec.Payload = json.RawMessage(payload)
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: agent phases: %w", err)
+	}
+	return out, nil
+}
 
 // PhaseTokens returns the per-phase spend records inside a window.
 //

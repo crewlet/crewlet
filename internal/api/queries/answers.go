@@ -2,6 +2,7 @@ package queries
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -205,7 +206,7 @@ func Register(r *Registry, s Sources) {
 }
 
 // agent answers one seat's live state.
-func (s Sources) agent(_ context.Context, p Params) (any, error) {
+func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// EITHER NAME, and the seat may be addressed by handle or by role.
 	//
 	// The dashboard sends `id`, carrying the handle — `query("agent", {id})`
@@ -215,18 +216,79 @@ func (s Sources) agent(_ context.Context, p Params) (any, error) {
 	// answered 400 and rendered its error state; the client is the
 	// compatibility reference for a frame's shape (d-502), so the answer
 	// takes what the client sends and resolves it.
-	role := s.roleOf(firstOf(p.String("id"), p.String("role")))
+	seat := firstOf(p.String("id"), p.String("role"))
+	role := s.roleOf(seat)
 	if role == "" {
 		return nil, fmt.Errorf("%w: agent needs a handle or a role", ErrBadParams)
 	}
-	overlay := s.State.AgentOverlay(role)
-	if overlay == nil {
-		// A seat the projection has never seen. Not an error: a role
-		// configured and never spawned is exactly this, and a 404 there
-		// would make a healthy new company look broken.
-		return map[string]any{"role": role, "live": nil}, nil
+	// LIVE STATE AND HISTORY, which are two different sources and always
+	// were: the projection holds the call in flight, the event store holds
+	// the ones that finished. The answer carried only the first, so a seat
+	// page showed the round happening now and nothing before it — while the
+	// spend chart beside it, which reads the store, reported every phase
+	// the turn had already completed. Two panels on one screen disagreeing
+	// about whether a seat had done anything.
+	//
+	// A seat the projection has never seen is NOT an error: a role
+	// configured and never spawned is exactly that, and a 404 there would
+	// make a healthy new company look broken. Its history is answered the
+	// same way.
+	answer := map[string]any{
+		"role":        role,
+		"live":        nil,
+		"llm_history": s.phaseHistory(ctx, seat, role),
 	}
-	return map[string]any{"role": role, "live": overlay}, nil
+	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
+	// any is not nil: every `live != nil` check above this layer would read
+	// a seat that has never run as one that has. It marshals to null either
+	// way, so the client never saw it and only a Go caller would — which is
+	// exactly the kind of trap that survives until something depends on it.
+	if overlay := s.State.AgentOverlay(role); overlay != nil {
+		answer["live"] = overlay
+	}
+	return answer, nil
+}
+
+// phaseHistory is the seat's finished calls, newest first, as the rows the
+// dashboard renders beside the live one.
+//
+// BEST EFFORT. The live half is the answer's point and it comes from memory;
+// refusing the whole seat page because the event log could not be read would
+// turn a degraded history into no screen at all. An unreadable log and a seat
+// that has not run yet both render as "no invocations", which is the same
+// thing a reader can see for themselves from the phase chart above it.
+//
+// Each row is the event's PAYLOAD with the envelope's timestamp merged in: the
+// payload's field names are already the client's — turn_id, phase, iteration,
+// model, response, tool_executions, total_tokens, cost_usd — because the same
+// shape drives the live row, and the timestamp is the one field that lives on
+// the envelope rather than inside it.
+func (s Sources) phaseHistory(ctx context.Context, seat, role string) []map[string]any {
+	if s.Events == nil {
+		return []map[string]any{}
+	}
+	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role)
+	if err != nil {
+		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(records))
+	for _, rec := range records {
+		row := map[string]any{}
+		if len(rec.Payload) > 0 {
+			if err := json.Unmarshal(rec.Payload, &row); err != nil {
+				// One unreadable row is not the list. Skipping it keeps
+				// the rest renderable, which is what a reader wants from
+				// a history panel.
+				continue
+			}
+		}
+		row["id"] = rec.ID
+		row["timestamp"] = rec.Time.UTC().Format(time.RFC3339Nano)
+		row["failed"] = rec.Failed
+		out = append(out, row)
+	}
+	return out
 }
 
 // firstOf returns the first non-empty value.

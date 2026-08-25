@@ -41,7 +41,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
-| `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
+| `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
@@ -206,6 +206,42 @@ answers by name and is what the socket's own frames map onto, so the two can
 never drift. A question whose source this node lacks — an event log, a
 schedule ledger — is left *unregistered* rather than answered empty, so its
 route replies `404` with a JSON error code rather than a bare mux miss.
+
+### An event on the wire
+
+One shape, whether it came from the live projection or from the event store,
+and the field names are the same either way — a screen shows a live row beside
+a historical one, so two spellings of one event would render the two halves of
+one list differently:
+
+```json
+{
+  "id": "…", "type": "chat_message_received", "source": "mattermost",
+  "timestamp": "2026-08-25T12:00:00Z", "category": "chat",
+  "summary": "…", "actor": "…",
+  "trace_id": "…", "span_id": "…", "parent_span_id": "…",
+  "failed": false,
+  "payload": { }
+}
+```
+
+`payload` is present only where the event was fetched by id or by trace: a
+listing deliberately never selects it, because a page of events with every
+payload attached is the query that makes an activity screen slow.
+
+### A seat's LLM history
+
+`llm_history` is the seat's **finished** phases, read from the event store —
+one row per `agent_phase_completed`, newest first, capped at 50. The call
+*in flight* is not in it; that is `live.live_call`, which comes from the
+projection, and the two are different sources on purpose: the store holds what
+completed, memory holds what is happening. A screen renders both with one
+renderer, so each history row carries the same fields a live one does —
+`turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
+`total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
+
+An unreadable or absent event log costs the history and nothing else: the
+answer still carries the seat and its live state.
 
 ### What the handshake snapshot carries
 
