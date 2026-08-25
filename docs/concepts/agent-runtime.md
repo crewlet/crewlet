@@ -1,8 +1,8 @@
 # Agent Runtime
 
-The agent runtime (`crewlet.agent`) manages agent lifecycle, execution, and memory.
+The agent runtime (`internal/agent`) manages agent lifecycle, execution, and memory.
 
-> **Per-turn execution:** every agent turn runs through the three-phase **Plan → Execute → Review** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `TurnEngine.run_turn`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
+> **Per-turn execution:** every agent turn runs through the three-phase **Plan → Execute → Review** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `turn.Engine.Run`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
 
 ---
 
@@ -12,7 +12,7 @@ Each **agent seat** (`Role.kind == "agent"`) maps 1:1 to an AgentDefinition and 
 
 **Identity is deterministic.** `AgentInstance.id` is computed as
 `uuid5(AGENT_ID_NAMESPACE, f"{org.name}:{handle}")` (see
-`crewlet.db.agents.derive_agent_id`).  The same role in the same org
+`org.Organization.AgentIDFor`).  The same role in the same org
 always lands on the same `UUID` across processes, machines, and
 restarts.  Anything keyed by `agent.id` -- ``agent_diary`` rows,
 ``agent_onboarding_markers`` rows, ``counterparty_profiles`` keyed
@@ -100,7 +100,7 @@ The Plan and Execute phases can run on different LLM models — see the [Turn En
 
 ## The LLM ↔ Tool Proxy
 
-The LLM is an external HTTP service — it cannot access local code, MCP servers, or engine internals directly. The shared tool-call loop (`crewlet.agent.llm_loop.run_tool_loop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
+The LLM is an external HTTP service — it cannot access local code, MCP servers, or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
 
 ```mermaid
 flowchart TD
@@ -135,7 +135,7 @@ Both builtin and MCP tools produce identical tool definition schemas. From the L
 
 ## System Prompts (per phase)
 
-Under the three-phase [Turn Engine](turn-engine.md), each phase builds its own narrow system prompt — there is no single monolithic prompt for a turn. Each builder lives in `internal/agent/prompts/`; the detail layer is in `internal/agent/prompts/sections.go`. Founder-defined role/org context (mission, vision, policies, backstory, responsibilities, behavioral guidelines, team roster) renders **directly from the in-memory `Organization` model into the Plan prompt** via the section builders in `crewlet.agent.definition` — no DB seed step, no reconcile pass.
+Under the three-phase [Turn Engine](turn-engine.md), each phase builds its own narrow system prompt — there is no single monolithic prompt for a turn. Each builder lives in `internal/agent/prompts/`; the detail layer is in `internal/agent/prompts/sections.go`. Founder-defined role/org context (mission, vision, policies, backstory, responsibilities, behavioral guidelines, team roster) renders **directly from the in-memory `Organization` model into the Plan prompt** via the section builders in `internal/agent` — no DB seed step, no reconcile pass.
 
 | Phase | What's in the prompt |
 |---|---|
@@ -152,7 +152,7 @@ Engine guardrails ("event triage framework", "escalation judgement", "tool usage
 
 Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, when to author code via the [code sandbox](code-sandbox.md) and what the GitHub tools are for) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence or Plane pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` / ``crewlet plane import`` and edit pages in the backend's editor thereafter.
 
-The `AgentDefinition.system_prompt` property composes a single monolithic prompt for introspection / external callers; the runtime path (`TurnEngine.run_turn`) never calls it. `AgentDefinition.build_system_prompt_with_skills(registry)` is the registry-aware variant for callers that want that combined prompt to stay consistent with what the live engine builds.
+There is no single monolithic system prompt to read: `internal/agent/prompts` builds one PER PHASE (`BuildOnboarding`, `BuildPlan`, `BuildExecute`, `BuildReview`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
 
 ---
 

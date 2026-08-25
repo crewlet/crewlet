@@ -1,6 +1,6 @@
 # Organization Model
 
-The organization model (`crewlet.org`) is the foundational data structure representing the company hierarchy. It determines how agents communicate, what knowledge they can access, who they report to, and how tasks flow.
+The organization model (`internal/org`) is the foundational data structure representing the company hierarchy. It determines how agents communicate, what knowledge they can access, who they report to, and how tasks flow.
 
 ---
 
@@ -75,7 +75,7 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 Roles can live in two places:
 
 - **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.plane.project`](../integrations/plane.md#project-identity) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
-- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.plane.project` identity. Knowledge **read** scope for every agent is the org-wide `Organization.plane_projects` only.
+- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.plane.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.PlaneProjects` only.
 
 > The `integrations.jira` and `integrations.confluence` identities, on a unit or a role, are **refused** by this build — no parser routes a delivery from either and no searcher reads a Confluence space, so the identity would be recorded and never consulted. `knowledge.confluence_spaces` is refused for the same reason. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
@@ -131,7 +131,7 @@ Root-level roles differ from unit roles in a few ways:
 | Knowledge scope | Org-wide (reads are role-independent — see [Knowledge System](knowledge-system.md)) | Org-wide (same) |
 | MCP env inheritance | No parent unit to inherit from | Inherits unit's `mcp_env` |
 | Lead auto-management | N/A (no unit lead concept) | Auto-managed by unit lead if unmanaged |
-| `get_unit_for_role()` | Returns `None` | Returns the containing unit |
+| `org.Organization.UnitFor` | Returns `None` | Returns the containing unit |
 
 ### Flat Startup (no departments)
 
@@ -366,7 +366,7 @@ In this example:
 - **Backend** has no lead, so it inherits `VP Engineering`. VP Engineering auto-manages `Dev A` and `Dev B`.
 - **Frontend** has an explicit lead (`Frontend Lead`), so the parent's lead is ignored.
 
-Inherited leads work the same as explicit leads for auto-management, task routing, `is_unit_lead()`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one — use `get_effective_lead(unit, org)` from `crewlet.org.hierarchy` to resolve the lead `Role` object in code.
+Inherited leads work the same as explicit leads for auto-management, task routing, `org.Organization.IsUnitLead`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one — use `get_effective_lead(unit, org)` from `internal/org` to resolve the lead `Role` object in code.
 
 ### Roles at Any Level
 

@@ -182,7 +182,7 @@ turn_engine:
 ```
 
 Nested under `turn_engine` rather than beside it, which is load-bearing: it
-rides the live `TurnEngineSettings` cell, so it hot-reloads through the
+rides the live the turn-engine settings cell, so it hot-reloads through the
 existing turn-engine diff handler with no extra apply-config wiring. Setting
 `enabled: false` restores the previous prompt exactly — which is why it is
 safe to leave on.

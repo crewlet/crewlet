@@ -18,7 +18,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 
 ## The lease
 
-Ownership is a row in the `leases` table (`crewlet.db.leases`) with a TTL and a monotonic `epoch`:
+Ownership is a row in the `leases` table (`internal/coord`) with a TTL and a monotonic `epoch`:
 
 ```
 seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
@@ -32,7 +32,7 @@ Three properties carry everything above it:
 
 ## Placement
 
-Placement is deliberately dumb, and lives in `crewlet.seat.host`:
+Placement is deliberately dumb, and lives in `internal/seat`:
 
 - Every node holds a `node:{id}` presence lease, renewed on the same heartbeat as its seats. Counting the live ones is how a node learns the fleet size. It cannot be inferred from seat ownership: a fleet where nobody has claimed anything yet would read as zero nodes, and every node would then take every seat.
 - A node claims up to `ceil(seats / live nodes)` — its **fair share** — trying `preferred`-hinted seats first for stickiness, and never more than `SEAT_CLAIM_LIMIT_PER_SWEEP` per pass, because each takeover costs an MCP spawn.
@@ -92,7 +92,7 @@ Three paths use it, and they are the three ways this node can be the wrong one t
 
 "Do I hold this seat?" is a question about a local snapshot refreshed on a 15-second heartbeat against a 45-second TTL, so the honest answer can be a full TTL stale — precisely the window an ownership check exists to close. A membership check cannot meet its own exit criterion.
 
-What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `SeatHost.may_start(handle)` returns the epoch only when the last successful renew is inside one heartbeat interval, and `None` otherwise. Every turn that starts is then certified owned for at least `ttl - heartbeat`.
+What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `seat.Host.MayStart` returns the epoch only when the last successful renew is inside one heartbeat interval, and `None` otherwise. Every turn that starts is then certified owned for at least `ttl - heartbeat`.
 
 That also gives the right answer during a database blip. The lease row is untouched by an unreachable store, so the seat is **kept** — shedding on a two-second outage would tear a healthy company down — but new turns stop at the first failed renew. The consumer is quiesced, and un-quiesced when a renew succeeds again. Both edges matter: without the second one the node comes back healthy, still owning the seat, still attached to it, and never reads from it again.
 

@@ -144,7 +144,7 @@ Re-runs are idempotent and resumable: state is saved after every mutation, so an
 
 ### Bot scopes and events
 
-The single source of truth is `crewlet.slack.manifest` (`BOT_SCOPES` / `BOT_EVENTS`); the manual steps below list the same values. The scopes cover **both** consumers of the bot token — the notification transport and every tool enabled on the Slack MCP server:
+The single source of truth is `internal/slack` (`BOT_SCOPES` / `BOT_EVENTS`); the manual steps below list the same values. The scopes cover **both** consumers of the bot token — the notification transport and every tool enabled on the Slack MCP server:
 
 | Scope | Used by |
 |-------|---------|

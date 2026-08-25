@@ -1,6 +1,6 @@
 # Scheduling
 
-The **Scheduler** (`crewlet.schedule`) lets an agent — or a whole unit —
+The **Scheduler** (`internal/schedule`) lets an agent — or a whole unit —
 own **recurring work** without an external cron emitting webhooks into
 the engine. A QA Engineer can run a smoke-test pipeline every morning, a
 team can hold an async standup at 9:30, a Knowledge-Base agent can audit
@@ -133,7 +133,7 @@ Runners are resolved from the **org**, never from the agents running in
 the ticking process. A fire is addressed to the runner seat's inbox and
 consumed by whichever node owns that seat — which is rarely the node
 whose tick won the ledger claim. The seat's agent id comes from
-`Organization.agent_id_for`, the same `uuid5` over `(org name, handle)`
+`org.Organization.AgentIDFor`, the same `uuid5` over `(org name, handle)`
 every node derives, so the `TaskAssigned` a scheduler publishes names
 exactly the identity the turn will run under.
 

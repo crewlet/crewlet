@@ -476,7 +476,7 @@ FAIL  seat swe         agent-swe authenticates and opens a socket but has joined
 1. A human posts in a channel the bot is a member of, or DMs it.
 2. Mattermost pushes a `posted` event down that bot's websocket.
 3. The fleet republishes it onto `crewlet.notifications.inbound`.
-4. `MattermostTransport` parses it, applies thread routing and loop
+4. the Mattermost transport parses it, applies thread routing and loop
    suppression, and produces a notification.
 5. NotificationService resolves handle → agent and publishes to
    `crewlet.agent.{handle}.inbox`.
@@ -556,7 +556,7 @@ disconnect and a server hanging up on sight look identical otherwise.
 
 All Mattermost capabilities — messaging, threading, search, reactions — come
 from **MCP tools** powered by the agent's own bot token. Messages post with
-the agent's own bot identity. `MattermostTransport.send()` exists as the
+the agent's own bot identity. the Mattermost transport's send exists as the
 transport-agnostic fallback for notifications routed through the
 notification service.
 

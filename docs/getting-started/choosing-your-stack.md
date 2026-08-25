@@ -141,7 +141,7 @@ Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).
 
 > **Don't mix knowledge backends**: the engine wires exactly one
-> `KnowledgeSearcher` — Confluence CQL or Plane page search — selected by
+> `knowledge.Searcher` — Confluence CQL or Plane page search — selected by
 > which integration is configured. See
 > [Knowledge System](../concepts/knowledge-system.md).
 

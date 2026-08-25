@@ -100,7 +100,7 @@ Every agent is expected to **capture context** via `reflect_and_persist(ttl_days
 
 What to record: what was kicked off, reference details (repo, PR number, issue key), and where the original request came from (Slack channel/thread, Jira issue, the human who asked).  Example: `reflect_and_persist(content="Opened PR foo/bar #123 from sandbox run — original request from Sam in #engineering thread 1777...", ttl_days=30)`.
 
-When the `review_requested` webhook arrives later, the agent receives a **tailored prompt** (`GitHubNotificationPrompt`) that instructs it to:
+When the `review_requested` webhook arrives later, the agent receives a **tailored prompt** (the GitHub notification prompt) that instructs it to:
 
 1. Look at its `## Personal memory` block (which the Plan-phase pre-fetch filtered against the incoming trigger) for the context of the work the PR came from
 2. Report back to the original requester in the originating channel

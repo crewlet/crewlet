@@ -415,7 +415,7 @@ flowchart TD
     D --> G
 ```
 
-Each Event's `trace_id`/`span_id` fields are auto-populated from the active OTel span at creation time. When events cross async boundaries (EventQueue → handler), the receiving component calls `restore_context()` to reconnect the trace.
+Each Event's `trace_id`/`span_id` fields are auto-populated from the active OTel span at creation time. When events cross async boundaries (EventQueue → handler), the receiving component calls the context restore to reconnect the trace.
 
 #### Dashboard Trace View
 

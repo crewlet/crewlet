@@ -145,7 +145,7 @@ rides in the prompt:
    ```
 
 4. The reply is parsed back into `Completion.content` +
-   `Completion.tool_calls`.
+   `Completion.ToolCalls`.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
 a bare object, `arguments` as a JSON string, and `message` / `content` /
@@ -160,7 +160,7 @@ plain answer, with no envelope to get wrong.
 
 ### Token accounting
 
-`Completion.input_tokens` / `output_tokens` come from the CLI's own
+`Completion.InputTokens` / `output_tokens` come from the CLI's own
 usage report where the profile can find one (Claude Code and Codex
 report it; Gemini CLI's shape varies by version). Where it can't, the
 counts are estimated at four characters per token — an approximation, but

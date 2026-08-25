@@ -69,7 +69,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 
-Read-side handlers live in the `crewlet.api.routes` package (one module
+Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
 `sandbox_runs`, `budgets`, `integrations`, `stream`, `webhooks`,
 `dashboard`, `health`);
@@ -199,7 +199,7 @@ The REST endpoints below remain a public read API, and
 upgrade to a WebSocket (corporate proxies). They are no longer part of
 the dashboard's normal operation.
 
-### Live-state projection (`StreamService` + `LiveState`)
+### Live-state projection (`api/stream` + `LiveState`)
 
 The API process maintains an **in-memory projection** of every agent's
 current state (`crewlet.api.live_state.LiveState`, owned by
@@ -567,7 +567,7 @@ Sources:
 * **`counterparty_profiles`** — rows from `counterparty_profiles`
   observed by this agent, ordered by `last_updated_at` descending.
 * **`synthesized_skills`** — the agent's own rows from
-  `synthesized_skills` via `SynthesizedSkillStore.list_for_agent`. The
+  `synthesized_skills` via `learning.Skills.List`. The
   table is strictly per-agent; cross-agent procedural artefacts are
   [promoted](../concepts/agent-learning.md) as draft pages in the shared
   knowledge backend, reachable by all members via query-time search.
@@ -881,7 +881,7 @@ list and `next_run` still render). Disabled schedules return an empty
 Rolls up per-phase LLM spend across the whole org so the dashboard's
 **Tokens** view can render every breakdown from a single fetch.
 Reads `agent_phase_completed` events via
-`EventStore.list_phase_token_events` and groups them by phase, model,
+the event store's phase-token query and groups them by phase, model,
 auxiliary worker, agent, and turn.
 
 **Query parameters**

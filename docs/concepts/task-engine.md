@@ -6,7 +6,7 @@ Task lifecycle management lives in an external PM tool (Jira, Plane, GitHub/GitL
 
 ## ExecutionTracker
 
-The `ExecutionTracker` is a passive data structure — it emits no events and enforces no transitions. Events originate from webhooks via the `NotificationService`.
+The `ExecutionTracker` is a passive data structure — it emits no events and enforces no transitions. Events originate from webhooks via the the notification service.
 
 **What it tracks**: bidirectional agent ↔ issue mappings and a dependency graph between issues.
 
@@ -28,7 +28,7 @@ The `ExecutionTracker` is a passive data structure — it emits no events and en
 
 ## How It Works with Webhooks
 
-PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the `NotificationService` into an `ExternalNotification` delivered to the routed agents' inboxes — the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the PM tool through its own MCP tools.
+PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the the notification service into an `ExternalNotification` delivered to the routed agents' inboxes — the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the PM tool through its own MCP tools.
 
 ```mermaid
 sequenceDiagram
@@ -44,7 +44,7 @@ sequenceDiagram
     Note over PM: Agent creates subtask, transitions ticket, posts<br/>comment — all through MCP tools, same as a human would
 ```
 
-The `TaskAssigned` event type exists for engine-internal work injection — the [Scheduler](scheduling.md) fires it for cron-style recurring tasks — not for the PM-tool webhook pipeline. The `ExecutionTracker` itself is passive plumbing exposed to extensions (`ExtensionContext.execution_tracker`) and the turn context; the engine's only built-in mutation is untracking a removed role's issues during org hot-reload.
+The `TaskAssigned` event type exists for engine-internal work injection — the [Scheduler](scheduling.md) fires it for cron-style recurring tasks — not for the PM-tool webhook pipeline. The execution tracker itself is passive plumbing read through the turn context; the engine's only built-in mutation is untracking a removed role's issues during org hot-reload.
 
 ---
 

@@ -290,7 +290,7 @@ The hint is suppressed for `watcher` / `mention` routings — those carry their 
 
 > **Important: Per-role tokens required for watcher and creator routing.** Watcher and page-creator routing only work when each agent authenticates to Confluence as a **distinct Atlassian user** (via per-role `CONFLUENCE_API_TOKEN` in `mcp_env`). If all agents share a single service account token, Confluence records the same user for all edits, and routing cannot distinguish between agents. See [Jira Integration](jira.md) for the `mcp_env` pattern.
 
-> **Confluence does NOT auto-add commenters as watchers.** When an agent comments on a page, they are not automatically added as a watcher (unlike page edits). The transport provides an `add_watcher()` method to explicitly watch a page after commenting, ensuring the agent receives future events.
+> **Confluence does NOT auto-add commenters as watchers.** When an agent comments on a page, they are not automatically added as a watcher (unlike page edits). The transport provides an the watcher registration method to explicitly watch a page after commenting, ensuring the agent receives future events.
 
 > **@mentions via API only.** The Confluence UI does not allow `@mentioning` service accounts. However, the API can insert mention markup (`<ri:user ri:account-id="..."/>`) when agents create comments via MCP tools. The transport extracts these mentions and routes accordingly. For human users wanting to direct a comment to an agent, they must use the agent's display name in the comment text (not @mention) — the transport will still route via watchers/page creator.
 
@@ -352,7 +352,7 @@ Each unit's Confluence space can host an `Onboarding` page that fresh agents are
 
 ### 3. Query-time Confluence search (engine side)
 
-The Plan-phase `## Relevant knowledge` block runs a live Confluence search for the planner: the `ConfluenceSearcher` has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
+The Plan-phase `## Relevant knowledge` block runs a live Confluence search for the planner: the the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
 
 This approach keeps tool guidance **configurable per-org** and **per-role** rather than hardcoded in the engine. The same Confluence MCP tools are available to all agents, but each agent's prompt scaffolding and accessible spaces determine how they use them.
 

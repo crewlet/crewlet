@@ -324,7 +324,7 @@ The durable state is always **git plus the persisted row** — the WIP branch is
 
 **The pause reaper.** A human reply can take days, and E2B holds a paused box — billing for the snapshot — until something kills it. Nothing else would, so the completion poll enforces `pause_ttl_seconds` on the same tick it uses for running jobs. The box's age is durable (`pending_sandbox_run.paused_at`, stamped when the box is paused), so the deadline survives an engine restart instead of resetting with the process. Past the TTL, a parked run gets:
 
-1. **the box killed by id** — `SandboxProvider.kill(sandbox_id)`, never `connect()`, which auto-resumes a paused sandbox and would boot the VM back up purely to shut it down;
+1. **the box killed by id** — `sandbox.Provider.Kill`, never `connect()`, which auto-resumes a paused sandbox and would boot the VM back up purely to shut it down;
 2. **the box released on the row** (`sandbox_id` cleared, `paused_at` cleared) — which is also what makes the next `run_sandbox` provision a fresh box rather than reattach to a dead id;
 3. **the run flipped to `reseed`** — still claimable, still matched by conversation key, because the run is not over. The answer can arrive days later and still resumes the same suspended Execute loop; only the spliced reply differs, telling the executor the machine is gone and the brief must re-check-out the pushed branch.
 

@@ -164,7 +164,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Plan** | full catalogue (`ToolSurface.catalogue_names()`) | Planner sees every skill that could apply if the plan picks that tool. |
+| **Plan** | full catalogue (the turn's tool catalogue) | Planner sees every skill that could apply if the plan picks that tool. |
 | **Execute** | `plan.tools_needed ∪ executor_always_on` | Narrowed — only tools the executor will actually call see their skill catalogued. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | parent-passed allowlist | Same matching as Execute against the sub-agent's narrower surface. |
@@ -305,7 +305,7 @@ Re-runs the boot-time full populate against a *temporary* registry and prints th
 
 Both backends share the same idea: a machine-readable YAML frontmatter block at the top of the page (edit to change binding metadata — `key` / `trigger` / `phases` / `title`), followed by the guidance rendered as a normal page body (edit to change the prose). When the sync worker reads a page back, it parses the YAML and flattens the body HTML to plain text for the LLM. The conversion is intentionally lossy on formatting — bullets and headings flatten to text-with-newlines — because the body's only consumer is an LLM, not a human reader. Operators who want exact source-text fidelity should keep the `.md` files in version control and re-run the import with `--update` when they change.
 
-Every synced skill records the backend page it came from in `PromptSkill.source_page_id` / `source_page_version` — used for logging and webhook eviction only. Confluence stamps its integer page version; Plane has no integer page version (the API exposes `updated_at` only), so Plane-sourced skills keep `source_page_version = 0`.
+Every synced skill records the backend page it came from in `skills.Skill.SourcePageID` / `source_page_version` — used for logging and webhook eviction only. Confluence stamps its integer page version; Plane has no integer page version (the API exposes `updated_at` only), so Plane-sourced skills keep `source_page_version = 0`.
 
 ### Confluence
 
@@ -350,7 +350,7 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 
 ## See also
 
-- [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into `TurnEngine`.
+- [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into the turn engine.
 - [Turn Engine](turn-engine.md) — phase contracts; how `plan.tools_needed` is resolved.
 - [CLI Reference](../reference/cli.md) — full flag reference for `crewlet plane import` / `crewlet plane resync`.
 - [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE`, `CREWLET_TOOL_SKILLS_PROJECT` (the `crewlet plane import` default; the engine reads `integrations.plane.skills_project`).
