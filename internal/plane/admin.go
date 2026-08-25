@@ -88,7 +88,7 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 		}
 	}
 	if out == nil {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"testing"
 )
 
@@ -30,17 +31,10 @@ var mintSites = map[string]bool{"authenticate": true, "forgeWebhook": true}
 func TestOnlyTheGuardsMintAVerifiedDelivery(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
-	if err != nil {
-		t.Fatalf("parse package: %v", err)
-	}
-	pkg, ok := pkgs["webhooks"]
-	if !ok {
-		t.Fatal("the webhooks package did not parse — this guard is asserting about nothing")
-	}
+	parsed := parseEveryGoFile(t, fset, ".")
 
 	mints := map[string]int{}
-	for _, file := range pkg.Files {
+	for _, file := range parsed {
 		for _, decl := range file.Decls {
 			fn, isFunc := decl.(*ast.FuncDecl)
 			if !isFunc || fn.Body == nil {
@@ -99,4 +93,32 @@ func TestAcceptCannotBeReachedWithoutOne(t *testing.T) {
 			"publish and persist a delivery it never authenticated")
 	}
 	t.Fatal("Receiver.accept not found — this guard is asserting about nothing")
+}
+
+// parseEveryGoFile parses every .go file in dir.
+//
+// Not parser.ParseDir, which Go 1.25 deprecated because it associates files
+// with packages without consulting build tags. A guard wants EVERY file
+// regardless of tags — a rule that stopped applying to the //go:build unix
+// half of a package would be a rule that quietly stopped applying — so the
+// walk is explicit rather than inherited from a helper whose behaviour here
+// was a happy accident.
+func parseEveryGoFile(t *testing.T, fset *token.FileSet, dir string) []*ast.File {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatalf("listing %s: %v", dir, err)
+	}
+	files := make([]*ast.File, 0, len(paths))
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		files = append(files, file)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no Go files under %s — the guard would pass by scanning nothing", dir)
+	}
+	return files
 }

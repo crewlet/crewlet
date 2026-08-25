@@ -261,7 +261,7 @@ func TestAStrandedSeatReRaisesItsAlarmOnAnIntervalNotEveryTick(t *testing.T) {
 
 	f.clock.Advance(2 * time.Second)
 	h.Heartbeat(f.ctx)
-	if undeadAlarm(h, "ceo") == first {
+	if undeadAlarm(h, "ceo").Equal(first) {
 		t.Fatal("a seat stranded past the alarm interval said nothing, so it can be out of " +
 			"service with no live evidence at all")
 	}

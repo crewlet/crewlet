@@ -152,6 +152,7 @@ func applyOverrides(base Profile, overrides map[string]any) (Profile, error) {
 		return Profile{}, fmt.Errorf("encoding the built-in profile: %w", err)
 	}
 	var doc map[string]any
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return Profile{}, fmt.Errorf("re-reading the built-in profile: %w", err)
 	}

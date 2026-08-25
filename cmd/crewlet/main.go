@@ -247,7 +247,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	// command line put there. Each is applied only when it was actually
 	// given: an unset -api-port is not "port 0", which would serve no
 	// HTTP at all and make every integration go deaf.
-	if err := overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
+	if err = overrideNode(boot, fs, *roles, *apiHost, *apiPort); err != nil {
 		return err
 	}
 
@@ -294,7 +294,7 @@ func runEngine(args []string, stderr io.Writer) error {
 		return string(reconciler.Posture(ctx))
 	})
 
-	if err := e.Start(ctx); err != nil {
+	if err = e.Start(ctx); err != nil {
 		// Everything the engine opened comes down with it. Returning
 		// without this leaves a broker, a store and a set of held seat
 		// leases behind — and the leases are the expensive half, because
@@ -495,13 +495,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// Started before the listener binds, so a socket cannot open onto a
 	// projection that is not yet being fed.
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
-	if err := projector.Start(ctx); err != nil {
+	if err = projector.Start(ctx); err != nil {
 		app.Stop()
 		return nil, err
 	}
 
 	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
-	listener, err := net.Listen("tcp", addr)
+	// Through a ListenConfig so a shutdown signal arriving while the bind
+	// is in flight aborts it, rather than leaving a listener nobody will
+	// serve from — the bind can block on a DNS lookup for the host.
+	var listenCfg net.ListenConfig
+	listener, err := listenCfg.Listen(ctx, "tcp", addr)
 	if err != nil {
 		app.Stop()
 		return nil, fmt.Errorf("api: bind %s: %w", addr, err)

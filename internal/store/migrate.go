@@ -188,7 +188,7 @@ func Pending(ctx context.Context, path string, opts Options) (applied, pending [
 		return nil, nil, err
 	}
 	defer func() { _ = pool.Close() }()
-	if err := pool.PingContext(ctx); err != nil {
+	if err = pool.PingContext(ctx); err != nil {
 		return nil, nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
 	}
 

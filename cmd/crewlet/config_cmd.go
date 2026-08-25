@@ -171,6 +171,7 @@ func importConfig(ctx context.Context, cs *configStore, path string, stdout io.W
 	}
 	parent := ""
 	if found {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		current, err := secrets.Open(cs.cipher, active.Payload)
 		if err != nil {
 			return fmt.Errorf("open the active revision: %w", err)

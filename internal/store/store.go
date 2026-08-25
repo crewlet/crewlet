@@ -165,7 +165,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	// query costs real latency on the read path.
 	pool.SetMaxIdleConns(maxConns)
 
-	if err := pool.PingContext(ctx); err != nil {
+	if err = pool.PingContext(ctx); err != nil {
 		_ = pool.Close()
 		return nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
 	}

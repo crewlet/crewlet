@@ -244,18 +244,6 @@ func (h *harness) purge(before time.Time) int {
 	return n
 }
 
-func (h *harness) requireKeys(what string, rows []schedule.Run, want ...schedule.FireKey) {
-	h.t.Helper()
-	got := keysOf(rows)
-	wantS := make([]string, 0, len(want))
-	for _, k := range want {
-		wantS = append(wantS, keyString(k))
-	}
-	if !slices.Equal(got, wantS) {
-		h.t.Fatalf("%s = %v, want %v", what, got, wantS)
-	}
-}
-
 func keysOf(rows []schedule.Run) []string {
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {

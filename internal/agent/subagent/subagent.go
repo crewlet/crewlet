@@ -210,24 +210,24 @@ type Limits struct {
 func (l Limits) validate() error {
 	var errs []error
 	if l.MaxTurns < 1 {
-		errs = append(errs, fmt.Errorf("MaxTurns must be at least 1, got %d", l.MaxTurns))
+		errs = append(errs, fmt.Errorf("limits: MaxTurns must be at least 1, got %d", l.MaxTurns))
 	}
 	if l.Timeout <= 0 {
-		errs = append(errs, fmt.Errorf("Timeout must be positive, got %v", l.Timeout))
+		errs = append(errs, fmt.Errorf("limits: Timeout must be positive, got %v", l.Timeout))
 	}
 	if l.BatchTimeout <= 0 {
-		errs = append(errs, fmt.Errorf("BatchTimeout must be positive, got %v", l.BatchTimeout))
+		errs = append(errs, fmt.Errorf("limits: BatchTimeout must be positive, got %v", l.BatchTimeout))
 	}
 	if l.MaxParallel < 1 {
-		errs = append(errs, fmt.Errorf("MaxParallel must be at least 1, got %d", l.MaxParallel))
+		errs = append(errs, fmt.Errorf("limits: MaxParallel must be at least 1, got %d", l.MaxParallel))
 	}
 	if l.BudgetFraction <= 0 || l.BudgetFraction > 1 {
 		errs = append(errs, fmt.Errorf(
-			"BudgetFraction must be in (0, 1], got %v — it is a SHARE of the "+
+			"limits: BudgetFraction must be in (0, 1], got %v — it is a SHARE of the "+
 				"parent's remaining budget, not a token count", l.BudgetFraction))
 	}
 	if l.MinPerChildTokens < 0 {
-		errs = append(errs, fmt.Errorf("MinPerChildTokens must not be negative, got %d",
+		errs = append(errs, fmt.Errorf("limits: MinPerChildTokens must not be negative, got %d",
 			l.MinPerChildTokens))
 	}
 	if err := errors.Join(errs...); err != nil {

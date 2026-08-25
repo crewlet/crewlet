@@ -183,9 +183,8 @@ func (w *Waiter) jittered() time.Duration {
 //
 // Exported so a test drives one pass deterministically without the loop.
 func (w *Waiter) Tick(ctx context.Context) (int, error) {
-	holds, err := w.mayTick(ctx)
-	if err != nil || !holds {
-		return 0, err
+	if !w.mayTick(ctx) {
+		return 0, nil
 	}
 	runs, err := w.pending.ListActive(ctx)
 	if err != nil {
@@ -223,7 +222,11 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 	if fired > 0 {
 		log.Info("sandbox_waiter_fired", "completions", fired)
 	}
-	w.reapExpiredPauses(ctx, runs)
+	if reaped := w.reapExpiredPauses(ctx, runs); reaped > 0 {
+		// Said out loud: a reaped box is a checkout an operator will find
+		// gone, and the pause TTL is the knob that decides it.
+		log.Info("sandbox_paused_boxes_reaped", "count", reaped)
+	}
 	return fired, nil
 }
 
@@ -232,9 +235,9 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 // Re-claimed every tick rather than held: the duty lease is short, so a node
 // that dies mid-poll releases it by lapsing and a peer takes over on its next
 // tick, with no handoff protocol.
-func (w *Waiter) mayTick(ctx context.Context) (bool, error) {
+func (w *Waiter) mayTick(ctx context.Context) bool {
 	if w.claimDuty == nil {
-		return true, nil
+		return true
 	}
 	holds, err := w.claimDuty(ctx)
 	if err != nil {
@@ -243,9 +246,9 @@ func (w *Waiter) mayTick(ctx context.Context) (bool, error) {
 		// polling anyway is the multi-poller case the duty exists to
 		// prevent — and skipping a tick costs one interval, which the next
 		// tick recovers.
-		return false, nil
+		return false
 	}
-	return holds, nil
+	return holds
 }
 
 // forget drops failure counters for runs that are no longer active, so a
@@ -291,7 +294,7 @@ func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 	// as long as it needs. The box is bounded only by how long the engine can
 	// go WITHOUT this heartbeat, never by a fixed run deadline: completion is
 	// detected by tracking the job, not by a clock.
-	if err := box.SetTimeout(ctx, w.manager.BoxTimeout().Seconds()); err != nil {
+	if err = box.SetTimeout(ctx, w.manager.BoxTimeout().Seconds()); err != nil {
 		log.Debug("sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 

@@ -252,12 +252,14 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// OMITTED rather than registered-and-broken, so an engine that equipped
 	// first would build a code-enabled company whose seats have no code
 	// tool and plan around one anyway.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.buildSandboxRuntime(company); err != nil {
 		return fail(fmt.Errorf("engine: sandbox: %w", err))
 	}
 	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
 	// current, and one that found an empty registry would run a seat with
 	// no tools at all — a company that boots cleanly and can do nothing.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := e.equip(company); err != nil {
 		return fail(err)
 	}
@@ -567,6 +569,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// A failure here does NOT fail the turn: the seat is un-onboarded, which
 	// is the state it was already in, and refusing to work over it would
 	// make a knowledge base that is briefly unreachable stop the company.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if ran, err := r.Onboard(ctx); err != nil {
 		log.WarnContext(ctx, "onboarding_pass_failed", "handle", req.Handle,
 			"error", err, "detail", "the seat stays un-onboarded and retries "+

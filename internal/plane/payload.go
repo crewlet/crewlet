@@ -111,7 +111,7 @@ func (p *Parser) base(body, data map[string]any, identifier string, parties noti
 	if action != "" {
 		eventType = event + "." + action
 	}
-	activity := object(body, "activity")
+	activity := activityOf(body)
 	workspace := str(body, "workspace_slug")
 
 	projectID := str(data, "project")
@@ -284,8 +284,13 @@ func str(m map[string]any, key string) string {
 	}
 }
 
-func object(m map[string]any, key string) map[string]any {
-	if v, ok := m[key].(map[string]any); ok {
+// activityOf is the webhook envelope's nested activity object.
+//
+// Named for the one key it reads rather than taking it as an argument: a
+// parameter that never varies is a constant with extra steps, and it invited
+// a caller to reach any nested object through a helper documented for one.
+func activityOf(m map[string]any) map[string]any {
+	if v, ok := m["activity"].(map[string]any); ok {
 		return v
 	}
 	// An empty map rather than nil, so every reader can index it without

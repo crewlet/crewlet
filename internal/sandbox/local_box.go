@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
 // hostCommand is one command to run on the engine host.
@@ -174,10 +175,10 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// Not exec.CommandContext: the job must outlive the turn that starts it,
 	// so binding it to the caller's context would kill it at the first
 	// return.
-	proc := exec.Command("/bin/sh", "-c", cmd)
+	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
 	proc.Env = flattenEnv(b.childEnv(opts.Env))
-	proc.SysProcAttr = detachAttr()
+	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads
 	// these, and a pipe nobody drains would block the agent on a full buffer.
 	proc.Stdin, proc.Stdout, proc.Stderr = nil, nil, nil
@@ -185,7 +186,11 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	if err := proc.Start(); err != nil {
 		return "", localErrorf("local sandbox %s could not start a background job: %v", b.layout.id, err)
 	}
-	go proc.Wait()
+	// Reaped in the background so the detached job does not become a
+	// zombie. Its exit status is deliberately discarded: the runner reads
+	// the job's OUTCOME from the marker and result files it wrote, and a
+	// non-zero exit is one of the outcomes those already describe.
+	go func() { _ = proc.Wait() }()
 
 	b.mu.Lock()
 	b.job = proc
@@ -198,11 +203,11 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 			// Without the pid file nothing in a later process can ever
 			// reach this job's group — it would run to completion
 			// unkillable. Kill it now rather than leak it.
-			killGroup(pid)
+			logSignal("kill", pid, procgroup.Kill(pid))
 			return "", localErrorf("local sandbox %s could not record its job's pid: %v", b.layout.id, err)
 		}
 	} else {
-		killGroup(pid)
+		logSignal("kill", pid, procgroup.Kill(pid))
 		return "", localErrorf("local sandbox %s could not record its job's pid: %v", b.layout.id, err)
 	}
 	log.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
@@ -306,7 +311,7 @@ func (b *directBox) Pause(ctx context.Context) error {
 	if pid <= 0 {
 		return nil
 	}
-	stopGroup(pid)
+	logSignal("stop", pid, procgroup.Stop(pid))
 	log.Debug("local_sandbox_paused", "sandbox_id", b.layout.id, "pid", pid)
 	return nil
 }
@@ -314,7 +319,7 @@ func (b *directBox) Pause(ctx context.Context) error {
 // resume SIGCONTs a paused box — the Connect auto-resume.
 func (b *directBox) resume() {
 	if pid := readPID(b.layout); pid > 0 {
-		continueGroup(pid)
+		logSignal("continue", pid, procgroup.Continue(pid))
 	}
 }
 
@@ -324,13 +329,13 @@ func (b *directBox) Close(ctx context.Context) error {
 		// SIGCONT first: a stopped process never runs again to handle
 		// SIGTERM, so tearing down a paused box without it would leave the
 		// tree alive and the directory in use.
-		continueGroup(pid)
-		termGroup(pid)
+		logSignal("continue", pid, procgroup.Continue(pid))
+		logSignal("terminate", pid, procgroup.Terminate(pid))
 		awaitGroupExit(ctx, pid)
 		// Whether or not it went: SIGKILL costs nothing on a group that is
 		// already gone, and the alternative is a tree left running because
 		// the grace expired.
-		killGroup(pid)
+		logSignal("kill", pid, procgroup.Kill(pid))
 		// Waited for again, because the removal below races the dying
 		// wrapper's last writes exactly as Kill's does.
 		awaitGroupExit(ctx, pid)
@@ -568,11 +573,20 @@ func (b *containerBox) Pause(ctx context.Context) error {
 // container reports an error we ignore, which keeps Connect a single
 // unconditional call.
 func (b *containerBox) unpause(ctx context.Context) {
-	runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
+	_, _ = runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
 }
 
 func (b *containerBox) Close(ctx context.Context) error {
-	runHost(ctx, hostCommand{argv: []string{b.runtime, "rm", "-f", b.container}})
+	// A removal that failed LEAKS a container on the engine host, which is
+	// the one outcome here an operator has to be able to see: nothing else
+	// in the teardown path will mention it again.
+	if res, err := runHost(ctx, hostCommand{
+		argv: []string{b.runtime, "rm", "-f", b.container},
+	}); err != nil || res.ExitCode != 0 {
+		log.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
+			"container", b.container, "exit", res.ExitCode,
+			"stderr", strings.TrimSpace(res.Stderr))
+	}
 	collectCredentials(b.layout, b.credentials)
 	removeBox(b.layout)
 	log.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)

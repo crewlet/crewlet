@@ -204,20 +204,6 @@ func (c *Confluence) ShareableBaseURL() string {
 	return c.URL
 }
 
-// urlXorCloudID holds the Atlassian addressing rule both blocks share:
-// exactly one of the two. Neither leaves the client with no address at all;
-// both leave two, and nothing decides between them.
-func urlXorCloudID(path, url, cloudID, example string) error {
-	switch {
-	case url != "" && cloudID != "":
-		return fault(path, ErrConflict, "give either url or cloud_id, not both")
-	case url == "" && cloudID == "":
-		return fault(path, ErrMissing,
-			"give either url (e.g. %q) or cloud_id (the Atlassian Cloud id)", example)
-	}
-	return nil
-}
-
 // WorkingStatus is when a seat raises the "is thinking…" indicator while it
 // reasons about a chat message.
 type WorkingStatus string
@@ -283,30 +269,6 @@ type StatusPhrases struct {
 func (s StatusPhrases) IsZero() bool {
 	return len(s.Onboarding) == 0 && len(s.Plan) == 0 && len(s.Execute) == 0 &&
 		len(s.Review) == 0 && len(s.Default) == 0
-}
-
-func (s StatusPhrases) validate(path string) error {
-	var p problems
-	pools := []struct {
-		name  string
-		lines []string
-	}{
-		{"onboarding", s.Onboarding}, {"plan", s.Plan}, {"execute", s.Execute},
-		{"review", s.Review}, {"default", s.Default},
-	}
-	for _, pool := range pools {
-		for i, phrase := range pool.lines {
-			if strings.TrimSpace(phrase) == "" {
-				// An empty LIST is the documented "keep the built-in
-				// pool"; a list containing an empty string would post a
-				// cleared indicator, the exact opposite of the intent.
-				p.add(idx(at(path, pool.name), i), ErrMissing,
-					"a status phrase must not be empty — omit the phase (or "+
-						"give it []) to keep the built-in pool")
-			}
-		}
-	}
-	return p.err()
 }
 
 // Mattermost is the org-level block for the self-hosted chat backend.

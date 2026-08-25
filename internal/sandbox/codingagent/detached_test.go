@@ -463,8 +463,6 @@ func alive(yes bool) func(context.Context, string, sandbox.ExecOptions) (sandbox
 	}
 }
 
-func shellQuoted(s string) string { return "'" + s + "'" }
-
 // lastBackground is the script the fake was asked to run detached.
 func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 	t.Helper()

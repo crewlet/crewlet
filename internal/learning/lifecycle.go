@@ -524,6 +524,7 @@ func (l *Lifecycle) evictCompacted(ctx context.Context, handle string, cutoff ti
 		// deletes run. A transaction holds ONE connection, and a statement
 		// issued while a result set on it is still open deadlocks against
 		// itself rather than erroring.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		ids, anchors, err := doomedSummaries(ctx, tx, handle, cutoff)
 		if err != nil {
 			return err
@@ -822,6 +823,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	}
 	row := l.buildCompacted(handle, cluster, exemplars, summary)
 	deleted, err := l.tx(ctx, "fold episode cluster", func(tx *sql.Tx) (int64, error) {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := insertEpisodeTx(ctx, tx, l.db, row); err != nil {
 			return 0, err
 		}

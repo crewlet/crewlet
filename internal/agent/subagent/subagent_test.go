@@ -91,17 +91,6 @@ func (p *provider) offered(i int) []string {
 	return out
 }
 
-func (p *provider) systemPrompt(i int) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, m := range p.seen[i].Messages {
-		if m.Role == llm.RoleSystem {
-			return m.Content
-		}
-	}
-	return ""
-}
-
 // say builds a plain text answer with a token cost.
 func say(text string, in, out int) *llm.Completion {
 	return &llm.Completion{Model: "scripted", Content: text, InputTokens: in, OutputTokens: out}

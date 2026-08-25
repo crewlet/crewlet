@@ -1741,6 +1741,11 @@ func (c skillFaultConn) PrepareContext(ctx context.Context, q string) (driver.St
 func (c skillFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	bt, ok := c.Conn.(driver.ConnBeginTx)
 	if !ok {
+		// The deprecated Begin is the CORRECT fallback for a driver that
+		// never implemented ConnBeginTx — it is what database/sql itself
+		// falls back to. A wrapper that refused it would work with fewer
+		// drivers than the standard library.
+		//nolint:staticcheck // SA1019: the fallback database/sql itself uses.
 		return c.Conn.Begin()
 	}
 	return bt.BeginTx(ctx, opts)

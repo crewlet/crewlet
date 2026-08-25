@@ -24,7 +24,7 @@ func TestTheAskShimRecordsAQuestionFromInsideARealBox(t *testing.T) {
 	t.Cleanup(func() { box.Close(t.Context()) })
 
 	runner := codingagent.NewClaudeCode()
-	if err := runner.Install(t.Context(), box); err != nil {
+	if err = runner.Install(t.Context(), box); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	p := codingagent.PathsFor(box)

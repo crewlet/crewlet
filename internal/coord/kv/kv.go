@@ -357,10 +357,11 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				// the persistent record FIRST, so the epoch bucket is
 				// never behind the lease bucket — that ordering is what
 				// lets PreferredResources read one bucket.
-				if err := s.pinHint(ctx, resource, opts.Preferred); err != nil {
+				if err = s.pinHint(ctx, resource, opts.Preferred); err != nil {
 					return nil, err
 				}
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			data, err := encodeValue(value)
 			if err != nil {
 				return nil, err
@@ -737,6 +738,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 		kve, err := s.epochs.Get(ctx, key)
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			next := resourceValue{Resource: resource, Epoch: 1, Preferred: preferred}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			data, err := encodeValue(next)
 			if err != nil {
 				return 0, "", err
@@ -754,7 +756,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 		}
 
 		var cur resourceValue
-		if err := json.Unmarshal(kve.Value(), &cur); err != nil {
+		if err = json.Unmarshal(kve.Value(), &cur); err != nil {
 			// Restarting the counter at 1 would be the one unrecoverable
 			// mistake this bucket exists to prevent, so an unreadable
 			// record is UNKNOWN and the claim does not proceed.
@@ -798,7 +800,7 @@ func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
 			return unavailable("read epoch "+resource, err)
 		}
 		var cur resourceValue
-		if err := json.Unmarshal(kve.Value(), &cur); err != nil {
+		if err = json.Unmarshal(kve.Value(), &cur); err != nil {
 			return fmt.Errorf("%w: decode epoch record for %s: %w",
 				coord.ErrUnavailable, resource, err)
 		}

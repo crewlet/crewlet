@@ -275,7 +275,7 @@ func TestRekeyMovesOnlyWhatIsNotAlreadyActive(t *testing.T) {
 	after := db.SecretValues(cipher)
 	// A value written after the rotation is already on the active key and
 	// must not be touched by the pass.
-	if err := after.Set(context.Background(), "NEW_C", "c", "op", "cli", secretClock); err != nil {
+	if err = after.Set(context.Background(), "NEW_C", "c", "op", "cli", secretClock); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 

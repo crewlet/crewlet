@@ -198,6 +198,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, p.fail(llm.KindFatal, 0, err)
 	}
 	defer func() {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := checkout.Release(); err != nil {
 			// Logged, not returned: the completion already happened
 			// and failing it over a cleanup would throw away work the

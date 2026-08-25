@@ -253,7 +253,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	} else {
 		// Drained so the connection returns to the pool rather than
 		// being closed and re-dialled on the next call.
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	}
 	return resp.Header, nil
 }

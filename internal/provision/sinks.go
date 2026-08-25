@@ -160,9 +160,10 @@ func NewEnvFileSink(path string) (*EnvFileSink, error) {
 	case errors.Is(err, os.ErrNotExist):
 		// Created NOW, at 0600, so the permissions are right before
 		// anything is in it.
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("provision: %s: %w", path, err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("provision: %s: %w", path, err)
@@ -258,7 +259,7 @@ func (s *EnvFileSink) rewrite() error {
 	if err != nil {
 		return fmt.Errorf("provision: %s: %w", s.path, err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	// NO CHMOD, and that is load-bearing rather than an omission:
 	// os.CreateTemp documents 0600, and the rename below carries the temp
 	// file's mode onto the destination. A chmod after the rename would be
@@ -266,7 +267,7 @@ func (s *EnvFileSink) rewrite() error {
 	// and one before it would be a second statement of a guarantee the
 	// standard library already makes.
 	if _, err := io.WriteString(tmp, body.String()); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("provision: %s: %w", s.path, err)
 	}
 	if err := tmp.Close(); err != nil {

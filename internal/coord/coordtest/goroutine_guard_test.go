@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"testing"
 )
 
@@ -64,14 +65,11 @@ var stopsTheGoroutine = map[string]bool{
 func TestNoFatalOffTheTestGoroutine(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
-	if err != nil {
-		t.Fatalf("parsing the suite: %v", err)
-	}
+	parsed := parseEveryGoFile(t, fset, ".")
 
 	files, goStmts := 0, 0
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
+	for _, file := range parsed {
+		{
 			files++
 			ast.Inspect(file, func(n ast.Node) bool {
 				gs, ok := n.(*ast.GoStmt)
@@ -111,4 +109,32 @@ func TestNoFatalOffTheTestGoroutine(t *testing.T) {
 			"spawns goroutines this guard is dead code: delete it rather than weaken it")
 	}
 	t.Logf("scanned %d files, %d go statements", files, goStmts)
+}
+
+// parseEveryGoFile parses every .go file in dir.
+//
+// Not parser.ParseDir, which Go 1.25 deprecated because it associates files
+// with packages without consulting build tags. A guard wants EVERY file
+// regardless of tags — a rule that stopped applying to the //go:build unix
+// half of a package would be a rule that quietly stopped applying — so the
+// walk is explicit rather than inherited from a helper whose behaviour here
+// was a happy accident.
+func parseEveryGoFile(t *testing.T, fset *token.FileSet, dir string) []*ast.File {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatalf("listing %s: %v", dir, err)
+	}
+	files := make([]*ast.File, 0, len(paths))
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		files = append(files, file)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no Go files under %s — the guard would pass by scanning nothing", dir)
+	}
+	return files
 }

@@ -386,7 +386,7 @@ func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Di
 					"company looks healthy", err)
 			continue
 		}
-		if err := dial(ctx, target, origin, seat.token); err != nil {
+		if err = dial(ctx, target, origin, seat.token); err != nil {
 			report.add(check, false,
 				"this seat authenticates but cannot open a socket: %v. A token "+
 					"valid for REST can still fail here, and the socket is the "+
@@ -481,6 +481,8 @@ const DialTimeout = 10 * time.Second
 
 // dialOnce performs the upgrade and closes it.
 func dialOnce(ctx context.Context, target string, header http.Header) error {
+	//nolint:bodyclose // On a successful upgrade the library has already
+	// closed the handshake response; on a failure there is no body to close.
 	conn, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		return err

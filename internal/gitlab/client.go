@@ -107,7 +107,7 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		}
 	}
 	if out == nil {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

@@ -6,8 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 )
 
 // The authoring format: YAML frontmatter, then a markdown body.

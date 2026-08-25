@@ -137,7 +137,7 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
 		}
 		var summary string
-		if err := tx.QueryRowContext(ctx,
+		if err = tx.QueryRowContext(ctx,
 			`SELECT summary FROM company_config WHERE revision_id = ?`,
 			revisionID).Scan(&summary); err != nil {
 			return err
@@ -178,7 +178,7 @@ func (c *Configs) one(ctx context.Context, query string, args ...any) (Revision,
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		if err := rows.Err(); err != nil {
+		if err = rows.Err(); err != nil {
 			return Revision{}, false, fmt.Errorf("store: read config revision: %w", err)
 		}
 		return Revision{}, false, nil

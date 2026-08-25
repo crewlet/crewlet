@@ -99,7 +99,7 @@ func TestAnAuthoredOrderWinsOverTheKeyOrder(t *testing.T) {
 	// Stating it explicitly is how an operator pins precedence without
 	// re-arranging their document, and it is the same rule the round trip
 	// depends on: the field wins, the key order is the fallback.
-	cfg, err := config.ParseCompany([]byte(`
+	_, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
   llm:
@@ -113,7 +113,7 @@ roles:
 		t.Fatal("llm_order inside the llm map was accepted; it belongs beside it")
 	}
 
-	cfg, err = config.ParseCompany([]byte(`
+	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
   llm_order: ["mike", "zulu"]

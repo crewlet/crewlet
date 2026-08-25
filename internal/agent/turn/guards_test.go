@@ -125,7 +125,11 @@ func TestResetClearsTheRun(t *testing.T) {
 
 func TestTheArtifactHashIsStableAndDiscriminating(t *testing.T) {
 	t.Parallel()
-	if turn.ArtifactHash("x") != turn.ArtifactHash("x") {
+	// Bound to variables rather than compared inline: the point is that
+	// two SEPARATE calls agree, which is what a future non-deterministic
+	// implementation would break.
+	first, again := turn.ArtifactHash("x"), turn.ArtifactHash("x")
+	if first != again {
 		t.Error("the same text hashed differently")
 	}
 	if turn.ArtifactHash("x") == turn.ArtifactHash("y") {

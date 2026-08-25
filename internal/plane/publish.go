@@ -130,6 +130,7 @@ func route(path string, cfg *config.Plane) (Item, error) {
 		return Item{}, err
 	}
 	if !skills.IsSkill(raw) {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		html, err := knowledge.RenderMarkdown(doc.Markdown)
 		if err != nil {
 			return Item{}, fmt.Errorf("plane: %s: %w", path, err)

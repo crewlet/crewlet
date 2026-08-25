@@ -118,8 +118,7 @@ type chatServer struct {
 	channels   map[string]string // channel name -> id
 	members    map[string]bool   // "channelID:userID"
 
-	failRecord string
-	next       int
+	next int
 }
 
 // forget clears the counters, so a test can measure ONE run.

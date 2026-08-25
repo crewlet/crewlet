@@ -3,6 +3,8 @@
 package sandbox
 
 import (
+	"github.com/crewlet/crewlet/internal/procgroup"
+
 	"context"
 	"errors"
 	"os"
@@ -273,7 +275,7 @@ func TestAFinishedBackgroundJobStopsAnsweringTheLivenessProbe(t *testing.T) {
 		t.Fatalf("StartBackground: %v", err)
 	}
 	n, _ := strconv.Atoi(pid)
-	waitFor(t, 5*time.Second, func() bool { return !groupExists(n) },
+	waitFor(t, 5*time.Second, func() bool { return !procgroup.Exists(n) },
 		"a finished job still answers the liveness probe — it was left a zombie")
 }
 
@@ -378,7 +380,7 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	if err := box.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	waitFor(t, 10*time.Second, func() bool { return !groupExists(pid) },
+	waitFor(t, 10*time.Second, func() bool { return !procgroup.Exists(pid) },
 		"a paused box survived teardown — it never saw SIGTERM")
 }
 
@@ -421,7 +423,7 @@ func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 	if err := local.Kill(t.Context(), box.ID()); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	waitFor(t, 10*time.Second, func() bool { return !groupExists(pid) }, "Kill left the tree running")
+	waitFor(t, 10*time.Second, func() bool { return !procgroup.Exists(pid) }, "Kill left the tree running")
 	if after := fileSize(counter); after != before {
 		t.Fatalf("Kill resumed the box before reclaiming it: %d bytes of work ran after the pause", after-before)
 	}
@@ -497,7 +499,7 @@ func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	seeded := filepath.Join(box.Home(), ".claude", ".credentials.json")
-	if err := os.WriteFile(seeded, []byte(`{"token":"rotated"}`), 0o600); err != nil {
+	if err = os.WriteFile(seeded, []byte(`{"token":"rotated"}`), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

@@ -171,7 +171,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 
 // routeIssue handles a work item's own lifecycle.
 func (p *Parser) routeIssue(ctx context.Context, body, data map[string]any, action string, reg *notify.Registry) ([]notify.Routed, error) {
-	activity := object(body, "activity")
+	activity := activityOf(body)
 	actor := str(activity, "actor_id")
 	projectID := str(data, "project")
 	identifier := p.identifier(ctx, projectID)
@@ -230,7 +230,7 @@ func (p *Parser) routeComment(ctx context.Context, body, data map[string]any, ac
 	if action != "created" && action != "updated" {
 		return nil, nil
 	}
-	activity := object(body, "activity")
+	activity := activityOf(body)
 	actor := str(activity, "actor_id")
 	projectID := str(data, "project")
 	identifier := p.identifier(ctx, projectID)
@@ -253,7 +253,7 @@ func (p *Parser) routeComment(ctx context.Context, body, data map[string]any, ac
 // Triage is the lead's for any action: intake exists precisely because
 // nobody has decided who owns the thing yet.
 func (p *Parser) routeIntake(ctx context.Context, body, data map[string]any, reg *notify.Registry) ([]notify.Routed, error) {
-	activity := object(body, "activity")
+	activity := activityOf(body)
 	identifier := p.identifier(ctx, str(data, "project"))
 	base, ok := p.base(body, data, identifier, reg)
 	if !ok {
@@ -305,7 +305,7 @@ func (p *Parser) routePage(ctx context.Context, body, data map[string]any, actio
 	if !ok {
 		return nil, nil
 	}
-	activity := object(body, "activity")
+	activity := activityOf(body)
 	return p.leadCopy(base, identifier, str(activity, "actor_id"), ViaPageLead, reg), nil
 }
 

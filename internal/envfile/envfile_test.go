@@ -54,7 +54,7 @@ func TestEveryWrittenAssignmentSurvivesARealShell(t *testing.T) {
 			// guards against is positional: a broken line does not lose
 			// its own credential, it loses every one after it.
 			body := line + "\nexport CREWLET_TEST_SENTINEL='still-here'\n"
-			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			if err = os.WriteFile(path, []byte(body), 0o600); err != nil {
 				t.Fatalf("write: %v", err)
 			}
 

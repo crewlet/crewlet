@@ -40,7 +40,7 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 	// STARTUP deadline, and CommandContext would kill the server the moment
 	// that deadline passed — that is, kill every healthy server 120 seconds
 	// after it came up. The child's lifetime is owned by Stop.
-	cmd := exec.Command(spec.Command, spec.Args...) //nolint:gosec // the command IS the operator's config
+	cmd := exec.Command(spec.Command, spec.Args...) //nolint:gosec,noctx // the command IS the operator's config; the deliberate lack of a context is explained above
 	cmd.Env = mergedEnv(spec, log)
 	cmd.Stderr = relay.writer()
 	procgroup.Set(cmd)

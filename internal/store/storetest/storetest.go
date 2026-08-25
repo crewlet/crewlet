@@ -525,7 +525,7 @@ func testByID(t *testing.T, db *store.DB) {
 		t.Fatalf("summary %q", rec.Summary)
 	}
 	var body map[string]any
-	if err := json.Unmarshal(rec.Payload, &body); err != nil {
+	if err = json.Unmarshal(rec.Payload, &body); err != nil {
 		t.Fatalf("payload: %v", err)
 	}
 	if body["detail"] != "kept" {

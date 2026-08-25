@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/notify"
 )
 
 // stubParties resolves the handful of ids a prompt test cares about.

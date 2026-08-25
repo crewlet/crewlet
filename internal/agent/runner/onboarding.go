@@ -205,6 +205,7 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 		// Released explicitly whether or not the pass marked. A marked
 		// pass has already cleared it; an unmarked or crashed one must not
 		// hold re-onboarding hostage until the TTL.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := cfg.Markers.Release(context.WithoutCancel(ctx), pass, cfg.now()); err != nil {
 			onboardingLog.Warn("onboarding_release_failed",
 				"agent", seat.Handle(), "error", err)

@@ -40,7 +40,7 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrShape, err)
+		return nil, fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	if empty(&doc) {
 		// An empty Tier A file is legitimate: every field defaults, and a
@@ -115,7 +115,7 @@ func ParseCompany(data []byte) (*Company, error) {
 func ParseCompanyDocument(data []byte) (*Company, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrShape, err)
+		return nil, fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	if empty(&doc) {
 		return nil, fault("", ErrMissing, "the company config is empty; it needs at least a name")
@@ -177,7 +177,7 @@ func DecodeCompany(payload []byte) (*Company, error) {
 	// through.
 	cfg := DefaultCompany()
 	if err := json.Unmarshal(payload, &cfg); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrShape, err)
+		return nil, fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -221,10 +221,10 @@ func decodeKnown(node *yaml.Node, out any) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	if err := enc.Encode(node); err != nil {
-		return fmt.Errorf("%w: %s", ErrShape, err)
+		return fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	if err := enc.Close(); err != nil {
-		return fmt.Errorf("%w: %s", ErrShape, err)
+		return fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	dec := yaml.NewDecoder(&buf)
 	dec.KnownFields(true)
@@ -255,7 +255,7 @@ func decodeError(err error) error {
 	}
 	var typeErr *yaml.TypeError
 	if !errors.As(err, &typeErr) {
-		return fmt.Errorf("%w: %s", ErrShape, err)
+		return fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	var out problems
 	for _, line := range typeErr.Errors {

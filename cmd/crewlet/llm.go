@@ -303,6 +303,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 
 	switch {
 	case req.fromHost:
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		taken, err := p.AdoptHostLogin(req.home)
 		if err != nil {
 			return err
@@ -327,6 +328,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	case req.captureToken, req.tokenStdin:
 		var token string
 		if req.tokenStdin {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			raw, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				return fmt.Errorf("reading the token from stdin: %w", err)

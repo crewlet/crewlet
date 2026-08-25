@@ -373,7 +373,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// whose spend is refused must not also have fired its side
 		// effects — the refusal is the whole point, and tools are where
 		// the irreversible things happen.
-		if err := charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
+		if err = charge(ctx, cfg.Budget, completion.TotalTokens()); err != nil {
 			return nil, err
 		}
 

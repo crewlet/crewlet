@@ -161,7 +161,7 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		// A state this build cannot read is a ROUTING failure, not a run
 		// failure: a peer on the version that wrote it can resume this, so
 		// the completion must go back rather than be settled here.
-		return fmt.Errorf("%w: %s", sandbox.ErrResumeUnavailable, err)
+		return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
 	}
 	if !ok {
 		return fmt.Errorf("%w: run %s has no suspended conversation",
@@ -359,7 +359,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	// falls back to llm_execute, because sandboxed work IS this seat's
 	// Execute phase running somewhere else.
 	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
-	env := underlay(e.sandboxEnv(company, seat, gate, setup), credentialEnv)
+	env := underlay(e.sandboxEnv(seat, gate, setup), credentialEnv)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		CodingAgent:     string(gate.CodingAgent),
 		PauseTTL:        pauseTTL(gate),
@@ -460,7 +460,7 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 // Precedence, later winning: identity, then the setup steps' contributions,
 // then the seat's own env — so an operator's explicit value always beats a
 // step's default.
-func (e *Engine) sandboxEnv(c *Company, seat *org.Role, gate *config.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
+func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
 	env := map[string]string{}
 	if handle := seat.Handle(); handle != "" {
 		env["CREWLET_AGENT_HANDLE"] = handle

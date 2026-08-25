@@ -76,7 +76,7 @@ func TestARegistryIsNeverNil(t *testing.T) {
 	if driver.Mode() != notify.StatusOff {
 		t.Fatalf("a company with no chat backend is in mode %q", driver.Mode())
 	}
-	var session *notify.StatusSession = driver.Begin(
+	session := driver.Begin(
 		context.Background(), "ceo", "turn-1", "plan", map[string]string{
 			"transport": "mattermost", "channel": "C1", "ts": "p1",
 		})

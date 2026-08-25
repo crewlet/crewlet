@@ -15,12 +15,6 @@ func planTool() *submitted[planPayload] {
 	}
 }
 
-func reviewTool() *submitted[reviewPayload] {
-	return &submitted[reviewPayload]{
-		name: SubmitReviewTool, schema: reviewSchema, decode: decodeReview,
-	}
-}
-
 func args(t *testing.T, blob string) map[string]any {
 	t.Helper()
 	var m map[string]any

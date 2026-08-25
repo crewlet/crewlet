@@ -129,10 +129,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		return d.park(ctx, handle, screening)
 	}
 
-	surviving, err := d.dropWorked(ctx, handle, screening.Events)
-	if err != nil {
-		return queue.Nak(err)
-	}
+	surviving := d.dropWorked(ctx, handle, screening.Events)
 	if len(surviving) == 0 {
 		return queue.Ack()
 	}
@@ -143,6 +140,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
 		ConversationKey: conversationKeyOf(routing.Events),
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if history, err := d.history(ctx, handle, req.ConversationKey); err == nil {
 		req.History = history
 	} else {
@@ -195,9 +193,9 @@ func (d *Dispatcher) park(ctx context.Context, handle string, s inbox.Screening)
 // A partial overlap is the case that matters: a redelivery of (A, B) after
 // (A, B, C) was worked drops A and B and runs C, rather than re-running all
 // three or skipping all three.
-func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) ([]*events.Event, error) {
+func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) []*events.Event {
 	if d.Completions == nil {
-		return evs, nil
+		return evs
 	}
 	keys := make([]string, 0, len(evs))
 	for _, ev := range evs {
@@ -206,11 +204,11 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 	}
 	if len(keys) == 0 {
-		return evs, nil
+		return evs
 	}
 	worked := d.Completions.Worked(ctx, handle, keys)
 	if len(worked) == 0 {
-		return evs, nil
+		return evs
 	}
 	out := make([]*events.Event, 0, len(evs))
 	for _, ev := range evs {
@@ -219,7 +217,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 		out = append(out, ev)
 	}
-	return out, nil
+	return out
 }
 
 // recordWorked writes both ledgers after a turn.

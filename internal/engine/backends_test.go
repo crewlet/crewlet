@@ -479,11 +479,11 @@ func settledGoroutines() int {
 	for range 40 {
 		runtime.GC()
 		time.Sleep(25 * time.Millisecond)
-		if n := runtime.NumGoroutine(); n == prev {
+		n := runtime.NumGoroutine()
+		if n == prev {
 			return n
-		} else {
-			prev = n
 		}
+		prev = n
 	}
 	return runtime.NumGoroutine()
 }

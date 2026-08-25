@@ -184,35 +184,37 @@ func CopyFileAtomic(src, dst string) (bool, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return false, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), DirMode); err != nil {
+	if err = os.MkdirAll(filepath.Dir(dst), DirMode); err != nil {
 		return false, err
 	}
 	in, err := os.Open(src)
 	if err != nil {
 		return false, err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".crewlet-tmp-*")
 	if err != nil {
 		return false, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename has succeeded
+	// No-op once the rename has succeeded, and best effort if it did not:
+	// the caller is already returning the failure that matters.
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if err := tmp.Chmod(FileMode); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if _, err := io.Copy(tmp, in); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	// Durability before visibility: a rename can be observed before the
 	// data behind it reaches disk, so a crash between the two would leave
 	// a credential file that exists and is empty.
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if err := tmp.Close(); err != nil {
@@ -235,7 +237,7 @@ func FileDigest(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sum := sha256.New()
 	if _, err := io.Copy(sum, f); err != nil {
 		return ""

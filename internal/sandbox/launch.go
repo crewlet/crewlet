@@ -121,7 +121,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	}
 
 	// Attached before the job starts, for the reason above.
-	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
+	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, req.Fence); err != nil {

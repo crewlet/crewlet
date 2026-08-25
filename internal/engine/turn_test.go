@@ -69,10 +69,6 @@ func dispatcher(t *testing.T, r *recorder) *engine.Dispatcher {
 	}
 }
 
-func healthy() inbox.Conditions {
-	return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
-}
-
 func TestAHealthyPartitionReachesTheTurnEngine(t *testing.T) {
 	t.Parallel()
 	// The control. Without it every guard assertion below passes for a

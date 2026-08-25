@@ -193,6 +193,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 	var made []minted
 	for _, seat := range opts.Plan.Seats {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		account, created, err := ensureAccount(ctx, opts, accounts, seat)
 		if err != nil {
 			return nil, rollback(ctx, opts, made, fmt.Errorf("plane: %s: %w", seat.Handle, err))
@@ -207,6 +208,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		}
 		role := AccountRole(opts.Config.Provisioning, seat.Handle)
 		for _, project := range projects {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := opts.Client.AddProjectMember(ctx, project.ID, account.ID, role); err != nil {
 				return nil, rollback(ctx, opts, made,
 					fmt.Errorf("plane: %s: membership of %s: %w",
@@ -215,6 +217,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		}
 
 		if created {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := seedCredential(ctx, opts, caps, account, seat); err != nil {
 				return nil, rollback(ctx, opts, made,
 					fmt.Errorf("plane: %s: %w", seat.Handle, err))
@@ -303,6 +306,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if opts.Decommission {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		removed, notes, err := decommission(ctx, opts, accounts)
 		if err != nil {
 			return nil, rollback(ctx, opts, made, err)
@@ -837,11 +841,13 @@ func ensureWebhook(ctx context.Context, opts Options, made *[]minted) (string, [
 			// this company holds. It is the only recovery for a secret
 			// that was never recorded, because the value cannot be read
 			// back — which is exactly why it is a flag.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
 				return "", nil, fmt.Errorf("plane: replace webhook: %w", err)
 			}
 			break
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		updated, err := opts.Client.UpdateWebhook(ctx, hook.ID, target)
 		if err != nil {
 			return "", nil, fmt.Errorf("plane: update webhook: %w", err)
@@ -958,7 +964,7 @@ func webhookTarget(base string) string {
 func rollback(ctx context.Context, opts Options, made []minted, cause error) error {
 	if len(made) == 0 {
 		if err := opts.Sink.Discard(ctx); err != nil {
-			return fmt.Errorf("%w\n\nAND THE SINK COULD NOT BE CLEARED: %v", cause, err)
+			return fmt.Errorf("%w\n\nAND THE SINK COULD NOT BE CLEARED: %w", cause, err)
 		}
 		return cause
 	}

@@ -184,12 +184,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Created = append(res.Created, seat.Handle)
 		}
 		level := accessLevel(p, seat.Handle)
-		if err := opts.Client.AddGroupMember(ctx, group.ID, user.ID, level); err != nil {
+		if err = opts.Client.AddGroupMember(ctx, group.ID, user.ID, level); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: group membership: %w", seat.Handle, err))
 		}
 		for _, project := range projects {
-			if err := opts.Client.AddProjectMember(ctx, project, user.ID, level); err != nil {
+			if err = opts.Client.AddProjectMember(ctx, project, user.ID, level); err != nil {
 				return nil, rollback(ctx, opts, minted,
 					fmt.Errorf("gitlab: %s: membership of %s: %w",
 						seat.Handle, project, err))
@@ -239,7 +239,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		}
 		// RECORDED IMMEDIATELY. The value above is the only copy there
 		// will ever be.
-		if err := opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
+		if err = opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: record %s: %w", seat.Handle, seat.TokenVar, err))
 		}
@@ -793,7 +793,7 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret
 			if err := c.UpdateGroupHook(ctx, groupID, hook.ID, target, secret); err != nil {
 				return fmt.Errorf("gitlab: update group hook: %w", err)
 			}
-			return confirmSigned(ctx, "group hook", func() ([]Hook, error) {
+			return confirmSigned("group hook", func() ([]Hook, error) {
 				return c.GroupHooks(ctx, groupID)
 			}, target)
 		}
@@ -801,7 +801,7 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret
 	if _, err := c.CreateGroupHook(ctx, groupID, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create group hook: %w", err)
 	}
-	return confirmSigned(ctx, "group hook", func() ([]Hook, error) {
+	return confirmSigned("group hook", func() ([]Hook, error) {
 		return c.GroupHooks(ctx, groupID)
 	}, target)
 }
@@ -819,7 +819,7 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, target, secret
 // `signing_token_present` is the only thing GitLab will say about it: the
 // token itself is never returned. That is enough, because what is being
 // confirmed is that a signing token EXISTS, not which one.
-func confirmSigned(ctx context.Context, what string, list func() ([]Hook, error), target string) error {
+func confirmSigned(what string, list func() ([]Hook, error), target string) error {
 	hooks, err := list()
 	if err != nil {
 		return fmt.Errorf("gitlab: re-read the %s to confirm it can sign: %w", what, err)
@@ -874,7 +874,7 @@ func ensureProjectHook(ctx context.Context, c *Client, project, target, secret s
 			if err := c.UpdateProjectHook(ctx, project, hook.ID, target, secret); err != nil {
 				return fmt.Errorf("gitlab: update hook on %s: %w", project, err)
 			}
-			return confirmSigned(ctx, "hook on "+project, func() ([]Hook, error) {
+			return confirmSigned("hook on "+project, func() ([]Hook, error) {
 				return c.ProjectHooks(ctx, project)
 			}, target)
 		}
@@ -882,7 +882,7 @@ func ensureProjectHook(ctx context.Context, c *Client, project, target, secret s
 	if _, err := c.CreateProjectHook(ctx, project, target, secret); err != nil {
 		return fmt.Errorf("gitlab: create hook on %s: %w", project, err)
 	}
-	return confirmSigned(ctx, "hook on "+project, func() ([]Hook, error) {
+	return confirmSigned("hook on "+project, func() ([]Hook, error) {
 		return c.ProjectHooks(ctx, project)
 	}, target)
 }

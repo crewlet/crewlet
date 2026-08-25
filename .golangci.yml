@@ -30,9 +30,42 @@ linters:
       # writes must still be checked.
       exclude-functions:
         - (io.Closer).Close
+        # Rows.Close after the scan loop: the read already happened, and
+        # the error the caller needs is rows.Err(), which every query here
+        # checks.
+        - (*database/sql.Rows).Close
+        # Writing to an operator's terminal. There is no recovery — the
+        # report is the only output the command has, and a second write
+        # saying "the first write failed" goes to the same broken pipe.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
     govet:
+      # shadow is ON because it is half of what caught a credential-map
+      # write whose failure could never be reported: an inner `if err :=`
+      # took the assignment while the check below read a stale outer err.
+      #
+      # It cannot, however, tell that bug from two shapes the language
+      # REQUIRES: a closure passed to db.Tx must have its own err, and
+      # `x, err := f()` inside a block declares x too — hoisting x above
+      # the block to dodge the report is strictly worse code. Every
+      # production site of those shapes carries a //nolint:govet naming
+      # this paragraph, so a reader can see which were reviewed; new ones
+      # are reported and have to be looked at rather than inherited.
       enable:
         - shadow
+    staticcheck:
+      # The SA (correctness) and ST (style) families are on, which is the
+      # default. The QF family is NOT: it is quickfix SUGGESTIONS — "you
+      # could remove the embedded field from this selector", "you could use
+      # a tagged switch" — and this tree writes `db.Conn.Begin` rather than
+      # `db.Begin` on purpose, because naming the embedded type is what says
+      # which of two Begins a reader is looking at. A refactoring assistant's
+      # opinions are not a gate.
+      checks:
+        - all
+        - -QF1008
+        - -QF1002
     misspell:
       # Three words this tree spells "wrong" ON PURPOSE, and correcting any
       # of them would break what it is for:
@@ -64,6 +97,28 @@ linters:
       # build long table-driven cases.
       - path: _test\.go
         linters: [errcheck, gocritic, unparam]
+
+      # The certification suites live in *test packages rather than
+      # _test.go files, because several backends run the same cases. They
+      # are test code by every measure that matters here: a helper whose
+      # parameter takes one value today is a helper the next case widens.
+      - path: (a2atest|coordtest|storetest|queuetest|scheduletest|sandboxtest)/
+        linters: [unparam, errcheck, gocritic]
+
+      # A test's own HTTP call has no caller to cancel it and no connection
+      # pool to exhaust past the test's lifetime, so the context and
+      # body-close rules buy nothing there. They stay on for the engine,
+      # which serves real traffic.
+      - path: _test\.go
+        linters: [noctx, bodyclose]
+
+      # govet's shadow check earns its place in production code — it is
+      # half of what caught a credential-map write whose failure could
+      # never be reported — but a table-driven test that re-derives `err`
+      # inside each case is the shape it cannot tell from that bug, and
+      # there is no third party reading a test's error to mislead.
+      - path: _test\.go
+        linters: [govet]
 
 formatters:
   enable:

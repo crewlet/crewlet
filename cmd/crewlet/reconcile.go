@@ -86,6 +86,7 @@ func seedCompany(ctx context.Context, db *store.DB, seed *config.Company,
 	}
 	parent := ""
 	if found {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		current, err := secrets.Open(cipher, active.Payload)
 		if err != nil {
 			return fmt.Errorf("open the active revision: %w", err)

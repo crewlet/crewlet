@@ -26,11 +26,10 @@ import (
 // is visible from the turn's own record, where a block looks like any other
 // failed tool call.
 type reportingGuard struct {
-	guard   *skills.Guard
-	emit    emitter
-	phase   phase.Phase
-	round   int
-	blocked func(context.Context, *events.Event)
+	guard *skills.Guard
+	emit  emitter
+	phase phase.Phase
+	round int
 }
 
 var _ tools.Guard = (*reportingGuard)(nil)

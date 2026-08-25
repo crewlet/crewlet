@@ -254,7 +254,7 @@ func (f *Fleet) run(ctx context.Context, s *seatSocket) {
 		f.replay(ctx, s)
 		attempt = 0
 		f.pump(ctx, s, socket)
-		socket.Close()
+		_ = socket.Close()
 	}
 }
 
@@ -439,12 +439,6 @@ func (s *seatSocket) since() (time.Time, bool) {
 	return s.cursor, !s.cursor.IsZero()
 }
 
-func (s *seatSocket) at() time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cursor
-}
-
 // mark advances the cursor, never backwards.
 //
 // A backfill replays oldest-first while the live socket delivers newest, so
@@ -530,6 +524,7 @@ func sleep(ctx context.Context, d time.Duration) bool {
 // because Mattermost accepts a socket only from an origin matching its own
 // Site URL — and a client sending none is refused outright.
 func dialWebsocket(ctx context.Context, seat Seat, c *Client) (Socket, error) {
+	//nolint:bodyclose // Deliberate: see dialOnce in doctor.go.
 	conn, _, err := websocket.Dial(ctx, c.WebsocketURL(), &websocket.DialOptions{
 		HTTPHeader: map[string][]string{
 			"Authorization": {"Bearer " + c.Token()},

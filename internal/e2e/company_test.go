@@ -340,13 +340,6 @@ func offeredTools(raw []byte) map[string]bool {
 	return out
 }
 
-// offers records what each request offered, for diagnosis.
-func (m *scriptedModel) offers() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]string(nil), m.offered...)
-}
-
 func (m *scriptedModel) saw(phase string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

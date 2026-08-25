@@ -300,6 +300,7 @@ func rekeySecrets(ctx context.Context, sv *store.SecretValues, bootstrapPath str
 		// envelope for exactly this: reporting what a rekey would touch
 		// must not decrypt anything, or the dry run is a bigger exposure
 		// than the pass it is previewing.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		rows, err := sv.List(ctx)
 		if err != nil {
 			return err

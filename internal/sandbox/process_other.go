@@ -4,7 +4,6 @@ package sandbox
 
 import (
 	"context"
-	"syscall"
 	"time"
 )
 
@@ -25,15 +24,6 @@ const localSupported = false
 const unsupportedReason = "the local sandbox backend needs POSIX process groups and " +
 	"signals, which this platform does not provide — run the engine on Linux or macOS, " +
 	"or configure a remote providers.sandbox backend"
-
-func detachAttr() *syscall.SysProcAttr { return nil }
-
-func killGroup(int)     {}
-func termGroup(int)     {}
-func stopGroup(int)     {}
-func continueGroup(int) {}
-
-func groupExists(int) bool { return false }
 
 func processGroupAlive(int, time.Time) bool { return false }
 

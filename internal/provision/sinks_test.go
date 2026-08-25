@@ -376,7 +376,7 @@ func TestTheEnvFileStaysPrivateAcrossRewrites(t *testing.T) {
 		t.Fatalf("NewEnvFileSink: %v", err)
 	}
 	for _, name := range []string{"TOKEN_A", "TOKEN_B", "TOKEN_C"} {
-		if err := sink.Record(t.Context(), name, "v"); err != nil {
+		if err = sink.Record(t.Context(), name, "v"); err != nil {
 			t.Fatalf("Record(%s): %v", name, err)
 		}
 		info, err := os.Stat(path)

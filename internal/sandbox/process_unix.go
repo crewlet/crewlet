@@ -9,55 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"syscall"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/procgroup"
 )
-
-// detachAttr makes a spawned process a session and process-group leader.
-//
-// Three properties come from that one flag, and only a direct spawn gives all
-// three — which is why the direct box spawns the coding job itself instead of
-// backgrounding it inside a throwaway shell:
-//
-//   - The job leads its own process group, so pause and teardown signal the
-//     WHOLE tree with one killpg. A job backgrounded inside a shell inherits
-//     that shell's group and is reachable only individually, leaving the
-//     coding agent's own children running.
-//   - It is detached from the engine's controlling terminal, so a Ctrl-C in
-//     an operator's shell does not reach into a running coding job.
-//   - If the engine dies the job is reparented to init and keeps going, which
-//     is what makes the detached lifecycle survive a restart at all.
-func detachAttr() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setsid: true} }
-
-// signalGroup sends sig to the whole process group led by pid.
-//
-// Negating the pid is what makes it the GROUP: kill(-pgid) reaches every
-// process the coding agent spawned, and the coding agents this drives all
-// spawn children.
-func signalGroup(pid int, sig syscall.Signal) error {
-	if pid <= 0 {
-		return errors.New("sandbox: refusing to signal a non-positive pid")
-	}
-	return syscall.Kill(-pid, sig)
-}
-
-func killGroup(pid int)     { signalGroup(pid, syscall.SIGKILL) }
-func termGroup(pid int)     { signalGroup(pid, syscall.SIGTERM) }
-func stopGroup(pid int)     { signalGroup(pid, syscall.SIGSTOP) }
-func continueGroup(pid int) { signalGroup(pid, syscall.SIGCONT) }
-
-// groupExists probes the group for liveness without touching it.
-func groupExists(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := signalGroup(pid, 0)
-	// EPERM means the group exists and belongs to somebody else — which,
-	// under a pid that was recycled, is exactly the case the start-time
-	// guard above this exists to reject. Alive is the honest answer here;
-	// processGroupAlive is where "and it could be ours" is decided.
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
 
 // processGroupAlive reports whether pid is a live process group that could be
 // THIS box's.
@@ -76,7 +31,7 @@ func groupExists(pid int) bool {
 // unavailable (any non-Linux unix) the pid probe stands alone, which fails
 // towards KEEPING a directory rather than deleting live work.
 func processGroupAlive(pid int, boxCreated time.Time) bool {
-	if !groupExists(pid) {
+	if !procgroup.Exists(pid) {
 		return false
 	}
 	info, err := os.Stat("/proc/" + strconv.Itoa(pid))
@@ -111,10 +66,10 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	proc := exec.Command(cmd.argv[0], cmd.argv[1:]...)
+	proc := exec.Command(cmd.argv[0], cmd.argv[1:]...) //nolint:noctx // the timeout is enforced below, on the GROUP
 	proc.Dir = cmd.cwd
 	proc.Env = flattenEnv(cmd.env)
-	proc.SysProcAttr = detachAttr()
+	procgroup.Detach(proc)
 
 	var stdout, stderr capture
 	proc.Stdout = &stdout
@@ -134,7 +89,7 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 			Stderr:   stderr.String(),
 		}, exitOnly(err)
 	case <-ctx.Done():
-		killGroup(proc.Process.Pid)
+		logSignal("kill", proc.Process.Pid, procgroup.Kill(proc.Process.Pid))
 		// Reap it, so the pid does not linger as a zombie that the liveness
 		// probe would read as alive.
 		<-done

@@ -163,10 +163,14 @@ func (e *Engine) startReflection(ctx context.Context) error {
 
 // ---- the two fleet singletons ----------------------------------------- //
 
-// episodeLifecycleDutyName is the singleton the compaction pass claims.
-const episodeLifecycleDutyName = "episode-lifecycle"
-
-// skillCuratorDutyName is the singleton the skill-ageing pass claims.
+// skillCuratorDutyName is the singleton BOTH background passes claim.
+//
+// One name for two loops, deliberately: BackgroundOptions takes a single
+// ClaimDuty, so the skill-ageing pass and the episode compaction run on the
+// same node — which is also what learningDutyTTL is sized against. The name
+// is the skill curator's for history rather than accuracy: renaming it would
+// change the coordination key, and during a rolling upgrade a node on each
+// name would both believe they held "the" duty.
 const skillCuratorDutyName = "skill-curator"
 
 // lifecycleOptions projects the operator's episode-lifecycle config onto the

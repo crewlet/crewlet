@@ -129,6 +129,7 @@ func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := configs.Activate(t.Context(), "00000000-0000-0000-0000-000000000000", base); err == nil {
 		t.Fatal("activating a revision that does not exist succeeded")
 	} else if !errors.Is(err, store.ErrNoRevision) {

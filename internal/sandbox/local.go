@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
 var log = logging.Get("sandbox.local")
@@ -255,7 +256,11 @@ func touchAlive(l boxLayout) {
 		log.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		// A keepalive that did not land is a box the reaper will treat as
+		// an orphan, so the failure is worth the same line as the open.
+		log.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
+	}
 }
 
 // readPID is the detached job's pid, or 0.
@@ -386,16 +391,16 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(layout.workspace(), hostbox.DirMode); err != nil {
+	if err = os.MkdirAll(layout.workspace(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s at %s: %v", id, layout.root, err)
 	}
 	// MkdirAll honours umask, so the mode is asserted rather than requested:
 	// a box holds a credential and must not be group- or world-readable on a
 	// host that runs other services.
-	if err := os.Chmod(layout.root, hostbox.DirMode); err != nil {
+	if err = os.Chmod(layout.root, hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not secure local sandbox %s at %s: %v", id, layout.root, err)
 	}
-	if err := os.MkdirAll(filepath.Join(layout.root, ".tmp"), hostbox.DirMode); err != nil {
+	if err = os.MkdirAll(filepath.Join(layout.root, ".tmp"), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s tmpdir: %v", id, err)
 	}
 
@@ -403,6 +408,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	seedCredentials(layout, spec.CredentialFiles)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := recordCredentialMap(layout, spec.CredentialFiles); err != nil {
 		// The map names paths, not secrets, but losing it means a
 		// refreshed login is never written back to the shared directory
@@ -440,7 +446,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 
 	result, err := runHost(ctx, hostCommand{argv: argv})
 	if err != nil || result.ExitCode != 0 {
-		os.RemoveAll(layout.root)
+		_ = os.RemoveAll(layout.root)
 		detail := strings.TrimSpace(result.Stderr)
 		if detail == "" {
 			detail = strings.TrimSpace(result.Stdout)
@@ -503,7 +509,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		return nil
 	}
 	if l.opts.Containment == Container {
-		runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
+		_, _ = runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
 	} else if pid := readPID(layout); pid > 0 {
 		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
 		// by SIGKILL directly — the signal cannot be caught, blocked or
@@ -513,7 +519,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		// pause is never resumed, and the SIGCONT that Close needs (a
 		// stopped process really does never run to handle SIGTERM) would
 		// quietly defeat that here.
-		killGroup(pid)
+		logSignal("kill", pid, procgroup.Kill(pid))
 		// And WAIT for it to actually go. SIGKILL is delivered, not
 		// applied: the kernel takes the process down some moments later,
 		// and until it does the coding agent's wrapper is still writing
@@ -554,7 +560,7 @@ func removeBox(l boxLayout) {
 func awaitGroupExit(ctx context.Context, pid int) {
 	deadline := time.Now().Add(termGrace)
 	for time.Now().Before(deadline) {
-		if !groupExists(pid) {
+		if !procgroup.Exists(pid) {
 			return
 		}
 		select {
@@ -704,4 +710,18 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// logSignal reports a signal that did not reach its process group.
+//
+// Every caller is on a teardown or a pause path, where there is nothing to
+// return the failure to and nothing useful to do about it — but a kill that
+// silently did not land leaves a coding agent running on the engine host,
+// which is the one outcome an operator has to be able to find. An empty group
+// is not a failure and never reaches here: procgroup answers ESRCH as success.
+func logSignal(what string, pid int, err error) {
+	if err == nil {
+		return
+	}
+	log.Warn("local_sandbox_signal_failed", "signal", what, "pgid", pid, "error", err.Error())
 }

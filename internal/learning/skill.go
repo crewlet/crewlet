@@ -511,6 +511,7 @@ func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Ref
 	for attempt := range updateAttempts {
 		var updated Skill
 		err = s.db.Tx(ctx, func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			current, ok, err := s.one(ctx, tx, `WHERE id = ?`, skillID)
 			if err != nil {
 				return err
@@ -518,10 +519,12 @@ func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Ref
 			if !ok {
 				return fmt.Errorf("%w: %s", ErrUnknownSkill, skillID)
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := archiveVersion(ctx, tx, current, r); err != nil {
 				return fmt.Errorf("learning: archive skill %s v%d: %w",
 					skillID, current.Version, err)
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE synthesized_skills
 				SET description = ?, content = ?, frontmatter = ?,

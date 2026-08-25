@@ -100,6 +100,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
 		}
 		if !exists {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			bot, err := opts.Client.CreateBot(ctx, username,
 				BotDisplayName(opts.Config.Provisioning, seat.Role))
 			if err != nil {
@@ -110,7 +111,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Created = append(res.Created, seat.Handle)
 		}
 
-		if err := opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
+		if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: join team: %w", seat.Handle, err))
 		}
@@ -170,7 +171,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		minted[seat.Handle] = mintedToken{
 			userID: user.ID, tokenID: token.ID, createdBot: created,
 		}
-		if err := opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
+		if err = opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("mattermost: %s: record %s: %w",
 					seat.Handle, seat.TokenVar, err))
