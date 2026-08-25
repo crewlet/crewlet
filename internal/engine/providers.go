@@ -13,6 +13,7 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
@@ -90,12 +92,7 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
 		})
 	case config.LLMCLIAgent:
-		// The subscription-CLI backend is a Phase-4 item that has not
-		// landed. Naming it explicitly is the point: an unknown-type error
-		// would tell an operator their config is wrong, when in fact it is
-		// this build that is incomplete.
-		return nil, fmt.Errorf("engine: provider %q: the %q backend is not in this build yet",
-			key, spec.Type)
+		return buildCLIAgent(key, spec, r, keys)
 	default:
 		return nil, fmt.Errorf("engine: provider %q: unknown type %q", key, spec.Type)
 	}
@@ -103,3 +100,95 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 
 // log is the package logger.
 var log = logging.Get("engine")
+
+// BuildCLIAgent constructs one cli-agent provider from its config entry.
+//
+// Exported for `crewlet llm`, which has to build the SAME provider the engine
+// would in order to report on it: a doctor that constructed its own would
+// diagnose a provider no seat is using, and the two would drift the first
+// time a default changed.
+func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cliagent.Provider, error) {
+	return buildCLIAgent(key, spec, r, spec.ResolvedKeys(r))
+}
+
+// buildCLIAgent constructs the subscription-CLI backend.
+//
+// Its credentials do not arrive the way an API entry's do. A metered entry
+// has a list of keys and a pool that rotates them; this one has ONE login,
+// held by the vendor's CLI in a directory on disk, and at most a single
+// long-lived token beside it. So there is no pool here and nothing to rotate
+// — the cooldowns an operator configured govern the chain's retry of this
+// provider, not a key inside it.
+func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiKeys []string) (*cliagent.Provider, error) {
+	cli := spec.CLI
+	if cli == nil {
+		// Validation refuses this combination, so reaching it means the
+		// provider was built from a document that never went through it.
+		return nil, fmt.Errorf("engine: provider %q: type %q with no cli block", key, spec.Type)
+	}
+	stateDir, err := cli.ResolvedStateDir(key)
+	if err != nil {
+		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
+	}
+	// RESOLVED HERE for the same reason an API key is: Tier B stores
+	// "${VAR}" verbatim, so a child handed the raw map would receive the
+	// literal reference as its value.
+	env, missing := r.Map(fmt.Sprintf("providers.llm.%s.cli.env", key), cli.Env)
+	for _, ref := range missing {
+		// Warned rather than refused: a CLI whose optional tuning
+		// variable is unset still runs, and a provider that refused to
+		// build would take the company down over it.
+		log.Warn("cli_agent_env_unresolved", "provider", key,
+			"path", ref.Path, "variables", strings.Join(ref.Names, ","))
+	}
+
+	auth := cliagent.Auth{Mode: cliagent.AuthMode(cli.Auth.Mode)}
+	if auth.Mode == "" {
+		auth.Mode = cliagent.AuthSubscription
+	}
+	if len(apiKeys) > 0 {
+		auth.APIKey = apiKeys[0]
+	}
+
+	// Both credentials fall back to a CONVENTIONAL name when the entry
+	// points at none, and both go through the resolver, which reads the
+	// secret store BEFORE the environment. That order is the whole point:
+	// `crewlet llm login <key> -capture-token` writes the token into the
+	// store, and an entry that had to name it explicitly would leave every
+	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
+	profile, err := cliagent.Load(cli.Name(), cli.Overrides)
+	if err != nil {
+		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
+	}
+	auth.Token = resolveOrConvention(r, cli.Auth.Token, profile.TokenEnv)
+	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
+
+	return cliagent.New(cliagent.Config{
+		Key:              key,
+		Model:            spec.Model,
+		Agent:            cli.Name(),
+		StateDir:         stateDir,
+		Overrides:        cli.Overrides,
+		Timeout:          time.Duration(cli.Timeout() * float64(time.Second)),
+		MaxConcurrent:    cli.Concurrency(),
+		Env:              env,
+		Auth:             auth,
+		CredentialBundle: bundle,
+	})
+}
+
+// resolveOrConvention resolves a configured ${VAR} reference, or falls back to
+// looking up a conventional variable name.
+//
+// The fallback is a LOOKUP, not an expansion: `conventional` is a bare name
+// rather than a reference, and passing it through Value would leave it
+// unresolved and return the literal name as if it were a credential.
+func resolveOrConvention(r *config.Resolver, configured, conventional string) string {
+	if configured != "" {
+		return r.Value(configured)
+	}
+	if conventional == "" {
+		return ""
+	}
+	return r.Lookup(conventional)
+}

@@ -4,8 +4,9 @@
 > `direct` (a process tree) and `container` (Docker or Podman). The E2B
 > backend is not here yet, so the remote-sandbox passages below describe the
 > intended contract rather than something you can configure today. The
-> `cli-agent` credential paths are likewise not in this build; see
-> [Subscription LLM Backends](subscription-llm-backends.md). Nor is the
+> [`cli-agent`](subscription-llm-backends.md) provider itself ships, but a
+> coding run does not yet receive its login — the credential seeding and the
+> resolved-model passages below describe the intended contract. Nor is the
 > engine-fronted OTLP receiver — a coding run's own telemetry has no
 > collector to export to yet, though the run's engine-side lifecycle events
 > and its published transcript are all here.
@@ -212,7 +213,7 @@ Runs headless — `claude -p "<brief>" --output-format json --permission-mode by
 
 Claude Code **speaks the Anthropic API only**, so it needs an Anthropic-compatible credential. The sandbox's LLM derives from the role's provider chain: `role.llm_sandbox` → `llm_execute` → `llm` → `default`. Point `role.llm_sandbox` at an `anthropic` `providers.llm` entry (a custom `base_url` on that entry becomes `ANTHROPIC_BASE_URL` — an Anthropic-API gateway works). A role whose resolved provider is *not* Anthropic-compatible cannot launch Claude Code — the launch fails with `SandboxCredentialError` (see [Failure modes](#failure-modes)) unless `ANTHROPIC_API_KEY` (or a Bedrock/Vertex/Foundry toggle) is supplied in `role.sandbox.env`.
 
-**A subscription counts.** When the resolved provider is a [`cli-agent`](subscription-llm-backends.md) entry, the headless subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, minted by `crewlet llm login <key> --capture-token`) is exported into the box and Claude Code there bills your Pro/Max plan — no API key anywhere. This works on **every** backend including remote E2B, because a token is one scoped, revocable variable. The credential *files* deliberately never leave the engine host: they carry a refresh token whose rotation is shared fleet state. A CLI that mints no headless token (Codex, Gemini CLI) therefore needs [`type: local`](#local-sandboxes), where the coding agent reads the login directly.
+**A subscription counts.** When the resolved provider is a [`cli-agent`](subscription-llm-backends.md) entry, the headless subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, minted by `crewlet llm login <key> -capture-token`) is exported into the box and Claude Code there bills your Pro/Max plan — no API key anywhere. This works on **every** backend including remote E2B, because a token is one scoped, revocable variable. The credential *files* deliberately never leave the engine host: they carry a refresh token whose rotation is shared fleet state. A CLI that mints no headless token (Codex, Gemini CLI) therefore needs [`type: local`](#local-sandboxes), where the coding agent reads the login directly.
 
 ### OpenCode
 
@@ -382,7 +383,7 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 What an operator should recognize:
 
 - **`SandboxCredentialError` at launch** — the role chose `claude-code` but its resolved LLM provider isn't Anthropic-compatible. The run never starts; the error says exactly what to do: point `role.llm_sandbox` at an `anthropic` `providers.llm` entry, put `ANTHROPIC_API_KEY` in `role.sandbox.env`, or switch the role (or the provider default) to `opencode`.
-  For a [`cli-agent` provider](subscription-llm-backends.md) the error is specific to the two cases: a CLI that mints a headless token says "run `crewlet llm login <key> --capture-token`", and one that does not says to use `providers.sandbox.type: local` instead.
+  For a [`cli-agent` provider](subscription-llm-backends.md) the error is specific to the two cases: a CLI that mints a headless token says "run `crewlet llm login <key> -capture-token`", and one that does not says to use `providers.sandbox.type: local` instead.
 - **`LocalSandboxError: refuses to touch …`** — a setup step tried to write a system path under `containment: direct`, which has no filesystem virtualisation. Root the file under the box's `$HOME`, or switch to `containment: container`.
 - **`LocalSandboxError: neither docker nor podman`** — `containment: container` with no container runtime on the engine host's PATH. Install one, name it in `runtime:`, or use `direct`.
 - **`sandbox_env_unresolved` warnings** — a declared `${VAR}` resolved empty; the run proceeds but the coding agent will hit auth failures (a clone dying anonymously, a 401 from a registry). Export the variable the config references.

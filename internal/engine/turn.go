@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -157,6 +158,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	// writers that must not duplicate under it sit frames below the
 	// dispatch behind functions with no other reason to carry it.
 	ctx = workkey.With(ctx, req.WorkKey)
+
+	// The acting seat travels the same way, and for the same reason: the
+	// only consumer is a leaf. A cli-agent provider gives every seat its
+	// own CLI home, because seven seats on one subscription sharing one
+	// home would read each other's transcripts — and an unbound call would
+	// silently put them all back in one. Bound HERE, at the single place a
+	// turn's context is built, rather than at each phase, so a new phase
+	// cannot forget it.
+	ctx = llm.WithSeat(ctx, handle)
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {

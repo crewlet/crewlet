@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -232,7 +235,11 @@ func (p *Providers) validateSharedStateDirs(path string) error {
 		if cfg.Type != LLMCLIAgent || cfg.CLI == nil || cfg.CLI.StateDir == "" {
 			continue
 		}
-		prev, seen := byDir[cfg.CLI.StateDir]
+		// Cleaned before comparison: "/var/lib/x" and "/var/lib/x/" are
+		// one directory, and comparing the raw strings let that pair
+		// through validation to fail at the first turn instead.
+		dir := filepath.Clean(cfg.CLI.StateDir)
+		prev, seen := byDir[dir]
 		if seen && prev.agent != cfg.CLI.Agent {
 			probs.add(at(at(path, key), "cli.state_dir"), ErrConflict,
 				"shares %q with providers.llm.%s but drives a different CLI "+
@@ -243,7 +250,7 @@ func (p *Providers) validateSharedStateDirs(path string) error {
 			continue
 		}
 		if !seen {
-			byDir[cfg.CLI.StateDir] = claim{key: key, agent: cfg.CLI.Agent}
+			byDir[dir] = claim{key: key, agent: cfg.CLI.Agent}
 		}
 	}
 	return probs.err()
@@ -623,6 +630,40 @@ func (c *CLIAgent) Timeout() float64 {
 		return defaultCLITimeoutSeconds
 	}
 	return c.TimeoutSeconds
+}
+
+// CLIHomeEnv is the environment variable naming the root under which every
+// cli-agent provider keeps its credential directory and per-seat homes.
+const CLIHomeEnv = "CREWLET_LLM_CLI_HOME"
+
+// defaultCLIHome is the per-user fallback root, under the operator's home.
+const defaultCLIHome = ".crewlet/llm-cli"
+
+// ResolvedStateDir is where this entry keeps its login and its per-seat
+// homes, applying the derivation when the operator named none.
+//
+// Derived PER PROVIDER KEY, which is what makes sharing a login an explicit
+// act: two unrelated entries must not silently land on one directory and
+// prune each other's state, so entries that should share have to say so with
+// a matching cli.state_dir. See docs/concepts/subscription-llm-backends.md.
+//
+// Read from the process environment rather than the resolver because this is
+// where the engine keeps FILES, not a secret — the same reason the store path
+// is a Tier A field and not a ${VAR}.
+func (c *CLIAgent) ResolvedStateDir(key string) (string, error) {
+	if c != nil && c.StateDir != "" {
+		return filepath.Clean(c.StateDir), nil
+	}
+	if root := os.Getenv(CLIHomeEnv); root != "" {
+		return filepath.Join(filepath.Clean(root), key), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf(
+			"providers.llm.%s.cli.state_dir: no directory given and no home directory to "+
+				"derive one under (%w) — set cli.state_dir, or %s", key, err, CLIHomeEnv)
+	}
+	return filepath.Join(home, defaultCLIHome, key), nil
 }
 
 // Concurrency is the process cap, applying the default.

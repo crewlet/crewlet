@@ -185,17 +185,19 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 	}
 }
 
-func TestAnUnsupportedProviderTypeSaysItIsTheBuild(t *testing.T) {
-	t.Parallel()
-	// An unknown-type error would tell an operator their config is wrong,
-	// when in fact it is this build that is incomplete.
+func TestACLIAgentProviderBuildsWithoutALogin(t *testing.T) {
+	// Like every other backend, it must BUILD without credentials: the
+	// call then fails with the vendor's own "not authenticated", which
+	// names the CLI, while a constructor that refused to exist would take
+	// the whole company down at boot over one provider's login.
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
   llm:
     local:
       type: cli-agent
-      model: claude
+      model: sonnet
       cli:
         agent: claude-code
 roles:
@@ -206,15 +208,45 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	_, err = engine.NewCompany(c)
-	if err == nil {
-		t.Fatal("a cli-agent provider built cleanly")
+	if _, err := engine.NewCompany(c); err != nil {
+		t.Fatalf("a cli-agent provider with no login refused to build: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not in this build") {
-		t.Errorf("the error blames the config rather than the build: %v", err)
+}
+
+// The state directory is derived PER PROVIDER KEY, which is what makes
+// sharing a login an explicit act: two unrelated entries landing on one
+// directory would prune each other's seat homes.
+func TestCLIAgentStateDirsAreDerivedPerProviderKey(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(config.CLIHomeEnv, root)
+
+	var cli config.CLIAgent
+	opus, err := cli.ResolvedStateDir("opus-sub")
+	if err != nil {
+		t.Fatalf("ResolvedStateDir: %v", err)
 	}
-	if !strings.Contains(err.Error(), "local") {
-		t.Errorf("the error does not name the provider: %v", err)
+	sonnet, err := cli.ResolvedStateDir("sonnet-sub")
+	if err != nil {
+		t.Fatalf("ResolvedStateDir: %v", err)
+	}
+	if opus == sonnet {
+		t.Fatalf("two provider keys derived one state dir %q", opus)
+	}
+	if !strings.HasPrefix(opus, root) {
+		t.Errorf("state dir %q is not under %s=%q", opus, config.CLIHomeEnv, root)
+	}
+
+	// An explicit state_dir is honoured verbatim — that is how two entries
+	// deliberately share one login.
+	shared := config.CLIAgent{StateDir: "/var/lib/crewlet/llm-cli/claude"}
+	for _, key := range []string{"opus-sub", "sonnet-sub"} {
+		got, err := shared.ResolvedStateDir(key)
+		if err != nil {
+			t.Fatalf("ResolvedStateDir: %v", err)
+		}
+		if got != "/var/lib/crewlet/llm-cli/claude" {
+			t.Errorf("ResolvedStateDir(%q) = %q, want the configured directory", key, got)
+		}
 	}
 }
 
@@ -230,5 +262,40 @@ func TestACompanyWithNoModelsIsRefusedAtBuild(t *testing.T) {
 	}
 	if _, err := engine.NewCompany(c); err == nil {
 		t.Error("a company with no models built an epoch that cannot run a turn")
+	}
+}
+
+// The documented fallback: an entry that names no token still gets one from
+// the profile's own variable, through the resolver — which reads the secret
+// store BEFORE the environment. Without it, every operator would have to wire
+// up a ${VAR} by hand for a value `crewlet llm login -capture-token` just
+// wrote into the store itself.
+func TestACLIAgentReadsItsConventionalTokenWhenTheEntryNamesNone(t *testing.T) {
+	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-from-the-convention")
+
+	c, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    subscription:
+      type: cli-agent
+      model: sonnet
+      cli:
+        agent: claude-code
+roles:
+  - name: CEO
+    handle: ceo
+    llm: subscription
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly())
+	if err != nil {
+		t.Fatalf("BuildCLIAgent: %v", err)
+	}
+	if got := built.LoginState(); got != "token" {
+		t.Errorf("LoginState = %q, want token — the conventional variable was not read", got)
 	}
 }

@@ -94,6 +94,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runMigrate(rest, stdout, stderr)
 	case "budgets":
 		return runBudgets(rest, stdout, stderr)
+	case "llm":
+		return runLLM(rest, stdout, stderr)
 	case "gitlab", "plane", "mattermost":
 		return runIntegration(cmd, rest, stdout, stderr)
 	default:
@@ -114,6 +116,7 @@ Usage:
   crewlet budgets <cmd>       Show or reset the durable token counters
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
+  crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet plane <cmd>         Reconcile Plane, and publish knowledge and skills
   crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one

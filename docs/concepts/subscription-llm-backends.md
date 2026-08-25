@@ -1,11 +1,5 @@
 # Subscription LLM Backends
 
-> **v1 status — not in this build.** The `cli-agent` provider type and the
-> `crewlet llm` command family are not part of the Go engine yet. The
-> providers it ships are `openai` and `anthropic` (and `openai-compatible`,
-> which is the same backend at a different base URL), with the fallback
-> chain across them. Everything below describes the intended contract.
-
 Run agents on a **coding CLI you already pay a subscription for** —
 Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Copilot — instead of a
 metered API key.
@@ -26,9 +20,9 @@ providers:
 
 ```bash
 # Already have the CLI logged in on this machine? Adopt that login:
-crewlet llm login default --from-host
+crewlet llm login default -from-host
 # Otherwise log in (or mint a headless token) inside Crewlet's own dir:
-crewlet llm login default --capture-token
+crewlet llm login default -capture-token
 crewlet llm doctor default                  # verify before the first turn
 ```
 
@@ -187,14 +181,14 @@ What it does instead covers every deployment shape:
 ### 0. Already logged in on this machine? Adopt it
 
 ```bash
-crewlet llm login default --from-host
+crewlet llm login default -from-host
 ```
 
 The usual starting point: you have been running `claude` on this box
 yourself for months. Crewlet **does not** use that login on its own —
 the child process is given its own `HOME`, so your `~/.claude` is
 invisible to it, which is exactly the isolation the rest of this page
-depends on. `--from-host` copies the CLI's credential files out of your
+depends on. `-from-host` copies the CLI's credential files out of your
 home directory into Crewlet's, once, on request.
 
 It is a *copy*, not a redirect: agents never write into your personal
@@ -203,9 +197,9 @@ surprise you get handed. The cost is that both copies then descend from
 one refresh token, and a vendor that rotates refresh tokens can log out
 whichever side refreshes second. Where the CLI mints a headless token
 (option 2 below), that is the better answer and avoids the fork
-entirely — `crewlet llm login --from-host` says so after it runs.
+entirely — `crewlet llm login -from-host` says so after it runs.
 
-`--home PATH` reads from somewhere other than the engine user's own home,
+`-home PATH` reads from somewhere other than the engine user's own home,
 for a deployment where the engine runs as a different user than the one
 that logged the CLI in.
 
@@ -218,8 +212,8 @@ host login    : .claude/.credentials.json (not adopted)
 problems:
   - no login of its own, but this machine has one at
     ~/.claude/.credentials.json — adopt it with
-    `crewlet llm login default --from-host`, or mint a headless
-    CLAUDE_CODE_OAUTH_TOKEN with `--capture-token` (preferred: no
+    `crewlet llm login default -from-host`, or mint a headless
+    CLAUDE_CODE_OAUTH_TOKEN with `-capture-token` (preferred: no
     shared refresh token)
 ```
 
@@ -238,7 +232,7 @@ personal CLI login on the same machine.
 ### 2. Capture a headless token (best where it exists)
 
 ```bash
-crewlet llm login default --capture-token
+crewlet llm login default -capture-token
 ```
 
 Runs the vendor's token-minting command (`claude setup-token`) and puts
@@ -251,14 +245,14 @@ no persistent volume.
 Already have a token from elsewhere?
 
 ```bash
-pass show anthropic/crewlet-oauth | crewlet llm login default --token-stdin
+pass show anthropic/crewlet-oauth | crewlet llm login default -token-stdin
 ```
 
 ### 3. Username / password, where the CLI genuinely has one
 
 ```bash
 vault read -field=password secret/gateway |
-  crewlet llm login default --username ops@example.com --password-stdin
+  crewlet llm login default -username ops@example.com -password-stdin
 ```
 
 Available for a profile that declares `stdin_login` — the built-in
@@ -273,7 +267,7 @@ unset, and the command says so rather than failing obscurely:
 Error: the 'claude-code' CLI authenticates through the vendor's browser
 OAuth flow — there is no username/password login to drive. Run
 `crewlet llm login` (which brokers that flow), or
-`crewlet llm login --capture-token` where the vendor mints a headless
+`crewlet llm login -capture-token` where the vendor mints a headless
 token. If your build of this CLI does accept a credential, declare it
 under providers.llm.<key>.cli.overrides.stdin_login.
 ```
@@ -299,7 +293,7 @@ several hosts. Export the credential directory as one blob into the
 encrypted secret store:
 
 ```bash
-crewlet llm export default --secret-store
+crewlet llm export default -secret-store
 ```
 
 Any engine sharing that database restores it at boot when its own
@@ -524,7 +518,7 @@ chain keeps the seat working while you re-run `crewlet llm login`.
 ```bash
 crewlet llm list                      # providers, agent, model, login state
 crewlet llm doctor                    # verify all of them, end to end
-crewlet llm doctor default --no-smoke # skip the real completion
+crewlet llm doctor default -no-smoke # skip the real completion
 crewlet llm status default            # ask the CLI who it's logged in as
 crewlet llm logout default            # revoke locally + delete credentials
 ```
@@ -549,7 +543,9 @@ smoke test    : ok — 812 in / 34 out
 problems      : none
 ```
 
-Every flag is described below; the command is not in this build (see the note at the top).
+One caveat worth stating plainly: `doctor` spends a real completion. On a
+subscription that is a few thousand tokens of your plan's allowance, which
+is why `-no-smoke` exists for a scripted health check that runs often.
 
 ---
 
@@ -561,7 +557,7 @@ Every flag is described below; the command is not in this build (see the note at
 - **Code work needs one more decision.** A subscription *can* back the
   [code sandbox](code-sandbox.md), two ways. On any backend including
   remote E2B, the headless token travels: `crewlet llm login <key>
-  --capture-token` and Claude Code in the box bills your plan. For a CLI
+  -capture-token` and Claude Code in the box bills your plan. For a CLI
   that mints no such token (Codex, Gemini CLI), use
   [`providers.sandbox.type: local`](code-sandbox.md#local-sandboxes),
   where the coding agent runs on the engine host and reads the login
