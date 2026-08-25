@@ -36,25 +36,6 @@ import (
 // the engine name a tool-specific variable that the seat's actual tools do
 // not read.
 
-// gitlabSeatEnv is the mcp_env server whose credentials belong to the code
-// host.
-const gitlabSeatEnv = "gitlab"
-
-// gitlabCredentialKeys are the spellings a seat's token arrives under,
-// in the order they are tried.
-//
-// FOUR, because the block is forwarded verbatim to whichever MCP server a
-// company runs and each of them names the credential differently: the glab
-// CLI reads GITLAB_TOKEN, an HTTP server takes a Private-Token header, and
-// an OAuth-shaped one takes Authorization. The engine names no variable of
-// its own — it reads the one the tools already use.
-var gitlabCredentialKeys = []string{
-	"GITLAB_TOKEN",
-	"GITLAB_PERSONAL_ACCESS_TOKEN",
-	"Private-Token",
-	"Authorization",
-}
-
 // gitlabIdentities remembers which account each seat credential
 // authenticates as.
 //
@@ -313,6 +294,13 @@ func gitlabSeatTokens(c *Company, env *config.Resolver) []string {
 
 // gitlabSeatToken reads a seat's code-host credential, under whichever key
 // its tool stack names it.
+//
+// THE KEYS COME FROM THE VENDOR PACKAGE, which is also what the provisioner
+// scans with. They were once written out twice — here and there — under a
+// comment saying the two must not drift, which is the shape of a bug rather
+// than a guard against one: a provisioner minting into a key this lookup did
+// not read would hand every seat a credential nothing authenticates with,
+// and the only symptom is a code host that names strangers.
 func gitlabSeatToken(seat *org.Role, env *config.Resolver) string {
 	if seat == nil || seat.IsHuman() {
 		// A human seat is addressable through its own contact block,
@@ -320,8 +308,8 @@ func gitlabSeatToken(seat *org.Role, env *config.Resolver) string {
 		// credential and must never be looked up as though it did.
 		return ""
 	}
-	block := seat.MCPEnv[gitlabSeatEnv]
-	for _, key := range gitlabCredentialKeys {
+	block := seat.MCPEnv[gitlab.SeatEnv]
+	for _, key := range gitlab.CredentialKeys {
 		value := strings.TrimSpace(env.Value(block[key]))
 		if value == "" {
 			continue
