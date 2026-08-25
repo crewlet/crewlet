@@ -406,7 +406,8 @@ var StoreDrivers = []StoreDriver{StoreDriverTurso, StoreDriverSQLite}
 // It is a FILE, owned exclusively by this process for the life of the
 // process. It is not a shared database and there is no DSN: two engines
 // pointed at one file corrupt it, and a fleet's nodes each keep their own
-// rebuildable copy (see the plan's D8 — sync truth, async cache).
+// rebuildable copy: the store is the synchronous truth and the index an
+// asynchronous cache of it.
 type Store struct {
 	// Path is the database file. Created if absent, along with its parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`

@@ -24,7 +24,7 @@ import (
 // A seat that keeps working accumulates one raw row per turn forever, and
 // nothing else in the system removes one. Recall is what pays for that, and it
 // pays LINEARLY: it is a brute-force scan (no ANN index reaches the Go driver,
-// rewrite/decisions/002), it runs in the Plan phase of every turn, and it
+// decisions/002), it runs in the Plan phase of every turn, and it
 // decodes every embedded row the seat owns. Measured on this store at 1536
 // dimensions: 6 ms at 100 rows, 32 ms at 500, 63 ms at 1000, 122 ms at 2000 —
 // ~62 µs per row with no ceiling. The pass is what puts the ceiling there.

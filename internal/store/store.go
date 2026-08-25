@@ -9,8 +9,8 @@
 // is not a degraded configuration, it is corruption waiting for a schedule to
 // collide. Everything that genuinely needs cross-process coordination — seat
 // leases, config activations, the completion ledger, dedupe and rate valves —
-// lives in the KV layer instead (REWRITE_PLAN D8, rewrite/decisions/201), and
-// that separation is why nothing here has to be safe against a peer.
+// lives in the KV layer instead (decisions/201), and that separation is why
+// nothing here has to be safe against a peer.
 //
 // It also collapses a whole idiom. The Postgres migrator took an advisory lock
 // because `crewlet run`, `crewlet run api` and `crewlet config import` could
@@ -23,7 +23,7 @@
 // (the default) and "sqlite" (modernc.org/sqlite — pure Go, no cgo). Every
 // statement in this package must parse on BOTH, because Turso's dialect is the
 // narrower of the two today and the dual-driver test job is the only thing
-// that catches a divergence. See rewrite/decisions/002 for what the spike
+// that catches a divergence. See decisions/002 for what the spike
 // measured and Capabilities for what the probe re-measures at open.
 package store
 
@@ -70,8 +70,8 @@ var ErrUnknownDriver = errors.New("store: unknown driver")
 // Defaults for Options. Both are anchored to the dashboard, which is the only
 // component that reads this store concurrently with the engine writing it.
 const (
-	// The dashboard's query channel admits 4 concurrent queries
-	// (REWRITE_PLAN §14), so 4 connections is what keeps a read burst off
+	// The dashboard's query channel admits 4 concurrent queries, so 4
+	// connections is what keeps a read burst off
 	// the write path. More would not help: under WAL, readers never block
 	// the writer, but writers serialise on the file lock regardless, so
 	// connections past the read concurrency only deepen a queue.

@@ -40,7 +40,7 @@
 //
 // So when this suite fails a backend nobody here wrote, the first question is
 // whether the case states a real invariant or an accident of the two backends
-// that already agreed. Check rewrite/decisions/ for the operation before
+// that already agreed. Check decisions/ for the operation before
 // concluding the backend is wrong: a recorded degradation is a permitted
 // exception, and the corpus is where permission lives. If the property is real
 // but not universal, it becomes a Capabilities flag with the reason at the skip
@@ -299,7 +299,7 @@ type Capabilities struct {
 	// handoff is free; on JetStream nothing is released by closing, so
 	// deferral is implemented with Nak() and costs one delivery count —
 	// and MaxDeliver was re-derived from 10 to 25 precisely to absorb
-	// handoffs (rewrite/decisions/102-jetstream-redelivery.md, decisions 1
+	// handoffs (decisions/102-jetstream-redelivery.md, decisions 1
 	// and 2).
 	//
 	// The invariant every backend still owes is the one the contract
@@ -316,7 +316,7 @@ type Capabilities struct {
 	// A capability rather than a requirement, and deliberately so:
 	// measured, Pulsar replays from the head while JetStream returns a
 	// redelivered message BEHIND never-delivered ones
-	// (rewrite/decisions/102-jetstream-redelivery.md). The engine no
+	// (decisions/102-jetstream-redelivery.md). The engine no
 	// longer depends on either — within-conversation order comes from
 	// event timestamps, which
 	// within_a_partition_events_are_ordered_by_timestamp certifies for
@@ -337,9 +337,20 @@ type Capabilities struct {
 	// "closes the connection", which reads as restartable — but delivery
 	// pause is documented one-way ("once paused, the engine is shutting
 	// down"), so a backend may reasonably treat Stop as terminal and
-	// require a fresh queue. Two backends already answer differently. See
-	// rewrite/questions/queue-contract-restart-after-stop.md; until that is
-	// settled the suite must not render a verdict on it.
+	// require a fresh queue. Two backends already answer differently: the
+	// in-memory twin restarts, because there Stop is a client disconnect
+	// and the broker, its mail and the cleared holds outlive it, while
+	// JetStream cannot, because Stop closes the NATS connection and Start
+	// does not re-establish it.
+	//
+	// UNSETTLED, and deliberately left that way here rather than decided by
+	// a test: nothing in the engine restarts a queue in-process today, so
+	// the ambiguity costs nothing yet, but it is exactly the lifecycle point
+	// a live config-reload path would trip over. Until the contract picks a
+	// side the suite must not render a verdict on it. Either answer lands
+	// somewhere concrete — "restartable" makes JetStream's behaviour a bug
+	// and this flag a plain requirement, "terminal" keeps the flag and puts
+	// the words in Stop's own doc in queue.go.
 	Restartable bool
 }
 

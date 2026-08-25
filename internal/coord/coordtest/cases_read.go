@@ -295,10 +295,18 @@ var readCases = []testCase{
 	// requirement wearing a value requirement's name.
 	//
 	// The remaining payloads below are pre-shaped and cannot see either
-	// property on their own; the one case above is what covers them. The
-	// open question — whether the contract should SAY the type is JSON's,
-	// or say callers may not depend on it — is
-	// rewrite/questions/coord-contract-meta-wire-shape.md.
+	// property on their own; the one case above is what covers them.
+	//
+	// What stays unsettled is the contract's own wording: coord.go says
+	// only that Meta is map[string]any, so nothing tells a caller whether
+	// it may depend on the Go type of a value it reads back. The silence
+	// has teeth — reverting the memory twin to hand the caller its own map
+	// straight back passes every case here, so a backend that preserves Go
+	// types is certified today, and a caller writing meta["replicas"].(int)
+	// is right against that backend and panics against the embedded-NATS
+	// store, which returns float64. Until Lease.Meta says one way or the
+	// other, read meta the way placement.rolesFromMeta does: accept either
+	// shape.
 
 	{"meta_values_survive_the_round_trip", func(h *harness) {
 		// The property the free-form payload actually owes, separated

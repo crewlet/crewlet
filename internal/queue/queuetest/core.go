@@ -596,8 +596,15 @@ func (s *suite) runCore(t *testing.T) {
 		}
 		if err := q.PauseTopic(ctx, "seat.restart", "grp", "sandbox"); err != nil {
 			// Refusing while stopped is a legitimate answer and closes the
-			// window just as well — see
-			// rewrite/questions/queue-contract-verbs-on-a-stopped-queue.md.
+			// window just as well: the contract does not say what the verbs
+			// other than Start and Stop do on a stopped queue, and both
+			// readings are real — on JetStream, Open establishes the
+			// connection and the streams, so Start is a no-op, while on the
+			// twin Start is what makes the client live. What a backend may
+			// NOT do is answer differently per verb, which is how this window
+			// opened: the twin refuses Publish and Subscribe while
+			// EnsureSubscription, DeleteSubscription and PauseTopic still
+			// mutate broker state on a stopped client.
 			t.Skipf("backend refuses PauseTopic while stopped: %v", err)
 		}
 		if err := q.Start(ctx); err != nil {

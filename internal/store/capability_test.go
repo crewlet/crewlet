@@ -10,7 +10,7 @@ import (
 // The capability matrix, re-measured against whatever driver versions this
 // build pins.
 //
-// It exists because rewrite/decisions/002 found the documentation and the code
+// It exists because decisions/002 found the documentation and the code
 // disagreeing: Turso ships F32_BLOB columns and the vector distance functions,
 // but its ANN vector index and its full-text index are announced surface not
 // yet reachable from Go. Pinning a driver and asserting a matrix in prose is
@@ -165,7 +165,7 @@ func exerciseFullText(t *testing.T, db *store.DB) {
 }
 
 // TestPartialIndexConflictTarget pins the measurement that decided the
-// nullable-work_key design (rewrite/decisions/002 §2).
+// nullable-work_key design (decisions/002 §2).
 //
 // The refinement worth keeping: it is not that ON CONFLICT and partial indexes
 // are incompatible — repeating the index predicate verbatim in the statement
@@ -201,7 +201,7 @@ func TestPartialIndexConflictTarget(t *testing.T) {
 				`INSERT INTO arb (h, k) VALUES ('a','x') ON CONFLICT (h, k) DO NOTHING`,
 			); err == nil {
 				t.Fatal("a bare ON CONFLICT now resolves against a partial index — " +
-					"re-read rewrite/decisions/002 §2 before relying on it")
+					"re-read decisions/002 §2 before relying on it")
 			}
 
 			if _, err := db.SQL().ExecContext(ctx,

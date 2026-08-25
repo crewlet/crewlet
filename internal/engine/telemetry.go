@@ -100,7 +100,7 @@ func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int) r
 			// The seat and the ORG both come off the pinned epoch, so a
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath
-			// it (rewrite/decisions/404).
+			// it (decisions/404).
 			Seat:  company.Org.AgentSeatByHandle(t.handle),
 			Org:   company.Org,
 			Depth: depth,

@@ -4,7 +4,7 @@
 // It exists because there are two drivers and one dialect: Turso is the
 // engine's database, mainline SQLite is the certified fallback, and the only
 // thing that keeps a statement inside their intersection is running the same
-// assertions against both (rewrite/decisions/002). A suite that ran on one
+// assertions against both (decisions/002). A suite that ran on one
 // driver would certify whichever dialect that driver happens to accept.
 //
 // Run takes a constructor rather than a *store.DB so each subtest gets its own
@@ -612,7 +612,7 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	}
 }
 
-// testWorkKeyNull proves the dialect decision from rewrite/decisions/002 on
+// testWorkKeyNull proves the dialect decision from decisions/002 on
 // the live driver: a PLAIN unique index over a nullable column gives the
 // semantics the Postgres schema needed a partial index (and an advisory lock)
 // for, and a bare ON CONFLICT can target it.

@@ -177,7 +177,7 @@ CREATE INDEX chat_thread_follows_updated_at_idx
 --
 -- The durable counter, distinct from the per-run in-memory meter: budget
 -- enforcement reads this, so it survives a restart and is shared across
--- every node. Its polarity is FAIL CLOSED (REWRITE_PLAN §15) — a spend
+-- every node. Its polarity is FAIL CLOSED — a spend
 -- that cannot be recorded must be refused, because an unbilled turn
 -- charges nothing and the next one charges nothing either.
 CREATE TABLE token_usage (

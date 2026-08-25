@@ -32,7 +32,7 @@
 // message takes 1.8 ms, and a fresh consumer receives it 8.6 ms later still
 // at redeliveryCount 0 — where an ack timeout costs one. (The Python engine's
 // harness measured the same free handoff on 4.2.4 with the C++ client: 9 ms,
-// redeliveryCount 0. See rewrite/decisions/104-pulsar-redelivery-economics.md
+// redeliveryCount 0. See decisions/104-pulsar-redelivery-economics.md
 // for the full table, and 102 for the JetStream column it contrasts with.)
 //
 // So Defer here means what the contract says it means — leave it unacked,
@@ -76,10 +76,11 @@ var (
 
 // --- tuned constants ------------------------------------------------------
 //
-// REWRITE_PLAN §14B splits these into "carry verbatim" and "re-derive per
-// broker". The broker here IS Pulsar, so the Python values carry with their
-// reasoning intact — but the CLIENT is different, and where that changes the
-// reasoning it is said at the definition rather than assumed away.
+// A tuned constant either carries verbatim from the previous engine or has to
+// be re-derived for this broker, and which one it is depends on what the value
+// was measured against. The broker here IS Pulsar, so the old values carry with
+// their reasoning intact — but the CLIENT is different, and where that changes
+// the reasoning it is said at the definition rather than assumed away.
 
 const (
 	// maxDeliveries is the delivery budget before a message is routed to

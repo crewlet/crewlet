@@ -94,7 +94,7 @@ func (s *SQLStore) Get(ctx context.Context, turnID string) (PendingRun, bool, er
 // which the seat sees as its own work arriving twice.
 //
 // No RETURNING: outside the intersection of the two certified drivers
-// (rewrite/decisions/002). The outcome is RowsAffected and the row is read
+// (decisions/002). The outcome is RowsAffected and the row is read
 // back inside the same transaction.
 var claimSQL = `
 UPDATE pending_sandbox_run

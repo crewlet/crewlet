@@ -21,7 +21,7 @@ import (
 // The rest of the Secrets struct is no longer REACHABLE FROM A CONFIG. Jira,
 // Confluence, GitHub, the Forge app id and every Slack app, org-level or per
 // seat, are refused at validation with config.ErrUnimplemented
-// (rewrite/decisions/703) — held below by TestNoConfigCanSupplyAnUnservedSecret,
+// (decisions/703) — held below by TestNoConfigCanSupplyAnUnservedSecret,
 // because that refusal is what keeps those routes answering 503. Their fields
 // and the routes that read them stay, so the mapping is still held to filling
 // them, over the only epoch that can still carry one: [unserved], built by hand.
@@ -187,7 +187,7 @@ type unserved struct{ forgeAppID, github, jira, confluence, slack string }
 // BUILT BY HAND, because no config produces one any more: every block below is
 // refused with config.ErrUnimplemented, so a parsed company reaches SecretsOf
 // with each of these fields empty and each of those routes therefore answering
-// 503 — which is the whole point of the refusal (rewrite/decisions/703), and is
+// 503 — which is the whole point of the refusal (decisions/703), and is
 // asserted directly by TestNoConfigCanSupplyAnUnservedSecret.
 //
 // The mapping stays held all the same. The routes are still registered and

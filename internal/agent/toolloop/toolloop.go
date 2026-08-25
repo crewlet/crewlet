@@ -84,7 +84,7 @@ type ToolResult struct {
 	// work outlives the turn (the detached sandbox). Honoured only when
 	// the caller set AllowSuspend; elsewhere it is logged and ignored,
 	// because a phase that never persists a partial conversation cannot
-	// resume one. See rewrite/decisions/402.
+	// resume one. See decisions/402.
 	Suspend bool
 
 	// SuspendPayload is handed back to the caller to persist.

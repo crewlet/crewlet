@@ -33,7 +33,7 @@ const (
 // It needs a REAL broker and skips without one. There is deliberately no
 // in-process fake: a twin that is not the broker does not merely fail to
 // catch bugs, it certifies them, and this repo has the scars to prove it
-// (rewrite/decisions/103-payload-pointer-invariant.md). Skipping is not
+// (decisions/103-payload-pointer-invariant.md). Skipping is not
 // passing — the CI job in .github/workflows/ci.yml is where this actually
 // runs.
 func TestConformance(t *testing.T) {
@@ -78,7 +78,7 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	// waiting: a one-second poll and a one-second redelivery delay. The
 	// behaviours under test are the same at any scale, and the numbers
 	// themselves are pinned separately (the constants in pulsar.go, with
-	// their measurements in rewrite/decisions/104-pulsar-redelivery-economics.md).
+	// their measurements in decisions/104-pulsar-redelivery-economics.md).
 	if cfg.ReceiveWait == 0 {
 		cfg.ReceiveWait = 25 * time.Millisecond
 	}
@@ -249,7 +249,7 @@ func capabilities() queuetest.Capabilities {
 		// unacked messages at redeliveryCount 0 where an ack
 		// timeout costs one (the table at the head of
 		// tests/test_queue/test_broker_behavior.py, and
-		// rewrite/decisions/102-jetstream-redelivery.md). So a deferral
+		// decisions/102-jetstream-redelivery.md). So a deferral
 		// here leaves the message unacked and the consumer's close — or
 		// Unquiesce's recycle — hands it back whole.
 		FreeDeferral: true,
@@ -282,7 +282,7 @@ func capabilities() queuetest.Capabilities {
 		// Start is legitimate here.
 		//
 		// Restartable — Stop closes the client and Start does not
-		// re-establish it. See
-		// rewrite/questions/queue-contract-restart-after-stop.md.
+		// re-establish it, and the contract does not say whether it
+		// should; the flag's own doc carries what is unsettled.
 	}
 }

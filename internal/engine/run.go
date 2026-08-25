@@ -320,7 +320,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// count and its drain state, and /health answers about whichever
 		// node served the request — so behind a load balancer a refresh
 		// tells a different story each time. See
-		// rewrite/decisions/501-node-runtime.md.
+		// decisions/501-node-runtime.md.
 		Status: e.nodeStatus,
 		Turn:   e.Dispatch,
 		// Before the mailbox opens and after it closes — see node.Config.

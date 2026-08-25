@@ -15,7 +15,7 @@ import (
 // running a seat knows its in-flight count and its drain state, and /health
 // answers about whichever node served the request — so behind a load
 // balancer a refresh tells a different story each time. See
-// rewrite/decisions/501-node-runtime.md.
+// decisions/501-node-runtime.md.
 func TestPresenceCarriesThisNodesLiveStatus(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)

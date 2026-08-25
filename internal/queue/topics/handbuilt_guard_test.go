@@ -57,7 +57,7 @@ import (
 //   - a subject assembled from a variable or a fmt.Sprintf whose format
 //     string carries no marker (`domain + ".inbox"` is caught by the .inbox
 //     marker; `a + "." + b + "." + c` is not caught at all);
-//   - a subject built in the web/ or rewrite/ trees, or in generated code
+//   - a subject built in the web/ tree, or in generated code
 //     outside internal/ and cmd/;
 //   - a subject fragment shorter than a marker — memory.go tests for an
 //     inbound-notification topic with strings.HasSuffix(topic, ".inbound"),

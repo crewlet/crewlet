@@ -40,10 +40,10 @@
 //     is why no case could see that a value's Go type does not survive a real
 //     round trip.
 //
-// So before concluding a backend is at fault: grep rewrite/decisions/ for the
-// operation, and read rewrite/questions/coord-contract-*.md. If the case turns
-// out to encode what the twin happens to do, the case is the defect. Two
-// backends agreeing is not evidence when the suite is what made them agree.
+// So before concluding a backend is at fault: grep decisions/ for the
+// operation. If the case turns out to encode what the twin happens to do, the
+// case is the defect. Two backends agreeing is not evidence when the suite is
+// what made them agree.
 //
 // # Checks that do not depend on you being careful
 //
@@ -144,7 +144,7 @@
 //
 // # Before adding a case that says a backend must NOT do something
 //
-// Grep rewrite/decisions/ for the operation first. A recorded degradation is a
+// Grep decisions/ for the operation first. A recorded degradation is a
 // PERMITTED exception, and the corpus is where permission lives — d-201 §3
 // records that a KV cannot express the protocol gate inside a compare-and-swap
 // and so does check → claim → re-check → release, which means a gate-refused
@@ -182,9 +182,29 @@
 // asynchronous replication would fail case after case for a property nobody
 // wrote down. It is enforced rather than relaxed because a claim you cannot
 // read back cannot provide mutual exclusion, and the seat host reads ListLive
-// and FleetProtocolFloor immediately after claiming — but see
-// rewrite/questions/coord-contract-read-your-own-write.md, because that is the
-// contract owner's call and not the suite's.
+// and FleetProtocolFloor immediately after claiming.
+//
+// Two lag shapes are not the same risk. A general READ lag fails loudly —
+// measured, by making the twin serve reads from a snapshot one write behind,
+// 15 cases go red — because the baseline read is stale too, so the comparison
+// still sees a difference. The quiet one is a backend whose reads are accurate
+// while a subsequent WRITE is not yet visible: then the negative-path group
+// (a_rejected_renew_leaves_the_lease_untouched,
+// a_refused_claim_leaves_the_holders_lease_untouched,
+// a_gate_refused_claim_leaves_the_record_untouched) passes vacuously, since
+// before and after agree on a stale-but-correct value the refusal's corruption
+// has not landed in yet. Those cases prove a refusal wrote NOTHING, and a write
+// that did not happen produces no signal to wait on, so they read immediately
+// and compare — all four assertions against the SAME resource the refused
+// operation acted on, which is why a per-resource guarantee is exactly what
+// makes them mean anything.
+//
+// Whether coord.go should SAY so is open, and it is the contract owner's call
+// rather than the suite's: stating it tells a backend author to serve reads
+// from wherever the write landed instead of discovering the requirement through
+// twenty failing cases with no common theme, but it forecloses a replicated
+// design nobody has asked for yet. Scoped per resource, with prefix listings
+// free to lag, is what callers actually depend on.
 //
 // The same applies to what a case QUIETLY assumes. Every meta payload here is
 // JSON-shaped, which is why none of them could see that a value's Go type does

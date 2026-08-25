@@ -20,8 +20,7 @@ one-directional: everything the schema rejects, the validator also rejects.
 An editor that red-underlines a config the engine would happily run teaches
 authors to ignore it.
 
-These differ from the repository-root `schema/` pair, which the Python
-engine generates. The difference is real and intended: per the rewrite
-plan's D11 the Python in-process extension system is not ported, so the
-company schema here has no `extensions` block. The root pair is replaced by
-this one when the Go tree moves to the root.
+There is no `extensions` block in the company schema, and the absence is
+deliberate: this engine has no in-process extension system for a schema to
+describe. What a company extends it extends through MCP servers and the
+knowledge base, both of which are ordinary config.

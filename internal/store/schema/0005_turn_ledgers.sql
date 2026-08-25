@@ -18,7 +18,9 @@
 -- duplicate instead of collapsing it. A coalesced digest is minted fresh
 -- on every merge and would key to nothing.
 --
--- Polarity: BOTH DIRECTIONS FAIL OPEN (REWRITE_PLAN §15). Not knowing
+-- Polarity: BOTH DIRECTIONS FAIL OPEN. Chosen for this contract rather
+-- than inherited from a house default — every store here picks its own,
+-- and normalising them to one direction is the mistake. Not knowing
 -- whether work was done has one safe answer and it is the pre-ledger one
 -- — do the work. A read that fails closed would make a database blip
 -- look like a company that had already answered everything.

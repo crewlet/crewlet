@@ -96,7 +96,7 @@ CREATE UNIQUE INDEX episodes_agent_work_key_idx
 
 -- Per-agent time windows — the recent-episodes read, and the scan vector
 -- recall runs over. Recall is brute force here (no ANN index reaches the
--- Go driver yet, rewrite/decisions/002), so this index doing the
+-- Go driver yet, decisions/002), so this index doing the
 -- agent-scoping is what keeps the cosine loop over thousands of rows
 -- rather than the whole table.
 CREATE INDEX episodes_agent_ended_at_idx
@@ -346,6 +346,6 @@ CREATE TABLE agent_onboarding_markers (
     -- bounds a claimant that died mid-pass. Claiming FAILS CLOSED — a
     -- store that cannot answer means the pass is skipped and retried,
     -- because running a possibly-duplicate onboarding is the worse
-    -- outcome (REWRITE_PLAN §15).
+    -- outcome.
     in_progress_until INTEGER
 );

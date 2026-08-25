@@ -213,7 +213,7 @@ Inbound GitLab events arrive at **`POST /webhooks/gitlab`**.
 ### Verification
 
 A delivery is authenticated by its **signature**, and by nothing else. See
-[d-702](https://github.com/crewlet/crewlet/blob/main/rewrite/decisions/702-gitlab-webhook-verification.md).
+[d-702](https://github.com/crewlet/crewlet/blob/main/decisions/702-gitlab-webhook-verification.md).
 
 `webhook-signature` is verified as a Standard-Webhooks HMAC-SHA256 over
 `{webhook-id}.{webhook-timestamp}.{body}`, keyed on the `whsec_…` secret's

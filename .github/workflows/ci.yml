@@ -97,7 +97,7 @@ jobs:
     name: stores (dual driver)
     runs-on: ubuntu-latest
     # Turso is the chosen embedded database and mainline SQLite is the
-    # certified fallback driver (D4). Running the store contract suites
+    # certified fallback driver. Running the store contract suites
     # against BOTH is what keeps the escape hatch real rather than
     # theoretical, and what stops Turso-only SQL reaching the schema —
     # Turso is currently the NARROWER dialect (see decisions/002).

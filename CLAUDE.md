@@ -152,15 +152,16 @@ docs/                 # Product documentation, published to docs.crewlet.ai
 schema/               # GENERATED JSON Schema for both config tiers. Emitted by
                       #   `crewlet schema <tier>`; a test regenerates and
                       #   compares, so never hand-edit — change the Go models
-rewrite/              # The rewrite record: decisions/ and questions/. Why the
-                      #   engine is shaped this way. See rewrite/README.md
+decisions/            # The design record. Why the engine is shaped the way
+                      #   it is, and what the obvious alternative cost. Cited
+                      #   from the code it governs. See decisions/README.md
 skills/               # FOUNDER-facing authoring skills for an AI assistant
 scripts/              # The three vendor dev-loop bootstraps (bash)
 ```
 
 ### The packages, and the one thing each is for
 
-**Every package states its own rationale in its package doc.** `go doc ./internal/coord` is the authority on coordination, not this file — what follows is a map, so you know which doc to read. Where a decision would be tempting to "fix" back to the obvious shape, it is written up under `rewrite/decisions/`.
+**Every package states its own rationale in its package doc.** `go doc ./internal/coord` is the authority on coordination, not this file — what follows is a map, so you know which doc to read. Where a decision would be tempting to "fix" back to the obvious shape, it is written up under `decisions/`.
 
 *The spine — what everything else is built on:*
 
@@ -187,7 +188,7 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 | `agent/skills` | Prompt fragments admitted from the knowledge base and injected per phase, plus the load-before-use guard |
 | `agent/builtin` | The tools the engine itself ships |
 | `tools` | The registry, holding four kinds of tool under one contract and recording WHICH at registration — the only frame that knows, and the last that can say |
-| `mcp` | MCP client and child supervision. A stdio server is a process TREE, not a process. See `rewrite/decisions/602` |
+| `mcp` | MCP client and child supervision. A stdio server is a process TREE, not a process. See `decisions/602` |
 | `providers/llm` | The model contract. It does NOT retry (rotation belongs to the credential pool, fallback to the chain) and does NOT decide what a failure means beyond a coarse kind |
 | `sandbox` | Code work as a suspended Execute phase. A coding run is DETACHED: the tool starts it, the loop suspends, and the engine resumes that same loop — minutes later, possibly after a restart, possibly on another node. Nothing parks a goroutine on a running job |
 | `learning` | What a seat remembers. Everything here is BEST EFFORT by design: a failed write is logged, a failed read answers empty |
@@ -265,7 +266,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 4. **Task Engine** — execution tracking, external PM tool integration
 5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Plane page search) + per-agent diary
-7. **Communication** — external chat (Mattermost) + ephemeral A2A channels. The three vendors this build serves are Mattermost, Plane and GitLab (`rewrite/decisions/701`); their SaaS alternates are config surfaces the engine refuses rather than serves
+7. **Communication** — external chat (Mattermost) + ephemeral A2A channels. The three vendors this build serves are Mattermost, Plane and GitLab (`decisions/701`); their SaaS alternates are config surfaces the engine refuses rather than serves
 8. **Notification Service** — queue-based spine, vendors on top
 9. **Provider Layer** — pluggable LLM and embeddings, with a credential pool and a fallback chain around them
 10. **Store** — the node's own embedded database (Turso, or mainline SQLite); coordination lives in the KV layer instead, never here

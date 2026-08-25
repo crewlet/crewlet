@@ -68,8 +68,8 @@ CREATE TABLE secret_values (
 -- Unlike company_config this table has NO plaintext mode: a keyring is
 -- required to read or write a row. There is no legacy corpus to stay
 -- compatible with, and a dedicated secret store that can hold unencrypted
--- secrets is a footgun with no upside. Reads FAIL CLOSED (REWRITE_PLAN
--- §15) — an unreadable secret must raise, because "" becomes an empty
+-- secrets is a footgun with no upside. Reads FAIL CLOSED — an unreadable
+-- secret must raise, because "" becomes an empty
 -- Bearer token hours later and somewhere else entirely.
 
 CREATE INDEX secret_values_updated_at_idx

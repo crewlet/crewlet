@@ -3,12 +3,12 @@
 -- This is the END STATE, not a replay of the Postgres tree's 31 forward
 -- migrations. Those files are the inventory of what exists and why; the
 -- history that produced them belongs to a database this binary will never
--- open (see REWRITE_PLAN D15: deployments stand up fresh).
+-- open: a deployment stands up fresh, with no data migration from it.
 --
 -- Every statement here must parse on BOTH certified drivers — Turso and
 -- mainline SQLite — because Turso's dialect is the narrower of the two and
 -- the dual-driver test job is the only thing that catches a divergence
--- (rewrite/decisions/002). Three conventions follow from that, plus one
+-- (decisions/002). Three conventions follow from that, plus one
 -- from the engine owning its own clock:
 --
 --   * TIMESTAMPTZ  -> INTEGER, microseconds since the Unix epoch, UTC.

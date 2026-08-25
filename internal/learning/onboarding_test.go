@@ -647,7 +647,7 @@ func TestAFailedClaimIsAClaimNotTaken(t *testing.T) {
 		t.Fatal("a claim against a dead store reported no error")
 	}
 	if p.Held() {
-		// Fail-closed (REWRITE_PLAN §15): a caller reading only Held() must
+		// Fail-closed: a caller reading only Held() must
 		// skip, because two engines running onboarding at once costs far
 		// more than one turn's delay.
 		t.Error("a failed claim came back HELD — the pass would run on unknown state")

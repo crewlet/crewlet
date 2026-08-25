@@ -39,8 +39,7 @@ const ReflectTool = "reflect_and_persist"
 // turn this process already reflected on is not a case worth spending memory
 // against. The guard is per PROCESS and deliberately not durable — a second
 // node reflecting the same turn writes a second diary row, which is the
-// bounded duplication the engine promises rather than exactly-once (REWRITE
-// PLAN §16).
+// bounded duplication the engine promises rather than exactly-once.
 const ReflectSeen = 1024
 
 // turnCompletedTopic is the subject completed turns arrive on.
@@ -61,7 +60,7 @@ type Turn struct {
 	// publishing its own events links them to the turn that caused them.
 	// It lives on the envelope, never on the payload, so it has to be
 	// handed down explicitly — an ambient one is what the Go rewrite
-	// deleted (rewrite/decisions/000).
+	// deleted (decisions/000).
 	Trace events.TraceContext
 }
 

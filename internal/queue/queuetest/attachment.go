@@ -241,8 +241,7 @@ func (s *suite) runAttachment(t *testing.T) {
 			// one line could have told them.
 			close(release)
 			t.Fatalf("Detach blocked on an in-flight handler for %s.\n"+
-				"A fenced detach abandons a running handler; only Quiesce waits for one.\n"+
-				"See rewrite/questions/queue-contract-detach-and-in-flight-handlers.md", settleFor)
+				"A fenced detach abandons a running handler; only Quiesce waits for one.", settleFor)
 		}
 		close(release)
 		awaitSignal(t, published, "the deferral to be applied", func() {})

@@ -4,7 +4,7 @@ package api_test
 //
 // The dashboard was not rewritten. It is a zero-build ES-module app that
 // talks to the server over one WebSocket, and the wire protocol it expects is
-// FROZEN (rewrite/decisions/502): the client ships unchanged and wins any
+// FROZEN (decisions/502): the client ships unchanged and wins any
 // disagreement about what a frame contains. That makes its ~350-assertion
 // JavaScript suite the compatibility reference for the client's half of the
 // contract — the only place the shape the browser actually parses is written

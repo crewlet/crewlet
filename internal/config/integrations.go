@@ -63,7 +63,7 @@ func (i *Integrations) validate(path string) error {
 //
 // The engine wires exactly three vendors — Mattermost for chat, Plane for the
 // tracker and the knowledge base, GitLab for the code host
-// (rewrite/decisions/701). The other four have config models, webhook routes
+// (decisions/701). The other four have config models, webhook routes
 // and generated schema, and no parser, no transport and no searcher behind
 // them: startNotifications builds its parser and prompt lists from those three
 // blocks alone.

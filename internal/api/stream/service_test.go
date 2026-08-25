@@ -60,7 +60,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// map keyed by role and passed for it — while store.js guards
 	// applyAgents with Array.isArray and DISCARDED every push, so a full
 	// turn ran with the seat rendered idle from start to finish. The
-	// client is the compatibility reference (rewrite/decisions/502), so
+	// client is the compatibility reference (decisions/502), so
 	// the assertion is written the way the client reads the frame.
 	rows, ok := agents.Data.([]map[string]any)
 	if !ok {

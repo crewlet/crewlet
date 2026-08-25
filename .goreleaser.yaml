@@ -2,7 +2,7 @@
 #
 # A release is still one command — `git tag v1.2.0 && git push origin v1.2.0`
 # — but what a tag produces is now a set of binaries rather than a package on
-# an index. See rewrite/decisions/901-release-tooling.md for why goreleaser,
+# an index. See decisions/901-release-tooling.md for why goreleaser,
 # and RELEASING.md for the runbook.
 #
 # THE TAG IS THE VERSION. Nothing in the tree records it: the tag is stamped

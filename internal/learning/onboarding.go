@@ -253,7 +253,7 @@ func (o *Onboarding) Mark(ctx context.Context, m Marker, at time.Time) error {
 // Claim takes the single-flight lease on one seat's onboarding pass.
 //
 // A held Pass means run the pass; the zero Pass means somebody else already
-// is, so skip. FAILS CLOSED (REWRITE_PLAN §15): an error yields the zero
+// is, so skip. FAILS CLOSED: an error yields the zero
 // Pass, so a caller that only reads Held() still skips. Running a
 // possibly-duplicate onboarding is the expensive mistake here — two engines
 // re-reading the same pages and writing the same conventions — and not

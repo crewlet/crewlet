@@ -79,7 +79,7 @@ type attachment struct {
 // fresh one when it is not. Closing is what returns everything unacked and
 // everything prefetched, in order, at redeliveryCount 0 — measured at 1.8 ms
 // to close and 8.6 ms to receive it again on a fresh consumer
-// (rewrite/decisions/104-pulsar-redelivery-economics.md). It is the same
+// (decisions/104-pulsar-redelivery-economics.md). It is the same
 // mechanism for all four reasons a consumer can be blocked, which is why
 // there is only one of it.
 func (a *attachment) blocked() bool {
@@ -483,7 +483,7 @@ const (
 // often enough would eventually die having never failed. On Pulsar there is a
 // third option and it costs nothing, so this backend takes it: leave it
 // unacked and let the close hand it back
-// (rewrite/decisions/102-jetstream-redelivery.md — the free handoff JetStream
+// (decisions/102-jetstream-redelivery.md — the free handoff JetStream
 // does not have, which is why Capabilities.FreeDeferral is a capability).
 func actionFor(outcome queue.Outcome) brokerAction {
 	switch outcome {

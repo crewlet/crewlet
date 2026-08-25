@@ -76,7 +76,7 @@
 // changes from silent mixed-protocol operation to a claim we immediately give
 // back. Combined with the gate's existing asymmetry — only newer nodes wait,
 // older ones were never gated — that is a faithful degradation and a recorded
-// difference, not an oversight (rewrite/decisions/201-coordination-contract.md
+// difference, not an oversight (decisions/201-coordination-contract.md
 // §3).
 package kv
 
@@ -113,7 +113,7 @@ var (
 
 const (
 	// defaultBucketPrefix yields crewlet_leases and crewlet_epochs, the
-	// names rewrite/decisions/201 records.
+	// names decisions/201 records.
 	defaultBucketPrefix = "crewlet"
 
 	leasesSuffix = "_leases"

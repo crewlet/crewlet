@@ -76,7 +76,7 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 			signature, now)
 	}
 	// ONE SCHEME. A delivery without a valid signature is refused —
-	// see rewrite/decisions/702.
+	// see decisions/702.
 	//
 	// There used to be a fallback to the plaintext X-Gitlab-Token, on the
 	// measured premise that gitlab-ee 19.3.0 sent no `webhook-signature`

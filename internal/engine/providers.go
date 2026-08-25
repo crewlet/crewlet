@@ -2,8 +2,8 @@
 // config, the org, the models, the tools, and the turn machinery that runs
 // between them.
 //
-// It is the ENTANGLEMENT POINT the rewrite plan names, and the reason it is a
-// package of small files rather than one large one. Python's equivalent was a
+// It is the ENTANGLEMENT POINT, and the reason it is a package of small files
+// rather than one large one. Python's equivalent was a
 // 7,500-line module whose two hardest passages — the inbox handler and the
 // config apply — could only be read by scrolling past everything else. Here
 // each of those is a package of its own (internal/agent/inbox, and the config

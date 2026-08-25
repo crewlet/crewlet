@@ -199,6 +199,12 @@ The pages under `docs/` are the source of truth and are published to
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
 
+`docs/` is written for people *running* Crewlet. Reasoning aimed at people
+*changing* it goes in a package doc, where `go doc` surfaces it beside the
+code — or, when a change makes a call a future reader would plausibly reverse,
+in [`decisions/`](decisions/README.md). Cite a decision from the code it
+governs: one nothing points at is one nobody will find.
+
 ## Commit messages
 
 Commit subjects follow the [Conventional Commits](https://www.conventionalcommits.org/)

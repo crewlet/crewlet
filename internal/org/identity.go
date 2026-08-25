@@ -32,7 +32,7 @@ import (
 // memory. Treat as load-bearing.
 //
 // The value is carried over from the Python engine. The rewrite is a clean
-// break with no data migration (D15), so nothing requires this specific
+// break with no data migration, so nothing requires this specific
 // namespace — but keeping it costs nothing and leaves the door open for
 // anyone who does want to carry a company's memory across.
 var agentIDNamespace = uuid.MustParse("c1ea9c6e-3f5d-4c9c-9e9f-1d2c3b4a5e6f")

@@ -38,7 +38,7 @@ import (
 // subscription, so a new observable is covered here by default rather than
 // needing a new case.
 //
-// BEFORE ADDING A "MUST NOT" CASE HERE, GREP rewrite/decisions/ FOR THE
+// BEFORE ADDING A "MUST NOT" CASE HERE, GREP decisions/ FOR THE
 // OPERATION. A recorded degradation is a permitted exception, and the corpus is
 // where permission lives — a case that forbids what a decision allows makes a
 // correct backend look broken, and the author who investigates pays far more
@@ -171,7 +171,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// A deferral that charged one would leave only one.
 		if !s.caps.FreeDeferral {
 			t.Skip("backend implements deferral with a nak, which costs one " +
-				"delivery count by design (rewrite/decisions/102, decisions 1-2)")
+				"delivery count by design (decisions/102, decisions 1-2)")
 		}
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)

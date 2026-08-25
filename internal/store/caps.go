@@ -8,7 +8,7 @@ import (
 // Capabilities records what the live driver can actually do, measured at Open
 // rather than assumed from a version number.
 //
-// The three answers here are the ones rewrite/decisions/002 found the docs and
+// The three answers here are the ones decisions/002 found the docs and
 // the code disagreeing about: Turso ships the vector column type and the
 // distance functions, but its ANN index and its full-text index are announced
 // surface not yet reachable from Go. Each feature sits behind exactly one

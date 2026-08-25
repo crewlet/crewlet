@@ -75,7 +75,7 @@ func TestConformance(t *testing.T) {
 			StrictRoundRobin: true,
 			// Pulsar-shaped replay: a NAK returns the event to the head,
 			// ahead of what queued behind it. The engine no longer
-			// depends on it (see rewrite/decisions/102), but the fleet
+			// depends on it (see decisions/102), but the fleet
 			// suite runs against this twin, so the twin must not quietly
 			// stop modelling the broker it was built to model.
 			// A deferral here returns the events untouched: nothing is

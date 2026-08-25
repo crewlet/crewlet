@@ -15,7 +15,7 @@ var watchLog = logging.Get("seat.watchdog")
 
 // The watchdog's own cadence. Both are CEILINGS, scaled down against the
 // threshold — see [Host.beatInterval] for the other half of the same
-// rule and rewrite/decisions/301-watchdog.md for why the threshold is not a
+// rule and decisions/301-watchdog.md for why the threshold is not a
 // knob.
 const (
 	// WatchdogBeatInterval is the fastest a watched duty needs to prove it

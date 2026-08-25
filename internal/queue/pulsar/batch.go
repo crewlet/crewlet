@@ -32,9 +32,9 @@ func eventOf(d delivery) *events.Event { return d.ev }
 // ConsumerOptions.AckTimeout, no client-side unacked tracker — and Pulsar has
 // no broker-side one for a connected consumer. A fetched message stays this
 // consumer's until it acks, naks, or the consumer closes. So the clock the
-// budget was racing does not exist, and REWRITE_PLAN §14B's own note on it
-// ("exists ONLY because Pulsar's ack clock starts at receive — may be
-// deletable") resolves to: deleted.
+// budget was racing does not exist. The budget existed ONLY because the
+// previous engine believed Pulsar's ack clock started at receive; measured
+// against this client, it does not, and the budget is deleted.
 //
 // Deleting it also removes the requeue-by-republish path, which d-101 §1
 // forbids anyway ("Never substitute a republish: that sends the event to the

@@ -9,7 +9,7 @@
 // goroutine shares whatever it captured. The same pattern that merely obscured
 // a dependency in Python is a live data race here.
 //
-// So (rewrite/decisions/401) a turn's inputs are an argument. The type is named
+// So (decisions/401) a turn's inputs are an argument. The type is named
 // TurnContext there; here it is [Turn], because turnctx.TurnContext stutters and
 // the package name already says what it is.
 //
@@ -22,7 +22,7 @@
 //
 // The config pin is deliberately NOT one of them: a turn reading config through
 // an ambient channel is how a mid-turn reload gets observed halfway, which is
-// the failure immutable epochs exist to remove (rewrite/decisions/404).
+// the failure immutable epochs exist to remove (decisions/404).
 package turnctx
 
 import (

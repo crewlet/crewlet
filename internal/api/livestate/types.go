@@ -1,7 +1,7 @@
 package livestate
 
 // The wire shapes. Every json tag here is part of the frozen dashboard
-// protocol (rewrite/decisions/502-dashboard-wire-protocol.md): the client ships
+// protocol (decisions/502-dashboard-wire-protocol.md): the client ships
 // unchanged and is the compatibility reference, so a renamed field is a broken
 // dashboard, not a refactor.
 
