@@ -14,9 +14,13 @@ import (
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
 // fakeRuntime is a co-located engine's answers, fixed.
-type fakeRuntime struct{ state api.RuntimeState }
+type fakeRuntime struct {
+	state api.RuntimeState
+	tools []api.ToolInfo
+}
 
 func (f *fakeRuntime) Snapshot() api.RuntimeState { return f.state }
+func (f *fakeRuntime) Tools() []api.ToolInfo      { return f.tools }
 
 func newApp(t *testing.T, opts api.Options) *api.App {
 	t.Helper()

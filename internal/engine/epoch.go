@@ -151,6 +151,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	log.InfoContext(ctx, "config_applied",
 		"company", next.Config.Name, "seats", len(next.Seats()),
 		"previous_seats", seatCount(previous))
+	// LAST, after the epoch is current and everything derived from it has
+	// been rebuilt, so a surface that reads the company on this signal
+	// reads the one now serving rather than the one being replaced.
+	e.notifyApplied(ctx)
 	return configplane.StatusOK, nil
 }
 

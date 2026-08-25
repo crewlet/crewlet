@@ -83,4 +83,34 @@ type RuntimeState struct {
 // know". Without the distinction a dashboard renders a confident zero for both.
 type NodeRuntime interface {
 	Snapshot() RuntimeState
+
+	// Tools is the tool catalogue this node serves, for the dashboard's
+	// tool screen.
+	//
+	// A SECOND METHOD rather than a field on RuntimeState, because
+	// Snapshot is called on every health tick and this is the one answer
+	// that is expensive to build — a company's catalogue is hundreds of
+	// entries once its MCP servers are up, and rebuilding it every few
+	// seconds to throw it away is work nobody asked for. Two methods on
+	// one seam still keeps the standalone/embedded difference in one
+	// place, which is what d-501 is about.
+	//
+	// Nil slice is "this node serves none", which for a co-located engine
+	// is a real claim; a standalone API has no NodeRuntime at all and the
+	// surface is simply absent.
+	Tools() []ToolInfo
+}
+
+// ToolInfo is one catalogue entry on the wire.
+//
+// The field names are the CLIENT's — name, description, source — because the
+// dashboard is the compatibility reference for a frame's shape (d-502) and it
+// groups the tool screen by `source`.
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+
+	// Source is "builtin" or the MCP server that serves it, which is
+	// exactly the grouping the tool screen renders.
+	Source string `json:"source"`
 }

@@ -62,6 +62,11 @@ type Service struct {
 	// with no org honestly has.
 	handles HandleFunc
 
+	// roster, org and tools are the config-derived surfaces. See Options.
+	roster func() []map[string]any
+	org    func() map[string]any
+	tools  func() []map[string]any
+
 	now      func() time.Time
 	interval time.Duration
 
@@ -87,6 +92,25 @@ type Options struct {
 	// no link.
 	Handles HandleFunc
 
+	// Roster, Org and Tools are the three surfaces the dashboard renders
+	// from CONFIGURATION rather than from anything that has happened.
+	//
+	// The projection cannot answer any of them: it holds what a seat is
+	// DOING, so it can say a seat is mid-Plan and not that the seat
+	// exists. Snapshot used to ask it for the agent list anyway, merging
+	// the live overlay onto a static roster of nil — an empty list, every
+	// connect, for ever on a company whose model was not answering.
+	//
+	// Functions, not values, for the same reason Handles is one: an apply
+	// replaces the company, and a roster captured at boot would keep
+	// showing a role a revision deleted.
+	//
+	// Nil is an empty surface rather than a fault: a standalone API has no
+	// engine to ask for tools, and that screen says so.
+	Roster func() []map[string]any
+	Org    func() map[string]any
+	Tools  func() []map[string]any
+
 	// Now is injectable so a test can pin the timestamps envelopes carry.
 	Now func() time.Time
 
@@ -107,6 +131,9 @@ func NewService(state *livestate.LiveState, opts Options) *Service {
 		state:    state,
 		health:   opts.Health,
 		handles:  opts.Handles,
+		roster:   opts.Roster,
+		org:      opts.Org,
+		tools:    opts.Tools,
 		now:      opts.Now,
 		interval: opts.HealthInterval,
 	}
@@ -176,13 +203,53 @@ func (s *Service) Ingest(env livestate.Envelope) {
 // thirty-day scan per tab, and would lose any call mid-flight while it did.
 func (s *Service) Snapshot() map[string]any {
 	return map[string]any{
-		"health":    s.currentHealth(),
-		"agents":    s.state.MergeAgents(nil),
+		"health": s.currentHealth(),
+		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
+		// MergeAgents walks what it is GIVEN, so passing nil here — which
+		// it did — produced an empty list whatever the projection held.
+		"agents":    s.state.MergeAgents(s.currentRoster()),
+		"org":       s.currentOrg(),
+		"tools":     s.currentTools(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
 		"sandboxes": s.state.ActiveSandboxes(),
 		"tokens":    s.TokenRollup(),
 		"budget":    s.state.Budget(),
 	}
+}
+
+// Roster is the company's seat list as the `seats` push carries it.
+//
+// Exported because a config apply has to re-send it: the client's own doc
+// says a merge cannot express a deletion, so a revision that removed a role
+// would leave its card on screen until someone reloaded the page.
+func (s *Service) Roster() []map[string]any { return s.state.MergeAgents(s.currentRoster()) }
+
+// Org is the company's role and unit tree, for the same re-send.
+func (s *Service) Org() map[string]any { return s.currentOrg() }
+
+// Tools is this node's catalogue, for the same re-send. It changes on an
+// apply too — a revision that adds an MCP server adds its tools.
+func (s *Service) Tools() []map[string]any { return s.currentTools() }
+
+func (s *Service) currentRoster() []map[string]any {
+	if s.roster == nil {
+		return nil
+	}
+	return s.roster()
+}
+
+func (s *Service) currentOrg() map[string]any {
+	if s.org == nil {
+		return map[string]any{}
+	}
+	return s.org()
+}
+
+func (s *Service) currentTools() []map[string]any {
+	if s.tools == nil {
+		return nil
+	}
+	return s.tools()
 }
 
 // Broadcast pushes an envelope to every client, for the surfaces that own their

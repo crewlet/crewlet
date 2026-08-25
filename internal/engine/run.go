@@ -52,6 +52,11 @@ type Engine struct {
 	// control plane. Nil publishes none — see [Engine.SetPosture].
 	posture atomic.Pointer[func(context.Context) string]
 
+	// onApplied is run after each apply publishes its epoch, for the
+	// surfaces derived from configuration. Nil runs nothing — see
+	// [Engine.SetOnApplied].
+	onApplied atomic.Pointer[func(context.Context)]
+
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
 	// requeues and pauses through, so holding "the ones I use" and "do I
@@ -682,3 +687,29 @@ func (e *Engine) StartedAt() time.Time { return e.startedAt }
 //
 // The context is the beat's, already bounded — see [seat.Config].Status.
 func (e *Engine) SetPosture(fn func(context.Context) string) { e.posture.Store(&fn) }
+
+// SetOnApplied registers a hook run after every config apply publishes its
+// epoch, for surfaces that render the COMPANY rather than its activity.
+//
+// The dashboard's roster, org tree and tool catalogue are all derived from
+// configuration, so nothing that happens afterwards will correct them: a
+// revision that adds a role, renames one, or removes one changes all three
+// and produces no event a projection could learn from. Without this, an open
+// dashboard kept rendering the company it connected to until someone
+// reloaded the page — and the client cannot paper over a deletion either,
+// because an overlay merge has no way to express a row going away.
+//
+// A SETTER for the same reason SetPosture is one: the API half is built after
+// the engine, so there is no moment at construction when a real wiring could
+// pass one.
+//
+// Safe to call while the engine is running, and safe to leave unset — an
+// engine with no hook applies exactly as before.
+func (e *Engine) SetOnApplied(fn func(context.Context)) { e.onApplied.Store(&fn) }
+
+// notifyApplied runs the hook, if one is set.
+func (e *Engine) notifyApplied(ctx context.Context) {
+	if fn := e.onApplied.Load(); fn != nil && *fn != nil {
+		(*fn)(ctx)
+	}
+}

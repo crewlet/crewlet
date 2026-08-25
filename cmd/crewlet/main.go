@@ -568,6 +568,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "reads serve without a token on an address other machines "+
 				"can reach; set api.auth.allow_anonymous_read to false to close them")
 	}
+	// THE CONFIG-DERIVED SURFACES, re-sent whenever an apply changes them.
+	//
+	// The roster, the org tree and the tool catalogue all come from the
+	// company document, so no event will ever correct them: a revision
+	// that adds, renames or removes a role produces nothing a projection
+	// could learn from, and an overlay merge cannot express a deletion at
+	// all. Without this an open dashboard renders the company it connected
+	// to until someone reloads.
+	//
+	// Registered after the app exists, which is the whole reason it is a
+	// setter — see Engine.SetOnApplied.
+	e.SetOnApplied(func(context.Context) {
+		app.Stream().Broadcast("seats", app.Stream().Roster())
+		app.Stream().Broadcast("org", app.Stream().Org())
+		app.Stream().Broadcast("tools", app.Stream().Tools())
+	})
+
 	return &httpSurface{app: app, server: server, projector: projector}, nil
 }
 
@@ -583,6 +600,35 @@ const apiReadHeaderTimeout = 10 * time.Second
 type engineRuntime struct {
 	engine     *engine.Engine
 	reconciler *engine.Reconciler
+}
+
+// Tools is the catalogue this node serves, for the dashboard's tool screen.
+//
+// THE EPOCH'S SHARED CATALOGUE, not a seat's. A per-role MCP server gives each
+// seat its own child and its own registry, so there is no single "the tools" a
+// company has — and picking one seat's would render a catalogue that is right
+// for one row of the agent screen and wrong for the rest. The shared surface
+// is the one every seat has, which is the honest answer to "what does this
+// company run".
+func (r engineRuntime) Tools() []api.ToolInfo {
+	company := r.engine.Company()
+	if company == nil || company.Tools == nil {
+		return nil
+	}
+	entries := company.Tools.List()
+	out := make([]api.ToolInfo, 0, len(entries))
+	for _, entry := range entries {
+		source := "builtin"
+		if server, ok := entry.FromMCP(); ok {
+			source = server
+		}
+		out = append(out, api.ToolInfo{
+			Name:        entry.Name(),
+			Description: entry.Tool.Description(),
+			Source:      source,
+		})
+	}
+	return out
 }
 
 func (r engineRuntime) Snapshot() api.RuntimeState {

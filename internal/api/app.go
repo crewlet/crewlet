@@ -130,7 +130,13 @@ func New(opts Options) *App {
 		// reason every other read here is: a config apply replaces the
 		// company, and a map captured at boot would keep cross-linking a
 		// renamed seat to the handle it used to have.
-		Handles:        opts.Sources.RoleHandles,
+		Handles: opts.Sources.RoleHandles,
+		// The three config-derived surfaces, read live for the same
+		// reason Handles is: an apply replaces the company.
+		Roster: func() []map[string]any { return roster(opts.Sources.Company, opts.Runtime) },
+		Org:    func() map[string]any { return orgTree(opts.Sources.Company) },
+		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
+
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})

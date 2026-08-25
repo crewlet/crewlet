@@ -199,6 +199,32 @@ The REST endpoints below remain a public read API, and
 upgrade to a WebSocket (corporate proxies). They are no longer part of
 the dashboard's normal operation.
 
+### What the handshake snapshot carries
+
+One frame, `kind: "snapshot"`, with every section a screen needs on first
+paint. Three of them are derived from **configuration** rather than from
+anything that has happened, and they are present from the moment the socket
+opens — before a single turn has run:
+
+| Section | What it is |
+|---|---|
+| `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
+| `org` | The role and unit tree, **verbatim** as the company document holds it: root-level `roles` plus `units` nesting to any depth. The client walks it and reads the config's own field names, so it is not reshaped on the way out |
+| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Absent on a standalone API, which has no engine to ask |
+| `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
+
+A seat carries `state: "idle"` when **this node** is serving it. A seat it
+does not hold carries no state at all and the dashboard reads that as
+`offline` — which is right for a seat nothing has claimed, and is this node
+declining to claim knowledge of a seat a peer may be running. [Fleet](#fleet)
+answers "who holds what" from the lease table, which is the one place that
+knows.
+
+The three config-derived sections are **re-sent on every config apply**, as
+`seats`, `org` and `tools` pushes. Nothing else would correct them: a
+revision that adds, renames or removes a role produces no event a projection
+could learn from, and an overlay merge cannot express a row going away.
+
 ### Live-state projection (`api/stream` + `LiveState`)
 
 The API process maintains an **in-memory projection** of every agent's
