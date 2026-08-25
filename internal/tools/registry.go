@@ -102,6 +102,32 @@ func NewRegistry() *Registry {
 	return &Registry{byName: make(map[string]Entry)}
 }
 
+// Clone returns an independent registry holding the same entries.
+//
+// A SEAT'S SURFACE STARTS AS THE COMPANY'S, and then diverges: every seat sees
+// the builtins and the shared MCP servers, and only its own per-role children
+// on top. One flat registry cannot express that, and the failure is not
+// cosmetic — a `shared: false` server is a template that gives each role its
+// own child holding that role's credentials, and two children of one template
+// publish the SAME tool names. In one registry the second shadows the first,
+// so every seat would call whichever won, acting under another seat's identity
+// in the tracker or the chat backend, invisibly. See internal/mcp/instance.go.
+//
+// The entries are copied, not the tools: a Callable is shared by reference,
+// which is what makes a clone per seat cheap rather than a duplicate surface.
+func (r *Registry) Clone() *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := &Registry{
+		byName: make(map[string]Entry, len(r.byName)),
+		order:  slices.Clone(r.order),
+	}
+	for name, e := range r.byName {
+		out.byName[name] = e
+	}
+	return out
+}
+
 // ErrDuplicate reports a name already registered.
 type ErrDuplicate struct{ Name, Existing, Incoming string }
 

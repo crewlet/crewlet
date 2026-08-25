@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/a2a"
@@ -30,7 +31,7 @@ import (
 // anyway — publishes a company whose agents cannot look up a colleague or
 // recall their own work, which looks from the outside like a model that has
 // stopped trying rather than a node that is missing half its tool surface.
-func (e *Engine) equip(c *Company) error {
+func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
@@ -55,6 +56,16 @@ func (e *Engine) equip(c *Company) error {
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
+	// THE SHARED MCP SERVERS, into the same registry and straight after
+	// the builtins, because this is the surface every seat's is cloned
+	// from. Per-role children are NOT here: they belong to a seat's lease
+	// rather than to the epoch, and this node holds only some of the
+	// company's seats — see mcp.go.
+	//
+	// A server that will not start does not fail the apply. It costs that
+	// server's tools; refusing the epoch over it would take a working
+	// company down because one vendor's binary was missing.
+	e.startSharedServers(ctx, c)
 	// The operator's ${var} map is CONFIG, so it is refreshed per epoch —
 	// unlike the skills themselves, which come from the knowledge base and
 	// outlive one. A variable a revision removed then surfaces here rather

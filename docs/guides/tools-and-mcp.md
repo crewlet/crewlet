@@ -172,10 +172,46 @@ Inheritance: the unit's `mcp_env` is the base, role values override per key. The
 
 ---
 
-## Global vs Per-Role MCP Servers
+## Shared vs per-role servers
 
-- **Global servers** — launched once, shared by all agents. Tools are registered in the global `ToolRegistry`. Use for servers that don't need per-agent identity (e.g., a shared knowledge base).
-- **Per-role instances** — launched with the role's merged env vars. Tools are stored in `_role_mcp_tools` and only available to agents with that role. Use for servers where each agent needs its own identity (e.g., Jira, Slack, GitHub).
+`shared:` decides which of two quite different things a server is, and the
+difference is a lifetime as much as a scope.
+
+| | `shared: true` (default) | `shared: false` |
+|---|---|---|
+| What it is | One child for the company | A **template**: one child per role that declares credentials for it |
+| Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
+| Who can call it | Every seat | Only the seat whose child it is |
+| Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it |
+| Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
+
+**A per-role child belongs to a seat, not to a node.** In a fleet each node
+claims a slice of the company, and it spawns children only for the seats it
+holds — so the company's processes are spread across the fleet rather than run
+N times over. It also means a seat that moves to a peer takes its identity with
+it: the credentials in a child *are* that seat, and one left running after the
+lease moved would let the old node keep acting as an agent it no longer serves.
+
+**Each seat gets its own surface**, and that is a correctness property rather
+than tidiness. Two children of one template publish the *same tool names*, so a
+single shared catalogue would keep whichever registered last and hand it to
+everyone — every seat calling one child, acting under one agent's identity in
+the tracker, invisibly, because the call looks identical from the engine's
+side. A claimed seat therefore gets its own registry (the company's catalogue
+plus its own children's tools) and its own bridge (holding only its own
+children).
+
+**A seat that declares no `mcp_env` for a template gets no child.** A template
+with nobody's identity in it is a server nobody can act through, and offering
+its tools anyway would put entries in the prompt whose every call fails
+authentication.
+
+**A server that will not start costs its own tools and nothing else.** The seat
+keeps its builtins, the other servers keep working, and the operator sees that
+server's **group missing** from the Tools room — which points at the right
+subsystem, where builtins quietly shrinking would not. It is logged as
+`mcp_server_failed` with the reason. Failing the apply instead would take a
+working company offline because one vendor's binary was absent from an image.
 
 ---
 

@@ -633,6 +633,15 @@ const waiterDutyTTL = 3 * sandbox.DefaultPollInterval
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
 // and start listening for their completions, BEFORE its mailbox opens.
 func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, owner string) error {
+	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
+	// that everything the first turn needs is ready before the mailbox
+	// opens. A seat that started consuming before its per-role children
+	// were up would run its first turn with a surface missing exactly the
+	// tools it acts through.
+	company := e.Company()
+	if reg := e.startSeatServers(ctx, company, handle); reg != nil {
+		company.setSeatTools(handle, reg)
+	}
 	if e.sandboxCoordinator == nil {
 		return nil
 	}
@@ -664,6 +673,13 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 // while the seat is between owners must be held for its successor, and the box
 // it refers to is still real.
 func (e *Engine) releaseSeat(ctx context.Context, handle string) {
+	// The seat's children die with its lease. The credentials in one ARE
+	// that seat's identity, so a child left running would let this node go
+	// on acting as a seat a peer has taken over — and the surface goes
+	// with them, so nothing here can serve a turn through a dead client.
+	company := e.Company()
+	e.stopSeatServers(ctx, handle)
+	company.dropSeatTools(handle)
 	if e.sandboxCoordinator == nil {
 		return
 	}

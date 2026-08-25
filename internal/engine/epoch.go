@@ -89,7 +89,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// turn can start the instant the pointer moves, and a revision that
 	// silently dropped every builtin would look like a model that stopped
 	// using its tools.
-	if err := e.equip(next); err != nil {
+	if err := e.equip(ctx, next); err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the revision built but could not be equipped with this "+
 				"node's tools; the previous epoch is still current")

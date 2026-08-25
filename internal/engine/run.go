@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -116,6 +118,19 @@ type Engine struct {
 	// and leave seats running without their company's guidance until the
 	// next sync walk — which on a webhook-driven sync could be never.
 	skills *skills.Registry
+
+	// mcp supervises every MCP child this NODE runs — the company's shared
+	// servers and the per-role children of the seats it holds. One per
+	// engine rather than one per epoch: the children are processes, and an
+	// apply that replaced the bridge would orphan every one of them.
+	mcp *mcp.Bridge
+
+	// seatMCP is one bridge per seat this node holds, for that seat's
+	// per-role children. Separate from the shared bridge above because a
+	// bridge's catalogue is keyed by tool name across its servers, and two
+	// seats' children of one template publish the same names.
+	mcpMu   sync.Mutex
+	seatMCP map[string]*mcp.Bridge
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the Plan
@@ -218,6 +233,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
+		mcp:       mcp.NewBridge(nil),
 		startedAt: time.Now().UTC(),
 	}
 	fail := func(err error) (*Engine, error) {
@@ -260,7 +276,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// current, and one that found an empty registry would run a seat with
 	// no tools at all — a company that boots cleanly and can do nothing.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.equip(company); err != nil {
+	if err := e.equip(ctx, company); err != nil {
 		return fail(err)
 	}
 	e.epoch.current.Store(company)
@@ -432,6 +448,12 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.node.Stop(ctx)
+	// AFTER the seats are released, so a per-role child is normally
+	// already gone with its seat. This is the backstop for the ones that
+	// were not: a stdio server is a process TREE holding a seat's
+	// credentials, and one left behind outlives the engine that vouched
+	// for it.
+	e.stopSharedServers(ctx)
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -33,11 +34,60 @@ type Company struct {
 	Org    *org.Organization
 	Models *phase.Registry
 
-	// Tools is the catalogue every seat's surfaces are cut from. One
-	// registry per epoch rather than per seat: MCP instances are per-role
-	// and register under distinct names, and a per-seat registry would
-	// duplicate every builtin once per seat for nothing.
+	// Tools is the catalogue every seat's surface is cut from: the
+	// builtins, plus the SHARED MCP servers, which one company-wide child
+	// serves for everyone.
+	//
+	// It is not the whole surface. A `shared: false` server is a template
+	// that gives each role its own child holding that role's credentials,
+	// and two children of one template publish the same tool names — so
+	// they cannot live in one registry without one shadowing the other and
+	// every seat calling whichever won. Per-role tools go in seatTools.
 	Tools *tools.Registry
+
+	// seatTools is one registry per seat this NODE runs, built when the
+	// seat is claimed and dropped when it is released.
+	//
+	// Only the seats this node holds: a fleet claims a slice of the
+	// company each, and a node that spawned every seat's children would
+	// run the whole company's MCP processes N times over. Absent means "no
+	// per-role children here", and [Company.ToolsFor] then serves the
+	// shared surface — which is the correct surface for a seat whose
+	// company declares no per-role server at all.
+	seatMu    sync.RWMutex
+	seatTools map[string]*tools.Registry
+}
+
+// ToolsFor is the surface one seat's turns run against.
+//
+// The seat's own registry when this node has claimed it, and the shared one
+// otherwise. Never nil: a seat with no per-role children still has the
+// builtins, and returning nil here would fail the turn rather than run it with
+// the tools it does have.
+func (c *Company) ToolsFor(handle string) *tools.Registry {
+	c.seatMu.RLock()
+	defer c.seatMu.RUnlock()
+	if reg, ok := c.seatTools[handle]; ok {
+		return reg
+	}
+	return c.Tools
+}
+
+// setSeatTools installs a claimed seat's own surface.
+func (c *Company) setSeatTools(handle string, reg *tools.Registry) {
+	c.seatMu.Lock()
+	defer c.seatMu.Unlock()
+	if c.seatTools == nil {
+		c.seatTools = make(map[string]*tools.Registry)
+	}
+	c.seatTools[handle] = reg
+}
+
+// dropSeatTools forgets a released seat's surface.
+func (c *Company) dropSeatTools(handle string) {
+	c.seatMu.Lock()
+	defer c.seatMu.Unlock()
+	delete(c.seatTools, handle)
 }
 
 // NewCompany builds an epoch from a validated config.
@@ -147,7 +197,7 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 	te := c.Config.TurnEngine
 	return runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: c.Org, Role: role},
-		Registry: c.Tools,
+		Registry: c.ToolsFor(handle),
 		Models:   c.Models,
 		Caps: runner.Caps{
 			PlanRounds:     te.PlanMaxToolRounds,
