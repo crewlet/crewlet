@@ -2,6 +2,7 @@ package phase
 
 import (
 	"fmt"
+	"iter"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -62,6 +63,22 @@ func NewRegistry(entries []Entry) (*Registry, error) {
 
 // Keys returns the configured keys in config order.
 func (r *Registry) Keys() []string { return slices.Clone(r.order) }
+
+// All yields every configured provider, in config order.
+//
+// Ordered for the same reason [Registry.Keys] is: a caller equipping every
+// backend with something — the fleet's credential ledger, at the time of
+// writing — logs what it did, and a log whose lines reshuffle per run is one
+// nobody can diff against the config that produced it.
+func (r *Registry) All() iter.Seq2[string, llm.Provider] {
+	return func(yield func(string, llm.Provider) bool) {
+		for _, key := range r.order {
+			if !yield(key, r.byKey[key]) {
+				return
+			}
+		}
+	}
+}
 
 // Has reports whether a key is configured. The config validator uses it to
 // reject a role naming a provider that does not exist — which is where that

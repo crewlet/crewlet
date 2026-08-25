@@ -5,7 +5,7 @@
 // the next lease picks a different one. When every key is benched the pool has
 // nothing to give, and the seat's fallback chain moves on to another model.
 //
-// Three things here are load-bearing:
+// Four things here are load-bearing:
 //
 //   - COOLDOWNS ARE MEASURED ON A MONOTONIC CLOCK. An NTP correction, a VM
 //     migration or container clock skew must not revive a benched key early
@@ -20,6 +20,11 @@
 //   - REPEATED AUTH FAILURES ON ONE KEY BACK OFF EXPONENTIALLY, and one
 //     success resets. A typo'd key would otherwise thrash forever: 401, bench
 //     for auth_seconds, retry, 401.
+//   - A BENCH IS A FACT ABOUT THE VENDOR, NOT ABOUT THIS PROCESS. A quota
+//     belongs to the key, so four nodes each discover a 429 on the same key
+//     separately unless one tells the others. [Pool.Share] attaches the
+//     fleet's ledger and [Pool.Refresh] pulls what peers found; both are off
+//     the request path. See fleetKey for why a shared record is scoped.
 //
 // The pool speaks [llm.ErrorKind] because that is the providers layer's one
 // failure vocabulary — llm.go defines ErrorKind.ExhaustsCredential precisely
@@ -27,6 +32,7 @@
 package credential
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -149,7 +155,72 @@ type Pool struct {
 	entries []*entry
 	policy  Policy
 	now     Clock
+
+	// wall is the WALL-CLOCK source, used only at the fleet boundary.
+	//
+	// The pool's own arithmetic never touches it — see [Clock] for why —
+	// but a cooldown shared with a peer has to name an instant that peer
+	// can also read, and "1m42s since MY process started" is not one. So a
+	// bench crosses the boundary as a wall-clock deadline and is converted
+	// straight back to a [Clock] reading on the way in.
+	wall func() time.Time
+
+	// shared is the fleet's cooldown ledger, nil on a node that has none
+	// — a single-node deployment, or any pool nothing called [Pool.Share]
+	// on. Nil means the pool behaves exactly as it did before sharing
+	// existed rather than failing: cooldowns stay this process's own.
+	shared Shared
+	// scope namespaces this pool's keys in that ledger. See fleetKey.
+	scope string
 }
+
+// Shared is the fleet's credential cooldown ledger, as this pool needs it.
+//
+// Declared here rather than imported because this is the consumer: the pool
+// needs two methods, and internal/coord's Cooldowns satisfies them. Both are
+// BEST EFFORT in the same direction — an unreachable ledger costs a peer one
+// wasted call, which is what the situation cost before any of this existed.
+type Shared interface {
+	// Cool records that a credential is unusable until the given instant.
+	Cool(ctx context.Context, key string, until time.Time) error
+	// Since returns every unlapsed cooldown across the fleet.
+	Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
+}
+
+// publishTimeout bounds the write a bench does on its way out.
+//
+// Short on purpose. It runs inside [Lease.Fail], which is on the path of a
+// request that has ALREADY failed and is about to be retried on another key;
+// a coordination store that is slow must not add itself to the latency of
+// working around a 429. Two seconds is several times the round trip of every
+// backend the contract certifies, so it fires only when the store is
+// genuinely unreachable — which is the case it exists to bound.
+const publishTimeout = 2 * time.Second
+
+// refreshTolerance is how much longer a peer's cooldown must run than the
+// local bench before [Pool.Refresh] takes it as new information.
+//
+// The two clocks disagree slightly and drift between ticks, so re-reading the
+// SAME record yields a target a hair either side of what it produced last
+// time. Without a floor, half of those land on "longer" and the pool reports
+// a peer-imposed bench on every refresh for as long as the record lives. A
+// second is far below the shortest cooldown an operator can configure (60 s,
+// internal/config/providers.go minCooldownSeconds) and far above the skew of
+// two clocks a few seconds apart.
+const refreshTolerance = time.Second
+
+// fleetKey is one credential's name in the shared ledger.
+//
+// SCOPED BY THE POOL, not bare, because a pool is what benches: a 429 is
+// scoped to a vendor's rate-limit bucket, and one config entry is exactly the
+// (model, endpoint, key bag) triple that shares one. An operator who lists the
+// same key under a fast entry and a smart entry has two buckets at the vendor,
+// and a bare hint would bench both the moment either was limited — turning one
+// model's burst into a company-wide outage.
+//
+// The hint, never the key: the ledger is a shared store and a credential must
+// not be legible in it.
+func fleetKey(scope, hint string) string { return scope + ":" + hint }
 
 // Options configure a pool.
 type Options struct {
@@ -164,6 +235,11 @@ type Options struct {
 
 	// Clock is the monotonic time source. Nil takes [Elapsed].
 	Clock Clock
+
+	// Wall is the wall-clock source used at the fleet boundary. Nil takes
+	// [time.Now]. Tests that drive [Pool.Refresh] set both this and Clock,
+	// because the conversion between them is the part worth pinning.
+	Wall func() time.Time
 }
 
 // New builds a pool.
@@ -172,7 +248,11 @@ func New(opts Options) *Pool {
 	if clock == nil {
 		clock = Elapsed
 	}
-	p := &Pool{policy: opts.Policy, now: clock}
+	wall := opts.Wall
+	if wall == nil {
+		wall = time.Now
+	}
+	p := &Pool{policy: opts.Policy, now: clock, wall: wall}
 	seen := make(map[string]struct{}, len(opts.Keys))
 	for _, key := range opts.Keys {
 		if key == "" {
@@ -226,6 +306,110 @@ func (p *Pool) Stats() []Stat {
 		})
 	}
 	return out
+}
+
+// Share attaches the fleet's cooldown ledger, under a scope that namespaces
+// this pool's keys in it. See fleetKey for why the scope is not optional.
+//
+// AFTER construction, not in [Options], because a pool is built when the
+// company epoch is — which must work with no network at all, so that
+// `crewlet validate` runs on a laptop — while the ledger belongs to a running
+// node. Re-attaching is how a config apply equips the epoch it just built;
+// calling it twice with the same ledger is a no-op in effect.
+//
+// A nil ledger DETACHES, which is what an epoch built on a node with no
+// coordination store gets. It leaves whatever cooldowns are already on the
+// bench alone: forgetting a live bench because sharing went away would hand
+// out a key the vendor is still refusing.
+func (p *Pool) Share(scope string, s Shared) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.shared, p.scope = s, scope
+}
+
+// publish tells the fleet a key is benched. Best effort, and never fatal.
+//
+// The context is DETACHED. A bench recorded here is the consequence of a call
+// that already failed, and the most common way for that call's context to be
+// dead by now is the turn being cancelled — which is exactly when losing the
+// record would make every peer rediscover the same 429.
+func (p *Pool) publish(ctx context.Context, hint string, bench time.Duration) {
+	p.mu.Lock()
+	shared, scope, wall := p.shared, p.scope, p.wall
+	p.mu.Unlock()
+	if shared == nil || hint == "" {
+		// No ledger, or the placeholder entry a keyless provider gets:
+		// "the empty credential is cooling" is not a fact a peer can use,
+		// and every keyless pool in the fleet would collide on it.
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishTimeout)
+	defer cancel()
+	if err := shared.Cool(ctx, fleetKey(scope, hint), wall().Add(bench)); err != nil {
+		// Warned rather than returned: the caller is mid-rotation and has
+		// nothing useful to do with this. What it costs is that peers
+		// rediscover the same refusal, which is worth a line naming the
+		// key it happened to.
+		log.WarnContext(ctx, "credential_cooldown_not_shared",
+			"scope", scope, "hint", hint, "error", err)
+	}
+}
+
+// Refresh applies what the fleet found to this pool, and reports how many
+// keys it benched that were not benched already.
+//
+// OFF THE REQUEST PATH, pulled on a ticker rather than read per lease. A
+// cooldown runs for minutes at least (60 s is the configurable floor), so a
+// pull every few seconds loses almost none of one — and putting a
+// coordination read in front of every model call would make the store's
+// latency the floor of every turn, and its availability the company's.
+//
+// It EXTENDS, never shortens. A peer's record is evidence a key is refused;
+// the absence of one is not evidence a key works, so a pool whose own 429 a
+// peer never heard about must not be talked out of it. That also makes an
+// unreadable ledger a no-op rather than a mass un-benching.
+func (p *Pool) Refresh(ctx context.Context) (int, error) {
+	p.mu.Lock()
+	shared, scope, wall := p.shared, p.scope, p.wall
+	p.mu.Unlock()
+	if shared == nil {
+		return 0, nil
+	}
+	now := wall()
+	cooled, err := shared.Since(ctx, now)
+	if err != nil {
+		return 0, fmt.Errorf("credential: reading the fleet's cooldowns: %w", err)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	elapsed := p.now()
+	applied := 0
+	for _, e := range p.entries {
+		if e.hint == "" {
+			continue
+		}
+		until, ok := cooled[fleetKey(scope, e.hint)]
+		if !ok {
+			continue
+		}
+		// CONVERTED HERE, at the boundary, exactly once: the ledger
+		// speaks wall-clock instants and everything below this line is a
+		// [Clock] reading.
+		target := elapsed + until.Sub(now)
+		// Two records are not benches. One that lands BEHIND the clock
+		// has already lapsed — [Shared.Since] is asked to drop those and
+		// the certified backends do, but this is an interface a caller
+		// supplies, and a bench in the past reads as "ready" while still
+		// being counted as applied. One that lands no further out than
+		// this pool's own is not new information; see refreshTolerance.
+		if target <= elapsed || target <= e.cooledUntil+refreshTolerance {
+			continue
+		}
+		e.cooledUntil = target
+		applied++
+	}
+	return applied, nil
 }
 
 // Lease is one credential checked out of the pool. Exactly one of Succeed or
@@ -290,7 +474,12 @@ func (l *Lease) Succeed() {
 // Transport failures (timeout, 5xx) release without benching anything:
 // cooling a healthy key on a network blip is how a fleet talks itself out of
 // every credential it has.
-func (l *Lease) Fail(kind llm.ErrorKind, retryAfter time.Duration) {
+//
+// A bench is PUBLISHED to the fleet where one is attached, so peers stop
+// spending a call each to rediscover the same refusal. That write happens
+// after the pool's own lock is released, because it reaches a network and
+// nothing else may queue behind it.
+func (l *Lease) Fail(ctx context.Context, kind llm.ErrorKind, retryAfter time.Duration) {
 	l.pool.mu.Lock()
 	if l.released {
 		l.pool.mu.Unlock()
@@ -320,12 +509,13 @@ func (l *Lease) Fail(kind llm.ErrorKind, retryAfter time.Duration) {
 	hint, failures := l.e.hint, l.e.authFailures
 	l.pool.mu.Unlock()
 
-	log.Warn("credential_cooled",
+	log.WarnContext(ctx, "credential_cooled",
 		"hint", hint,
 		"kind", kind.String(),
 		"cooldown_seconds", bench.Seconds(),
 		"server_hinted", retryAfter > 0,
 		"consecutive_auth_failures", failures)
+	l.pool.publish(ctx, hint, bench)
 }
 
 // double returns d shifted left n places, saturating at [maxCooldown].
@@ -360,6 +550,12 @@ type Identity struct {
 
 // Rotate walks the pool for ONE request.
 //
+// ctx is the REQUEST's, taken explicitly rather than left to the closure that
+// already captures it: a bench publishes to the fleet's ledger, and a package
+// that reaches a network on a context it cannot see is one whose cancellation
+// and deadline nobody can reason about. What it does with it is detach — see
+// [Pool.publish].
+//
 // call is invoked with a leased key. A failure that benches the credential
 // (429, 402, 401, 403) moves to the next live key and tries the SAME request
 // again; every other failure is the caller's to handle and comes straight
@@ -374,6 +570,7 @@ type Identity struct {
 // effect was that a lone key was never benched at all: every call re-paid the
 // round trip to be told 429 again. One code path, whatever the pool size.
 func Rotate[T any](
+	ctx context.Context,
 	p *Pool,
 	id Identity,
 	classify func(error) *llm.Error,
@@ -406,7 +603,7 @@ func Rotate[T any](
 				Kind: llm.KindFatal, Provider: id.Provider, Model: id.Model, Err: err,
 			}
 		}
-		lease.Fail(classified.Kind, classified.RetryAfter)
+		lease.Fail(ctx, classified.Kind, classified.RetryAfter)
 		if !classified.Kind.ExhaustsCredential() {
 			return zero, classified
 		}

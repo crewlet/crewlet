@@ -97,7 +97,7 @@ func TestDuplicateKeyIsOneEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("Acquire() found nothing in a fresh pool")
 	}
-	lease.Fail(llm.KindRateLimit, 0)
+	lease.Fail(t.Context(), llm.KindRateLimit, 0)
 	if _, ok := p.Acquire(); ok {
 		t.Fatal("Acquire() succeeded after the only distinct key was benched")
 	}
@@ -152,7 +152,7 @@ func TestAcquireSkipsBenchedKeys(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"bad", "good"}, Policy{})
 	lease, _ := p.Acquire()
-	lease.Fail(llm.KindRateLimit, 0)
+	lease.Fail(t.Context(), llm.KindRateLimit, 0)
 	next, ok := p.Acquire()
 	if !ok || next.Key() != "good" {
 		t.Fatalf("Acquire() = %v/%q, want the live key", ok, next.Key())
@@ -167,7 +167,7 @@ func TestAcquireReportsNothingWhenEveryKeyIsBenched(t *testing.T) {
 		if !ok {
 			t.Fatal("Acquire() ran out early")
 		}
-		lease.Fail(llm.KindRateLimit, 0)
+		lease.Fail(t.Context(), llm.KindRateLimit, 0)
 	}
 	if _, ok := p.Acquire(); ok {
 		t.Fatal("Acquire() succeeded with every key benched")
@@ -180,7 +180,7 @@ func TestBenchExpiresOnTheInjectedClock(t *testing.T) {
 	t.Parallel()
 	p, clock := newTestPool(t, []string{"k"}, Policy{RateLimit: time.Minute})
 	lease, _ := p.Acquire()
-	lease.Fail(llm.KindRateLimit, 0)
+	lease.Fail(t.Context(), llm.KindRateLimit, 0)
 
 	clock.advance(59 * time.Second)
 	if _, ok := p.Acquire(); ok {
@@ -200,7 +200,7 @@ func TestBenchIgnoresRealTimeWhenTheClockIsFrozen(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k"}, Policy{RateLimit: 5 * time.Millisecond})
 	lease, _ := p.Acquire()
-	lease.Fail(llm.KindRateLimit, 0)
+	lease.Fail(t.Context(), llm.KindRateLimit, 0)
 
 	time.Sleep(25 * time.Millisecond)
 	if _, ok := p.Acquire(); ok {
@@ -248,7 +248,7 @@ func TestPolicyDefaultsMatchTheConfigLayer(t *testing.T) {
 			t.Parallel()
 			p, _ := newTestPool(t, []string{"k"}, tc.policy)
 			lease, _ := p.Acquire()
-			lease.Fail(tc.kind, 0)
+			lease.Fail(t.Context(), tc.kind, 0)
 			if got := coolingOf(t, p, Hint("k")); got != tc.want {
 				t.Fatalf("Cooling = %v, want %v", got, tc.want)
 			}
@@ -263,7 +263,7 @@ func TestOnlyCredentialKindsBench(t *testing.T) {
 			t.Parallel()
 			p, _ := newTestPool(t, []string{"k"}, Policy{})
 			lease, _ := p.Acquire()
-			lease.Fail(kind, 0)
+			lease.Fail(t.Context(), kind, 0)
 			if got := coolingOf(t, p, Hint("k")); got != 0 {
 				t.Fatalf("%s benched the key for %v; a transport failure is not a key failure",
 					kind, got)
@@ -290,7 +290,7 @@ func TestServerHintOverridesThePolicyTTL(t *testing.T) {
 			t.Parallel()
 			p, _ := newTestPool(t, []string{"k"}, Policy{RateLimit: time.Hour})
 			lease, _ := p.Acquire()
-			lease.Fail(llm.KindRateLimit, tc.after)
+			lease.Fail(t.Context(), llm.KindRateLimit, tc.after)
 			if got := coolingOf(t, p, Hint("k")); got != tc.want {
 				t.Fatalf("Cooling = %v, want %v", got, tc.want)
 			}
@@ -315,7 +315,7 @@ func TestRepeatedAuthFailuresBackOffAndOneSuccessResets(t *testing.T) {
 				t.Fatal("key never came back")
 			}
 		}
-		lease.Fail(llm.KindAuth, 0)
+		lease.Fail(t.Context(), llm.KindAuth, 0)
 		return coolingOf(t, p, Hint("bad"))
 	}
 
@@ -355,15 +355,15 @@ func TestRateLimitDoesNotTouchTheAuthCounter(t *testing.T) {
 	p, clock := newTestPool(t, []string{"k"}, Policy{Auth: 100 * time.Second, RateLimit: time.Second})
 
 	lease, _ := p.Acquire()
-	lease.Fail(llm.KindAuth, 0)
+	lease.Fail(t.Context(), llm.KindAuth, 0)
 	clock.advance(2 * time.Hour)
 
 	lease, _ = p.Acquire()
-	lease.Fail(llm.KindRateLimit, 0)
+	lease.Fail(t.Context(), llm.KindRateLimit, 0)
 	clock.advance(2 * time.Hour)
 
 	lease, _ = p.Acquire()
-	lease.Fail(llm.KindAuth, 0)
+	lease.Fail(t.Context(), llm.KindAuth, 0)
 	if got := coolingOf(t, p, Hint("k")); got != 200*time.Second {
 		t.Fatalf("Cooling = %v, want the second auth failure's 2x bench", got)
 	}
@@ -396,7 +396,7 @@ func TestAuthBackoffSaturatesInsteadOfOverflowing(t *testing.T) {
 				t.Fatalf("key never came back before failure %d", i+1)
 			}
 		}
-		lease.Fail(llm.KindAuth, 0)
+		lease.Fail(t.Context(), llm.KindAuth, 0)
 		got := coolingOf(t, p, Hint("bad"))
 		if got != maxCooldown {
 			t.Fatalf("failure %d benched for %v, want the %v cap", i+1, got, maxCooldown)
@@ -408,7 +408,7 @@ func TestBenchIsCappedAtADay(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k"}, Policy{})
 	lease, _ := p.Acquire()
-	lease.Fail(llm.KindRateLimit, 400*time.Hour)
+	lease.Fail(t.Context(), llm.KindRateLimit, 400*time.Hour)
 	if got := coolingOf(t, p, Hint("k")); got != maxCooldown {
 		t.Fatalf("Cooling = %v, want the %v cap", got, maxCooldown)
 	}
@@ -423,13 +423,13 @@ func TestSecondReleaseIsANoOp(t *testing.T) {
 		second func(*Lease)
 	}{
 		{"fail then succeed", func(l *Lease) { l.Succeed() }},
-		{"fail then fail", func(l *Lease) { l.Fail(llm.KindAuth, 0) }},
+		{"fail then fail", func(l *Lease) { l.Fail(t.Context(), llm.KindAuth, 0) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			p, _ := newTestPool(t, []string{"k"}, Policy{RateLimit: time.Hour})
 			lease, _ := p.Acquire()
-			lease.Fail(llm.KindRateLimit, 0)
+			lease.Fail(t.Context(), llm.KindRateLimit, 0)
 			tc.second(lease)
 
 			stats := p.Stats()
@@ -500,7 +500,7 @@ func TestRotateReturnsTheFirstSuccess(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k0", "k1"}, Policy{})
 	var seen []string
-	got, err := Rotate(p, Identity{Provider: "test"}, classifier(llm.KindFatal, 0),
+	got, err := Rotate(t.Context(), p, Identity{Provider: "test"}, classifier(llm.KindFatal, 0),
 		func(key string) (string, error) {
 			seen = append(seen, key)
 			return "answer from " + key, nil
@@ -523,7 +523,7 @@ func TestRotateWalksPastBenchingFailures(t *testing.T) {
 			t.Parallel()
 			p, _ := newTestPool(t, []string{"k0", "k1", "k2"}, Policy{})
 			var seen []string
-			got, err := Rotate(p, Identity{Provider: "test"},
+			got, err := Rotate(t.Context(), p, Identity{Provider: "test"},
 				func(err error) *llm.Error {
 					return &llm.Error{Kind: kind, Err: err}
 				},
@@ -560,7 +560,7 @@ func TestRotateStopsAtANonCredentialFailure(t *testing.T) {
 			t.Parallel()
 			p, _ := newTestPool(t, []string{"k0", "k1"}, Policy{})
 			calls := 0
-			_, err := Rotate(p, Identity{Provider: "test"},
+			_, err := Rotate(t.Context(), p, Identity{Provider: "test"},
 				classifier(kind, 0),
 				func(string) (string, error) {
 					calls++
@@ -589,7 +589,7 @@ func TestRotateExhaustionCarriesTheLastKind(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k0", "k1"}, Policy{})
 	calls := 0
-	_, err := Rotate(p, Identity{Provider: "anthropic", Model: "claude"},
+	_, err := Rotate(t.Context(), p, Identity{Provider: "anthropic", Model: "claude"},
 		classifier(llm.KindAuth, 0),
 		func(string) (string, error) {
 			calls++
@@ -621,10 +621,10 @@ func TestRotateOnAnAlreadyBenchedPoolReportsRateLimit(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k"}, Policy{})
 	lease, _ := p.Acquire()
-	lease.Fail(llm.KindAuth, 0)
+	lease.Fail(t.Context(), llm.KindAuth, 0)
 
 	calls := 0
-	_, err := Rotate(p, Identity{Provider: "test"}, classifier(llm.KindFatal, 0),
+	_, err := Rotate(t.Context(), p, Identity{Provider: "test"}, classifier(llm.KindFatal, 0),
 		func(string) (string, error) { calls++; return "", nil })
 	if calls != 0 {
 		t.Fatalf("made %d calls against a fully benched pool", calls)
@@ -640,7 +640,7 @@ func TestRotateOnAnAlreadyBenchedPoolReportsRateLimit(t *testing.T) {
 func TestRotatePassesTheServerHintToTheBench(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k"}, Policy{RateLimit: time.Hour})
-	_, _ = Rotate(p, Identity{Provider: "test"},
+	_, _ = Rotate(t.Context(), p, Identity{Provider: "test"},
 		classifier(llm.KindRateLimit, 20*time.Second),
 		func(string) (string, error) { return "", errors.New("429") })
 	if got := coolingOf(t, p, Hint("k")); got != 20*time.Second {
@@ -655,7 +655,7 @@ func TestRotateSurvivesAClassifierThatAnswersNothing(t *testing.T) {
 	t.Parallel()
 	p, _ := newTestPool(t, []string{"k0", "k1"}, Policy{})
 	calls := 0
-	_, err := Rotate(p, Identity{Provider: "test", Model: "m"},
+	_, err := Rotate(t.Context(), p, Identity{Provider: "test", Model: "m"},
 		func(error) *llm.Error { return nil },
 		func(string) (string, error) {
 			calls++
@@ -682,7 +682,7 @@ func TestRotateIsSafeUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = Rotate(p, Identity{Provider: "test"},
+			_, _ = Rotate(t.Context(), p, Identity{Provider: "test"},
 				classifier(llm.KindRateLimit, 0),
 				func(key string) (string, error) {
 					if i%3 == 0 {

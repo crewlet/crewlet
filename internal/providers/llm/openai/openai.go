@@ -215,7 +215,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	resp, err := credential.Rotate(p.pool,
+	resp, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: p.name, Model: p.model},
 		p.classify,
 		func(key string) (*sdk.ChatCompletion, error) {

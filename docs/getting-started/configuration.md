@@ -199,6 +199,8 @@ providers:
         rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
         auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;
                                         #   repeated auth failures on one key back off exponentially)
+                                        #   a bench is SHARED across the fleet, so a peer's 429 benches the
+                                        #   key here too — see concepts/coordination.md
       base_url: "..."                   # optional — custom endpoint (required for openai-compatible)
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)

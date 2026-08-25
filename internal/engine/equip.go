@@ -82,6 +82,12 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		return err
 	}
 	e.embeddings.Store(&embedder)
+	// THE FLEET'S CREDENTIAL LEDGER, onto the pools this epoch just built.
+	// Local and infallible — it stores a handle — which is why it can sit
+	// after the one step here that can fail: an epoch that is refused never
+	// reaches this line, and one that is not must never be published with
+	// pools that publish nothing. See cooldowns.go.
+	e.shareCooldowns(c)
 	return nil
 }
 

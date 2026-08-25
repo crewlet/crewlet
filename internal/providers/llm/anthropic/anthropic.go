@@ -238,7 +238,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	msg, err := credential.Rotate(p.pool,
+	msg, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: providerName, Model: p.model},
 		p.classify,
 		func(key string) (*sdk.Message, error) {
