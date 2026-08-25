@@ -50,6 +50,21 @@ type Plan struct {
 
 	// Calls is what Plan itself called during recon.
 	Calls []ledger.Call
+
+	// Rescued marks a decision the ENGINE synthesised because the planner
+	// never submitted one.
+	//
+	// It is not decoration. `direct` is the one decision that skips
+	// Review, and skipping it is only safe when a planner CHOSE it — that
+	// choice is the planner saying "Execute finishes this in one shot".
+	// A rescued plan carries the same word without the commitment behind
+	// it, and it also carries no ToolsNeeded, so the delivery gate that
+	// would otherwise force Review reads it as a turn that intended
+	// nothing and lets it through. Observed: a seat was addressed on
+	// chat, ran a full turn, produced an answer, called nothing, and
+	// reported done — a silent no-op, which is the exact failure the gate
+	// exists to prevent.
+	Rescued bool
 }
 
 // Execution is what the Execute phase produced.
@@ -307,7 +322,18 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			KnownReads:      surface.KnownReads,
 		}
 
-		skipReview := p.Decision == PlanDirect
+		// A RESCUED plan never skips Review. The engine wrote that
+		// `direct`, not the planner, so there is no commitment to honour
+		// — and because a rescue names no tools, the gate below cannot
+		// catch it either: ExpectedAction is false, so a rescued turn
+		// that delivered nothing would complete as done.
+		skipReview := p.Decision == PlanDirect && !p.Rescued
+		if p.Decision == PlanDirect && p.Rescued {
+			log.Warn("review_forced_plan_was_rescued",
+				"turn_id", in.TurnID, "round", round,
+				"detail", "the planner never submitted a decision, so the engine "+
+					"cannot honour one; Review judges what Execute actually did")
+		}
 		if skipReview && gate.MustReview() {
 			log.Warn("review_forced_execute_skipped_delivery",
 				"turn_id", in.TurnID, "round", round,

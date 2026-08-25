@@ -240,8 +240,14 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		// turn wastes everything it did; inventing a full plan puts words
 		// in its mouth. A `direct` plan with its own text as the reasoning
 		// is the honest middle: Execute improvises against the full
-		// surface, and the engine's forced-Review net still catches a
-		// non-delivery.
+		// surface.
+		//
+		// The plan is marked RESCUED, and that mark is load-bearing. A
+		// rescue names no tools, so the delivery gate reads it as a turn
+		// that intended nothing and does not force Review — while
+		// `direct` on its own skips Review outright. Both together let a
+		// rescued turn deliver nothing and report done, so the turn loop
+		// keys on the mark rather than on the synthesised word.
 		log.Warn("plan_never_submitted", "round", round, "rounds_used", res.Rounds)
 		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
 	}
@@ -266,6 +272,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		ToolsNeeded:     payload.ToolsNeeded,
 		SuccessCriteria: payload.SuccessCriteria,
 		Calls:           calls(surface),
+		Rescued:         !submitted,
 	}, describe(surface), nil
 }
 

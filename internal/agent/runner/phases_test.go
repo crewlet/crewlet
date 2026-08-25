@@ -243,8 +243,7 @@ func TestAPlannerThatNeverSubmittedFallsBackWithoutInventingAPlan(t *testing.T) 
 	t.Parallel()
 	// Discarding the turn wastes everything the phase did; inventing a full
 	// plan puts words in its mouth. A direct plan carrying its own text is
-	// the honest middle — and the engine's forced-Review net still catches
-	// a non-delivery.
+	// the honest middle.
 	r, _, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{text("I think we should post something.")}})
 	p, _, err := r.Plan(context.Background(), 1, "", nil)
 	if err != nil {
@@ -258,6 +257,35 @@ func TestAPlannerThatNeverSubmittedFallsBackWithoutInventingAPlan(t *testing.T) 
 	}
 	if len(p.ToolsNeeded) != 0 {
 		t.Errorf("tools_needed = %v, want nothing invented", p.ToolsNeeded)
+	}
+	// AND IT SAYS SO. Without the mark, the word `direct` is
+	// indistinguishable from a decision the planner actually made — and
+	// the turn loop skips Review on that word. A rescue also names no
+	// tools, so the delivery gate cannot force Review back on either:
+	// both nets miss, and a turn that delivered nothing reports done.
+	if !p.Rescued {
+		t.Error("a synthesised decision was returned as if the planner had made it")
+	}
+}
+
+// The counterfactual, so the mark cannot quietly become "always true".
+//
+// The payload carries a step because validation refuses a `direct` that names
+// neither steps nor tools — "has decided nothing" — so this is what a real
+// chosen `direct` looks like coming off the wire.
+func TestASubmittedPlanIsNotMarkedRescued(t *testing.T) {
+	t.Parallel()
+	r, _, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{
+		submitCall(t, runner.SubmitPlanTool, `{"decision":"direct",
+			"reasoning":"answering in the thread",
+			"steps":[{"intent":"reply","approach":"Answer in the thread."}]}`),
+	}})
+	p, _, err := r.Plan(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if p.Rescued {
+		t.Error("a plan the planner submitted was marked as the engine's own")
 	}
 }
 

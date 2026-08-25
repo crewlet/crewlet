@@ -208,6 +208,69 @@ func TestADirectPlanThatDeliveredNothingIsReviewedAnyway(t *testing.T) {
 	}
 }
 
+// A RESCUED PLAN IS NOT A CHOSEN ONE, and the difference decides whether
+// Review runs.
+//
+// This is the case observed against a live vendor stack: a seat was addressed
+// on chat, the planner ran its rounds and never submitted a decision, the
+// engine rescued the turn with a synthesised `direct`, Execute produced an
+// answer, nothing was called, and the turn reported done. The reply never
+// reached the channel and no warning said so.
+//
+// Both nets miss it by construction. `direct` skips Review outright, and the
+// delivery gate that would force Review back on is keyed on ToolsNeeded —
+// which a rescue, having no submitted plan, cannot have. So the mark has to
+// be what the loop reads.
+func TestARescuedPlanIsReviewedEvenThoughItSaysDirect(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		plans: []turn.Plan{{
+			Decision: turn.PlanDirect,
+			Rescued:  true,
+			// EMPTY, as every rescue is: the planner submitted nothing,
+			// so there is no tool list to key a gate on.
+			ToolsNeeded: nil,
+		}},
+		surfaces: []turn.Surface{slackSurface()},
+		execs:    []turn.Execution{{Text: "here is my answer"}},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "you never posted it"}},
+	}
+	res, err := turn.Run(context.Background(), f, settings(), turn.Input{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.revRounds == 0 {
+		t.Fatal("Review was skipped on a plan the ENGINE wrote: the planner never " +
+			"committed to Execute finishing in one shot, so there is no decision to honour")
+	}
+	if res.Decision == phase.Done {
+		t.Error("a rescued turn that called nothing completed as done")
+	}
+}
+
+// The counterfactual, and the reason the fix keys on the mark rather than on
+// an empty tool list: a planner that DELIBERATELY chose `direct` with nothing
+// to call is answering in conversation, and forcing Review on it would put a
+// second model call on every "thanks, noted" in the company.
+func TestAChosenDirectPlanWithNoToolsStillSkipsReview(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		plans:    []turn.Plan{{Decision: turn.PlanDirect, ToolsNeeded: nil}},
+		surfaces: []turn.Surface{slackSurface()},
+		execs:    []turn.Execution{{Text: "acknowledged"}},
+	}
+	res, err := turn.Run(context.Background(), f, settings(), turn.Input{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.revRounds != 0 {
+		t.Errorf("Review ran %d times on a chosen direct plan", f.revRounds)
+	}
+	if res.Decision != phase.Done {
+		t.Errorf("decision = %s, want done", res.Decision)
+	}
+}
+
 func TestDoneIsOverturnedWhenNothingDelivered(t *testing.T) {
 	t.Parallel()
 	// Review judges from the produced text and says done even though no
