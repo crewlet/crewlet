@@ -45,18 +45,18 @@ func mustRegister(t *testing.T, r *tools.Registry, tl tools.Callable, origin str
 
 func TestOriginIsRecordedBecauseItCannotBeRecovered(t *testing.T) {
 	t.Parallel()
-	// A tool an extension registers is structurally identical to one the
+	// A tool an MCP server serves is structurally identical to one the
 	// engine ships. With nothing recorded, a tool missing because its
-	// extension failed to load reads as a missing builtin — which sends
+	// server failed to start reads as a missing builtin — which sends
 	// someone to debug the wrong subsystem.
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("reflect"), tools.OriginBuiltin)
-	mustRegister(t, r, tool("deploy"), tools.ExtensionOrigin("ops"))
+	mustRegister(t, r, tool("deploy"), tools.Origin("ops"))
 	mustRegister(t, r, tool("slack_post"), tools.Origin("slack"))
 
 	for name, want := range map[string]string{
 		"reflect":    "builtin",
-		"deploy":     "extension:ops",
+		"deploy":     "mcp:ops",
 		"slack_post": "mcp:slack",
 	} {
 		e, ok := r.Lookup(name)
@@ -77,7 +77,7 @@ func TestADuplicateNameIsRefusedRatherThanOverwritten(t *testing.T) {
 	// calls.
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("post"), tools.OriginBuiltin)
-	err := r.Register(tool("post"), tools.ExtensionOrigin("ops"))
+	err := r.Register(tool("post"), tools.Origin("ops"))
 	if err == nil {
 		t.Fatal("a duplicate name registered cleanly")
 	}
@@ -87,7 +87,7 @@ func TestADuplicateNameIsRefusedRatherThanOverwritten(t *testing.T) {
 	}
 	// Both origins named, or the operator cannot tell which two things
 	// collided.
-	if !strings.Contains(err.Error(), "builtin") || !strings.Contains(err.Error(), "extension:ops") {
+	if !strings.Contains(err.Error(), "builtin") || !strings.Contains(err.Error(), "mcp:ops") {
 		t.Errorf("the error names neither side: %v", err)
 	}
 	if e, _ := r.Lookup("post"); e.Origin != tools.OriginBuiltin {
@@ -221,14 +221,14 @@ func TestUnregisterReportsWhetherItDidAnything(t *testing.T) {
 
 func TestAnOriginViewCannotGetItsOwnOriginWrong(t *testing.T) {
 	t.Parallel()
-	// An extension handed the bare registry could register under "builtin"
+	// A registrant handed the bare registry could register under "builtin"
 	// by omission, and the whole grammar exists to stop that reading.
 	r := tools.NewRegistry()
-	view := r.ForOrigin(tools.ExtensionOrigin("ops"))
+	view := r.ForOrigin(tools.Origin("ops"))
 	if err := view.Register(tool("deploy")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if e, _ := r.Lookup("deploy"); e.Origin != "extension:ops" {
+	if e, _ := r.Lookup("deploy"); e.Origin != "mcp:ops" {
 		t.Errorf("origin = %q", e.Origin)
 	}
 	if got := view.Unregister(); !slices.Equal(got, []string{"deploy"}) {

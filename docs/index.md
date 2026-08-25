@@ -38,7 +38,7 @@ How the engine works, one subsystem per page:
 - **[Coordination](concepts/coordination.md)** — The fleet's shared store and the line between it and the node's own database: the three-valued answer every question here returns, which direction each contract fails in when the store cannot be reached, the slots a fleet is discovered from, why every retention is a bucket's age rather than a per-write TTL, and what stays node-local or per-process on purpose
 - **[Seat Ownership](concepts/seat-ownership.md)** — How a fleet decides which node runs which seat, and why no two ever run the same one: TTL leases with epoch fencing, fair-share placement with give-back, the two release modes, freshness-based admission, owner-only inbox and sandbox-control attachment, the durable subscription that holds an unowned seat's mail, the broker settings that must not delete it, and why a wedged-but-alive node ends its own process
 - **[Control Plane](concepts/control-plane.md)** — How every node converges on one company config: the shared activation pointer whose own revision is the epoch, the reconcile poll, per-node apply status (`ok` / `error` / `degraded`), the posture a lagging node takes (`serve` / `wait` / `shed` / `isolated` / `stuck`), what a running turn sees through a live apply, and what `/health` and `/ready` report
-- **[Secret Store](concepts/secret-store.md)** — Encrypted `secret_values` table consulted ahead of `os.environ` when resolving `${VAR}`: `crewlet secrets set/list/unset/get/rekey`, the `--secret-store` provisioning sink that hands minted credentials straight to the engine, store-wins precedence, and the Tier A root-of-trust boundary
+- **[Secret Store](concepts/secret-store.md)** — Encrypted `secret_values` table consulted ahead of the process environment when resolving `${VAR}`: `crewlet secrets set/list/unset/get/rekey`, the `--secret-store` provisioning sink that hands minted credentials straight to the engine, store-wins precedence, and the Tier A root-of-trust boundary
 - **[Organization Model](concepts/organization-model.md)** — Hierarchy, departments, teams, roles (seats), handles
 - **[Humans in the Org Chart](concepts/humans-in-the-org.md)** — Human seats (`kind: human`): hierarchy membership, contact identities, notify delivery, escalation terminus, prompts and lookup
 - **[Agent Runtime](concepts/agent-runtime.md)** — Agent lifecycle, states, execution model, graceful shutdown
@@ -61,18 +61,16 @@ How the engine works, one subsystem per page:
 Connecting the external surfaces agents work on:
 
 - **[Plane](integrations/plane.md)** — Self-hosted tracker **and** knowledge backend in one product: webhook routing, per-role MCP tools, knowledge search, `crewlet plane import`, tool-skill sync, skill promotion, `crewlet plane provision`, and a complete local docker-compose loop
-- **[Jira](integrations/jira.md)** — Webhooks (Forge app for Cloud, direct for Data Center), MCP tools, per-team projects
-- **[Confluence](integrations/confluence.md)** — Webhooks, MCP tools, query-time CQL knowledge search, `crewlet confluence import`
+- **[Jira](integrations/jira.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
+- **[Confluence](integrations/confluence.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring
-- **[GitHub](integrations/github.md)** — Per-role remote MCP tools for read/review/track; sandbox code authoring
-- **[Slack](integrations/slack.md)** — One-app-per-agent setup with automated app provisioning via `crewlet slack provision` (App Manifest APIs), thread routing, and the per-phase working indicator
+- **[GitHub](integrations/github.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
+- **[Slack](integrations/slack.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
 - **[Mattermost](integrations/mattermost.md)** — Self-hosted open-source chat: one bot account per agent, `crewlet mattermost provision`, a websocket event fleet instead of webhooks (no public URL needed), and thread routing
-- **[Custom Transports](integrations/custom-transports.md)** — Build your own notification transport
 
 ## Guides
 
-- **[Tools & MCP](guides/tools-and-mcp.md)** — Built-in tools, MCP integration, tool registry
-- **[Extensions](guides/extensions.md)** — Extension system, hooks, writing extensions
+- **[Tools & MCP](guides/tools-and-mcp.md)** — Built-in tools, MCP integration, the two-value tool-origin grammar the dashboard groups on, and how you extend a static binary that loads no plugins
 - **[Deployment](guides/deployment.md)** — The single host, the compose profiles, Pulsar sizing & auth, the event store, tracing
 - **[Running a Fleet](guides/fleet.md)** — When to run more than one node, node roles, seat placement, draining and rolling upgrades
 - **[Running One Agent Somewhere Else](guides/satellite-nodes.md)** — Put a single seat on a host that can reach what it needs — an internal API, a licensed binary, a GPU, a lab network — without moving the company: what a satellite is, what moves with the seat (its MCP servers above all), what the node still needs outbound, and what a pin costs when the host is down

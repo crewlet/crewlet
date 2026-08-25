@@ -1,12 +1,12 @@
 // The Tools view groups by where a tool came from.
 //
 // Every tool that was not an MCP wrapper used to arrive as source
-// "builtin", so an extension's tools rendered inside the engine's own
-// group — an operator could not tell what the engine ships from what an
-// extension added, and a tool missing because its extension failed to
-// load looked like a missing builtin. The server now sends the real
-// origin ("builtin" / "custom" / "extension:<name>" / "mcp:<server>");
-// this is the half that has to render it as a group of its own.
+// "builtin", so a server's tools rendered inside the engine's own group —
+// an operator could not tell what the engine ships from what an
+// integration added, and a tool missing because its server failed to
+// start looked like a missing builtin. The server now sends the real
+// origin ("builtin" or "mcp:<server>"); this is the half that has to
+// render it as a group of its own.
 
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
@@ -45,16 +45,16 @@ function badge(html, source) {
   return { cls: m[1], label: m[2] };
 }
 
-test("an extension's tools are their own group, not the engine's", () => {
+test("a server's tools are their own group, not the engine's", () => {
   const html = render([
     tool("lookup_colleague", "builtin"),
-    tool("acme_ping", "extension:acme-metrics"),
+    tool("acme_ping", "mcp:acme-metrics"),
   ]);
-  assert.deepStrictEqual(groupOrder(html), ["builtin", "extension:acme-metrics"]);
+  assert.deepStrictEqual(groupOrder(html), ["builtin", "mcp:acme-metrics"]);
 
-  const b = badge(html, "extension:acme-metrics");
-  assert.strictEqual(b.cls, "extension");
-  assert.strictEqual(b.label, "Extension · acme-metrics");
+  const b = badge(html, "mcp:acme-metrics");
+  assert.strictEqual(b.cls, "mcp");
+  assert.strictEqual(b.label, "MCP · acme-metrics");
 });
 
 test("the builtin group still reads as the engine's own", () => {
@@ -73,34 +73,31 @@ test("an MCP server's group is unchanged", () => {
   });
 });
 
-test("an extension is never badged as the MCP server it is named after", () => {
-  // The badge used to be chosen by substring, so an extension called
-  // "slack-digest" was painted in the Slack MCP server's colour — a
-  // third-party tool wearing an integration's identity.
-  const html = render([tool("digest_post", "extension:slack-digest")]);
-  assert.strictEqual(badge(html, "extension:slack-digest").cls, "extension");
+test("an origin this build cannot produce still renders in its own group", () => {
+  // The grammar is "builtin" or "mcp:<server>" and nothing else registers
+  // — but this view is served by whatever build the node is running, and a
+  // tool the reader can see in a prompt but not in this room is the one
+  // failure mode the room exists to prevent. So an unrecognised origin
+  // gets a group and the neutral badge, never the builtin group.
+  const html = render([
+    tool("lookup_colleague", "builtin"),
+    tool("acme_ping", "somethingelse:acme"),
+  ]);
+  assert.deepStrictEqual(groupOrder(html), ["builtin", "somethingelse:acme"]);
+  assert.strictEqual(badge(html, "somethingelse:acme").cls, "mcp");
 });
 
-test("tools handed to the engine by the host app are their own group", () => {
-  const html = render([tool("review_code", "custom")]);
-  assert.deepStrictEqual(badge(html, "custom"), {
-    cls: "custom",
-    label: "custom",
-  });
-});
-
-test("groups read outward from the engine", () => {
+test("the builtins come first, then the servers by name", () => {
+  // Ranked, not alphabetical: "builtin" happens to sort before "mcp:" but
+  // an alphabetical order is an accident of those two strings rather than
+  // a rule, and the rule is that the engine's own tools lead.
   const html = render([
     tool("jira_get_issue", "mcp:atlassian"),
-    tool("acme_ping", "extension:acme"),
-    tool("review_code", "custom"),
     tool("lookup_colleague", "builtin"),
     tool("slack_post", "mcp:slack"),
   ]);
   assert.deepStrictEqual(groupOrder(html), [
     "builtin",
-    "custom",
-    "extension:acme",
     "mcp:atlassian",
     "mcp:slack",
   ]);
@@ -110,18 +107,18 @@ test("every card carries a key the patcher can index", () => {
   // Without a data-k the patcher rebuilds the list on every envelope,
   // and a tool name is unique only within its source.
   const html = render([
-    tool("ping", "extension:acme"),
+    tool("ping", "mcp:acme"),
     tool("ping", "mcp:atlassian"),
   ]);
   const keys = [...html.matchAll(/class="tool-card" data-k="([^"]+)"/g)].map(
     (m) => m[1],
   );
-  assert.deepStrictEqual(keys, ["tool:extension:acme:ping", "tool:mcp:atlassian:ping"]);
+  assert.deepStrictEqual(keys, ["tool:mcp:acme:ping", "tool:mcp:atlassian:ping"]);
 });
 
 test("a tool with no source at all still lands somewhere", () => {
   // Older engines, and the payload-only fallback before it learned
-  // about extensions, can both omit it.
+  // about origins, can both omit it.
   const html = render([{ name: "mystery", description: "" }]);
   assert.deepStrictEqual(groupOrder(html), ["builtin"]);
 });

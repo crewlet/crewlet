@@ -275,7 +275,7 @@ Full reference: [CLI](docs/reference/cli.md) ·
 - [Event system](docs/concepts/event-system.md) · [Scheduling](docs/concepts/scheduling.md) · [Configuration](docs/concepts/configuration.md)
 
 **Guides**
-- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Extensions](docs/guides/extensions.md) · [Deployment](docs/guides/deployment.md)
+- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Deployment](docs/guides/deployment.md) · [Running a Fleet](docs/guides/fleet.md)
 
 </td>
 <td valign="top" align="center" width="38%">

@@ -7,21 +7,31 @@ import (
 
 func TestOriginGrammar(t *testing.T) {
 	t.Parallel()
-	if OriginBuiltin != "builtin" || OriginCustom != "custom" {
-		t.Fatal("the two bare origins are a contract with the operator surface, which groups on them")
-	}
-	if got := ExtensionOrigin("standup"); got != "extension:standup" {
-		t.Fatalf("ExtensionOrigin = %q", got)
+	if OriginBuiltin != "builtin" {
+		t.Fatal("the bare origin is a contract with the operator surface, which groups on it")
 	}
 	if got := Origin("github"); got != "mcp:github" {
 		t.Fatalf("Origin = %q", got)
 	}
-	// A tool an extension registers is structurally identical to a builtin.
-	// The origin is the only thing that tells them apart, so it must not
-	// collide with the builtin string for any extension name.
-	for _, name := range []string{"builtin", "custom", "mcp"} {
-		if ExtensionOrigin(name) == OriginBuiltin || ExtensionOrigin(name) == OriginCustom {
-			t.Fatalf("extension %q collides with a bare origin", name)
+	// A tool an MCP server serves is structurally identical to a builtin.
+	// The origin is the only thing that tells them apart, so no server name
+	// may produce the builtin string.
+	for _, name := range []string{"builtin", "", "mcp"} {
+		if Origin(name) == OriginBuiltin {
+			t.Fatalf("server %q collides with the builtin origin", name)
+		}
+	}
+}
+
+// TWO REGISTRANTS, not four. "custom" and "extension:<name>" came from a
+// Python engine that could be embedded and could load plugins; this one is a
+// static binary whose only extension point is MCP, out of process. Keeping
+// them would have left the dashboard two groups nothing could ever fill.
+func TestTheGrammarNamesOnlyWhatCanRegister(t *testing.T) {
+	t.Parallel()
+	for _, gone := range []string{"custom", "extension:"} {
+		if OriginBuiltin == gone || OriginMCPPrefix == gone {
+			t.Fatalf("%q is back in the grammar with nothing able to produce it", gone)
 		}
 	}
 }

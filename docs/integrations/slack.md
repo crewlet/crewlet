@@ -443,39 +443,9 @@ By default, agents only receive thread replies in threads they are **following**
 1. **Direct mention** — `<@BOT_USER_ID>` or `app_mention` event
 2. **Collective address** — `<!channel>` or `<!here>`
 3. **Outbound participation** — the agent sends a reply in the thread
-4. **Outbound send** — the agent sends a reply via ``SlackTransport.send()``
+4. **Outbound send** — the agent posts its reply into the thread
 
 Thread tracking state is persisted in the store (``chat_thread_follows`` table, rows keyed ``backend = 'slack'``) so it survives engine restarts. Bot messages are automatically ignored to prevent loops.
 
 A follow is dropped after **90 days without activity** — the row's timestamp is refreshed every time the follow is re-asserted (a mention, a collective address, the agent posting), so it means last activity rather than when the thread started. The asymmetry is what sets the number: a dropped stale follow costs at most one missed non-mention reply, and the next mention re-follows through the ordinary path above, while keeping every follow forever grows a table that is read on the hot path of every inbound message. The sweep runs on the maintenance worker, once per fleet.
 
-Disable thread routing:
-
-```python
-slack_transport = SlackTransport(thread_routing=False)
-```
-
----
-
-## Programmatic Setup
-
-```python
-from crewlet.notifications.transports.slack import SlackAppConfig, SlackTransport
-from crewlet.notifications.typing_status import SlackTypingStatusMode
-
-slack_transport = SlackTransport(
-    typing_status_mode=SlackTypingStatusMode.ADDRESSED,
-)
-slack_transport.register_app("engineer", SlackAppConfig(
-    bot_token="xoxb-eng-...",
-    signing_secret="secret-eng",
-    channel="C0123456789",
-))
-
-engine = Engine(
-    organization=org,
-    notification_transports=[slack_transport],
-)
-```
-
-The engine automatically registers per-agent Slack apps from `role.integrations.slack` configs during `start()`.

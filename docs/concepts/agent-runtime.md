@@ -75,7 +75,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    │     Reserve activation for read-only recon (Slack thread reads,
    │     Jira fetches, agent lookup); action / write tools should not
    │     be activated here -- name them in tools_needed for Execute.
-   └── Emits an ExecutionPlan: reasoning, steps, tools_needed, criteria
+   └── Emits a Plan: reasoning, steps, tools needed, success criteria
 
 3. Execute phase
    ├── Tool surface = plan.tools_needed ∪ executor_always_on_tools
@@ -291,7 +291,7 @@ you opted into by sending the second signal.
 
 **Watching the drain.** The dashboard stays live through the entire drain (the embedded API server is stopped only after `stop()` completes). Its footer pill shows the engine's in-flight handler count whenever it's non-zero or the engine has flipped to "shutting down" — turns red during the drain so operators can watch it converge to 0. The count is also available programmatically:
 
-- `engine.in_flight_count` — Python property on the engine
+- the engine's in-flight turn count
 - `engine.shutting_down` — `True` from the first moment of `stop()` (unlike `is_running`, which only flips once teardown completes)
 - `GET /health` — JSON includes `in_flight` and `shutting_down`, and `status` reads `"shutting_down"` during the drain (embedded API only; the standalone API process omits these fields because it has no engine reference)
 

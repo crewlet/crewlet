@@ -88,7 +88,7 @@ DACI decisions are conducted in **Slack threads** — the driver opens a thread 
 
 ## Event Types
 
-```python
+```text
 # Lifecycle
 OrgStarted, OrgStopped
 AgentSpawned, AgentTerminated, AgentReassigned
@@ -134,29 +134,37 @@ Every event carries a common set of fields: a unique ID (UUID), a type string, a
 
 Events also carry **OpenTelemetry trace context** and self-describing properties:
 
-```python
-class Event(BaseModel):
-    id: UUID
-    type: str
-    timestamp: datetime
-    source: str = ""
-    payload: dict[str, Any] = {}
+```go
+type Event struct {
+    ID        uuid.UUID
+    Type      string
+    Timestamp time.Time
+    Source    string
+    Payload   map[string]any   // free-form extras; typed fields live in Data
 
-    # OpenTelemetry trace context — auto-captured from the active span
-    trace_id: str       # W3C 32-char hex, groups causally related events
-    span_id: str        # W3C 16-char hex, identifies this event in the trace
-    parent_span_id: str # links to the event/span that caused this one
+    // OpenTelemetry trace context — captured at construction from the
+    // active span.
+    TraceID      string // W3C 32-char hex, groups causally related events
+    SpanID       string // W3C 16-char hex, identifies this event in the trace
+    ParentSpanID string // links to the event/span that caused this one
 
-    @property
-    def summary(self) -> str:
-        """Human-readable 'who did what' — overridden by each subclass."""
+    // Turn-engine bookkeeping, so an agent woken by a colleague handoff
+    // inherits the correct depth and chain.
+    DelegationDepth int
+    ParentTurnID    string
+    DelegationChain []string
 
-    @property
-    def actor(self) -> str:
-        """Human-readable actor name (role > source > agent_id > 'system')."""
+    // Data is the typed body, non-nil when Type is registered in this
+    // build. Marshalled flat into the same JSON object as the envelope.
+    Data Payload
+}
 ```
 
-Each Event subclass defines its own `summary` property using its domain fields. New event types automatically get a reasonable default.
+`Payload` is the typed half: each registered event type is a Go type with its
+own fields and its own `Summary()` — "who did what", in a person's words — and
+an `Actor()` (role, then source, then agent id, then `system`). An event type
+this build does not know decodes into the envelope with `Data` nil, and
+re-publishes losslessly.
 
 Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. On Pulsar, time-based retention of already-acknowledged messages is an optional namespace retention policy.
 

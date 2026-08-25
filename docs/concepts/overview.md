@@ -2,7 +2,7 @@
 
 Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, task management, agent lifecycle, and knowledge infrastructure needed to operate a network of AI agents modeled after a real corporate structure.
 
-Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + zero-build web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built as [extensions](../guides/extensions.md) on top of the engine.
+Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + zero-build web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
 
 ---
 

@@ -37,30 +37,25 @@ type (
 // The tool-origin grammar: who put a tool in front of the agents.
 //
 // Recorded AT REGISTRATION because it cannot be recovered afterwards. A tool
-// an extension registers is structurally identical to one the engine ships —
+// an MCP server serves is structurally identical to one the engine ships —
 // same name, same schema, same call signature. With nothing recorded, the
 // operator surface called both "builtin", and a tool missing because its
-// extension failed to load read as a missing builtin, which sends someone to
+// server failed to start read as a missing builtin, which sends someone to
 // debug the wrong subsystem.
 //
+// TWO registrants, and mcp/origin.go says why there are not four.
+//
 // These strings are a CONTRACT with that surface, which groups on them.
+// Re-exported rather than redefined: one definition, in the package this one
+// already depends on for Callable, Result and Annotations.
 const (
 	// OriginBuiltin marks a tool the engine itself ships.
 	OriginBuiltin = mcp.OriginBuiltin
-	// OriginCustom marks a tool handed to the engine by an embedding
-	// application: not shipped by the engine, not from an extension.
-	OriginCustom = mcp.OriginCustom
-	// OriginExtensionPrefix prefixes the registering extension's name.
-	OriginExtensionPrefix = mcp.OriginExtensionPrefix
-	// OriginMCPPrefix prefixes the BARE name of the serving MCP server —
-	// never the per-role instance name. Two seats' children of one template
-	// are the same integration to a reader grouping the catalogue, and
-	// splitting that view per seat helps nobody.
+
+	// OriginMCPPrefix prefixes the bare name of the MCP server serving
+	// the tool.
 	OriginMCPPrefix = mcp.OriginMCPPrefix
 )
-
-// ExtensionOrigin is the origin for a tool an extension registered.
-func ExtensionOrigin(extension string) string { return mcp.ExtensionOrigin(extension) }
 
 // Origin is the origin for a tool served by an MCP server.
 func Origin(server string) string { return mcp.Origin(server) }

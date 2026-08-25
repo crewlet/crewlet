@@ -260,7 +260,7 @@ founder seat above the agent CEO.
 
 ## Hot Reload
 
-Seat kind flips are first-class in `apply_config`:
+Seat kind flips are first-class in the config apply:
 
 - `human → agent` spawns an instance (budget, inbox, per-role MCP).
 - `agent → human` decommissions the instance. Agent IDs are

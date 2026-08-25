@@ -532,9 +532,8 @@ Every significant operation emits structured log entries:
 
 Every state change in the engine is an event on the stream, so anything that
 wants to react — dashboards, alerting, an external audit sink — subscribes
-rather than polls. `/ws/stream` is the read surface for a client; an
-[extension](extensions.md) is how code inside the process hooks the same
-events.
+rather than polls. `/ws/stream` is the read surface for a client; nothing runs
+inside the process to hook them, because the engine loads no plugins.
 
 ---
 

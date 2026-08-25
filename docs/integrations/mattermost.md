@@ -926,31 +926,3 @@ pass: reachability, the Site URL against your configured `url`, a
 distinguishes a browser from the engine), and one real authenticated socket
 per seat. It exits non-zero when anything is wrong.
 
----
-
-## Programmatic Setup
-
-```python
-from crewlet.notifications.transports.mattermost import (
-    MattermostBotConfig,
-    MattermostTransport,
-)
-from crewlet.notifications.typing_status import WorkingStatusMode
-
-transport = MattermostTransport(
-    base_url="https://chat.nimbus.example",
-    team="nimbus",
-    typing_status_mode=WorkingStatusMode.OFF,
-)
-transport.register_bot("engineer", MattermostBotConfig(
-    bot_token="...",
-    username="agent-engineer",
-    channel="engineering",
-))
-
-engine = Engine(organization=org, notification_transports=[transport])
-```
-
-The engine registers per-agent bots from `role.integrations.mattermost`
-during `start()`, and supplies the event queue the websocket fleet publishes
-on.

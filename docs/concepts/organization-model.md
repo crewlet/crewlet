@@ -407,7 +407,7 @@ This mirrors how a real new hire learns.  A founder doesn't need YAML config for
 The org model is loaded once at startup and can be hot-reloaded at runtime via the Engine API:
 
 - **`engine.reassign()`** — move an agent to a different role (optionally with a new manager)
-- **`engine.apply_config(CompanyConfig)`** — full Tier B hot-reload: spawn new roles, terminate removed roles, swap `AgentDefinition` for changed roles, plus diff-and-apply for every other Tier B subsystem (LLM providers, MCP servers, integrations, transports, turn engine, budgets, extensions). Driven by the API process when a `PUT /config` activates a new `company_config` revision; see [Configuration concept doc](configuration.md).
+- **The config apply** — full Tier B hot-reload: spawn new roles, terminate removed roles, swap the agent definition for changed roles, plus diff-and-apply for every other Tier B subsystem (LLM providers, MCP servers, integrations, transports, turn engine, budgets). Driven by each node's reconcile tick once a `PUT /config` moves the activation pointer; see [Configuration concept doc](configuration.md).
 
 Since all agent handlers run in the same Engine process (shared memory), hot reload works by:
 
@@ -415,4 +415,4 @@ Since all agent handlers run in the same Engine process (shared memory), hot rel
 2. Cancelling handlers for removed agents, spawning new ones
 3. Updating `AgentDefinition` in place for modified agents — picked up on next turn
 
-For non-org subsystems (LLM providers, MCP servers, integrations, transports, extensions, learning workers), `apply_config` runs per-subsystem diff handlers that rewire the live instances (providers re-instantiated, MCP processes restarted via `MCPToolBridge.restart_server`, notification transports swapped in `NotificationService.transports`, extensions un/registered). Mid-apply failures roll back to a snapshot of pre-apply state via `ConfigApplyError`.
+For non-org subsystems (LLM providers, MCP servers, integrations, transports, learning workers), the apply runs per-subsystem diff handlers that rewire the live instances: providers re-instantiated, per-role MCP children restarted, notification transports swapped. A mid-apply failure rolls back to a snapshot of the pre-apply state.

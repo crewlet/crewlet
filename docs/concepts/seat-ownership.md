@@ -80,13 +80,13 @@ Only a restart of that process can free a seat whose teardown never succeeds —
 
 A handler has two ordinary outcomes: return (ack) or raise (negative-ack, which spends the message's dead-letter budget). Seat handoff needs a third, so the queue protocol has one:
 
-```python
-raise DeferDelivery(f"seat {handle!r} is not owned here")
+```go
+return queue.Defer(fmt.Sprintf("seat %q is not owned here", handle))
 ```
 
 The delivery is left **unacked** and the attachment stops consuming. Measured against a real broker, a close-driven handoff does *not* increment `redeliveryCount`: the messages return to the seat's next owner in order, at count 0. A NAK would burn the budget on messages nothing is wrong with.
 
-Three paths use it, and they are the three ways this node can be the wrong one to run a delivery it was just handed: the seat is not owned here, the in-turn fence tripped mid-dispatch, or the config posture went `shed`/`stuck`. Each also calls `note_delivery_deferred`, because a deferral quiesces the consumer and the resume is edge-triggered on the next successful renew — without it the seat is owned, attached and deaf.
+Three paths use it, and they are the three ways this node can be the wrong one to run a delivery it was just handed: the seat is not owned here, the in-turn fence tripped mid-dispatch, or the config posture went `shed`/`stuck`. Each also records the deferral, because a deferral quiesces the consumer and the resume is edge-triggered on the next successful renew — without it the seat is owned, attached and deaf.
 
 ## Admission: freshness, not membership
 
@@ -203,15 +203,16 @@ Agents exist only on the seat's owner, so **any code that resolves a recipient t
 
 Routing needs only `handle → (inbox topic, agent id)`, and both are derivable from the org every node has in full:
 
-```python
-from crewlet.queue.topics import agent_inbox_topic
-
-topic = agent_inbox_topic(handle)
-seat = org.agent_seat_by_handle(handle)
-agent_id = org.agent_id_for(seat)      # uuid5 over (org name, handle)
+```go
+topic := topics.AgentInbox(handle)
+seat := org.AgentSeatByHandle(handle)
+agentID, ok := org.AgentIDFor(seat)   // uuid5 over (org name, handle)
 ```
 
-The live `AgentInstance` is an *execution* detail. It must never be a *routing* one. This applies to extensions too — see [Extensions § The agent pool is per-node](../guides/extensions.md#the-agent-pool-is-per-node).
+Both are derived from the ORGANIZATION, which every node holds in full. The
+running agent is an *execution* detail; it must never be a *routing* one — a
+lookup among the seats this process happens to be running answers "is this
+agent here?", and a miss means "not on this node", never "does not exist".
 
 ## Singleton duties
 

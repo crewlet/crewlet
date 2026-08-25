@@ -85,7 +85,7 @@ one task's context into the next.
 **Between the seat and the host.** The child process gets an
 **allowlisted** environment — `PATH`, locale, TLS trust, proxy settings,
 plus whatever the profile and your `cli.env` declare — never
-`os.environ`. Inheriting the engine's environment would hand every seat
+the process environment. Inheriting the engine's environment would hand every seat
 the org's `SLACK_BOT_TOKEN` and database DSN. It would also, for a
 subscription backend, silently bill a metered `ANTHROPIC_API_KEY` that
 happened to be exported.

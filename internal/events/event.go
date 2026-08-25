@@ -67,8 +67,8 @@ type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	Source    string    `json:"source"`
 
-	// Payload is the free-form bag the Python engine also carries. Typed
-	// fields belong in Data; this stays for genuinely unstructured extras.
+	// Payload is the free-form bag. Typed fields belong in Data; this
+	// stays for genuinely unstructured extras.
 	Payload map[string]any `json:"payload,omitempty"`
 
 	// Trace context, captured at construction from the active span.

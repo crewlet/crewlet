@@ -1,6 +1,7 @@
 # CLI Reference
 
-Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
+Crewlet ships one command, `crewlet` — a single static binary. Every
+subcommand below is served by it.
 
 ---
 

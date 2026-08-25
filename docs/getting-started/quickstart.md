@@ -374,8 +374,8 @@ crewlet run -config config.yaml        # start the node
 ```
 
 See [Configure via the API](../guides/configure-via-api.md) for editing a
-live company, and [Extensions](../guides/extensions.md) for adding
-behaviour inside the process.
+live company, and [Tools & MCP](../guides/tools-and-mcp.md#extending-the-engine)
+for adding behaviour the agents can reach.
 
 ## Next steps
 
@@ -428,11 +428,11 @@ each), then wire them in:
 - Stop exporting a variable per credential — with that keyring in place,
   `crewlet secrets set LLM_API_KEY` puts the value in the encrypted
   [secret store](../concepts/secret-store.md), which the engine consults ahead
-  of `os.environ` when resolving the `${...}` references you already wrote.
+  of the process environment when resolving the `${...}` references you already wrote.
   Provisioners can write there directly (`crewlet gitlab provision …
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the full [Nimbus example](../../examples/) — a seven-seat company
   with Plane + GitLab + Mattermost + sandbox wired end-to-end
-- Write [extensions](../guides/extensions.md) to hook into engine events
+- Add [MCP servers](../guides/tools-and-mcp.md#extending-the-engine) so agents can reach your own systems
 - See the full [configuration reference](configuration.md) for all YAML options

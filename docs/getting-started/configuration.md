@@ -634,21 +634,6 @@ the company still starts.
 
 ---
 
-## Extensions
-
-```yaml
-extensions:
-  - my_metrics_extension:          # module path resolved by the loader;
-      export: prometheus           #   settings are passed to the constructor
-```
-
-Each entry names an extension module and its settings — see
-[Extensions](../guides/extensions.md) for the loader contract and the hook
-surface. (The REST API is not an extension; run it embedded via `api.port`
-or on its own node via `crewlet run --roles ingress`.)
-
----
-
 ## Environment Variable References
 
 All string values in YAML support `${ENV_VAR}` syntax, keeping secrets out of config files. Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (an encrypted table the provisioning CLIs can write into directly; inert until you store something), then `os.environ`. An unanswered reference resolves to the empty string.

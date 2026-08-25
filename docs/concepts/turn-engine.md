@@ -51,16 +51,22 @@ On the dashboard, onboarding renders as its **own** group (a `book` label, no tr
 
 ## ExecutionPlan artifact
 
-```python
-class ExecutionPlan(BaseModel):
-    decision: Literal["plan", "direct", "skip"] = "plan"
-    reasoning: str = ""
-    steps: list[Step]
-    tools_needed: list[str]
-    success_criteria: list[str]
+```go
+type Plan struct {
+    Decision  PlanDecision // "plan" | "direct" | "skip"
+    Reasoning string
+    Summary   string
+
+    // ToolsNeeded is every tool Execute will call, as the planner named
+    // them — research AND the final delivery tool. Kept raw: the split
+    // into resolved and phantom happens against the live catalogue.
+    ToolsNeeded     []string
+    SuccessCriteria []string
+    Calls           []ledger.Call // what Plan itself called during recon
+}
 ```
 
-To hand a task off to a colleague the planner uses `decision="plan"` with a step that reaches them where the work lives (a chat mention, an issue comment / reassignment, or `a2a_ask`) and names that tool in `tools_needed`. There is no dedicated `delegate` decision — a handoff is just Execute calling the colleague-surface tool.
+To hand a task off to a colleague the planner uses `Decision: "plan"` with a step that reaches them where the work lives (a chat mention, an issue comment / reassignment, or `a2a_ask`) and names that tool in `ToolsNeeded`. There is no dedicated `delegate` decision — a handoff is just Execute calling the colleague-surface tool.
 
 **Real code work** is the `run_sandbox` Execute tool, not a plan field. For a role gated with `role.sandbox.enabled`, the planner lists `run_sandbox` in `tools_needed` (alongside the tool it will report/act with); Execute calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the Execute tool-loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the executor reports / acts in the same turn. See [Code Sandbox](code-sandbox.md).
 
@@ -93,15 +99,21 @@ The per-phase headers are deliberately verbose — each rule traces to an observ
 
 ## ReviewOutcome
 
-```python
-class ReviewOutcome(BaseModel):
-    decision: Literal["done", "self_iterate"]
-    notes: str = ""
-    completed_work: str = ""
-    final_artifact: str = ""
+```go
+type Review struct {
+    Decision phase.Decision // "done" | "self_iterate"
+    Notes    string
+
+    // CompletedWork is what already landed, in the reviewer's own words.
+    CompletedWork string
+
+    // FinalArtifact is what Review wants returned. Empty reuses
+    // Execute's text.
+    FinalArtifact string
+}
 ```
 
-- `done` → return `final_artifact` (fallback: Execute's text).
+- `done` → return `FinalArtifact` (fallback: Execute's text).
 - `self_iterate` → record the round in the [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) and loop back to Plan. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed` (engine-driven, not an LLM decision).
 
 When a turn is blocked and needs a manager or peer — a capability gap requiring someone else's identity / credentials, or a decision above the agent's authority — Review chooses `self_iterate` and says so in `notes`. The next Plan pass adds an outreach step and Execute reaches the colleague directly with its own colleague-surface tools (a Slack mention, a Jira comment, `a2a_ask`) — the same way a human teammate asks for help, and the same way an agent reaches a [human seat](humans-in-the-org.md). The colleague replies asynchronously and that re-triggers the agent. There is **no** engine-side handoff dispatcher, **no** `ask_colleague` decision, and **no** `role.fallback` chain: escalation is ordinary tool use during Execute (no special escalation mechanism).

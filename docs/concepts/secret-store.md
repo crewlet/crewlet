@@ -2,7 +2,7 @@
 
 The **secret store** is an encrypted table (`secret_values`) that answers `${VAR}` references, consulted ahead of the process environment. It gives Crewlet a place to *keep* a secret that the engine can read back — so a provisioner that mints a credential can hand it straight to the engine instead of writing a file a human must source.
 
-It is optional and inert until used. With nothing stored, `${VAR}` resolution is byte-for-byte what it has always been: `os.environ`.
+It is optional and inert until used. With nothing stored, `${VAR}` resolution is byte-for-byte what it has always been: the process environment.
 
 > Related: [Configuration § Secrets](configuration.md#secrets) covers whole-config encryption at rest — a *different* mechanism with the same keyring. See [Which one do I want?](#which-one-do-i-want) below.
 
@@ -36,13 +36,13 @@ secret_values
   source      TEXT               -- "cli" | "gitlab-provision" | ...
 ```
 
-At boot the engine loads every row into a process-local snapshot and installs it as the **secret source**. From then on `_resolve_env_value` asks the store first and falls back to `os.environ`:
+At boot the engine loads every row into a process-local snapshot and installs it as the **secret source**. From then on `_resolve_env_value` asks the store first and falls back to the process environment:
 
 ```mermaid
 flowchart LR
     REF["<b>${GITLAB_TOKEN_SWE}</b><br/>config._resolve_env_value"]
     STORE{"secret store<br/>(boot snapshot)"}
-    ENV{"os.environ"}
+    ENV{"process env"}
     VAL["the value"]
     EMPTY["<b>&quot;&quot;</b><br/>(silently empty)"]
     REF --> STORE

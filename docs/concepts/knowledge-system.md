@@ -29,30 +29,39 @@ The two reads are independent: the diary is read by hybrid candidate selection (
 
 ## The KnowledgeSearcher seam
 
-`crewlet.knowledge.protocol` defines the one seam between the agent runtime and the knowledge backend:
+`internal/knowledge` defines the one seam between the agent runtime and the knowledge backend:
 
-```python
-class KnowledgeHit(BaseModel):
-    title: str = ""
-    url: str = ""            # shareable human URL; "" when unbuildable
-    container: str = ""      # Confluence space key / Plane project identifier
-    page_id: str = ""
-    snippet: str = ""        # plain text, ≤ 200 chars; may be ""
-    ancestors: list[str] = []  # ancestor page titles; [] on Plane
+```go
+type Hit struct {
+    Title     string
+    URL       string   // shareable human link; "" when unbuildable
+    Container string   // Confluence space key / Plane project identifier
+    PageID    string
+    Snippet   string   // plain text, <= 200 chars; may be ""
+    Ancestors []string // ancestor page titles, outermost first; nil on Plane
+}
 
-class KnowledgeSearcher(Protocol):
-    def can_search(self, *, role, org) -> bool: ...
-    async def search(self, *, query, role, org, limit=8,
-                     exclude_ancestors=None) -> list[KnowledgeHit]: ...
+type Searcher interface {
+    // Backend names the integration answering, for logs and for the
+    // operator surface that reports which one a company wired.
+    Backend() string
+
+    // CanSearch is the cheap, no-I/O pre-gate.
+    CanSearch(seat *org.Role, o *org.Organization) bool
+
+    // Search returns up to Query.Limit ranked hits. It never reports an
+    // error: every failure path is an empty result.
+    Search(ctx context.Context, q Query) []Hit
+}
 ```
 
 Contract semantics every backend honors:
 
-- **Scope lives behind the seam.** `search()` derives its container scope from `org` ([`accessible_spaces` / `accessible_projects`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because `org` is a per-call parameter, live config edits to the `knowledge.*` scope flow through with no engine refresh hook.
-- **Unscoped-vs-nothing is enforced inside `search()`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
-- **`can_search` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
-- **Best-effort**: `search()` never raises; every failure path returns no hits and the prompt block renders empty.
-- **`exclude_ancestors`** drops hits whose ancestor/parent chain matches any listed title. The prefetch defaults it to `["Auto-Drafted Skills"]` (`AUTO_DRAFTED_PARENT` in `internal/knowledge/knowledge.go`) so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them.
+- **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`accessible_spaces` / `accessible_projects`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to the `knowledge.*` scope flow through with no engine refresh hook.
+- **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
+- **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
+- **Best-effort**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty.
+- **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. The prefetch defaults it to `["Auto-Drafted Skills"]` (`AUTO_DRAFTED_PARENT` in `internal/knowledge/knowledge.go`) so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them.
 
 **Selection is by integration presence, and single-homed.** Engine start constructs exactly one searcher: `ConfluenceSearcher` when `confluence` is configured, `PlaneSearcher` when an enabled `integrations.plane` is — config validation rejects both at once, so the Plan-phase prefetch, onboarding hints, and skill promotion always share one knowledge home. With neither, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change that rebuilds or removes a transport re-points the running `TurnEngine` at the new searcher (or at none) via `set_knowledge_searcher`.
 
@@ -73,14 +82,12 @@ Contract semantics every backend honors:
 
 ## Accessible containers
 
-The search scope is set by **one** thing: the org-wide `knowledge.*` scope list for the active backend, normalised by `crewlet.knowledge.accessibility` —
+The search scope is set by **one** thing: the org-wide `knowledge.*` scope list for the active backend, normalised once by `internal/knowledge` —
 
-```python
-from crewlet.knowledge.accessibility import accessible_spaces, accessible_projects
-
-accessible_spaces(org)     # normalised set(org.confluence_spaces)  — Confluence
-accessible_projects(org)   # normalised set(org.plane_projects)     — Plane
-# {"HANDBOOK"}  — or set() ⇒ unscoped/ACL-bound for self-authenticating agents
+```text
+knowledge.plane_projects: ["HANDBOOK"]   # scoped to these containers
+knowledge.plane_projects: []             # empty ⇒ unscoped / ACL-bound for
+                                         # self-authenticating agents
 ```
 
 It is **role- and unit-independent** — every agent has the same read scope.
@@ -178,7 +185,7 @@ The two are independent: an org can have knowledge search without reflection, or
 
 ## Relevant-knowledge prefetch
 
-Beyond agents calling the backend's search tools directly, the Plan-phase prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the planner. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the planner sees title + snippet bullets without having to think to call a tool. The `can_search` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
+Beyond agents calling the backend's search tools directly, the Plan-phase prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the planner. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the planner sees title + snippet bullets without having to think to call a tool. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
 
 Full page bodies open via the backend's page-read MCP tool; further searches via its search MCP tool (e.g. `confluence_get_page` / `confluence_search` on Confluence, the `plane` server's page tools on Plane).
 

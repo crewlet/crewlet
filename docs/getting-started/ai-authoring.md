@@ -157,8 +157,8 @@ with any standards-compliant JSON Schema validator (`jsonschema`,
 `ajv`), or by reading it.
 
 It carries more than field names. Because the config models forbid
-unknown keys and the cross-field rules are encoded alongside their
-Python validators, a schema-only check catches:
+unknown keys and the cross-field rules are generated from the same Go
+types the engine parses with, a schema-only check catches:
 
 - unknown keys, at every level including roles, units, and MCP servers
 - wrong types, and bad enums (`kind: robot`, `type: openaii`)

@@ -44,7 +44,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/agents/{id}` | Single agent — static config + live state (incl. `live_call`) + LLM history |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills) |
 | `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
-| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin`, `custom` (`Engine(tools=[...])`), `extension:<name>`, or `mcp:<server>` (see [Tool origins](../guides/extensions.md#tool-origins)) |
+| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |

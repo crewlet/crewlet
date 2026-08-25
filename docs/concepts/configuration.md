@@ -117,7 +117,7 @@ The engine boots in this order:
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 7. `SELECT payload FROM company_config WHERE is_active = TRUE`
-   - **Row present**: call `apply_config(payload)` which spawns the full company
+   - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 
 ### Two equivalent bootstrap entry points
@@ -170,7 +170,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
 
 ---
 
@@ -182,9 +182,9 @@ This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-con
 
 ### The engine half
 
-Converging runs `await self.apply_config(payload)`, which:
+Converging applies the payload, which:
 
-1. Acquires `self._apply_lock` (serialises the CLI path, the reconcile loop, and tests).
+1. Takes the apply lock, so the CLI path, the reconcile loop and tests serialise against one another.
 2. Re-reads the secret store, then validates the payload as `CompanyConfig` (defence in depth).
 3. **No-op short-circuit:** if the new payload equals the current active config **and** its [resolution fingerprint](control-plane.md#rotation) is unchanged, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes. Same payload with a *moved* fingerprint is a credential rotation, not a no-op: the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild and the rest is skipped.
 4. Snapshots in-memory state for rollback (including `_scheduling_config` so a rollback after `_apply_scheduling_live` restores the prior scheduler settings).
@@ -196,15 +196,15 @@ Converging runs `await self.apply_config(payload)`, which:
    - **`turn_engine`** — push new settings into `TurnEngineSettings` cell; in-flight turns finish on the prior snapshot
    - **`providers`** — LLM providers are rebuilt and swapped in place. The **embeddings** provider is rebuilt with them — model, key and base URL are all live — with **one exception that is refused rather than applied**: `dimensions`. Rows already written carry vectors of the old width, and a similarity query across two widths compares nothing; the apply fails with an error naming the declared width and the width this store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live, in both directions: a company that drops it degrades to recency-only recall on the next turn rather than at the next restart.
    - **`scalars`** — `integrations.forge_app_id`, `notification_rate_limit` (the rate limit is propagated onto the running `NotificationService` so it takes effect on the next notification), and `notification_coalesce_window_seconds` / `notification_coalesce_max_batch` (mutated in place on the shared `BatchOptions` the inbox batch consume loops read every cycle — takes effect on the next batch, no re-subscription; see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing))
-   - **`restart_required`** — MCP server start/stop/restart for both stdio (`MCPToolBridge.restart_server`) and remote http (`restart_http_server`, triggered by a `url` / `headers` change), per-role MCP respawn when a role's `mcp_env` changes (`_respawn_role_mcp` — this carries the per-agent Slack/GitHub credentials too), notification transport dict swap with routing re-seed (Slack apps + Jira/Confluence project/space key→lead maps), integration handle-registry refresh, extension `unregister`/`register`. **Learning** is the one subsystem that does NOT live-restart — the new `learning:` config is stored for the next engine restart and a WARNING is logged; the running `ReflectEngine` / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then.
+   - **`restart_required`** — MCP server start/stop/restart for both stdio  and remote http (`restart_http_server`, triggered by a `url` / `headers` change), per-role MCP respawn when a role's `mcp_env` changes (`_respawn_role_mcp` — this carries the per-agent Slack/GitHub credentials too), notification transport dict swap with routing re-seed (Slack apps + Jira/Confluence project/space key→lead maps), integration handle-registry refresh, extension `unregister`/`register`. **Learning** is the one subsystem that does NOT live-restart — the new `learning:` config is stored for the next engine restart and a WARNING is logged; the running `ReflectEngine` / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then.
 6. Refreshes derived state (`DelegationHandler`).
 7. Publishes `crewlet.config.revision_applied` with `status`, `applied_subsystems`, optional `error`.
 
-On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-derives both the per-seat token caps and the running transports' routing maps from the rolled-back org, so a failed apply never leaves live spend limits or webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The converge path unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in the fleet's [apply status](control-plane.md) so peers can see it.
+On any mid-apply failure the rollback restores all captured state — and, after the org and the transports are back, re-derives both the per-seat token caps and the running transports' routing maps from the rolled-back org, so a failed apply never leaves live spend limits or webhook routing derived from a revision that was never activated. The error carries which subsystem failed and which ones had already applied. The active row stays active either way — the dashboard banner surfaces divergence. The converge path carries that partial list onto the `config_revision_applied` event so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in the fleet's [apply status](control-plane.md) so peers can see it.
 
 Rollback **restarts** the transports it restores, routing them through the same swap the apply used, so a failed apply cannot leave the node with a live config and a dead inbound path.
 
-What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. `ConfigApplyError` therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
+What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. The apply error therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
 
 ### The API half
 

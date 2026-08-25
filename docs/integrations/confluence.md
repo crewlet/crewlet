@@ -380,14 +380,6 @@ When both Jira and Confluence are configured, agents can cross-reference between
 
 This works naturally because both integrations share the `mcp-atlassian` MCP server — all Jira and Confluence tools are available in the same tool list.
 
----
-
-## Programmatic Setup
-
-```python
-from crewlet.config import ConfluenceConfig
-from crewlet.notifications.transports.confluence import ConfluenceTransport
-
 # Cloud — webhooks via Forge app
 confluence_transport = ConfluenceTransport(ConfluenceConfig(
     url="https://your-company.atlassian.net/wiki",

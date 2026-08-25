@@ -107,12 +107,6 @@ Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature
 
 `webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Jira and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 
-### Programmatic Transport Setup
-
-```python
-from crewlet.config import JiraConfig
-from crewlet.notifications.transports.jira import JiraTransport
-
 # Cloud — webhooks via Forge app
 jira_config = JiraConfig(
     url="https://your-company.atlassian.net",

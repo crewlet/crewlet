@@ -138,7 +138,7 @@ The **scheduler** is gated too, and differently: a tick on a shedding node is sk
 
 ## Rotation
 
-A config revision and the *values* its `${VAR}` references resolve to are two different things, and `apply_config` used to compare only the first.
+A config revision and the *values* its `${VAR}` references resolve to are two different things, and the apply used to compare only the first.
 
 That gap was the whole of secret rotation. Re-activating an unchanged revision produces a byte-identical payload, so the no-op early-out fired and nothing rebuilt: MCP children kept the credential they captured at spawn, LLM providers kept the revoked key, transports kept the old token.
 
@@ -158,7 +158,7 @@ In-place is right — the alternative is a turn holding a reference to a dict no
 
 Two mechanisms, and the split between them is the point.
 
-**The pin.** A turn captures those four things once, at the top, and reads through the capture for the rest of it. The capture lives in a `contextvars.ContextVar`, so it propagates into every task the turn spawns — a sub-agent inherits the turn that spawned it — without threading a parameter through every phase signature. It is keyed by owner and seat, so a concurrent turn for a different seat, or a second engine in the same process, reads live state.
+**The pin.** A turn captures those four things once, at the top, and reads through the capture for the rest of it. The capture rides the turn's own `context.Context`, so it reaches every goroutine the turn spawns — a sub-agent inherits the turn that spawned it — without threading a parameter through every phase signature. It is keyed by owner and seat, so a concurrent turn for a different seat, or a second engine in the same process, reads live state.
 
 **The drain.** A pin holds a *catalogue*, not a *capability*: pinning an MCP tool wrapper does not keep the client it dispatches to alive, so a pinned turn whose server was respawned fails as a dead tool rather than as a name that vanished. So before the apply mutates a seat — swapping its definition, respawning its per-role MCP children, decommissioning it — it waits for that seat's in-flight turns, capped at 10 s.
 
