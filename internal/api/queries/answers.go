@@ -84,7 +84,13 @@ type Sources struct {
 	// the budget surface with `durable: false` rather than zeros: "nobody
 	// looked" and "nothing was spent" are different facts, and only one of
 	// them is a measurement.
-	Budget *store.Budgets
+	//
+	// A consumer-defined interface rather than the whole coord.Fleet: the
+	// budget screen reads spend and nothing else, and a source that could
+	// reach the activation pointer would eventually be given a reason to.
+	Budget interface {
+		Usage(ctx context.Context) ([]coord.Usage, error)
+	}
 
 	// Sandbox is the durable record of detached coding runs. Nil leaves
 	// the question unregistered, which is honest for a node with no

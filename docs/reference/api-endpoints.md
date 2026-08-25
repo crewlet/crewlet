@@ -53,6 +53,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable `pending_sandbox_run` row (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
+| `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `GET` | `/conversations` | What a seat already said in each thread / issue / pull request it works — the same [conversation-session](../concepts/conversation-sessions.md) rows the engine renders into that conversation's next turn. `?handle=` lists them; `?handle=&key=` returns one conversation's entries. `available: false` means this node cannot see the ledger, never that the seat has said nothing |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
@@ -690,9 +691,10 @@ budget and they cover three different spans, which is why any surface
 mixing them can only be wrong:
 
 - the **cap** is configuration, from the active company revision;
-- **durable usage** is the shared counter in `token_budget_usage`, written
-  by every process running the company and surviving restarts. It is what
-  the engine actually enforces against;
+- **durable usage** is the fleet's shared counter, in the
+  [coordination store](../concepts/coordination.md), written by every node
+  running the company and surviving restarts. It is what the engine
+  actually enforces against;
 - the **live meter** is per engine *run*. It is pushed to the dashboard as
   `budget_reported` and resets when the process does.
 
@@ -700,7 +702,7 @@ Only the meter and the cap share a span, which is why a seat card can draw
 a bar and this room mostly cannot. What it could never show before is the
 more useful picture — "this seat has burned 94% of its cap across two
 restarts" — because the durable half was reachable only from
-`crewlet budgets show`.
+`crewlet budgets show`, which is itself a client of this route.
 
 ```json
 {
@@ -736,6 +738,40 @@ Exhaustion is `refused_at`, the moment a charge was turned away — never
 and increments nothing, so a seat charged in 3k-token rounds against a
 100k cap stalls near 99k and never compares equal to its own maximum. A
 ratio test shows a permanently blocked seat at 99% and calls it healthy.
+
+### `POST /budgets/reset`
+
+Zeroes the fleet's token counter. `?scope=` names one (`org`, `agent:<id>`);
+its absence clears every one.
+
+```bash
+curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "http://localhost:8080/budgets/reset?scope=agent:<uuid>"
+```
+
+```json
+{"cleared": 1, "scopes": ["agent:<uuid>"]}
+```
+
+The answer **names what it cleared** rather than only counting it: this is an
+irreversible action against a spend ceiling, and a bare count leaves an
+operator unable to tell "reset the seat I meant" from "reset a scope that was
+already empty".
+
+This route exists because the counter is fleet state. On the default topology
+the [coordination store](../concepts/coordination.md) is the engine's own
+embedded broker, so a running node is the only thing that can reach it —
+which is why `crewlet budgets reset` is a client of this route rather than a
+command that opens a file.
+
+Two refusals, both deliberate:
+
+- **401 without a token.** `allow_anonymous_read` is on by default and opens
+  the whole read surface; a reset is a write, so it is never eligible.
+- **503 with no coordination store.** A standalone API with no counter
+  attached answers `{"error":"no_coordination_store"}` rather than 404: the
+  route exists on this build, and a 404 sends an operator looking for a
+  version mismatch that is not there.
 
 ### `GET /integrations`
 

@@ -2,12 +2,13 @@ package coord
 
 import (
 	"context"
+	"sort"
 	"time"
 )
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These four answer the other questions
+// A lease answers "who runs this seat". These five answer the other questions
 // a fleet has to agree on, and they are here — beside [Backend], certified by
 // the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
 // internal/store is documented "one file, one process". Every one of them was
@@ -79,6 +80,13 @@ const (
 	// therefore the bucket's age. A cooldown carries its own end instant,
 	// so the bucket only has to outlive the longest one.
 	CooldownMax = 24 * time.Hour
+
+	// BudgetRetention is deliberately absent, and the absence is the
+	// point: a token cap is a ceiling for the LIFE of a deployment, so
+	// the counter's bucket has no age at all. A counter that rolled itself
+	// over would silently re-arm a company somebody had stopped on
+	// purpose, on a horizon nobody chose. Clearing one is an operator
+	// action — see [Budgets.Reset].
 
 	// StatusFreshness bounds how old a node's apply status may be and
 	// still count. A node that stops reporting must VANISH from the fleet
@@ -162,6 +170,102 @@ type Cooldowns interface {
 	// the pre-sharing behaviour, and the one that cannot make a healthy
 	// fleet refuse to use any of its credentials.
 	Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
+}
+
+// OrgScope is the company-wide token counter's key.
+const OrgScope = "org"
+
+// AgentScope is one seat's counter key.
+//
+// Keyed on the DERIVED agent id rather than the handle, matching the diary and
+// the episodes: renaming a handle then starts a fresh budget rather than
+// inheriting the spend of whoever held the name before.
+func AgentScope(agentID string) string { return "agent:" + agentID }
+
+// Spend is what one charge did.
+type Spend struct {
+	// OK is false when a scope refused. RefusedScope, RefusedUsed and
+	// RefusedLimit then say WHICH and by how much — "the company is out"
+	// and "this seat is out" send an operator to different places, and a
+	// bare refusal sends them to neither.
+	OK           bool
+	RefusedScope string
+	RefusedUsed  int
+	RefusedLimit int
+
+	// OrgUsed and AgentUsed are the counters after a successful charge.
+	OrgUsed   int
+	AgentUsed int
+}
+
+// Usage is one scope's counter, for the operator surface.
+type Usage struct {
+	Scope     string
+	Used      int
+	UpdatedAt time.Time
+}
+
+// Budgets is the fleet's token counter.
+//
+// USAGE IS SHARED, CAPS ARE NOT. A cap belongs to a config epoch — a revision
+// that raises a ceiling takes effect on the next turn — while the counter has
+// to be one number across the fleet, because per-node counters mean N nodes
+// each spend the whole allowance and an org cap of 500 000 is silently
+// N x 500 000. So the limit travels IN on every call and the store holds only
+// what has been spent.
+type Budgets interface {
+	// Charge checks and increments the seat's counter and the org's, and
+	// a refusal by either leaves NEITHER charged.
+	//
+	// There is no transaction here — two keys, and a KV store has no way
+	// to write both at once — so the atomicity is built rather than
+	// borrowed: the ORG is charged first and compensated if the seat then
+	// refuses.
+	//
+	// Org first, and not the reverse, for two reasons that point the same
+	// way. It makes the refusal report ORG-FIRST for free when both scopes
+	// are out of room, and "the company is out" is the fact that matters —
+	// raising one seat's ceiling against an exhausted org changes nothing,
+	// and an operator sent to the seat first finds that out the slow way.
+	// And it puts the compensation on the path a seat refusal ALWAYS
+	// takes, rather than on a race between two nodes: an unwind that only
+	// a race can reach is an unwind nothing ever proves works.
+	//
+	// What the compensation cannot cover is a process that dies between
+	// the two writes. The org is then over-stated by one round, which
+	// trips the cap EARLY — the fail-closed direction, bounded by how
+	// often a node dies mid-charge, and visible in the counter rather than
+	// silently absorbed.
+	//
+	// FAILS CLOSED: an error stops the round. It is NOT a refusal, and a
+	// caller must not report it as one — "the company is out of tokens"
+	// is a budget event an operator acts on, and "the counter is
+	// unreachable" is an outage. Money leaves the building for every
+	// token, so a counter that cannot be reached must not un-cap a
+	// company.
+	//
+	// A limit of 0 is UNLIMITED, matching the config: `token_budget: 0` is
+	// how an operator says "no ceiling", and reading it as "no allowance"
+	// would stop every company that never set one.
+	Charge(ctx context.Context, agentScope string, tokens, orgLimit, agentLimit int) (Spend, error)
+
+	// Used reports one scope's spend. A scope never charged has spent
+	// nothing; an unreachable store is an error, never a zero.
+	Used(ctx context.Context, scope string) (int, error)
+
+	// Usage returns every counter, org first then seats by scope.
+	//
+	// Ordered so the operator surface does not have to sort, and so two
+	// reads of an unchanged counter are byte-identical — a listing that
+	// reshuffled would make a diff of two captures unreadable.
+	Usage(ctx context.Context) ([]Usage, error)
+
+	// Reset zeroes one scope, or every scope when given "", and reports
+	// how many it cleared.
+	//
+	// An operator action, never a schedule. See [BudgetRetention]'s
+	// absence above.
+	Reset(ctx context.Context, scope string) (int, error)
 }
 
 // Activation is one entry of the config pointer every node converges on.
@@ -249,13 +353,34 @@ type Plane interface {
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
-// One interface at the CONSTRUCTION seam and four at the call sites: the
-// webhook edge takes a Claims and nothing else, the valve takes a Counter.
-// A consumer that could reach the whole store would eventually use it.
+// One interface at the CONSTRUCTION seam and five at the call sites: the
+// webhook edge takes a Claims and nothing else, the valve takes a Counter,
+// a turn's meter takes a Budgets. A consumer that could reach the whole store
+// would eventually use it.
 type Fleet interface {
 	Counter
 	Claims
 	Ledger
 	Cooldowns
+	Budgets
 	Plane
+}
+
+// SortUsage puts the org counter first, then the seats by scope.
+//
+// Shared by the backends rather than left to each: "org" does NOT sort before
+// "agent:…" alphabetically, so a backend that just sorted would put the
+// company's own counter in the middle of its seats — and a listing whose order
+// differed between backends would make a diff of two captures unreadable.
+func SortUsage(rows []Usage) {
+	sort.Slice(rows, func(i, j int) bool {
+		switch {
+		case rows[i].Scope == OrgScope:
+			return rows[j].Scope != OrgScope
+		case rows[j].Scope == OrgScope:
+			return false
+		default:
+			return rows[i].Scope < rows[j].Scope
+		}
+	})
 }

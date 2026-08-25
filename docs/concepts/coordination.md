@@ -29,6 +29,7 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 | Delivery dedupe | **Fails open** — do not suppress | A claim that cannot be read has not suppressed anything. Suppressing on a read failure drops the delivery entirely, and nothing redelivers it. |
 | Completion ledger | **Fails open** — do the work | The pre-ledger answer. Failing closed parks real work during an outage; the redundant turn is bounded and visible. |
 | Lease renew | **Holds, briefly** | Ambiguity is not loss. The watchdog is what bounds it — see [Seat Ownership](seat-ownership.md). |
+| Budget charge | **Fails closed** — stop the round | Money leaves the building for every token, and a counter that cannot be reached must not un-cap a company. An error is *not* a refusal, though: the caller fails the turn rather than telling an agent it is out of budget. |
 
 ---
 
@@ -44,6 +45,7 @@ flowchart LR
         CL[("claims<br/>delivery dedupe")]
         R[("rate<br/>notification valve")]
         CD[("cooldowns<br/>credential 429s")]
+        B[("budgets<br/>org · per-seat spend")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations · a2a<br/>company payload · secrets")]
@@ -62,6 +64,7 @@ flowchart LR
 | `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, so a vendor's retry to a *different* ingress node woke the same seat twice | [Event System](event-system.md) |
 | `rate` | The notification valve. Four nodes ran four of them, so a seat capped at five a second emitted twenty | [Event System](event-system.md) |
 | `cooldowns` | Which provider credential is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
+| `budgets` | Org and per-seat token spend. Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000 | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -69,7 +72,7 @@ A fleet is not configured — it is **discovered** from these, which is why addi
 
 ## Retention is a bucket's age
 
-Every slot above except `leases` and `config` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
+Every slot above except `leases`, `config` and `budgets` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -81,6 +84,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `cooldowns` | 24 hours | The longest cooldown anything sets. A cooldown stores its own end instant, so the bucket only has to outlive the longest one |
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
+| `budgets` | none | A cap is a ceiling for the life of a deployment. A counter that rolled itself over would silently re-arm a company somebody had stopped on purpose, on a horizon nobody chose — so clearing one is an operator action (`crewlet budgets reset`) |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
@@ -97,6 +101,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
 - **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with.
 - **A2A channels, scheduled-run claims, pending sandbox runs, thread follows.**
+- **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.
 
 And two things stay **per-process** deliberately:
 
@@ -116,7 +121,11 @@ And two things stay **per-process** deliberately:
 
 The twin is not a lesser implementation: it is held to the **same certified suite** as the real backends (`internal/coord/coordtest`), because a twin that agrees only with itself proves nothing.
 
-> **On the embedded backend the coordination store lives inside the running engine.** It exists while the engine runs. That is the correct trade for a single node — nothing else to install — but it has one visible consequence: an *offline* `crewlet config import --activate` cannot move the activation pointer, because there is nothing running to move it in. The command says so. A node that starts holding an active revision the fleet has no pointer for publishes it at boot, so a restart converges without any operator action.
+> **On the embedded backend the coordination store lives inside the running engine.** It exists while the engine runs. That is the correct trade for a single node — nothing else to install — but it has two visible consequences.
+>
+> An *offline* `crewlet config import --activate` cannot move the activation pointer, because there is nothing running to move it in. The command says so. A node that starts holding an active revision the fleet has no pointer for publishes it at boot, so a restart converges without any operator action.
+>
+> And the operator commands that act on this state talk to a **running node** rather than to a file: `crewlet budgets show` and `crewlet budgets reset` are clients of that node's API. Opening the store from outside would either find nothing (the engine is down, and an embedded broker exists only while it runs) or corrupt it (the engine is up, and a second broker on the same store directory is *accepted* rather than refused).
 
 ---
 

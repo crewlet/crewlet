@@ -59,16 +59,10 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
 		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},
-		{"BudgetChargeAccumulates", testBudgetChargeAccumulates},
-		{"BudgetZeroLimitIsUnlimited", testBudgetZeroLimitIsUnlimited},
-		{"BudgetRefusalNamesTheScope", testBudgetRefusalNamesTheScope},
-		{"BudgetSeatRefusalUnwindsTheOrgCharge", testBudgetSeatRefusalUnwindsTheOrgCharge},
-		{"BudgetOversizeChargeIsScreened", testBudgetAnOversizeChargeIsScreenedBeforeTheInsert},
-		{"BudgetChargeIsExclusiveUnderContention", testBudgetChargeIsExclusiveUnderContention},
-		{"BudgetZeroTokensIsNotACharge", testBudgetZeroTokensIsNotACharge},
-		{"BudgetSeatsAreSeparateCounters", testBudgetSeatsAreSeparateCounters},
-		{"BudgetListPutsTheOrgFirst", testBudgetListPutsTheOrgFirst},
-		{"BudgetResetIsScoped", testBudgetResetIsScoped},
+		// NOT HERE: the token counter. It is fleet state now, certified
+		// by coordtest against both coordination backends — a counter
+		// this node kept privately was the whole defect (migration
+		// 0011), so a suite for one would be certifying the bug.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

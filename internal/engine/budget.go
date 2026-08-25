@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Enforcing the token budget.
@@ -17,10 +17,11 @@ import (
 // token, which is why this fails CLOSED — a counter that cannot be reached
 // stops the round rather than silently un-capping the company.
 //
-// CAPS ARE READ OFF THE EPOCH, usage off the shared counter, and the split is
-// the design: a revision that raises a ceiling takes effect on the next turn
-// (the cap travels in on every call), while the counter has to be one number
-// across the fleet or N nodes each spend the whole allowance.
+// CAPS ARE READ OFF THE EPOCH, usage off the fleet's shared counter, and the
+// split is the design: a revision that raises a ceiling takes effect on the
+// next turn (the cap travels in on every call), while the counter has to be
+// one number across the fleet or N nodes each spend the whole allowance —
+// which is exactly what a counter on the node's own database was.
 
 // meter charges one seat's rounds against the shared counter.
 //
@@ -28,17 +29,17 @@ import (
 // change cannot move the ceiling a round is judged against, which is the same
 // rule every other epoch read follows (rewrite/decisions/404).
 type meter struct {
-	budgets    *store.Budgets
-	agentID    string
+	budgets    coord.Budgets
+	agentScope string
 	orgLimit   int
 	agentLimit int
 }
 
 var _ toolloop.BudgetMeter = (*meter)(nil)
 
-// Spend checks and increments in ONE operation. See store.Budgets.Charge.
+// Spend checks and increments in ONE operation. See coord.Budgets.Charge.
 func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
-	got, err := m.budgets.Charge(ctx, m.agentID, tokens, m.orgLimit, m.agentLimit)
+	got, err := m.budgets.Charge(ctx, m.agentScope, tokens, m.orgLimit, m.agentLimit)
 	if err != nil {
 		// NOT a refusal. The caller must tell "the company is out of
 		// tokens" from "the counter is unreachable": the first is a
@@ -55,12 +56,12 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 
 // meterFor builds the meter for one seat's turn, or nil.
 //
-// Nil when there is nothing to enforce — no store, or no ceiling anywhere in
-// the epoch. A meter over an unlimited budget would put a database round trip
-// on every LLM round to answer "yes" every time, which is the cost of a check
-// with no question behind it.
+// Nil when there is nothing to enforce — no coordination store, or no ceiling
+// anywhere in the epoch. A meter over an unlimited budget would put a network
+// round trip on every LLM round to answer "yes" every time, which is the cost
+// of a check with no question behind it.
 func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
-	if e.backends == nil || e.backends.Store == nil || c == nil || c.Org == nil {
+	if e.backends == nil || e.backends.Fleet == nil || c == nil || c.Org == nil {
 		return nil
 	}
 	seat := c.Org.AgentSeatByHandle(handle)
@@ -76,7 +77,7 @@ func (e *Engine) meterFor(c *Company, handle string) toolloop.BudgetMeter {
 		return nil
 	}
 	return &meter{
-		budgets: e.backends.Store.Budgets(), agentID: agentID.String(),
+		budgets: e.backends.Fleet, agentScope: coord.AgentScope(agentID.String()),
 		orgLimit: orgLimit, agentLimit: agentLimit,
 	}
 }

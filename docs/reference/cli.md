@@ -11,8 +11,8 @@ Crewlet ships a `crewlet` command (also available as `python -m crewlet`).
 | `crewlet run [config]` | Read Tier A bootstrap (default `./config.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate <config.yaml>` | Validate a Tier A or Tier B YAML and print a summary (`--json` for machine-readable errors) |
 | `crewlet migrate [config]` | Apply pending schema migrations (Tier A file, default `./config.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`) — nothing rather than zeros when no scope has spent anything |
-| `crewlet budgets reset [config]` | Zero token usage — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
+| `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -286,9 +286,16 @@ install looks like rather than an error.
 
 ## `crewlet budgets`
 
-Token-budget usage is stored in the database: it is shared by every process
-running the company (an in-memory counter would make an org cap of 500k into
-N × 500k) and it survives restarts.
+Token-budget usage lives in the fleet's [coordination store](../concepts/coordination.md):
+one counter for the whole company, surviving restarts. A counter each node
+kept privately would make an org cap of 500k into N × 500k.
+
+**These commands talk to a running node**, not to a file. That follows from
+where the counter lives: on the default topology the coordination store is the
+engine's own embedded broker, so there is nothing on disk to open — and opening
+it anyway would be worse than useless, because a second broker on the same
+store directory is accepted rather than refused, and two writers on one store
+is corruption rather than contention.
 
 ```bash
 crewlet budgets show                       # usage per scope
@@ -297,14 +304,26 @@ crewlet budgets reset -scope org           # just the org
 crewlet budgets reset -scope agent:<id>    # just one seat
 ```
 
+| Flag | Default | What it does |
+|---|---|---|
+| `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
+| `-token` | `$CREWLET_API_TOKEN`, then the config's first `api.auth.tokens` entry | The bearer token. `reset` is a write, so it always needs one — `allow_anonymous_read` opens reads and nothing else |
+
+The environment wins over the config so an operator who exported a token
+deliberately gets that one. There is no token *default* on the command line:
+a token typed as an argument is in the shell history, in `ps`, and in any CI
+log that echoes the command.
+
 The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
 derives the same numbers without coordinating. Only the usage is shared.
 
-`show` prints nothing rather than zeros when no scope has spent anything: a
-company that has spent nothing and one whose counters were reset are the
-same row-less state, and printing `0` for scopes that do not exist would
-invent seats.
+`show` refuses rather than printing zeros when the node reports it could not
+read the counter (`durable: false` on the query surface). A counter nobody
+could look at is not a counter that reads zero, and a table of zeros draws a
+company at 0% of its budget at exactly the moment nothing is known. Seats with
+no cap and no spend are left out for the same reason in reverse: a permanent
+zero row per seat buries the seats that matter.
 
 `reset` is an operator action and never a schedule — a budget is a ceiling
 for the life of a deployment, and a counter that rolled itself over would

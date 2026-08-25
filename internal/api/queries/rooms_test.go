@@ -86,7 +86,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Conversations: ledgerstore.NewMemoryConversations(),
 		Diary:         &learning.Diary{},
 		Episodes:      &learning.Episodes{},
-		Budget:        &store.Budgets{},
+		Budget:        coordmemory.NewFleet(),
 		Sandbox:       memorySandbox{},
 		Config:        surface,
 	}

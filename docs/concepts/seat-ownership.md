@@ -108,7 +108,7 @@ It is **not** on every seat-scoped write, and the honest inventory is narrower t
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
 | `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
 | `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
-| `token_usage` | Two rows, skewing the dashboard rollup. **Not** budget enforcement, which reads the shared `token_budget_usage` counter and stays correct |
+| `token_usage` | Two rows, skewing the dashboard rollup. **Not** budget enforcement, which reads the fleet's shared counter and stays correct |
 
 The last two are deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's. And `token_usage` is observability on a high-volume insert path swept on a TTL; a guard there costs more than the skew it prevents.
 

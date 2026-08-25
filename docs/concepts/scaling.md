@@ -104,6 +104,7 @@ stopping it.
 | `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |
 | `cooldowns` | Which provider key is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `rate` | The notification valve | [Event System](event-system.md) |
+| `budgets` | Org and per-seat spend against the cap. Caps stay config-derived in memory; only *usage* is shared | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).
@@ -193,8 +194,8 @@ theoretical one:
   memory to its twin — that needs the duplicate *turn* not to happen, which
   is the completion ledger's job — and `token_usage` is observability on a
   high-volume path swept on a TTL, where a guard costs more than the skew.
-  Budget *enforcement* is unaffected: it reads the shared
-  `token_budget_usage` counter. `episodes` and the counterparty interaction
+  Budget *enforcement* is unaffected: it reads the fleet's shared
+  counter. `episodes` and the counterparty interaction
   count are collapsed, and onboarding was already exclusive; see
   [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work).
 - **Per-company singletons remain singletons.** They sit behind leases so any

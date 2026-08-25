@@ -452,7 +452,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Diary:         learning.NewDiary(e.Backends().Store),
 			Episodes:      learning.NewEpisodes(e.Backends().Store),
 			Config:        configSurface,
-			Budget:        e.Backends().Store.Budgets(),
+			Budget:        e.Backends().Fleet,
 			// The DURABLE record of detached coding runs. Read rather
 			// than projected: a run parked on a person's question can
 			// wait days, and the live projection sweeps long before
@@ -467,7 +467,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// exactly once — a vendor retrying reaches whichever node the
 		// load balancer picks, so a claim only this node could see would
 		// suppress nothing.
-		Config: configSurface,
+		// The WRITE half of the counter, for POST /budgets/reset. On the
+		// default topology the coordination store is this engine's own
+		// embedded broker, so a node that is running is the only thing
+		// that can reach it — which is why the reset is a route and not
+		// only a CLI subcommand.
+		Budgets: e.Backends().Fleet,
+		Config:  configSurface,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,

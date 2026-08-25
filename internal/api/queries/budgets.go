@@ -3,8 +3,8 @@ package queries
 import (
 	"context"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The budgets answer: the CAP the engine enforces against, paired with the
@@ -44,12 +44,12 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		return out, nil
 	}
 
-	// The durable half. A store that cannot be read leaves `durable` false
+	// The durable half. A counter that cannot be read leaves `durable` false
 	// and every figure absent — the alternative is drawing a company at 0%
 	// of its budget when the truth is that nobody looked.
-	used := map[string]store.Usage{}
+	used := map[string]coord.Usage{}
 	if s.Budget != nil {
-		rows, err := s.Budget.List(ctx)
+		rows, err := s.Budget.Usage(ctx)
 		if err != nil {
 			//nolint:nilerr // Deliberate: see the paragraph above.
 			return out, nil
@@ -60,7 +60,7 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		out["durable"] = true
 	}
 
-	orgRow := used[store.OrgScope]
+	orgRow := used[coord.OrgScope]
 	out["org"] = map[string]any{
 		"max_tokens":         company.TokenBudget,
 		"durable_used":       orgRow.Used,
@@ -77,7 +77,7 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 			// has to learn to ignore.
 			continue
 		}
-		row := used[store.AgentScope(id.String())]
+		row := used[coord.AgentScope(id.String())]
 		seats = append(seats, map[string]any{
 			"agent_id":           id.String(),
 			"role":               role.Name,

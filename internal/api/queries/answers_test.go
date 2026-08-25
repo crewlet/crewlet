@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -506,7 +508,6 @@ func TestBudgetsPairTheCapWithTheDurableCounter(t *testing.T) {
 	// THE CAP AND THE COUNTER GO TOGETHER, and neither is useful alone: a
 	// ceiling with no usage says nothing about how close a company is, and
 	// usage with no ceiling says nothing about whether it will be refused.
-	db := openStore(t)
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -528,14 +529,15 @@ token_budget: 10000
 	}
 	ceo := organization.AgentSeatByHandle("ceo")
 	id, _ := organization.AgentIDFor(ceo)
-	if _, err := db.Budgets().Charge(t.Context(), id.String(), 120, 10000, 500); err != nil {
+	budgets := coordmemory.NewFleet()
+	if _, err := budgets.Charge(t.Context(), coord.AgentScope(id.String()), 120, 10000, 500); err != nil {
 		t.Fatalf("charge: %v", err)
 	}
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
-		Budget:  db.Budgets(),
+		Budget:  budgets,
 	})
 	got := ask(t, r, "budgets", nil)
 
@@ -599,7 +601,6 @@ func TestALiveMeterIsNullRatherThanZeroWhenAbsent(t *testing.T) {
 	// The live meter is THIS PROCESS's run and shares a span with neither
 	// the cap nor the durable counter. A zero would be a measurement; the
 	// honest answer for a seat this node has not run is nothing at all.
-	db := openStore(t)
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -613,7 +614,7 @@ roles:
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
-		Budget:  db.Budgets(),
+		Budget:  coordmemory.NewFleet(),
 	})
 	got := ask(t, r, "budgets", nil)
 	seats, _ := got["seats"].([]any)

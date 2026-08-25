@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -22,7 +23,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The sandbox's engine-side wiring: which concrete thing satisfies which seam.
@@ -129,7 +129,7 @@ func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Se
 // refusal cannot un-spend a run that already ran, and recording it anyway is
 // the only way the meter stays true when the cap is binding.
 type sandboxAccountant struct {
-	budgets *store.Budgets
+	budgets coord.Budgets
 	caps    func(agentID string) (org, seat int)
 }
 
@@ -138,7 +138,7 @@ func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens
 		return false, nil
 	}
 	orgLimit, seatLimit := a.caps(agentID)
-	spend, err := a.budgets.Charge(ctx, agentID, tokens, orgLimit, seatLimit)
+	spend, err := a.budgets.Charge(ctx, coord.AgentScope(agentID), tokens, orgLimit, seatLimit)
 	if err != nil {
 		return false, err
 	}
@@ -585,11 +585,11 @@ func (e *Engine) stopSandbox() {
 
 // sandboxAccountant charges collected runs, or nil where nothing counts them.
 func (e *Engine) sandboxAccountant() sandbox.Accountant {
-	if e.backends == nil || e.backends.Store == nil {
+	if e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}
 	return sandboxAccountant{
-		budgets: e.backends.Store.Budgets(),
+		budgets: e.backends.Fleet,
 		// The ORG cap and the seat's own, read off the epoch LIVE at charge
 		// time rather than pinned to the turn: this charge lands after a run
 		// that may have taken hours, and the cap the company is running

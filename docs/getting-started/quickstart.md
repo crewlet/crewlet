@@ -244,12 +244,14 @@ units:
 When a budget is exceeded, the agent's turn stops immediately and a
 `BudgetExhausted` event is emitted.
 
-Usage is **durable** — it is stored in this node's store file and survives restarts, and
-is shared by every process running the company. Reset it deliberately:
+Usage is **durable** — it lives in the fleet's
+[coordination store](../concepts/coordination.md), so it survives restarts and
+is one number for the whole company however many nodes run it. Reset it
+deliberately, against a running node:
 
 ```bash
-crewlet budgets show     # usage per scope
-crewlet budgets reset    # zero everything (or --scope agent:<id>)
+crewlet budgets show     # usage per scope, read from the running node
+crewlet budgets reset    # zero everything (or -scope agent:<id>)
 ```
 
 (Usage used to reset on every engine start, which made a cap advisory in

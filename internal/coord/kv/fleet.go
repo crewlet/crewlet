@@ -17,7 +17,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why SIX buckets and not one
+// # Why SEVEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -36,6 +36,9 @@ import (
 //	           vanish from the fleet view, which the bucket does for free
 //	config     none at all: the activation pointer is the fencing sequence,
 //	           and a pointer that expired would restart the epoch
+//	budgets    none at all either, for the opposite reason: a token cap is
+//	           a ceiling for the life of a deployment, and a counter that
+//	           rolled over would re-arm a company somebody had stopped
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -56,6 +59,7 @@ const (
 	cooldownSuffix  = "_cooldowns"
 	statusSuffix    = "_status"
 	configSuffix    = "_config"
+	budgetSuffix    = "_budgets"
 	activationKey   = "activation"
 	fleetCASRetries = 16
 )
@@ -63,7 +67,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the six buckets. Empty means "crewlet", matching
+	// BucketPrefix names the seven buckets. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -87,7 +91,7 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for all six.
+	// Replicas is the JetStream replica count for all seven.
 	Replicas int
 }
 
@@ -142,6 +146,7 @@ type FleetStore struct {
 	cooldowns jetstream.KeyValue
 	status    jetstream.KeyValue
 	config    jetstream.KeyValue
+	budgets   jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -149,7 +154,7 @@ type FleetStore struct {
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the six buckets and returns the backend.
+// OpenFleet creates or adopts the seven buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -201,6 +206,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			cfg.StatusFreshness},
 		{&store.config, configSuffix,
 			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
+		{&store.budgets, budgetSuffix,
+			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -458,6 +465,230 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 		out[decoded] = until
 	}
 	return out, nil
+}
+
+// ---- the token counters ------------------------------------------------ //
+
+// budgetRecord is one scope's spend.
+type budgetRecord struct {
+	Used int       `json:"used"`
+	At   time.Time `json:"at"`
+}
+
+// Charge checks and increments the org's counter and the seat's.
+//
+// Two keys and no transaction, so the all-or-nothing property is BUILT: the
+// org is charged first and compensated if the seat then refuses. See
+// [coord.Budgets.Charge] for why that order and not the reverse.
+func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgLimit, agentLimit int) (coord.Spend, error) {
+	if tokens <= 0 {
+		// Not an error and not a charge. A phase whose provider reported
+		// nothing still ran, and refusing it would stop a company over a
+		// backend that omits usage.
+		return coord.Spend{OK: true}, nil
+	}
+	if agentScope == "" {
+		return coord.Spend{}, errors.New("coord/kv: a charge needs a seat scope")
+	}
+
+	// A charge larger than a whole cap can never fit, so it is screened
+	// before anything is written — org first, matching the order below, and
+	// so a seat whose own cap is smaller than the charge never costs the
+	// org a bump and an unwind.
+	for _, scope := range []struct {
+		name, key string
+		limit     int
+	}{{"org", coord.OrgScope, orgLimit}, {"agent", agentScope, agentLimit}} {
+		if scope.limit > 0 && tokens > scope.limit {
+			used, err := f.Used(ctx, scope.key)
+			if err != nil {
+				return coord.Spend{}, err
+			}
+			return coord.Spend{RefusedScope: scope.name, RefusedUsed: used, RefusedLimit: scope.limit}, nil
+		}
+	}
+
+	orgUsed, fits, err := f.bump(ctx, coord.OrgScope, tokens, orgLimit)
+	if err != nil {
+		return coord.Spend{}, err
+	}
+	if !fits {
+		return coord.Spend{RefusedScope: "org", RefusedUsed: orgUsed, RefusedLimit: orgLimit}, nil
+	}
+
+	agentUsed, fits, err := f.bump(ctx, agentScope, tokens, agentLimit)
+	switch {
+	case err != nil, !fits:
+		// COMPENSATE, which is what a single SQL transaction used to do
+		// for free: charging the company for a turn that never ran lets
+		// it exhaust its budget on work it did not do.
+		if _, _, undo := f.bump(ctx, coord.OrgScope, -tokens, 0); undo != nil {
+			// Logged rather than returned: the caller's answer is
+			// already decided, and a compensation that failed leaves
+			// the org over-stated, which trips the cap EARLY. That is
+			// the safe direction, and it is worth a line saying so
+			// rather than a drift nobody can later explain.
+			log.Error("coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
+				"tokens", tokens, "error", undo,
+				"detail", "the org counter is over-stated by this charge and will refuse "+
+					"early; clear it with `crewlet budgets reset`")
+		}
+		if err != nil {
+			return coord.Spend{}, err
+		}
+		return coord.Spend{RefusedScope: "agent", RefusedUsed: agentUsed, RefusedLimit: agentLimit}, nil
+	}
+	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
+}
+
+// bump applies one scope's delta under a compare-and-swap, reporting the
+// resulting usage and whether it fit.
+//
+// A negative delta is a compensation and is never refused: it is undoing a
+// charge this caller already made, so a limit has nothing to say about it.
+func (f *FleetStore) bump(ctx context.Context, scope string, delta, limit int) (int, bool, error) {
+	key := encodeKey(scope)
+	for range fleetCASRetries {
+		entry, err := f.budgets.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			if limit > 0 && delta > limit {
+				return 0, false, nil
+			}
+			raw, encoded := encodeBudget(max(delta, 0))
+			if encoded != nil {
+				return 0, false, encoded
+			}
+			_, created := f.budgets.Create(ctx, key, raw)
+			switch {
+			case created == nil:
+				return max(delta, 0), true, nil
+			case errors.Is(created, jetstream.ErrKeyExists):
+				continue
+			default:
+				return 0, false, unavailable("charge the budget", created)
+			}
+		}
+		if err != nil {
+			return 0, false, unavailable("read the budget", err)
+		}
+		var record budgetRecord
+		if decode := json.Unmarshal(entry.Value(), &record); decode != nil {
+			return 0, false, unavailable("decode the budget", decode)
+		}
+		// Floored at zero: a compensation for a charge whose own write
+		// was already reaped (or reset by an operator mid-turn) must not
+		// leave a counter that reads as credit.
+		next := max(record.Used+delta, 0)
+		if limit > 0 && next > limit {
+			return record.Used, false, nil
+		}
+		raw, encoded := encodeBudget(next)
+		if encoded != nil {
+			return 0, false, encoded
+		}
+		_, err = f.budgets.Update(ctx, key, raw, entry.Revision())
+		switch {
+		case err == nil:
+			return next, true, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			return 0, false, unavailable("charge the budget", err)
+		}
+	}
+	// Exhausting the retries is reported as an ERROR, never as a refusal:
+	// the caller fails the round rather than telling an agent it is out of
+	// budget, which is the fail-closed direction the contract requires.
+	return 0, false, contended("charge", scope)
+}
+
+func encodeBudget(used int) ([]byte, error) {
+	raw, err := json.Marshal(budgetRecord{Used: used, At: time.Now().UTC()})
+	if err != nil {
+		return nil, fmt.Errorf("coord/kv: encode the budget: %w", err)
+	}
+	return raw, nil
+}
+
+// Used reports one scope's spend.
+func (f *FleetStore) Used(ctx context.Context, scope string) (int, error) {
+	if scope == "" {
+		return 0, errors.New("coord/kv: a budget scope is required")
+	}
+	entry, err := f.budgets.Get(ctx, encodeKey(scope))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, unavailable("read the budget", err)
+	}
+	var record budgetRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return 0, unavailable("decode the budget", err)
+	}
+	return record.Used, nil
+}
+
+// Usage returns every counter, org first then seats by scope.
+func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
+	keys, err := f.budgets.ListKeys(ctx)
+	if err != nil {
+		return nil, unavailable("list the budgets", err)
+	}
+	var out []coord.Usage
+	for key := range keys.Keys() {
+		entry, err := f.budgets.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, unavailable("read the budget", err)
+		}
+		var record budgetRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			return nil, unavailable("decode the budget", err)
+		}
+		scope, ok := decodeKey(key)
+		if !ok {
+			// A key this backend did not write. Skipped rather than
+			// guessed at, matching the lease listing: an invented
+			// scope name in the operator's budget view is worse than
+			// a missing one.
+			continue
+		}
+		out = append(out, coord.Usage{Scope: scope, Used: record.Used, UpdatedAt: record.At})
+	}
+	coord.SortUsage(out)
+	return out, nil
+}
+
+// Reset zeroes one scope, or every scope when given "".
+//
+// PURGE, not delete: a tombstone would be returned by a later ListKeys as a
+// key with no value, so an operator who cleared a counter would still see the
+// scope in `crewlet budgets`.
+func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
+	if scope != "" {
+		if _, err := f.Used(ctx, scope); err != nil {
+			return 0, err
+		}
+		if err := f.budgets.Purge(ctx, encodeKey(scope)); err != nil {
+			return 0, unavailable("reset the budget", err)
+		}
+		return 1, nil
+	}
+	keys, err := f.budgets.ListKeys(ctx)
+	if err != nil {
+		return 0, unavailable("list the budgets", err)
+	}
+	cleared := 0
+	for key := range keys.Keys() {
+		if err := f.budgets.Purge(ctx, key); err != nil {
+			return cleared, unavailable("reset the budget", err)
+		}
+		cleared++
+	}
+	return cleared, nil
 }
 
 // ---- the config plane -------------------------------------------------- //

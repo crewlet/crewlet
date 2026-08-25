@@ -31,6 +31,7 @@ type Fleet struct {
 	worked    map[string]workedEntry
 	cooldowns map[string]time.Time
 	applies   map[string]coord.NodeApply
+	budgets   map[string]coord.Usage
 
 	epoch  int64
 	target coord.Activation
@@ -57,6 +58,7 @@ func NewFleet() *Fleet {
 		worked:    map[string]workedEntry{},
 		cooldowns: map[string]time.Time{},
 		applies:   map[string]coord.NodeApply{},
+		budgets:   map[string]coord.Usage{},
 	}
 }
 
@@ -258,4 +260,94 @@ func (f *Fleet) ExpireApplies(cutoff time.Time) {
 			delete(f.applies, node)
 		}
 	}
+}
+
+// ---- the token counters ------------------------------------------------ //
+
+// Charge checks and increments the org's counter and the seat's.
+//
+// The twin holds ONE mutex for the whole call, so the compensation the KV
+// backend needs never runs here. That is not a shortcut around the contract —
+// the observable behaviour is identical, and the suite asserts the behaviour
+// — it is what a single process can honestly offer: there is no second writer
+// to race, so building a compensation nothing could ever exercise would be a
+// path with no test that could reach it.
+func (f *Fleet) Charge(_ context.Context, agentScope string, tokens, orgLimit, agentLimit int) (coord.Spend, error) {
+	if tokens <= 0 {
+		return coord.Spend{OK: true}, nil
+	}
+	if agentScope == "" {
+		return coord.Spend{}, errors.New("coord/memory: a charge needs a seat scope")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// ORG FIRST for the REFUSAL, whichever order the writes go in: "the
+	// company is out" is the fact an operator has to see when both scopes
+	// are out of room.
+	for _, scope := range []struct {
+		name, key string
+		limit     int
+	}{{"org", coord.OrgScope, orgLimit}, {"agent", agentScope, agentLimit}} {
+		used := f.budgets[scope.key].Used
+		if scope.limit > 0 && used+tokens > scope.limit {
+			return coord.Spend{
+				RefusedScope: scope.name, RefusedUsed: used, RefusedLimit: scope.limit,
+			}, nil
+		}
+	}
+	orgUsed := f.charge(coord.OrgScope, tokens)
+	agentUsed := f.charge(agentScope, tokens)
+	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
+}
+
+// charge applies one scope's delta under the held lock.
+func (f *Fleet) charge(scope string, delta int) int {
+	row := f.budgets[scope]
+	row.Scope = scope
+	row.Used = max(row.Used+delta, 0)
+	row.UpdatedAt = time.Now().UTC()
+	f.budgets[scope] = row
+	return row.Used
+}
+
+// Used reports one scope's spend.
+func (f *Fleet) Used(_ context.Context, scope string) (int, error) {
+	if scope == "" {
+		return 0, errors.New("coord/memory: a budget scope is required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.budgets[scope].Used, nil
+}
+
+// Usage returns every counter, org first then seats by scope.
+func (f *Fleet) Usage(_ context.Context) ([]coord.Usage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.Usage, 0, len(f.budgets))
+	for _, row := range f.budgets {
+		out = append(out, row)
+	}
+	coord.SortUsage(out)
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// Reset zeroes one scope, or every scope when given "".
+func (f *Fleet) Reset(_ context.Context, scope string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if scope != "" {
+		if _, ok := f.budgets[scope]; !ok {
+			return 0, nil
+		}
+		delete(f.budgets, scope)
+		return 1, nil
+	}
+	cleared := len(f.budgets)
+	clear(f.budgets)
+	return cleared, nil
 }

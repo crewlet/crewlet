@@ -38,6 +38,11 @@ type App struct {
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
 
+	// budgets is the fleet's token counter, for the one route that WRITES
+	// to it. Nil on a standalone API with no coordination store, which
+	// that route reports rather than hides.
+	budgets budgetResetter
+
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
 	// health probe reads it.
@@ -81,6 +86,13 @@ type Options struct {
 	// Config serves /config. Nil serves none, which is what a process with
 	// no store genuinely has.
 	Config *configapi.Service
+
+	// Budgets is the fleet's token counter. Supplied separately from
+	// Sources.Budget, which is the READ half: a reset is an operator
+	// action against a spend ceiling, and giving the read surface a
+	// method that clears one would put it a typo away from every screen
+	// that renders spend.
+	Budgets budgetResetter
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
@@ -153,11 +165,16 @@ func New(opts Options) *App {
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
+	a.budgets = opts.Budgets
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(a.serveReady))
 	mux.Handle("GET /query/{what}", http.HandlerFunc(a.serveQuery))
+	// The one WRITE outside /config and the webhook edge. A POST, so the
+	// anonymous-read posture never opens it: clearing a company's spend
+	// ceiling is not a read, whatever a laptop deployment allows.
+	mux.Handle("POST /budgets/reset", http.HandlerFunc(a.serveBudgetReset))
 	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, a.answer))
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require

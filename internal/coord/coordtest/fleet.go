@@ -3,6 +3,7 @@ package coordtest
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"claims", claimCases},
 		{"ledger", ledgerCases},
 		{"cooldowns", cooldownCases},
+		{"budgets", budgetCases},
 		{"plane", planeCases},
 	}
 	for _, g := range groups {
@@ -107,6 +109,24 @@ func (h *fleetHarness) record(scope, key, detail string, at time.Time) {
 	if err := h.f.Record(h.ctx, scope, key, detail, at); err != nil {
 		h.t.Fatalf("Record(%s/%s): %v", scope, key, err)
 	}
+}
+
+func (h *fleetHarness) charge(seat string, tokens, orgLimit, seatLimit int) coord.Spend {
+	h.t.Helper()
+	got, err := h.f.Charge(h.ctx, seat, tokens, orgLimit, seatLimit)
+	if err != nil {
+		h.t.Fatalf("Charge(%s, %d): %v", seat, tokens, err)
+	}
+	return got
+}
+
+func (h *fleetHarness) used(scope string) int {
+	h.t.Helper()
+	got, err := h.f.Used(h.ctx, scope)
+	if err != nil {
+		h.t.Fatalf("Used(%s): %v", scope, err)
+	}
+	return got
 }
 
 // ---- the valve ---------------------------------------------------------- //
@@ -557,6 +577,278 @@ var planeCases = []fleetCase{{
 		}
 		if len(got[0].Error) >= len(huge) {
 			h.t.Fatalf("the failure text was stored whole (%d bytes)", len(got[0].Error))
+		}
+	},
+}}
+
+// ---- the token counters ------------------------------------------------- //
+
+const testSeat = "agent:11111111-1111-1111-1111-111111111111"
+
+var budgetCases = []fleetCase{{
+	// The reason this moved off the node's own database. Four nodes on one
+	// company each kept their own counter, so `token_budget: 500000` was
+	// silently four times that — and the config number was decoration.
+	name: "one counter however many callers share it",
+	fn: func(h *fleetHarness) {
+		for i := range 4 {
+			if got := h.charge(testSeat, 100, 500, 0); !got.OK {
+				h.t.Fatalf("charge %d was refused inside the cap: %+v", i+1, got)
+			}
+		}
+		if got := h.charge(testSeat, 100, 500, 0); !got.OK {
+			h.t.Fatalf("the charge that exactly fills the cap was refused: %+v", got)
+		}
+		got := h.charge(testSeat, 1, 500, 0)
+		if got.OK {
+			h.t.Fatal("a charge past the org cap was accepted")
+		}
+		if got.RefusedScope != "org" || got.RefusedLimit != 500 {
+			h.t.Fatalf("refusal = %+v, want the org scope and its limit", got)
+		}
+		if h.used(coord.OrgScope) != 500 {
+			h.t.Fatalf("org spend = %d, want the 500 that fit", h.used(coord.OrgScope))
+		}
+	},
+}, {
+	name: "a limit of zero is unlimited, not an empty allowance",
+	fn: func(h *fleetHarness) {
+		// `token_budget: 0` is how an operator says "no ceiling".
+		// Reading it as "no allowance" stops every company that never
+		// set one — which is most of them.
+		if got := h.charge(testSeat, 1_000_000, 0, 0); !got.OK {
+			h.t.Fatalf("an unlimited budget refused a charge: %+v", got)
+		}
+		if h.used(coord.OrgScope) != 1_000_000 {
+			h.t.Fatal("an unlimited charge was not counted")
+		}
+	},
+}, {
+	name: "a refused seat leaves the org uncharged",
+	fn: func(h *fleetHarness) {
+		// The property a single SQL transaction used to give for free,
+		// and the whole reason this contract cannot be two calls:
+		// charging the company for a turn that never ran lets it
+		// exhaust its budget on work it did not do. On a KV backend
+		// there is no transaction, so the org bump made a moment ago
+		// has to be UNWOUND by hand — this is the case that proves it.
+		if got := h.charge(testSeat, 90, 0, 100); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		before := h.used(coord.OrgScope)
+		got := h.charge(testSeat, 90, 0, 100)
+		if got.OK {
+			h.t.Fatal("a charge past the seat cap was accepted")
+		}
+		if got.RefusedScope != "agent" {
+			h.t.Fatalf("refusal = %+v, want the agent scope", got)
+		}
+		if after := h.used(coord.OrgScope); after != before {
+			h.t.Fatalf("org spend moved from %d to %d on a REFUSED turn", before, after)
+		}
+	},
+}, {
+	name: "a refused org leaves the seat uncharged",
+	fn: func(h *fleetHarness) {
+		// The other direction. Nothing to unwind here — the org is
+		// charged first, so its refusal happens before the seat is
+		// touched — which is exactly the property being pinned: a
+		// backend that wrote the seat first would burn a seat's own
+		// allowance on turns the company refused.
+		if got := h.charge(testSeat, 90, 100, 1000); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		before := h.used(testSeat)
+		got := h.charge(testSeat, 90, 100, 1000)
+		if got.OK {
+			h.t.Fatal("a charge past the org cap was accepted")
+		}
+		if got.RefusedScope != "org" {
+			h.t.Fatalf("refusal = %+v, want the org scope", got)
+		}
+		if after := h.used(testSeat); after != before {
+			h.t.Fatalf("seat spend moved from %d to %d on a REFUSED turn", before, after)
+		}
+	},
+}, {
+	name: "an exhausted company is reported before an exhausted seat",
+	fn: func(h *fleetHarness) {
+		// Both scopes are out of room. "The company is out" is the fact
+		// that matters: raising this seat's ceiling against an
+		// exhausted org changes nothing, and an operator sent to the
+		// seat first finds that out the slow way.
+		if got := h.charge(testSeat, 100, 100, 100); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		got := h.charge(testSeat, 50, 100, 100)
+		if got.OK {
+			h.t.Fatal("a charge past both caps was accepted")
+		}
+		if got.RefusedScope != "org" {
+			h.t.Fatalf("refusal = %+v, want the org scope reported first", got)
+		}
+	},
+}, {
+	name: "a charge larger than the whole cap is refused before anything is written",
+	fn: func(h *fleetHarness) {
+		// The first-ever charge, against an empty counter. A backend
+		// that only checked "existing + delta" on an UPDATE path would
+		// accept this one, because there is nothing to update yet.
+		got := h.charge(testSeat, 1_000_000, 10, 0)
+		if got.OK {
+			h.t.Fatal("a charge larger than the entire cap was accepted")
+		}
+		if got.RefusedScope != "org" {
+			h.t.Fatalf("refusal = %+v, want the org scope", got)
+		}
+		if h.used(coord.OrgScope) != 0 || h.used(testSeat) != 0 {
+			h.t.Fatal("a refused charge still moved a counter")
+		}
+	},
+}, {
+	name: "a zero-token charge is neither an error nor a charge",
+	fn: func(h *fleetHarness) {
+		// A phase whose provider reported no usage still RAN. Refusing
+		// it would stop a company over a backend that omits the field.
+		if got := h.charge(testSeat, 0, 10, 10); !got.OK {
+			h.t.Fatalf("a zero-token charge was refused: %+v", got)
+		}
+		if h.used(coord.OrgScope) != 0 {
+			h.t.Fatal("a zero-token charge moved the counter")
+		}
+	},
+}, {
+	name: "two seats spend the org's allowance together",
+	fn: func(h *fleetHarness) {
+		// Per-SEAT counters are separate; the org's is not. A backend
+		// that keyed the org counter per caller would let each seat
+		// spend the whole company allowance.
+		other := "agent:22222222-2222-2222-2222-222222222222"
+		if got := h.charge(testSeat, 60, 100, 0); !got.OK {
+			h.t.Fatalf("the first seat was refused: %+v", got)
+		}
+		got := h.charge(other, 60, 100, 0)
+		if got.OK {
+			h.t.Fatal("a second seat spent the org allowance the first had already spent")
+		}
+		if h.used(other) != 0 {
+			h.t.Fatal("a refused seat was charged")
+		}
+	},
+}, {
+	name: "usage lists the org first, then the seats",
+	fn: func(h *fleetHarness) {
+		// The operator surface does not sort, and "org" does NOT sort
+		// before "agent:…" alphabetically — so a backend that left the
+		// order to its own collation would put the company's counter
+		// in the middle of its seats.
+		h.charge("agent:zzzz", 10, 0, 0)
+		h.charge("agent:aaaa", 20, 0, 0)
+		rows, err := h.f.Usage(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Usage: %v", err)
+		}
+		var scopes []string
+		for _, row := range rows {
+			scopes = append(scopes, row.Scope)
+		}
+		want := []string{coord.OrgScope, "agent:aaaa", "agent:zzzz"}
+		if !slices.Equal(scopes, want) {
+			h.t.Fatalf("scopes = %v, want %v", scopes, want)
+		}
+		for _, row := range rows {
+			if row.Scope == coord.OrgScope && row.Used != 30 {
+				h.t.Fatalf("org used = %d, want both seats' spend", row.Used)
+			}
+		}
+	},
+}, {
+	name: "an unspent scope has spent nothing rather than erroring",
+	fn: func(h *fleetHarness) {
+		if got := h.used("agent:never-ran"); got != 0 {
+			h.t.Fatalf("used = %d for a scope never charged, want 0", got)
+		}
+	},
+}, {
+	name: "a reset clears one scope and leaves the rest",
+	fn: func(h *fleetHarness) {
+		// An OPERATOR action. The counter has no retention precisely so
+		// that nothing else can do this: a horizon that rolled the
+		// numbers over would silently re-arm a company somebody stopped.
+		h.charge(testSeat, 40, 0, 0)
+		other := "agent:33333333-3333-3333-3333-333333333333"
+		h.charge(other, 40, 0, 0)
+		n, err := h.f.Reset(h.ctx, testSeat)
+		if err != nil {
+			h.t.Fatalf("Reset: %v", err)
+		}
+		if n != 1 {
+			h.t.Fatalf("cleared %d scopes, want 1", n)
+		}
+		if h.used(testSeat) != 0 {
+			h.t.Fatal("the reset scope still has spend")
+		}
+		if h.used(other) != 40 {
+			h.t.Fatal("a reset of one scope cleared another")
+		}
+		if h.used(coord.OrgScope) != 80 {
+			h.t.Fatal("a reset of one seat cleared the org counter")
+		}
+	},
+}, {
+	name: "a reset with no scope clears everything",
+	fn: func(h *fleetHarness) {
+		h.charge(testSeat, 40, 0, 0)
+		if _, err := h.f.Reset(h.ctx, ""); err != nil {
+			h.t.Fatalf("Reset: %v", err)
+		}
+		rows, err := h.f.Usage(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Usage: %v", err)
+		}
+		if len(rows) != 0 {
+			h.t.Fatalf("usage = %v after a full reset, want none", rows)
+		}
+	},
+}, {
+	name: "a cleared scope stops being listed at all",
+	fn: func(h *fleetHarness) {
+		// Not merely zero: an operator who cleared a counter must not
+		// still find the scope in `crewlet budgets`, or every seat that
+		// ever ran accumulates forever in a view meant to show spend.
+		h.charge(testSeat, 40, 0, 0)
+		if _, err := h.f.Reset(h.ctx, testSeat); err != nil {
+			h.t.Fatalf("Reset: %v", err)
+		}
+		rows, err := h.f.Usage(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Usage: %v", err)
+		}
+		for _, row := range rows {
+			if row.Scope == testSeat {
+				h.t.Fatalf("the cleared scope is still listed: %+v", row)
+			}
+		}
+	},
+}, {
+	name: "concurrent charges add up",
+	fn: func(h *fleetHarness) {
+		// The property a compare-and-swap buys and a read-modify-write
+		// does not. Without it N concurrent rounds count as one, and
+		// the cap is whatever the last writer happened to see.
+		const callers = 8
+		var wg sync.WaitGroup
+		for range callers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, _ = h.f.Charge(h.ctx, testSeat, 10, 0, 0)
+			}()
+		}
+		wg.Wait()
+		if got := h.used(coord.OrgScope); got != callers*10 {
+			h.t.Fatalf("org spend = %d after %d concurrent charges of 10, want %d",
+				got, callers, callers*10)
 		}
 	},
 }}

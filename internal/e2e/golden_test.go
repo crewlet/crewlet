@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -554,13 +555,13 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// The scripted model reports 150 tokens on its first call and 130 on
 	// the next, so the cap bites partway through the turn rather than
 	// before it starts — which is the case a pre-flight check would miss.
-	budgets := n.engine.Backends().Store.Budgets()
+	budgets := n.engine.Backends().Fleet
 	waitFor(t, "the budget to be charged", func() bool {
-		used, err := budgets.Used(t.Context(), store.OrgScope)
+		used, err := budgets.Used(t.Context(), coord.OrgScope)
 		return err == nil && used > 0
 	})
 	waitFor(t, "the turn to stop", func() bool {
-		used, err := budgets.Used(t.Context(), store.OrgScope)
+		used, err := budgets.Used(t.Context(), coord.OrgScope)
 		if err != nil {
 			return false
 		}
@@ -568,7 +569,7 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		return used > 0 && used+150 > 200
 	})
 
-	used, err := budgets.Used(t.Context(), store.OrgScope)
+	used, err := budgets.Used(t.Context(), coord.OrgScope)
 	if err != nil {
 		t.Fatalf("used: %v", err)
 	}
@@ -578,7 +579,7 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
-	seatUsed, err := budgets.Used(t.Context(), store.AgentScope(id.String()))
+	seatUsed, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
 	if err != nil {
 		t.Fatalf("seat used: %v", err)
 	}

@@ -1,0 +1,23 @@
+-- The token counter moved to the fleet's coordination store.
+--
+-- token_budget_usage was the LAST of the shared counters still living in the
+-- node's own database, and it was the most expensive one to get wrong: the
+-- table's own comment said "USAGE IS SHARED, CAPS ARE NOT", and every node ran
+-- its own copy. An org cap of 500 000 was silently N x 500 000, and the number
+-- in a company's config was decoration for any deployment past one process.
+--
+-- It now lives in internal/coord, in a bucket with NO retention — a cap is a
+-- ceiling for the life of a deployment, and a counter that rolled itself over
+-- would re-arm a company somebody had stopped on purpose. Clearing one is an
+-- operator action: `crewlet budgets reset`, which posts to the running node
+-- because on the default topology the counter is inside it.
+--
+-- token_usage STAYS. It is the per-agent audit record — what was spent, for
+-- the operator's history — not the counter anything enforces against, and a
+-- seat's own history is read by the node running that seat.
+--
+-- DROPPED rather than left in place, for the same reason as migration 0010: a
+-- table nothing reads is a table the next reader assumes is authoritative,
+-- and a spend figure is exactly the shape somebody would wire a dashboard to.
+
+DROP TABLE IF EXISTS token_budget_usage;
