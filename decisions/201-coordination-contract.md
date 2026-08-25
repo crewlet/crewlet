@@ -102,11 +102,19 @@ which is why they move to a KV without redesign:
 | Per-node apply status | one key per node, re-put every tick, TTL-fresh |
 
 Two need care. **Budget spend** charges agent and org together and Postgres did
-it in one transaction so a seat-refused turn never charges the org: on a KV,
-charge the agent first and compensate on org refusal, and keep the refusal
-naming its own scope (d-202 owns the detail). **Config activation** must append
-the epoch atomically with the revision flip, or a crash leaves the fleet
-converged on a revision nobody asked for — on JetStream the append IS the
+it in one transaction so a seat-refused turn never charges the org. A KV has no
+transaction, so one of the two is charged first and compensated if the other
+refuses — and the order is not free. This decision originally said agent first;
+building it proved that wrong. A seat-first compensation is UNREACHABLE: the
+org counter is charged only after the seat's own charge succeeded, so the
+branch that would refund the seat never runs, and a mutation deleting it passed
+the whole suite. **Charge the org first and compensate it when the seat
+refuses**, and keep the refusal naming its own scope — "the company is out" and
+"this seat is out" send an operator to different places, and a bare refusal
+sends them to neither. See `internal/coord/fleet.go`.
+
+**Config activation** must append the epoch atomically with the revision flip,
+or a crash leaves the fleet converged on a revision nobody asked for — on JetStream the append IS the
 commit, so the flip is derived from the stream rather than written separately.
 
 ## 5. Fail-open vs fail-closed is per store, and deliberate

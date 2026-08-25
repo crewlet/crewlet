@@ -60,11 +60,21 @@ import (
 
 var log = logging.Get("queue.memory")
 
-// ErrNotStarted is returned by Publish, Subscribe and SubscribeBatch on a
-// queue that has not been started, or has been stopped. A sentinel because
-// callers branch on it: a boot-ordering mistake looks exactly like a transport
-// failure otherwise.
-var ErrNotStarted = errors.New("memory: event queue is not started")
+// ErrNotStarted is returned on a queue that has not been started, or has been
+// stopped, by EVERY publish, subscription and attachment verb — not just the
+// ones a caller thinks of as needing a connection. The contract requires one
+// answer for all of them (see queue.EventQueue.Start), and this backend's
+// answer is "Start is what makes the client live".
+//
+// It used to be only Publish, Subscribe and SubscribeBatch, while
+// EnsureSubscription created durable state, DeleteSubscription destroyed it
+// and PauseTopic took a hold — on a client whose Stop had already dropped
+// every consumer. That hold survived into the next life and left a restarted
+// queue reporting itself running and silently deaf.
+//
+// A sentinel because callers branch on it: a boot-ordering mistake looks
+// exactly like a transport failure otherwise.
+var ErrNotStarted = fmt.Errorf("memory: event queue is not started: %w", queue.ErrNotLive)
 
 // ErrNilHandler is returned when a subscription is registered with no handler.
 // Accepting one would attach a consumer that swallows a seat's mail and panics
@@ -601,6 +611,12 @@ func (b *Broker) ensureLocked(topic, group string) *subscription {
 	return sub
 }
 
+// notStartedLocked reports whether this client is down, for the verbs that
+// must refuse when it is. Called with broker.mu held, so the check and the
+// mutation it guards are one critical section: a two-step "ask, then act"
+// would let a Stop land between them and re-open the window this closes.
+func (q *Queue) notStartedLocked() bool { return !q.running }
+
 // --- the four attachment verbs --------------------------------------------
 
 // Quiesce stops taking NEW work while staying attached; a running handler
@@ -608,6 +624,10 @@ func (b *Broker) ensureLocked(topic, group string) *subscription {
 func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return false, ErrNotStarted
+	}
 	sub, ok := q.broker.subs[key]
 	if !ok || len(sub.membersOf(q)) == 0 {
 		q.broker.mu.Unlock()
@@ -629,6 +649,10 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error) {
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return false, ErrNotStarted
+	}
 	if _, held := q.quiescing[key]; !held {
 		q.broker.mu.Unlock()
 		return false, nil
@@ -654,6 +678,10 @@ func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error
 func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return false, ErrNotStarted
+	}
 	// Holds and the quiesce flag describe THIS attachment, so they are
 	// released with it — unconditionally, before the attachment is even
 	// looked up. One that outlived a detach would leave a node that
@@ -680,6 +708,10 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 // consumer attached and positioned at the earliest message.
 func (q *Queue) EnsureSubscription(_ context.Context, topic, group string) (bool, error) {
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return false, ErrNotStarted
+	}
 	if _, ok := q.broker.subs[subKey{topic, group}]; ok {
 		q.broker.mu.Unlock()
 		return false, nil
@@ -697,6 +729,15 @@ func (q *Queue) EnsureSubscription(_ context.Context, topic, group string) (bool
 // requires one: decommissioning a role cannot depend on which node ran the
 // seat.
 func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bool, error) {
+	// Checked here as well as inside Detach, so the refusal names the verb
+	// the caller actually invoked rather than surfacing as a failure of a
+	// step it did not ask for.
+	q.broker.mu.Lock()
+	down := q.notStartedLocked()
+	q.broker.mu.Unlock()
+	if down {
+		return false, ErrNotStarted
+	}
 	if _, err := q.Detach(ctx, topic, group); err != nil {
 		return false, err
 	}
@@ -738,6 +779,10 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 	}
 	sub := &streamSub{owner: q, pattern: pattern, handler: h}
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return nil, ErrNotStarted
+	}
 	q.broker.streams = append(q.broker.streams, sub)
 	q.broker.mu.Unlock()
 	log.Debug("stream_subscription_added", "topic_pattern", pattern)
@@ -860,6 +905,10 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return ErrNotStarted
+	}
 	held, ok := q.pauses[key]
 	if !ok {
 		held = map[string]struct{}{}
@@ -882,6 +931,10 @@ func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) er
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
+	if q.notStartedLocked() {
+		q.broker.mu.Unlock()
+		return ErrNotStarted
+	}
 	held := q.pauses[key]
 	if len(held) == 0 {
 		q.broker.mu.Unlock()

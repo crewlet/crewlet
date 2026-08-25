@@ -114,6 +114,22 @@ type Lease struct {
 	// for everything else. A record written by a build that predates a
 	// field reads as absent, which callers treat as the old behaviour
 	// rather than as a node with no roles.
+	//
+	// A CALLER MAY NOT DEPEND ON THE GO TYPE OF A META VALUE, only on the
+	// value. Backends are free to store it however they like, and the
+	// shipped two disagree: the in-memory twin hands back what was
+	// written, while the embedded-NATS store round-trips through JSON, so
+	// a number written as an int reads back as a float64 and a []string as
+	// a []any. Both are conforming — nothing in the suite requires the
+	// type to survive — so meta["replicas"].(int) is correct against one
+	// and panics against the other, at a call site nothing else would ever
+	// exercise.
+	//
+	// The alternative was to REQUIRE the JSON shape, which sounds tidier
+	// and would make every backend pay for a round trip nothing needs, to
+	// let callers type-assert a shape that says nothing about what the
+	// value means. Read a meta value the way placement.rolesFromMeta does:
+	// accept either shape, and treat anything else as absent.
 	Meta map[string]any
 }
 
@@ -199,6 +215,24 @@ type AcquireOptions struct {
 // not exist.
 //
 // Every method follows the tri-state described in the package doc.
+//
+// A BACKEND MUST SERVE ITS OWN WRITES, PER RESOURCE. A claim, renew or
+// release that has returned must be visible to this caller's next read of
+// THAT resource. Prefix listings are free to lag: ListLive is how a node
+// discovers peers, and a peer discovered a second late is a placement that
+// converges a second later.
+//
+// It reads like an implementation detail and it is the whole basis of mutual
+// exclusion: a claim you cannot read back cannot exclude anybody, and the
+// seat host reads ListLive and FleetProtocolFloor immediately after claiming.
+// Both certified backends make it true for free — one is a mutex over a map,
+// the other a single-connection KV — so it went unstated, and the suite
+// enforces it in about twenty places without ever naming it. A backend author
+// who did not know would meet it as twenty failures with no common theme.
+//
+// What it forecloses is asynchronous replication across the coordination
+// store, which nothing has asked for. Taking it up means changing this
+// sentence deliberately, not discovering it.
 type Backend interface {
 	// TryAcquire claims resource for the owner, or reports that someone
 	// else holds it.

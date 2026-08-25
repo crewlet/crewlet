@@ -164,7 +164,7 @@ func capabilities() queuetest.Capabilities {
 		// published; interest retention deliberately drops what no
 		// subscription covers, which is the mailbox semantic itself.
 		//
-		// RejectsPublishBeforeStart — Open establishes the connection and
+		// RequiresStart — Open establishes the connection and
 		// streams, so a publish before Start is legitimate here.
 	}
 }

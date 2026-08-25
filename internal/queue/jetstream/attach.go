@@ -145,6 +145,13 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	key := attachKey{topic, group}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	// A hold on a closed client gates nothing: Stop dropped every
+	// attachment and cleared the hold map on the way out. Returning nil
+	// here told a shutdown path it had gated a subscription that no longer
+	// existed. See queue.EventQueue's Stop.
+	if q.closed {
+		return ErrClosed
+	}
 	if q.holds[key] == nil {
 		q.holds[key] = map[string]struct{}{}
 	}
@@ -160,6 +167,9 @@ func (q *Queue) ResumeTopic(_ context.Context, topic, group, reason string) erro
 	key := attachKey{topic, group}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		return ErrClosed
+	}
 	delete(q.holds[key], reason)
 	if len(q.holds[key]) == 0 {
 		delete(q.holds, key)
@@ -382,6 +392,9 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 
 // Quiesce stops taking new work while staying attached.
 func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
+	if q.isClosed() {
+		return false, ErrClosed
+	}
 	atts := q.lookup(topic, group)
 	for _, a := range atts {
 		a.setQuiesced(true)
@@ -399,6 +412,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // consumers never pushed anything into a client-side queue, so resuming is
 // simply fetching again.
 func (q *Queue) Unquiesce(_ context.Context, topic, group string) (bool, error) {
+	if q.isClosed() {
+		return false, ErrClosed
+	}
 	var was bool
 	for _, a := range q.lookup(topic, group) {
 		if a.quiesced.Swap(false) {
@@ -421,6 +437,10 @@ func (q *Queue) Unquiesce(_ context.Context, topic, group string) (bool, error) 
 func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	key := attachKey{topic, group}
 	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return false, ErrClosed
+	}
 	atts := q.attachments[key]
 	delete(q.attachments, key)
 	delete(q.holds, key)
@@ -430,6 +450,14 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 		a.close()
 	}
 	return len(atts) > 0, nil
+}
+
+// isClosed reports whether Stop has run, for the verbs that must refuse
+// afterwards rather than report success against a connection that is gone.
+func (q *Queue) isClosed() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.closed
 }
 
 func (q *Queue) lookup(topic, group string) []*attachment {

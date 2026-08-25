@@ -80,9 +80,9 @@ func TestConformance(t *testing.T) {
 			// stop modelling the broker it was built to model.
 			// A deferral here returns the events untouched: nothing is
 			// acked, nothing is counted. Pulsar's free handoff, modelled.
-			FreeDeferral:              true,
-			HeadReplayOnNak:           true,
-			RejectsPublishBeforeStart: true,
+			FreeDeferral:    true,
+			HeadReplayOnNak: true,
+			RequiresStart:   true,
 			// Stop is a client disconnect, not a teardown: the broker and
 			// its mail outlive it, so Start serves again.
 			Restartable: true,

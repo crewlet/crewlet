@@ -307,6 +307,11 @@ func dial(cfg Config) (*nats.Conn, error) {
 // messages rather than holding them, and the authoritative path for anything
 // that matters polls its own source.
 func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.StreamHandler) (queue.Unsubscribe, error) {
+	// The one broker-touching verb that does not go through streamFor, so
+	// it carries its own copy of the same check — see there.
+	if q.isClosed() {
+		return nil, ErrClosed
+	}
 	spec, err := specForPattern(pattern, q.cfg.EventRetention)
 	if err != nil {
 		return nil, err

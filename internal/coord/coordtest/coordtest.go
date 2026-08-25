@@ -199,17 +199,18 @@
 // operation acted on, which is why a per-resource guarantee is exactly what
 // makes them mean anything.
 //
-// Whether coord.go should SAY so is open, and it is the contract owner's call
-// rather than the suite's: stating it tells a backend author to serve reads
-// from wherever the write landed instead of discovering the requirement through
-// twenty failing cases with no common theme, but it forecloses a replicated
-// design nobody has asked for yet. Scoped per resource, with prefix listings
-// free to lag, is what callers actually depend on.
+// coord.Backend now SAYS so — per resource, with prefix listings free to lag,
+// which is what callers actually depend on. It went unstated for as long as it
+// did precisely because both backends make it true for free; writing it down
+// is what turns twenty failures with no common theme into one sentence a
+// backend author reads first.
 //
 // The same applies to what a case QUIETLY assumes. Every meta payload here is
 // JSON-shaped, which is why none of them could see that a value's Go type does
-// not survive a real backend's round trip; that gap is stated at the meta
-// cases rather than left for someone to discover in production.
+// not survive a real backend's round trip — so a Go-type-preserving backend is
+// certified by this suite exactly as a JSON one is. That is now a stated
+// property rather than an accident: coord.Lease.Meta says a caller may not
+// depend on the Go type of a meta value, only on the value.
 //
 // # What the suite does NOT require
 //

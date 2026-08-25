@@ -762,9 +762,71 @@ func (s *suite) runCore(t *testing.T) {
 		}
 	})
 
+	// THE ELEVEN VERBS, AT THE TWO POINTS A QUEUE IS NOT LIVE.
+	//
+	// Nine of them had never been sent at either point by any case in this
+	// suite, and both backends were internally inconsistent there. The twin
+	// refused Publish and Subscribe while EnsureSubscription created durable
+	// broker state, DeleteSubscription destroyed it and PauseTopic took a
+	// hold that outlived the stop and left the next life silently deaf.
+	// JetStream refused everything that touched the broker and returned
+	// SUCCESS from Quiesce, Unquiesce, Detach, PauseTopic and ResumeTopic on
+	// a closed connection.
+	//
+	// The two points get different rules, and the asymmetry is deliberate —
+	// see queue.EventQueue's Start and Stop.
+
+	// BEFORE START a backend picks its answer and applies it to all eleven.
+	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
+		t.Parallel()
+		q := s.newQueue(t)
+		for _, verb := range lifecycleVerbs(ctx, q, "unstarted") {
+			switch {
+			case s.caps.RequiresStart && verb.err == nil:
+				t.Errorf("%s accepted before Start; this backend requires "+
+					"Start, so every verb must refuse — a caller cannot "+
+					"reason about a lifecycle whose rules change per method",
+					verb.name)
+			case !s.caps.RequiresStart && verb.err != nil:
+				t.Errorf("%s refused before Start (%v); this backend does "+
+					"not require Start, so no verb may demand it",
+					verb.name, verb.err)
+			}
+		}
+	})
+
+	// AFTER STOP there is no choice: a closed client mutates nothing.
+	t.Run("a_stopped_queue_refuses_every_verb", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		if err := q.Stop(ctx); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		for _, verb := range lifecycleVerbs(ctx, q, "stopped") {
+			if verb.err == nil {
+				t.Errorf("%s succeeded on a stopped queue; whatever it did "+
+					"was done through a closed client, and any state it left "+
+					"behind outlives the queue that took it", verb.name)
+				continue
+			}
+			// AND IT REFUSES WITH THE CONTRACT'S SENTINEL, not only its
+			// own. A seat release reads this to tell "the mailbox is
+			// already down" from "the detach failed" — and it may not ask
+			// which backend is running to find out. A backend that wrapped
+			// its own error alone would send the seat host down the second
+			// reading, which KEEPS THE LEASE.
+			if !errors.Is(verb.err, queue.ErrNotLive) {
+				t.Errorf("%s refused with %v, which is not queue.ErrNotLive; "+
+					"a caller above the queue cannot tell a torn-down mailbox "+
+					"from a failed teardown without branching on the backend",
+					verb.name, verb.err)
+			}
+		}
+	})
+
 	t.Run("start_stop_lifecycle", func(t *testing.T) {
 		t.Parallel()
-		if !s.caps.RejectsPublishBeforeStart {
+		if !s.caps.RequiresStart {
 			t.Skip("backend accepts a publish before Start")
 		}
 		q := s.newQueue(t)
@@ -827,4 +889,51 @@ func (s *suite) runCore(t *testing.T) {
 
 		j.awaitLabels(t, "delivery to survive a broken listener", "e1")
 	})
+}
+
+// verbResult is one contract method's answer at one point in a queue's life.
+type verbResult struct {
+	name string
+	err  error
+}
+
+// second returns the error half of a (bool, error) verb, so the lifecycle
+// table can hold every shape of the contract's methods in one list.
+func second(_ bool, err error) error { return err }
+
+// lifecycleVerbs sends every publish, subscription and attachment verb once
+// and reports what each answered.
+//
+// ALL ELEVEN, in one list, because the property under test is that they AGREE
+// — a helper that took a subset would be certifying the subset the author
+// happened to think of, which is exactly how nine of them went unsent.
+//
+// The drain trio is absent on purpose: PauseDelivery, WaitForHandlers and
+// InFlightCount exist to run around a stop, so they answer on a stopped queue
+// and must. Backend and AddPublishListener return no error to refuse with.
+func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbResult {
+	topic := ns + ".t"
+	unsub, streamErr := q.SubscribeStream(ctx, ns+".>", func(context.Context, string, *events.Event) {})
+	if unsub != nil {
+		// Released immediately: a subscription this probe left behind would
+		// deliver into a handler the case has already returned from.
+		_ = unsub(ctx)
+	}
+	return []verbResult{
+		{"Publish", q.Publish(ctx, topic, newEvent(topic))},
+		{"Subscribe", q.Subscribe(ctx, topic, "g", func(context.Context, *events.Event) queue.Result {
+			return queue.Ack()
+		})},
+		{"SubscribeBatch", q.SubscribeBatch(ctx, topic, "g", func(context.Context, []*events.Event) queue.Result {
+			return queue.Ack()
+		}, nil, nil)},
+		{"Quiesce", second(q.Quiesce(ctx, topic, "g"))},
+		{"Unquiesce", second(q.Unquiesce(ctx, topic, "g"))},
+		{"Detach", second(q.Detach(ctx, topic, "g"))},
+		{"EnsureSubscription", second(q.EnsureSubscription(ctx, topic, "g"))},
+		{"DeleteSubscription", second(q.DeleteSubscription(ctx, topic, "g"))},
+		{"SubscribeStream", streamErr},
+		{"PauseTopic", q.PauseTopic(ctx, topic, "g", "test")},
+		{"ResumeTopic", q.ResumeTopic(ctx, topic, "g", "test")},
+	}
 }

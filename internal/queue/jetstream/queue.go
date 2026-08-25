@@ -24,8 +24,10 @@ var (
 	// ErrSubject means a subject belongs to no stream — a publish that
 	// would land where nobody consumes.
 	ErrSubject = errors.New("jetstream: unroutable subject")
-	// ErrClosed means the queue has been stopped.
-	ErrClosed = errors.New("jetstream: queue closed")
+	// ErrClosed means the queue has been stopped. It wraps
+	// queue.ErrNotLive, which is what callers above this package test:
+	// they must not branch on which backend is running.
+	ErrClosed = fmt.Errorf("jetstream: queue closed: %w", queue.ErrNotLive)
 )
 
 // Config configures a JetStream-backed queue.
@@ -320,6 +322,22 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 // streamFor resolves the stream carrying a subject, provisioning it when the
 // subject belongs to a namespace the engine does not itself define.
 func (q *Queue) streamFor(ctx context.Context, subject string) (string, error) {
+	// CHECKED HERE, at the one door every broker-touching verb goes
+	// through, and BEFORE the stream cache below. Without it a closed
+	// client surfaces "nats: connection closed" from wherever the
+	// transport happened to give up — a message that names neither this
+	// queue nor its lifecycle, and that a caller above internal/queue
+	// cannot match against without knowing which backend is running.
+	//
+	// Before the cache, because ensureStream remembers what it has already
+	// provisioned: a verb whose stream was cached never reached the
+	// transport at all, so whether a stopped queue refused depended on
+	// what some other caller had ensured earlier in the process. That is
+	// the worst shape a lifecycle answer can have — correct most of the
+	// time, and a function of unrelated history.
+	if q.isClosed() {
+		return "", ErrClosed
+	}
 	spec, err := specForSubject(subject, q.cfg.EventRetention)
 	if err != nil {
 		return "", err

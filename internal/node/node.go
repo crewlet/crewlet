@@ -336,7 +336,13 @@ func (n *Node) OnRelease(ctx context.Context, handle string, _ coord.Lease, reas
 	if inbox == "" {
 		return nil
 	}
-	if _, err := n.cfg.Queue.Detach(ctx, inbox, group); err != nil {
+	// A queue that is NOT LIVE has torn the mailbox down already: it
+	// consumes nothing, so the detach this hook exists to prove is proven.
+	// Reading it as a failure would keep the lease on the one path where
+	// this node is trying to hand the seat back — a drain — and strand the
+	// seat for a full TTL. Through the contract's sentinel, never a
+	// backend's own: nothing above internal/queue may know which is running.
+	if _, err := n.cfg.Queue.Detach(ctx, inbox, group); err != nil && !errors.Is(err, queue.ErrNotLive) {
 		return fmt.Errorf("node: detach seat %q: %w", handle, err)
 	}
 
@@ -368,7 +374,9 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 	} else {
 		_, err = n.cfg.Queue.Quiesce(ctx, inbox, group)
 	}
-	if err != nil {
+	// Same reading as OnRelease: a queue that is not live delivers nothing,
+	// so an admission change against one has already taken effect.
+	if err != nil && !errors.Is(err, queue.ErrNotLive) {
 		return fmt.Errorf("node: set admission for %q: %w", handle, err)
 	}
 	n.log.Debug("seat_admission", "handle", handle, "admitted", admitted)

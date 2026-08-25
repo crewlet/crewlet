@@ -325,9 +325,24 @@ type Capabilities struct {
 	// the twin the fleet suite runs against.
 	HeadReplayOnNak bool
 
-	// RejectsPublishBeforeStart declares that Publish on an unstarted or
-	// stopped queue returns an error rather than silently accepting.
-	RejectsPublishBeforeStart bool
+	// RequiresStart declares that this backend's publish, subscription and
+	// attachment verbs refuse on a queue that has not been started or has
+	// been stopped.
+	//
+	// A capability rather than a requirement because both answers are
+	// legitimate — on JetStream, Open establishes the connection and the
+	// streams, so Start is a no-op — but the CONSISTENCY is not optional.
+	// Whichever way this flag points,
+	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
+	// eleven and refuses a backend that answers some one way and some the
+	// other. After Stop there is no choice — see
+	// a_stopped_queue_refuses_every_verb.
+	//
+	// It was RequiresStart, one verb, and the narrowness was
+	// the bug: the twin refused Publish and Subscribe while
+	// EnsureSubscription created durable state and PauseTopic took a hold
+	// that outlived the stop.
+	RequiresStart bool
 
 	// Restartable declares that Start on a stopped queue re-establishes it
 	// and delivery resumes.

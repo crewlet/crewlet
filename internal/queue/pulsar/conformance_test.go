@@ -278,7 +278,7 @@ func capabilities() queuetest.Capabilities {
 		// published; a topic no subscription covers drops its messages,
 		// which is the mailbox semantic itself.
 		//
-		// RejectsPublishBeforeStart — Open connects, so a publish before
+		// RequiresStart — Open connects, so a publish before
 		// Start is legitimate here.
 		//
 		// Restartable — Stop closes the client and Start does not

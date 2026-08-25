@@ -22,6 +22,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
@@ -107,6 +108,23 @@ type Handler func(ctx context.Context, ev *events.Event) Result
 
 // BatchHandler processes one conversation partition of a drained batch.
 type BatchHandler func(ctx context.Context, evs []*events.Event) Result
+
+// ErrNotLive reports that a verb reached a queue that is not live — never
+// started, or stopped.
+//
+// THE ONE SENTINEL THE LAYERS ABOVE MAY BRANCH ON for this, because they must
+// not branch on which backend is running: each backend keeps its own error
+// (jetstream.ErrClosed, memory.ErrNotStarted) and wraps this, so
+// errors.Is(err, queue.ErrNotLive) is the same question everywhere.
+//
+// It exists because "the queue is down" is not a failure for every caller. A
+// seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
+// detach cannot be proven — a seat this process may still be consuming must
+// not go to a peer. But a queue that is not live consumes nothing, so a
+// refusal there is proof of teardown rather than a failure to prove it, and
+// reading it as a failure would strand the seat for a full TTL on the one
+// path where the node is trying to hand it back.
+var ErrNotLive = errors.New("queue: not live")
 
 // StreamHandler receives broadcast events. Stream delivery is best-effort:
 // there is no ack, and a handler's failure is logged, never redelivered.
@@ -209,6 +227,37 @@ type EventQueue interface {
 	AddPublishListener(l PublishListener)
 
 	// Start connects the backend and begins consuming.
+	//
+	// WHETHER A BACKEND REQUIRES IT IS ITS OWN ANSWER, and both shipped
+	// answers are legitimate: on JetStream, Open establishes the
+	// connection and the streams, so Start is a no-op and a publish
+	// before it works; on the in-memory twin, Start is what makes the
+	// client live.
+	//
+	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
+	// Start, all eleven of the publish, subscription and attachment verbs
+	// must give the same answer — Publish, Subscribe, SubscribeBatch,
+	// Quiesce, Unquiesce, Detach, EnsureSubscription, DeleteSubscription,
+	// SubscribeStream, PauseTopic and ResumeTopic. Either they all refuse,
+	// or none of them require it. Capabilities.RequiresStart says which,
+	// and queuetest sends all eleven to hold a backend to one answer.
+	//
+	// A caller cannot reason about a lifecycle whose rules change per
+	// method, and this is not hypothetical: a twin that refused Publish
+	// and Subscribe while PauseTopic still took a hold left that hold to
+	// survive into the next life, and the restarted queue reported itself
+	// running and was silently deaf.
+	//
+	// AFTER Stop the answer is not a capability at all — see Stop.
+	// The asymmetry is written up in decisions/105-the-queue-lifecycle-verbs.md.
+	//
+	// The DRAIN protocol is exempt along with Start and Stop, because it
+	// exists to run around a stop rather than in spite of one:
+	// PauseDelivery, WaitForHandlers and InFlightCount answer on a
+	// stopped queue, and must — a drain that could not report its own
+	// in-flight count once the queue was down would have no way to say
+	// whether it finished. Backend and AddPublishListener return no error
+	// and so have nothing to refuse with.
 	Start(ctx context.Context) error
 
 	// InFlightCount reports handler invocations currently mid-flight —
@@ -242,6 +291,25 @@ type EventQueue interface {
 	WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error)
 
 	// Stop closes the connection.
+	//
+	// AFTERWARDS EVERY ONE OF THE ELEVEN VERBS REFUSES. A requirement
+	// rather than a capability, and the asymmetry with the pre-Start rule
+	// is the point: "not connected yet" is a state a backend may
+	// legitimately not have — JetStream's Open connects, so there is
+	// nothing before Start — while "closed" is a state every backend
+	// genuinely reaches, and a verb that mutates through a closed client
+	// is wrong on all of them.
+	//
+	// It is wrong in two different ways, and both were measured. On the
+	// twin, PauseTopic after Stop took a hold that outlived the client and
+	// left the next life silently deaf. On JetStream, Quiesce, Unquiesce,
+	// Detach, PauseTopic and ResumeTopic all returned success on a closed
+	// connection while Publish and Subscribe returned "nats: connection
+	// closed" — so a shutdown path could believe it had gated a
+	// subscription that no longer existed.
+	//
+	// Whether Start can revive a stopped queue is a separate question the
+	// contract does not answer; see Capabilities.Restartable.
 	Stop(ctx context.Context) error
 }
 
