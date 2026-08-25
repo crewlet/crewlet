@@ -189,7 +189,7 @@ func importConfig(ctx context.Context, cs *configStore, path string, stdout io.W
 	if err != nil {
 		return err
 	}
-	id, epoch, err := cs.configs.InsertActive(ctx, store.Revision{
+	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: currentOperator(),
 		Summary: "imported from " + path,
 		Payload: payload,
@@ -197,10 +197,25 @@ func importConfig(ctx context.Context, cs *configStore, path string, stdout io.W
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
 	}
-	fmt.Fprintf(stdout, "imported %s as revision %s (epoch %d, sealed=%t)\n",
-		path, id, epoch, cs.cipher != nil)
+	fmt.Fprintf(stdout, "imported %s as revision %s (sealed=%t)\n", path, id, cs.cipher != nil)
+	fmt.Fprintln(stdout, publishNote)
 	return nil
 }
+
+// publishNote is what an OFFLINE import or activation can and cannot do.
+//
+// The fleet's activation pointer lives in the coordination store, and on the
+// default embedded topology that store is inside the engine's own process —
+// so a command run while the engine is stopped genuinely cannot move it.
+// What it CAN do is mark the revision active in this node's database, which
+// the node publishes at its next boot (see startReconciler).
+//
+// Said out loud rather than left to be discovered: an operator who imported a
+// revision and saw nothing change would reasonably conclude the import
+// failed, and the fix — restart, or use the API — is not guessable.
+const publishNote = "This node will publish it to the fleet at its next start. " +
+	"To activate it on a RUNNING fleet without a restart, use the API: " +
+	"POST /config to a node that is up."
 
 // exportConfig prints one revision as YAML.
 func exportConfig(ctx context.Context, cs *configStore, revisionID string,
@@ -325,16 +340,15 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	} else if !found {
 		return fmt.Errorf("no revision %s", revisionID)
 	}
-	epoch, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC())
-	if err != nil {
+	if _, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC()); err != nil {
 		return err
 	}
-	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP and the message
-	// says so: the pointer is append-only, so it mints a new epoch every
-	// node is watching — which is how a rotated secret reaches a running
-	// fleet without a restart.
-	fmt.Fprintf(stdout, "activated %s as epoch %d; every node picks it up on "+
-		"its next reconcile\n", revisionID, epoch)
+	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP, and that is worth
+	// keeping in mind here: publishing mints a new epoch every node is
+	// watching, which is how a rotated secret reaches a running fleet
+	// without a restart.
+	fmt.Fprintf(stdout, "marked %s active on this node\n", revisionID)
+	fmt.Fprintln(stdout, publishNote)
 	return nil
 }
 

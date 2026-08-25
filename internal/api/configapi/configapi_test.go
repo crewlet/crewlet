@@ -13,6 +13,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -60,6 +62,7 @@ type surface struct {
 	mux     *http.ServeMux
 	configs *store.Configs
 	db      *store.DB
+	plane   coord.Plane
 	svc     *configapi.Service
 	cipher  secrets.Cipher
 }
@@ -72,9 +75,13 @@ func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	s := &surface{mux: http.NewServeMux(), configs: db.Configs(), db: db}
+	s := &surface{
+		mux: http.NewServeMux(), configs: db.Configs(), db: db,
+		plane: coordmemory.NewFleet(),
+	}
 	s.svc = configapi.New(configapi.Options{
-		Store: db, Cipher: cipher, Now: func() time.Time { return pinned },
+		Store: db, Plane: s.plane, Cipher: cipher,
+		Now: func() time.Time { return pinned },
 	})
 	s.svc.Routes(s.mux)
 	s.cipher = cipher
@@ -127,7 +134,7 @@ func (s *surface) seed(t *testing.T, doc string, cipher secrets.Cipher) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _, err := s.configs.InsertActive(t.Context(), store.Revision{
+	id, err := s.configs.InsertActive(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
@@ -405,7 +412,7 @@ func TestAWriteActivatesANewRevision(t *testing.T) {
 	}
 	// THE POINTER MOVED, which is what makes the write reach every node
 	// rather than only the process that handled the request.
-	target, found, err := s.db.ControlPlane().Target(t.Context())
+	target, found, err := s.plane.Target(t.Context())
 	if err != nil || !found {
 		t.Fatalf("target: found=%v err=%v", found, err)
 	}

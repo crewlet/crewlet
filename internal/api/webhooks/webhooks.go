@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -96,9 +97,14 @@ type Options struct {
 	// nothing, which is a standalone posture rather than a failure.
 	Events *store.EventLog
 
-	// Deliveries is the cross-process dedupe. Nil handles every delivery,
-	// which is what a single node without a store already does.
-	Deliveries *store.Deliveries
+	// Claims is the FLEET-WIDE dedupe. Nil handles every delivery, which
+	// is what a single node without coordination already does.
+	//
+	// It is coordination state rather than store state because a vendor
+	// retrying a delivery reaches whichever ingress node the load balancer
+	// picks: a claim only one node could see suppressed nothing, and the
+	// same push woke the same seat twice.
+	Claims coord.Claims
 
 	// Stream surfaces the delivery live. Nil pushes nothing.
 	Stream Emitter
@@ -122,7 +128,7 @@ type Receiver struct {
 	secrets    func() Secrets
 	publisher  queue.Publisher
 	events     *store.EventLog
-	deliveries *store.Deliveries
+	claims     coord.Claims
 	stream     Emitter
 	configured func() bool
 	now        func() time.Time
@@ -135,7 +141,7 @@ func New(opts Options) *Receiver {
 		secrets:    opts.Secrets,
 		publisher:  opts.Publisher,
 		events:     opts.Events,
-		deliveries: opts.Deliveries,
+		claims:     opts.Claims,
 		stream:     opts.Stream,
 		configured: opts.Configured,
 		now:        opts.Now,
@@ -308,14 +314,15 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 
 // claim reports whether this caller may handle the delivery.
 //
-// FAILS OPEN in every direction: no store, no key, or a store that cannot be
-// reached all yield true. A duplicate is recoverable noise; a delivery dropped
-// because a database blinked is a message nobody ever answers.
+// FAILS OPEN in every direction: no registry, no key, or a store that cannot
+// be reached all yield true. A duplicate is recoverable noise — the completion
+// ledger collapses the turn — while a delivery dropped because the store
+// blinked is a message nobody ever answers.
 func (r *Receiver) claim(ctx context.Context, d delivery) bool {
-	if r.deliveries == nil || d.key == "" {
+	if r.claims == nil || d.key == "" {
 		return true
 	}
-	won, err := r.deliveries.Claim(ctx, d.source, d.key, r.now())
+	won, err := r.claims.Claim(ctx, claimKey(d), coord.ClaimTTL, r.now())
 	if err != nil {
 		log.Warn("delivery_dedupe_unavailable", "source", d.source, "error", err,
 			"detail", "handling the delivery, which may duplicate one a peer took")
@@ -325,18 +332,25 @@ func (r *Receiver) claim(ctx context.Context, d delivery) bool {
 }
 
 func (r *Receiver) release(ctx context.Context, d delivery) {
-	if r.deliveries == nil || d.key == "" {
+	if r.claims == nil || d.key == "" {
 		return
 	}
 	// context.WithoutCancel: the request context is already being torn
 	// down on this path, and a release that skipped because the client
 	// hung up would leave the claim standing for the whole TTL — which is
 	// precisely the delivery this is trying to save.
-	if err := r.deliveries.Release(context.WithoutCancel(ctx), d.source, d.key); err != nil {
+	if err := r.claims.Release(context.WithoutCancel(ctx), claimKey(d)); err != nil {
 		log.Warn("delivery_release_failed", "source", d.source, "key", d.key, "error", err,
 			"detail", "the provider's retry of this delivery will be refused until the claim expires")
 	}
 }
+
+// claimKey is the fleet-wide identity of one delivery.
+//
+// The SOURCE is in it, so two vendors that happen to mint the same delivery
+// id do not suppress each other — a UUID from one and a sequence number from
+// another collide far more easily than either vendor's own ids do.
+func claimKey(d delivery) string { return d.source + "|" + d.key }
 
 // record writes the audit row and pushes the live one. Both are best effort:
 // they run after the wake is safely queued, and neither can fail the delivery.

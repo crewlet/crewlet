@@ -91,24 +91,22 @@ the answer is a node model rather than a lock.
 ## What the fleet shares
 
 Everything that must be true for the *company* rather than for a process lives
-in the coordination slot. A fleet is not configured — it is discovered from these tables,
-which is why adding a node is starting a process and removing one is stopping
-it.
+in the coordination slot — a fleet-shared key/value store, distinct from the
+node's own database. A fleet is not configured; it is discovered from these
+slots, which is why adding a node is starting a process and removing one is
+stopping it.
 
-| Table | Answers | Documented in |
+| Slot | Answers | Documented in |
 |---|---|---|
 | `leases` | Which node runs which seat, which node holds which duty, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
-| `config_activations` · `config_apply_status` | Which company revision is current, and which nodes have reached it | [Control Plane](control-plane.md) |
-| `turn_completions` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
-| `episodes.work_key` | Which unit of work an agent's memory already records, so two nodes finishing one turn leave one memory | [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work) |
-| `token_budget_usage` | Org and per-seat spend against the cap. Caps stay config-derived in memory; only *usage* is shared | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
-| `webhook_deliveries` | Has this inbound delivery been seen — the dedupe ring that used to be a per-process dict, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |
-| `credential_cooldowns` | Which provider key is cooling after a 429. Per-process `time.monotonic()` values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
-| `rate_limits` | The notification valve | [Event System](event-system.md) |
-| `pending_sandbox_run` | The suspended Execute conversation and the box that belongs to it, mutated only under the owner's epoch | [Code Sandbox](code-sandbox.md) |
-| `a2a_channels` | Who is on an agent-to-agent channel and whether it is open — read by every authorization decision, and the two parties are usually on different nodes | [Design Decisions](../reference/design-decisions.md#one-queue-contract-several-backends) |
-| `scheduled_runs` | Which schedule fires have already been claimed | [Scheduling](scheduling.md) |
-| `secret_values` | The encrypted secret store every node resolves `${VAR}` through | [Secret Store](secret-store.md) |
+| `config` · `status` | Which company revision is current, and which nodes have reached it | [Control Plane](control-plane.md) |
+| `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
+| `claims` | Has this inbound delivery been seen — the dedupe that used to be a per-process map, and that GitHub and GitLab did not have at all | [Event System](event-system.md) |
+| `cooldowns` | Which provider key is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
+| `rate` | The notification valve | [Event System](event-system.md) |
+
+The full list, what each retention is sized from, and what deliberately stays
+node-local are in [Coordination](coordination.md).
 
 The broker carries the other half: one durable Shared subscription per seat
 inbox, attached only by the node holding that seat's lease. The subscription is

@@ -81,7 +81,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Health:        func() any { return nil },
 		Company:       func() *config.Company { return cfg },
 		Coord:         coordmemory.New(),
-		Plane:         &store.ConfigPlane{},
+		Plane:         coordmemory.NewFleet(),
 		Runs:          fakeRuns{},
 		Conversations: ledgerstore.NewMemoryConversations(),
 		Diary:         &learning.Diary{},

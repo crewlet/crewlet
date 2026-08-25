@@ -9,8 +9,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var base = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
@@ -27,9 +27,14 @@ func db(t *testing.T) *store.DB {
 
 func completionImpls(t *testing.T) map[string]ledgerstore.Completions {
 	t.Helper()
+	// The SQL implementation is GONE, not omitted: the completion ledger
+	// has to be agreed across the fleet, so it moved to the coordination
+	// store — see internal/coord/fleet.go. The twin here and the fleet
+	// implementation over the memory backend are the two this contract has,
+	// and internal/coord/coordtest certifies the backends underneath.
 	return map[string]ledgerstore.Completions{
 		"memory": ledgerstore.NewMemoryCompletions(),
-		"sql":    ledgerstore.NewCompletions(db(t)),
+		"fleet":  ledgerstore.NewFleetCompletions(coordmemory.NewFleet()),
 	}
 }
 
@@ -104,11 +109,14 @@ func TestAnEmptyKeyIsNeverRecordedOrMatched(t *testing.T) {
 	}
 }
 
-func TestRecordingTwiceKeepsTheFirstTime(t *testing.T) {
+func TestRecordingTwiceIsNotAnError(t *testing.T) {
 	t.Parallel()
-	// A redelivery must not move the completion forward past the retention
-	// cutoff, which would keep resurrecting a row the sweep should have
-	// taken.
+	// Two nodes completing one trigger is the case the ledger EXISTS to
+	// collapse, so losing the write is the ordinary outcome and not a
+	// failure to report. The record itself is first-writer-wins, which
+	// internal/coord/coordtest asserts against every backend — including
+	// that the second write does not move the record's age past the
+	// retention the bucket enforces.
 	for name, s := range completionImpls(t) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -118,37 +126,8 @@ func TestRecordingTwiceKeepsTheFirstTime(t *testing.T) {
 			if err := s.Record(ctx, "ceo", "wk-1", "t2", base.Add(10*time.Hour)); err != nil {
 				t.Fatalf("second Record: %v", err)
 			}
-			n, err := s.Purge(ctx, base.Add(time.Hour))
-			if err != nil {
-				t.Fatalf("Purge: %v", err)
-			}
-			if n != 1 {
-				t.Errorf("purged %d, want 1 — the second write moved the timestamp", n)
-			}
-		})
-	}
-}
-
-func TestPurgeSparesRecentCompletions(t *testing.T) {
-	t.Parallel()
-	for name, s := range completionImpls(t) {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			if err := s.Record(ctx, "ceo", "old", "t1", base); err != nil {
-				t.Fatalf("Record: %v", err)
-			}
-			if err := s.Record(ctx, "ceo", "new", "t2", base.Add(2*time.Hour)); err != nil {
-				t.Fatalf("Record: %v", err)
-			}
-			if _, err := s.Purge(ctx, base.Add(time.Hour)); err != nil {
-				t.Fatalf("Purge: %v", err)
-			}
-			got := s.Worked(ctx, "ceo", []string{"old", "new"})
-			if got["old"] {
-				t.Error("an old completion survived the sweep")
-			}
-			if !got["new"] {
-				t.Error("a recent completion was swept")
+			if !s.Worked(ctx, "ceo", []string{"wk-1"})["wk-1"] {
+				t.Error("the key stopped being worked after a second record")
 			}
 		})
 	}
@@ -386,33 +365,50 @@ func replies(ss []ledger.Session) []string {
 	return out
 }
 
+// An UNKEYED turn writes nothing at all.
+//
+// Worked already refuses to MATCH an empty key, so a stored one would be
+// invisible on the read path — which is exactly why the write guard needs its
+// own assertion. The observation is the CALL, not a side effect: the guard is
+// in the adapter, and a counting ledger underneath it sees whether the write
+// was attempted at all.
+//
+// Found by mutation: removing the write guard changed no read.
 func TestAnUnkeyedTurnLeavesNoRowBehind(t *testing.T) {
 	t.Parallel()
-	// Worked already refuses to MATCH an empty key, so a stored one is
-	// invisible on the read path — which is exactly why the write guard
-	// needs its own assertion. Purge is where it shows: an unkeyed turn
-	// that wrote a row would grow the table with entries nothing can ever
-	// look up.
-	//
-	// Found by mutation: removing the write guard changed no read.
-	for name, s := range completionImpls(t) {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			if err := s.Record(ctx, "ceo", "", "t1", base); err != nil {
-				t.Fatalf("Record: %v", err)
-			}
-			if err := s.Record(ctx, "ceo", "wk-1", "t2", base); err != nil {
-				t.Fatalf("Record: %v", err)
-			}
-			n, err := s.Purge(ctx, base.Add(time.Hour))
-			if err != nil {
-				t.Fatalf("Purge: %v", err)
-			}
-			if n != 1 {
-				t.Errorf("purged %d rows, want 1 — an unkeyed turn wrote one", n)
-			}
-		})
+	counter := &countingLedger{Fleet: coordmemory.NewFleet()}
+	s := ledgerstore.NewFleetCompletions(counter)
+	ctx := context.Background()
+
+	if err := s.Record(ctx, "ceo", "", "t1", base); err != nil {
+		t.Fatalf("an unkeyed turn was an error: %v", err)
 	}
+	if err := s.Record(ctx, "", "wk-1", "t1", base); err != nil {
+		t.Fatalf("a seatless turn was an error: %v", err)
+	}
+	if counter.writes != 0 {
+		t.Fatalf("%d writes reached the ledger, want none", counter.writes)
+	}
+
+	// THE CONTROL. Without it this passes for an adapter that writes
+	// nothing at all.
+	if err := s.Record(ctx, "ceo", "wk-1", "t2", base); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if counter.writes != 1 {
+		t.Fatalf("a keyed turn made %d writes, want 1", counter.writes)
+	}
+}
+
+// countingLedger counts the writes that reach it.
+type countingLedger struct {
+	*coordmemory.Fleet
+	writes int
+}
+
+func (c *countingLedger) Record(ctx context.Context, scope, key, detail string, at time.Time) error {
+	c.writes++
+	return c.Fleet.Record(ctx, scope, key, detail, at)
 }
 
 func TestAConversationKeyCannotCollideWithAnother(t *testing.T) {
@@ -450,122 +446,57 @@ func TestAConversationKeyCannotCollideWithAnother(t *testing.T) {
 	}
 }
 
+// The ledger FAILS OPEN on a read it could not complete.
+//
+// Not knowing whether work was done has one safe answer and it is the
+// pre-ledger one — do the work. A read that failed closed would make a
+// coordination-store blip look like a company that had already answered
+// everything, and every seat would go quiet with nothing in the log to say
+// why.
+//
+// The failure is injected at the CONTRACT rather than in a driver: the
+// coordination store raises the error (so the decision belongs to whoever is
+// about to do the work) and this is where that decision is made.
 func TestAFailedCompletionReadAnswersNOTHINGRatherThanAPartialSet(t *testing.T) {
 	t.Parallel()
-	// The fail-open direction, probed rather than asserted from the code.
-	//
-	// TWO failure paths, and they are not the same. The query failing
-	// outright is reachable by closing the database. The result set failing
-	// PART WAY THROUGH iteration is not — and that is the one that decides
-	// between "nothing is known" and a silent PARTIAL answer, where some
-	// triggers read as worked, the rest as unknown, and the caller cannot
-	// tell which half it got. A seat then skips part of a conversation.
-	//
-	// Both are exercised here, the second through a driver wrapper that
-	// stops the rows mid-iteration. The SQL, the schema and the encoding
-	// are all real; the only fiction is when the rows end.
-	fault := storetest.FailReadsAfter(1, errors.New("connection reset mid-iteration"))
-	d, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "fault.db"),
-		store.Options{WrapDriver: fault.Wrap})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	s := ledgerstore.NewCompletions(d)
+	ledger := &faultyLedger{Fleet: coordmemory.NewFleet()}
+	s := ledgerstore.NewFleetCompletions(ledger)
 	ctx := context.Background()
 	for _, k := range []string{"wk-1", "wk-2", "wk-3"} {
 		if err := s.Record(ctx, "ceo", k, "t", base); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 	}
-	// THE CONTROL. Without it every assertion below passes for a store
+	// THE CONTROL. Without it every assertion below passes for a ledger
 	// that never finds anything.
 	if got := s.Worked(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"}); len(got) != 3 {
 		t.Fatalf("healthy read found %v, want all three", got)
 	}
 
-	fault.Arm()
+	ledger.fail = errors.New("the coordination store is unreachable")
 	got := s.Worked(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"})
 	if len(got) != 0 {
-		t.Errorf("a read that failed mid-iteration answered %v, want nothing known — "+
-			"a partial answer marks some triggers worked and leaves the rest "+
-			"unknown, with no way for the caller to tell", got)
+		t.Errorf("a failed read answered %v, want nothing known — a partial answer "+
+			"marks some triggers worked and leaves the rest unknown, with no way "+
+			"for the caller to tell", got)
 	}
-	fault.Disarm()
-
-	// And it recovers: the fail-open answer is for the duration of the
-	// failure, not a latched state.
-	if got := s.Worked(ctx, "ceo", []string{"wk-1"}); !got["wk-1"] {
-		t.Error("the read did not recover once the fault cleared")
-	}
-
-	// The other path: the query itself failing.
-	if err := d.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if got := s.Worked(ctx, "ceo", []string{"wk-1"}); len(got) != 0 {
-		t.Errorf("a read against a closed store answered %v, want nothing known", got)
+	ledger.fail = nil
+	if got := s.Worked(ctx, "ceo", []string{"wk-1"}); len(got) != 1 {
+		t.Errorf("the ledger did not recover: %v", got)
 	}
 }
 
-func TestAnUnscannableRowAlsoAnswersNOTHING(t *testing.T) {
-	t.Parallel()
-	// The THIRD failure path, and a separate branch from the other two: a
-	// value the column cannot hold surfaces through rows.Scan, not through
-	// rows.Err. The two lines look identical in the source and only one of
-	// them is exercised by a transport failure.
-	//
-	// Found by mutation: making the Scan branch return its partial result
-	// passed every test, including the mid-iteration one.
-	fault := storetest.CorruptReadsAfter(1)
-	d, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "corrupt.db"),
-		store.Options{WrapDriver: fault.Wrap})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	s := ledgerstore.NewCompletions(d)
-	ctx := context.Background()
-	for _, k := range []string{"wk-1", "wk-2", "wk-3"} {
-		if err := s.Record(ctx, "ceo", k, "t", base); err != nil {
-			t.Fatalf("Record: %v", err)
-		}
-	}
-	if got := s.Worked(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"}); len(got) != 3 {
-		t.Fatalf("healthy read found %v, want all three", got)
-	}
-
-	fault.Arm()
-	if got := s.Worked(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"}); len(got) != 0 {
-		t.Errorf("a read that hit an unscannable row answered %v, want nothing known", got)
-	}
+// faultyLedger is a coordination ledger whose reads can be made to fail.
+type faultyLedger struct {
+	*coordmemory.Fleet
+	fail error
 }
 
-func TestAStoredEmptyKeyStillNeverMatches(t *testing.T) {
-	t.Parallel()
-	// Two guards defend one property — Record refuses to write an empty key
-	// and Worked refuses to query for one — and the second is invisible
-	// while the first holds. It is not redundant: it is what stops a row
-	// written by anything else (a migration, a future writer, a hand-fixed
-	// database) from reading as "already worked" for EVERY unkeyed turn
-	// this seat ever runs.
-	//
-	// Found by mutation: removing the query-side skip changed nothing,
-	// because no test had ever put such a row there.
-	d, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "raw.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+func (f *faultyLedger) Worked(ctx context.Context, scope string, keys []string) (map[string]bool, error) {
+	if f.fail != nil {
+		return nil, f.fail
 	}
-	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.SQL().ExecContext(t.Context(),
-		`INSERT INTO turn_completions (work_key, agent_handle, turn_id, completed_at)
-		 VALUES ('', 'ceo', 't0', 0)`); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	s := ledgerstore.NewCompletions(d)
-	if s.Worked(context.Background(), "ceo", []string{""})[""] {
-		t.Error("a stored empty key read as worked")
-	}
+	return f.Fleet.Worked(ctx, scope, keys)
 }
 
 // Threads is the OPERATOR's read of the same ledger a turn uses, and both

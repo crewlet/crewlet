@@ -446,7 +446,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// is no longer running.
 			Company:       func() *config.Company { return companyConfig(e) },
 			Coord:         e.Backends().Coord,
-			Plane:         e.Backends().Store.ControlPlane(),
+			Plane:         e.Backends().Fleet,
 			Runs:          sqlledger.New(e.Backends().Store.SQL()),
 			Conversations: ledgerstore.NewConversations(e.Backends().Store),
 			Diary:         learning.NewDiary(e.Backends().Store),
@@ -462,14 +462,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			NodeID:  nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
-		// dedupes through THIS node's store, which is what makes a
-		// delivery that lands on any node of a fleet wake the seat's
-		// owner exactly once.
+		// dedupes through the FLEET'S coordination store, which is what
+		// makes a delivery that lands on any node wake the seat's owner
+		// exactly once — a vendor retrying reaches whichever node the
+		// load balancer picks, so a claim only this node could see would
+		// suppress nothing.
 		Config: configSurface,
 		Inbound: api.Inbound{
-			Secrets:    func() webhooks.Secrets { return companySecrets(e) },
-			Publisher:  e.Backends().Queue,
-			Deliveries: e.Backends().Store.DeliveryLog(),
+			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
+			Publisher: e.Backends().Queue,
+			Claims:    e.Backends().Fleet,
 		},
 	})
 	// CONFIGURED by construction. The engine only exists because a company

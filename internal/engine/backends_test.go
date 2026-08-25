@@ -390,8 +390,9 @@ func TestTheStoreOpensWithTheOtherSlots(t *testing.T) {
 	// Open, and MIGRATED — an opened file with no schema is a store every
 	// ledger write fails against, which is not what "opened" should mean.
 	if _, err := back.Store.SQL().ExecContext(t.Context(),
-		`INSERT INTO turn_completions (agent_handle, work_key, turn_id, completed_at)
-		 VALUES ('ceo', 'wk1', '', 1)`); err != nil {
+		`INSERT INTO conversation_sessions
+		     (agent_handle, conversation_key, entry, created_at)
+		 VALUES ('ceo', 'thread-1', '{}', 1)`); err != nil {
 		t.Errorf("the store opened without its schema: %v", err)
 	}
 }
@@ -570,8 +571,9 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 			// how a shutdown reaches a handler, and a write refused for
 			// that reason would not be evidence about the store.
 			_, _ = back.Store.SQL().ExecContext(context.WithoutCancel(ctx),
-				`INSERT INTO turn_completions (agent_handle, work_key, turn_id, completed_at)
-				 VALUES ('ceo', 'late', '', 1)`)
+				`INSERT INTO conversation_sessions
+				     (agent_handle, conversation_key, entry, created_at)
+				 VALUES ('ceo', 'late', '{}', 1)`)
 			return queue.Ack()
 		}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -608,7 +610,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 	t.Cleanup(func() { _ = again.Close() })
 	var n int
 	if err := again.SQL().QueryRowContext(t.Context(),
-		`SELECT count(*) FROM turn_completions WHERE work_key = 'late'`).Scan(&n); err != nil {
+		`SELECT count(*) FROM conversation_sessions WHERE conversation_key = 'late'`).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n != 1 {

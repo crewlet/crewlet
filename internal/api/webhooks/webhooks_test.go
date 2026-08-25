@@ -18,6 +18,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -95,7 +97,7 @@ type edge struct {
 	published  *recorder
 	stream     *sink
 	events     *store.EventLog
-	deliveries *store.Deliveries
+	claims     coord.Claims
 	secrets    *webhooks.Secrets
 	configured *bool
 }
@@ -125,7 +127,7 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 		published:  &recorder{},
 		stream:     &sink{},
 		events:     db.Events(),
-		deliveries: db.DeliveryLog(),
+		claims:     coordmemory.NewFleet(),
 		secrets:    secrets,
 		configured: &configured,
 	}
@@ -133,7 +135,7 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 		Secrets:    func() webhooks.Secrets { return *secrets },
 		Publisher:  e.published,
 		Events:     e.events,
-		Deliveries: e.deliveries,
+		Claims:     e.claims,
 		Stream:     e.stream,
 		Configured: func() bool { return configured },
 		Now:        func() time.Time { return pinned },
@@ -719,7 +721,7 @@ func TestAStoreOutageDoesNotSwallowTheWake(t *testing.T) {
 	// will be worked whatever happens to the audit row, and a receiver that
 	// failed the request over a store error would drop real work to keep a
 	// feed tidy.
-	e := newEdge(t, func(o *webhooks.Options) { o.Events = nil; o.Deliveries = nil })
+	e := newEdge(t, func(o *webhooks.Options) { o.Events = nil; o.Claims = nil })
 	res := e.post(t, "/webhooks/github", issueBody, githubDelivery(issueBody, "gh-secret"))
 	if res.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200", res.Code)

@@ -301,10 +301,10 @@ What a fleet gets right, each of which was a real defect before:
 
 - *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn loop re-checks the fence before every round and every write-capable tool. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
-- *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — an append-only epoch log every node polls — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
+- *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* A shared counter in the coordination slot, so an org cap of 500 k is 500 k across the fleet.
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering and curation are [singleton duties](../concepts/seat-ownership.md#singleton-duties) now, along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps — six `worker:{duty}` leases, each claimed per tick so a node that dies mid-duty hands it back by lapsing.
-- *Unbounded table growth.* `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions`, `conversation_sessions`, `a2a_channels` and `config_apply_status` all answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. `config_apply_status` is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed leaves its last row behind, which under generated pod names is one row per pod that ever ran.
+- *Unbounded table growth.* `scheduled_runs`, `conversation_sessions`, `chat_thread_follows` and `a2a_channels` all answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. The fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. The concurrency
 gate is per node, so an org's ceiling becomes N × the configured value.
@@ -326,8 +326,9 @@ CI runs the store suites twice to keep that true.
 **The engine owns the file exclusively.** A second process pointed at the same
 path is not a degraded configuration, it is corruption waiting for a schedule
 to collide — so nothing that genuinely needs to be shared between nodes lives
-here. Seat leases, config activations, the completion ledger, webhook dedupe
-and the rate valves are all in the coordination slot instead.
+here. Seat leases, the activation pointer and per-node apply status, the
+completion ledger, webhook dedupe, the rate valve and credential cooldowns are
+all in the [coordination slot](../concepts/coordination.md) instead.
 
 The load-bearing tables:
 
@@ -341,7 +342,7 @@ The load-bearing tables:
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`chat_thread_follows`** — per-agent chat thread-follow state, keyed by backend.
 - **`pending_sandbox_run`** — the suspended Execute conversation of a detached [coding run](../concepts/code-sandbox.md), and the box record it resumes into.
-- **`company_config`**, **`config_activations`**, **`config_apply_status`** — the [control plane](../concepts/control-plane.md).
+- **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
 - **`secret_values`** — the [secret store](../concepts/secret-store.md), one encrypted row per env-var name, consulted ahead of the process environment when a `${VAR}` is resolved.
 
 Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a backup instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.

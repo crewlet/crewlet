@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -46,7 +48,8 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 	// company no peer can see, and a second node started against the same
 	// store finds it unconfigured.
 	db := seedStore(t)
-	if err := seedCompany(t.Context(), db, parse(t, companyYAML), nil, quiet()); err != nil {
+	fleet := coordmemory.NewFleet()
+	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -57,7 +60,7 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 		t.Errorf("source = %q, want the file it came from", active.Source)
 	}
 	// And the POINTER moved with it, or nothing in the fleet reconciles.
-	target, found, err := db.ControlPlane().Target(t.Context())
+	target, found, err := fleet.Target(t.Context())
 	if err != nil || !found {
 		t.Fatalf("target: found=%v err=%v", found, err)
 	}
@@ -75,7 +78,7 @@ func TestAnUnchangedFileSeedsNothing(t *testing.T) {
 	db := seedStore(t)
 	company := parse(t, companyYAML)
 	for range 5 {
-		if err := seedCompany(t.Context(), db, company, nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, nil, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -94,12 +97,13 @@ func TestAnEditedFileIsImportedOnce(t *testing.T) {
 	// the three: an operator edits a config, restarts, and nothing happens,
 	// with nothing anywhere saying why.
 	db := seedStore(t)
-	if err := seedCompany(t.Context(), db, parse(t, companyYAML), nil, quiet()); err != nil {
+	fleet := coordmemory.NewFleet()
+	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
 		t.Fatal(err)
 	}
 	edited := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
 	for range 3 {
-		if err := seedCompany(t.Context(), db, parse(t, edited), nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), parse(t, edited), nil, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -143,7 +147,7 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	}
 	company := parse(t, companyYAML)
 	for range 4 {
-		if err := seedCompany(t.Context(), db, company, cipher, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, cipher, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -177,10 +181,10 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 		t.Fatal(err)
 	}
 	company := parse(t, companyYAML)
-	if err := seedCompany(t.Context(), db, company, cipher, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, cipher, quiet()); err != nil {
 		t.Fatal(err)
 	}
-	err = seedCompany(t.Context(), db, company, nil, quiet())
+	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), company, nil, quiet())
 	if err == nil {
 		t.Fatal("a node with no keyring seeded over a sealed revision")
 	}
@@ -203,4 +207,75 @@ func generatedKey(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return key
+}
+
+// A node whose COORDINATION store is empty publishes what it already has.
+//
+// This is the case the embedded topology creates on every restart of a
+// single-node deployment whose broker keeps no persistent store: the local
+// database still holds the active revision, the fleet's pointer is gone, and
+// without this the node would serve a company that nothing points at — so
+// every peer, and its own reconciler, would read it as unconfigured.
+//
+// It is also what carries an OFFLINE `crewlet config import` through: that
+// command marks a revision active locally and says it cannot move the
+// pointer, because on this topology the pointer lives inside the engine's own
+// process.
+func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	company := parse(t, companyYAML)
+
+	// A first start, which seeds the revision and publishes the pointer.
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, nil, quiet()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	active, found, err := db.Configs().Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("active: found=%v err=%v", found, err)
+	}
+
+	// A restart onto a FRESH coordination store, with the same file and
+	// the same database.
+	fleet := coordmemory.NewFleet()
+	if err := seedCompany(t.Context(), db, fleet, company, nil, quiet()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	target, found, err := fleet.Target(t.Context())
+	if err != nil || !found {
+		t.Fatalf("the restarted node published no pointer: found=%v err=%v", found, err)
+	}
+	if target.RevisionID != active.ID {
+		t.Fatalf("the pointer names %s, want the revision this node holds (%s)",
+			target.RevisionID, active.ID)
+	}
+}
+
+// A node booting into a running fleet must CONVERGE on what the fleet already
+// decided, not overwrite it with whatever its local database happens to say.
+// Without this rule one restarted node could roll a company back.
+func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
+	t.Parallel()
+	db := seedStore(t)
+	fleet := coordmemory.NewFleet()
+	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// A PEER activated something else, later.
+	peer, err := fleet.Activate(t.Context(), "peer-revision", "from a peer",
+		time.Now().Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("peer activate: %v", err)
+	}
+	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	after, _, err := fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.RevisionID != peer.RevisionID {
+		t.Fatalf("a restarting node rolled the fleet back to %s, want the peer's %s",
+			after.RevisionID, peer.RevisionID)
+	}
 }

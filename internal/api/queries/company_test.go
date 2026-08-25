@@ -20,7 +20,6 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // pinned is the clock these answers run on. Pinned because a lease countdown
@@ -571,19 +570,19 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 	// node that STOPPED reporting is exactly the one an operator is
 	// looking for — without the timestamp its stale row is
 	// indistinguishable from one written a second ago.
-	db := openStore(t)
 	backend := coordmemory.New()
 	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	plane := db.ControlPlane()
-	if _, err := plane.RecordActivation(t.Context(), "rev-1", "", pinned); err != nil {
+	plane := coordmemory.NewFleet()
+	published, err := plane.Activate(t.Context(), "rev-1", "", pinned)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := plane.RecordApply(t.Context(), store.NodeApply{
-		NodeID: "node-a", Epoch: 1, RevisionID: "rev-1",
-		Status: configplane.StatusOK, UpdatedAt: pinned,
+	if err := plane.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-a", Epoch: published.Epoch, RevisionID: "rev-1",
+		Status: string(configplane.StatusOK), UpdatedAt: pinned,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -616,18 +615,15 @@ func TestAnUnreadableControlPlaneDoesNotBlankTheFleet(t *testing.T) {
 	// "which node holds what", and refusing the whole view because one of
 	// its columns is unreadable would blank the screen an operator opens
 	// when nodes are dying.
-	db := openStore(t)
 	backend := coordmemory.New()
 	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
 		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	plane := db.ControlPlane()
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// A plane that CANNOT be read, which is the case this covers: the
+	// config column is unavailable while the lease view is fine.
 	body := asMap(t, answer(t, queries.Sources{
-		Coord: backend, Plane: plane, NodeID: "node-a",
+		Coord: backend, Plane: brokenPlane{}, NodeID: "node-a",
 	}, "fleet", nil))
 
 	nodes, _ := body["nodes"].([]any)
@@ -1009,3 +1005,21 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		}
 	}
 }
+
+// brokenPlane is a config plane that answers nothing, for the case where the
+// fleet view has to survive one of its columns being unreadable.
+type brokenPlane struct{}
+
+func (brokenPlane) Activate(context.Context, string, string, time.Time) (coord.Activation, error) {
+	return coord.Activation{}, errUnreadablePlane
+}
+
+func (brokenPlane) Target(context.Context) (coord.Activation, bool, error) {
+	return coord.Activation{}, false, errUnreadablePlane
+}
+
+func (brokenPlane) RecordApply(context.Context, coord.NodeApply) error { return errUnreadablePlane }
+
+func (brokenPlane) Fleet(context.Context) ([]coord.NodeApply, error) { return nil, errUnreadablePlane }
+
+var errUnreadablePlane = errors.New("the coordination plane is unreachable")

@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -193,9 +193,9 @@ func New(opts Options) *App {
 // recording a delivery that never reaches an agent is worse than not accepting
 // it.
 type Inbound struct {
-	Secrets    func() webhooks.Secrets
-	Publisher  queue.Publisher
-	Deliveries *store.Deliveries
+	Secrets   func() webhooks.Secrets
+	Publisher queue.Publisher
+	Claims    coord.Claims
 
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
@@ -218,7 +218,7 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 	webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
-		Deliveries: in.Deliveries,
+		Claims:     in.Claims,
 		Keys:       in.Keys,
 		Events:     sources.Events,
 		Stream:     a.stream,

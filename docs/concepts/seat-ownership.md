@@ -134,12 +134,12 @@ A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a sandbox r
 
 Fencing and admission bound the window in which two nodes could be working one seat. They do not close a narrower one: a turn **finishes**, its outbound effects ship, and the node dies before the delivery is acked. At-least-once then hands that trigger to the seat's next owner, which re-runs the whole turn — the same Slack reply, the same Jira comment, from an agent with no idea it already spoke.
 
-`turn_completions` records what finished, and is read before the next turn starts.
+The **completion ledger** records what finished, and is read before the next turn starts. It lives in the fleet's [coordination store](coordination.md), not in a node's own database — a redelivery that lands on a peer has to find it, and a ledger each node kept privately would find nothing and run the turn again, which is the exact failure it exists to prevent.
 
 It is deliberately **not** a claim, and the absences are the design:
 
 - **No `in_progress` state.** The seat lease is already the mutual exclusion — one consuming node, serial within it — so a claim's only honest disposition for a stale in-progress row is "supersede and re-run", which is exactly what you do with no row at all. An earlier design had one; five of five reviewers rejected it, because every other defect they found existed only to service that state.
-- **No expiry, no supersede rule.** A row means the work is done, and done does not lapse. Rows are deleted on a retention horizon by the `maintenance` duty — garbage collection, not semantics.
+- **No expiry, no supersede rule.** A record means the work is done, and done does not lapse. Records age out on the bucket's own seven-day retention — garbage collection, not semantics, and its floor is the scheduler's catchup ceiling rather than a round number: forgetting a completion a tick could still evaluate lets that fire run twice.
 - **Keyed on *constituent* event ids.** A multi-event partition is merged into one digest before the turn runs, and that digest is minted fresh on every coalesce, so a key taken from it would differ on every redelivery and match nothing. Recording constituents also means a redelivery that overlaps a previous partition only partially — A+B ran, then A+B+C arrives — skips A and B and runs C.
 
 **Both directions fail open, and that is the whole failure policy.** An unreadable ledger cannot tell you whether work was done, and the only safe answer to that is the one the engine gave before the table existed: run it. Failing closed would park real work during a database blip — and the seat's own admission gate already refuses new turns within one heartbeat of a store it cannot reach. The write happens *after* the side effects shipped, so failing to record them cannot un-ship them.
@@ -226,7 +226,7 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `scheduler` | Evaluates every schedule and fires what is due | The `scheduled_runs` claim already makes a fire at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `skill-clustering` | Synthesises skills from episodes | Reads every agent's episodes and **writes** skills: N nodes produce N sets of near-identical pages and N× the LLM spend |
 | `skill-curator` | Transitions skills active → stale → archived | Publishes a lifecycle event per transition, and races its own optimistic-concurrency guard |
-| `maintenance` | Retention sweeps for every short-horizon table — `events`, `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions`, `conversation_sessions`, `a2a_channels` and `config_apply_status` — plus the idle-close of A2A channels no turn ever answered | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+| `maintenance` | Retention sweeps for every short-horizon table in the node's own database — `events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows` and `a2a_channels` — plus the idle-close of A2A channels no turn ever answered. Nothing shared is swept here: the [coordination store](coordination.md) expires its own records | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
@@ -246,7 +246,7 @@ Two consequences worth stating plainly:
 
 The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
 
-- **v2 — the completion ledger.** Holding a seat lease now means consulting and settling `turn_completions`. A v1 node cannot: it takes a seat over, never reads the completion row, and re-runs a turn whose effects already shipped.
+- **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
 - **v3 — placement.** Holding a seat lease now means "and this node satisfies the seat's `role.placement`". A v2 node has no such concept, so it claims a seat pinned to a node id or a label it does not carry — and *succeeds*, because the lease is only a mutex and knows nothing about where a seat belongs. The operator's pin is silently violated: the seat runs, on the wrong node, with nothing to see.
 
 ## What ownership looks like from outside

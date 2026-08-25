@@ -61,25 +61,6 @@ func (m *MemoryCompletions) Record(_ context.Context, handle, key, _ string, at 
 	return nil
 }
 
-// Purge deletes rows completed before cutoff.
-func (m *MemoryCompletions) Purge(_ context.Context, cutoff time.Time) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var n int64
-	for handle, seat := range m.rows {
-		for key, at := range seat {
-			if at.Before(cutoff) {
-				delete(seat, key)
-				n++
-			}
-		}
-		if len(seat) == 0 {
-			delete(m.rows, handle)
-		}
-	}
-	return n, nil
-}
-
 // memoryEntry is one stored conversation row.
 type memoryEntry struct {
 	entry   ledger.Session

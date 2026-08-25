@@ -376,17 +376,21 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}
-	// The ledgers are the local store's, and nil-checked rather than
-	// assumed: a caller-supplied Backends may carry no store, and the
-	// dispatcher already documents nil as the single-node case where the
-	// seat lease is the whole mutual exclusion.
-	if backends.Store != nil {
-		if d.Completions == nil {
-			d.Completions = ledgerstore.NewCompletions(backends.Store)
-		}
-		if d.Conversations == nil {
-			d.Conversations = ledgerstore.NewConversations(backends.Store)
-		}
+	// THE TWO LEDGERS COME FROM DIFFERENT PLACES, and the split is the
+	// point. Completions must be agreed across the FLEET — a redelivery
+	// that lands on a peer has to find the record, or the turn runs twice
+	// — so it lives on the coordination store. Conversations are a seat's
+	// own history, read only by the node running that seat, so they stay
+	// on the node's local database where a long thread costs nothing to
+	// replicate.
+	if backends.Fleet != nil && d.Completions == nil {
+		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
+	}
+	// Nil-checked rather than assumed: a caller-supplied Backends may
+	// carry no store, and the dispatcher already documents nil as the
+	// single-node case where the seat lease is the whole mutual exclusion.
+	if backends.Store != nil && d.Conversations == nil {
+		d.Conversations = ledgerstore.NewConversations(backends.Store)
 	}
 	return d
 }

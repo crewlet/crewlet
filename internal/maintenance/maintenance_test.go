@@ -368,7 +368,7 @@ func TestStartIsIdempotent(t *testing.T) {
 // one day, so this floor is for a caller that built its stores directly.
 func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 	for _, asked := range []time.Duration{0, -time.Hour} {
-		jobs := maintenance.LedgerJobs(stubCompletions{}, stubConversations{}, asked)
+		jobs := maintenance.LedgerJobs(stubConversations{}, asked)
 		var found bool
 		for _, j := range jobs {
 			if j.Name != "conversation_sessions" {
@@ -385,7 +385,7 @@ func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 		}
 	}
 	// A real horizon is used as written.
-	jobs := maintenance.LedgerJobs(stubCompletions{}, stubConversations{}, 72*time.Hour)
+	jobs := maintenance.LedgerJobs(stubConversations{}, 72*time.Hour)
 	for _, j := range jobs {
 		if j.Name == "conversation_sessions" && j.Horizon != 72*time.Hour {
 			t.Fatalf("a configured horizon became %v", j.Horizon)
@@ -396,7 +396,7 @@ func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 // A missing store contributes no job rather than one that fails every tick:
 // a deployment without one is real, and its in-memory twins prune inline.
 func TestAbsentLedgersContributeNoJobs(t *testing.T) {
-	if jobs := maintenance.LedgerJobs(nil, nil, time.Hour); len(jobs) != 0 {
+	if jobs := maintenance.LedgerJobs(nil, time.Hour); len(jobs) != 0 {
 		t.Fatalf("nil stores produced %d jobs", len(jobs))
 	}
 	if jobs := maintenance.StoreJobs(nil); len(jobs) != 0 {

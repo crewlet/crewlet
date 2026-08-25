@@ -64,7 +64,7 @@ type Sources struct {
 	Coord coord.Backend
 
 	// Plane is the control plane, for the config columns of the fleet view.
-	Plane *store.ConfigPlane
+	Plane coord.Plane
 
 	// Runs is the schedule dispatch ledger. Nil still answers the
 	// schedules question — the configured schedules are a projection of

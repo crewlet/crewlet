@@ -12,14 +12,6 @@ import (
 // under test is which jobs come back and over what horizon, and a real store
 // would answer that question with a database.
 
-type stubCompletions struct{}
-
-func (stubCompletions) Worked(context.Context, string, []string) map[string]bool { return nil }
-func (stubCompletions) Record(context.Context, string, string, string, time.Time) error {
-	return nil
-}
-func (stubCompletions) Purge(context.Context, time.Time) (int64, error) { return 0, nil }
-
 type stubConversations struct{}
 
 func (stubConversations) Append(context.Context, string, string, ledger.Session, string, time.Time, int) error {

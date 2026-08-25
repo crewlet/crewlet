@@ -8,9 +8,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The inbound edge, wired.
@@ -387,24 +387,29 @@ func (e *Engine) followStore() notify.FollowStore {
 	return e.backends.Store.ThreadFollows()
 }
 
-// notifyValve is the shared per-seat notification cap, or nil with no store.
+// notifyValve is the shared per-seat notification cap, or nil with no
+// coordination store.
 //
 // Nil leaves the valve off, which is right: the counter has to be FLEET-WIDE
 // to work at all — the loop it exists to catch bounces between nodes, so no
 // single process sees enough of it to trip — and a per-process substitute
 // would report a limit it is not enforcing.
+//
+// It was on the node's own database, which made it exactly that per-process
+// substitute: a company on four nodes ran four valves, and a seat configured
+// for five notifications a second could emit twenty.
 func (e *Engine) notifyValve() notify.Valve {
-	if e.backends.Store == nil {
+	if e.backends.Fleet == nil {
 		return nil
 	}
-	return &notifyValve{limits: e.backends.Store.RateLimits()}
+	return &notifyValve{counter: e.backends.Fleet}
 }
 
-// notifyValve adapts the store's counter to the notification seam.
-type notifyValve struct{ limits *store.RateLimits }
+// notifyValve adapts the fleet counter to the notification seam.
+type notifyValve struct{ counter coord.Counter }
 
 func (v *notifyValve) Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error) {
-	return v.limits.Allow(ctx, bucket, limit, now)
+	return v.counter.Allow(ctx, bucket, limit, coord.RateWindow, now)
 }
 
 // admits reports whether this node may take inbound work, deferring to the

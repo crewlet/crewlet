@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -56,6 +57,7 @@ roles:
 type plane struct {
 	engine  *engine.Engine
 	store   *store.DB
+	fleet   coord.Plane
 	recon   *engine.Reconciler
 	applies []applied
 }
@@ -68,10 +70,11 @@ type applied struct {
 func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
 	t.Helper()
 	e := newEngine(t, engine.Options{})
-	p := &plane{engine: e, store: e.Backends().Store}
+	p := &plane{engine: e, store: e.Backends().Store, fleet: e.Backends().Fleet}
 
 	options := engine.ReconcilerOptions{
 		Store:  p.store,
+		Fleet:  p.fleet,
 		NodeID: "node-a",
 		Now:    func() time.Time { return pinnedNow },
 	}
@@ -90,17 +93,43 @@ func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
 }
 
 // activate writes a revision and points the fleet at it, returning its epoch.
+//
+// TWO STORES, which is the shape the engine itself now has: the payload goes
+// in the node's database, the pointer in the coordination store.
 func (p *plane) activate(t *testing.T, doc string) int64 {
 	t.Helper()
 	document := yamlToJSON(t, doc)
-	_, epoch, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
+		t.Fatalf("store the revision: %v", err)
+	}
+	published, err := p.fleet.Activate(t.Context(), id, "revision", pinnedNow)
+	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	return epoch
+	return published.Epoch
+}
+
+// activatePayload is activate for a document that is not a company — a broken
+// one, or a sealed one. Same two writes, because a payload the fleet does not
+// point at is a payload no reconciler will ever read.
+func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
+	t.Helper()
+	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Source: "test", CreatedBy: "operator", Summary: summary,
+		Payload: payload, CreatedAt: pinnedNow,
+	})
+	if err != nil {
+		t.Fatalf("store the revision: %v", err)
+	}
+	published, err := p.fleet.Activate(t.Context(), id, summary, pinnedNow)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	return published.Epoch
 }
 
 // yamlToJSON stores a company the way an import does: parse the authored
@@ -128,9 +157,9 @@ func (p *plane) seats(t *testing.T) []string {
 	return out
 }
 
-func (p *plane) fleetRow(t *testing.T) store.NodeApply {
+func (p *plane) fleetRow(t *testing.T) coord.NodeApply {
 	t.Helper()
-	rows, err := p.store.ControlPlane().Fleet(t.Context())
+	rows, err := p.fleet.Fleet(t.Context())
 	if err != nil {
 		t.Fatalf("fleet: %v", err)
 	}
@@ -153,7 +182,7 @@ func TestANodeWithNoActivationAppliesNothing(t *testing.T) {
 	if p.recon.Applied() != 0 {
 		t.Errorf("applied epoch = %d, want 0", p.recon.Applied())
 	}
-	rows, err := p.store.ControlPlane().Fleet(t.Context())
+	rows, err := p.fleet.Fleet(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +231,7 @@ func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
 	if row.NodeID != "node-a" || row.Epoch != epoch {
 		t.Fatalf("row = %+v, want node-a on epoch %d", row, epoch)
 	}
-	if row.Status != configplane.StatusOK {
+	if configplane.ApplyStatus(row.Status) != configplane.StatusOK {
 		t.Errorf("status = %q, want ok", row.Status)
 	}
 	if row.Error != "" {
@@ -230,10 +259,18 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("active: found=%v err=%v", found, err)
 	}
-	second, err := p.store.Configs().Activate(t.Context(), active.ID, pinnedNow)
+	// RE-ACTIVATING the SAME revision, which is the case that matters: the
+	// pointer is append-only, so it mints a new epoch every node is
+	// watching — that is how a rotated secret reaches a running fleet.
+	summary, err := p.store.Configs().Activate(t.Context(), active.ID, pinnedNow)
 	if err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
+	republished, err := p.fleet.Activate(t.Context(), active.ID, summary, pinnedNow)
+	if err != nil {
+		t.Fatalf("re-publish: %v", err)
+	}
+	second := republished.Epoch
 	if second <= first {
 		t.Fatalf("the pointer did not move: %d then %d", first, second)
 	}
@@ -273,17 +310,12 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	// exactly what the distinction is for.
 	p := newPlane(t)
 	before := p.engine.Company()
-	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "broken", CreatedAt: pinnedNow,
-		// A seat naming a provider the document does not configure:
-		// well-formed JSON, and refused at build. The provider block is
-		// non-empty on purpose — a company with NO models is a
-		// documented authoring state, so an empty one would be a
-		// different fault from the one under test.
-		Payload: brokenRevision,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// A seat naming a provider the document does not configure:
+	// well-formed JSON, and refused at build. The provider block is
+	// non-empty on purpose — a company with NO models is a documented
+	// authoring state, so an empty one would be a different fault from
+	// the one under test.
+	p.activatePayload(t, "broken", brokenRevision)
 	err := p.recon.Tick(t.Context())
 	if err == nil {
 		t.Fatal("a revision that cannot be built applied cleanly")
@@ -295,7 +327,7 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 		t.Errorf("applied = %d, want 0 — nothing was applied", p.recon.Applied())
 	}
 	row := p.fleetRow(t)
-	if row.Status != configplane.StatusError {
+	if configplane.ApplyStatus(row.Status) != configplane.StatusError {
 		t.Errorf("status = %q, want error", row.Status)
 	}
 	if !strings.Contains(row.Error, "nonexistent") {
@@ -308,14 +340,14 @@ func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 	// A fleet where every node quietly ignores an unreadable pointer
 	// converges on nothing while reporting convergence.
 	p := newPlane(t)
-	if _, err := p.store.ControlPlane().RecordActivation(t.Context(),
+	if _, err := p.fleet.Activate(t.Context(),
 		"00000000-0000-0000-0000-000000000000", "ghost", pinnedNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.recon.Tick(t.Context()); err == nil {
 		t.Fatal("a pointer naming nothing applied cleanly")
 	}
-	if row := p.fleetRow(t); row.Status != configplane.StatusError {
+	if row := p.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError {
 		t.Errorf("status = %q, want error", row.Status)
 	}
 }
@@ -327,12 +359,7 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	// bound a bad revision has this node rebuilding its subsystems every
 	// fifteen seconds until somebody notices.
 	p := newPlane(t)
-	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "broken", CreatedAt: pinnedNow,
-		Payload: brokenRevision,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	p.activatePayload(t, "broken", brokenRevision)
 	for range 10 {
 		_ = p.recon.Tick(t.Context())
 	}
@@ -369,11 +396,7 @@ func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
 	// nothing reads on every surface as an operator who configured nothing,
 	// where the actual fault is a deployment that lost its root of trust.
 	blind := newPlane(t)
-	if _, _, err := blind.store.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "sealed", Payload: sealed, CreatedAt: pinnedNow,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	blind.activatePayload(t, "sealed", sealed)
 	err = blind.recon.Tick(t.Context())
 	if !errors.Is(err, secrets.ErrSealedWithoutKey) {
 		t.Fatalf("err = %v, want the sealed-without-key error", err)
@@ -381,11 +404,7 @@ func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
 
 	// With it: applied.
 	keyed := newPlane(t, func(o *engine.ReconcilerOptions) { o.Cipher = cipher })
-	if _, _, err := keyed.store.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "sealed", Payload: sealed, CreatedAt: pinnedNow,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	keyed.activatePayload(t, "sealed", sealed)
 	if err := keyed.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("a sealed revision with its keyring: %v", err)
 	}
@@ -465,11 +484,7 @@ func TestAConfirmedLaggardShedsOnlyWhenAPeerHasTheEpoch(t *testing.T) {
 	// The node tries and fails, which is what makes its lag CONFIRMED
 	// rather than ordinary propagation — a distinction the posture rule
 	// rests on, because every successful rollout produces lag.
-	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "broken", CreatedAt: pinnedNow, Payload: brokenRevision,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	p.activatePayload(t, "broken", brokenRevision)
 	_ = p.recon.Tick(t.Context())
 
 	if got := p.recon.Posture(t.Context()); got != configplane.PostureIsolated {
@@ -477,12 +492,12 @@ func TestAConfirmedLaggardShedsOnlyWhenAPeerHasTheEpoch(t *testing.T) {
 	}
 
 	// A peer reports the epoch applied cleanly, recently.
-	target, _, err := p.store.ControlPlane().Target(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.store.ControlPlane().RecordApply(t.Context(), store.NodeApply{
-		NodeID: "node-b", Epoch: target.Epoch, Status: configplane.StatusOK,
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: string(configplane.StatusOK),
 		UpdatedAt: pinnedNow,
 	}); err != nil {
 		t.Fatal(err)
@@ -499,19 +514,14 @@ func TestAStalePeerIsNotEvidence(t *testing.T) {
 	// its seats to a node that no longer exists — the company goes dark
 	// exactly where it should have gone degraded and raised an alarm.
 	p := newPlane(t)
-	if _, _, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Summary: "broken", CreatedAt: pinnedNow,
-		Payload: brokenRevision,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	p.activatePayload(t, "broken", brokenRevision)
 	_ = p.recon.Tick(t.Context())
-	target, _, err := p.store.ControlPlane().Target(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.store.ControlPlane().RecordApply(t.Context(), store.NodeApply{
-		NodeID: "ghost", Epoch: target.Epoch, Status: configplane.StatusOK,
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "ghost", Epoch: target.Epoch, Status: string(configplane.StatusOK),
 		UpdatedAt: pinnedNow.Add(-time.Hour),
 	}); err != nil {
 		t.Fatal(err)

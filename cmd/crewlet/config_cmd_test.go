@@ -209,27 +209,37 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 	}
 }
 
-// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP: the pointer is
-// append-only, so it mints a new epoch every node is watching — which is how
-// a rotated secret reaches a running fleet without a restart.
-func TestReactivatingTheCurrentRevisionMintsANewEpoch(t *testing.T) {
+// An OFFLINE activation marks the revision active on this node and says what
+// it can and cannot do.
+//
+// It cannot move the fleet's pointer: that lives in the coordination store,
+// which on the default embedded topology is inside the engine's own process,
+// so a command run while the engine is stopped genuinely cannot reach it.
+// Saying so is the whole value — an operator who activated a revision and saw
+// nothing change would reasonably conclude the command failed, and neither
+// remedy (restart, or POST /config) is guessable.
+//
+// That the pointer then MOVES on the next start is asserted where it happens:
+// TestAnOfflineActivationReachesTheFleetAtTheNextStart in reconcile_test.go.
+func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "one.yaml", nil)); err != nil {
+	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	id := activeRevisionID(t, cfg)
-
-	first, _, err := configCmd(t, cfg, "activate", id)
+	out, _, err := configCmd(t, cfg, "activate", id)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	second, _, err := configCmd(t, cfg, "activate", id)
-	if err != nil {
-		t.Fatalf("second activate: %v", err)
+	if !strings.Contains(out, id) {
+		t.Errorf("the output does not name the revision: %q", out)
 	}
-	if first == second {
-		t.Fatalf("re-activating produced the same epoch twice: %q", first)
+	for _, want := range []string{"next start", "POST /config"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the output does not mention %q, so an operator cannot tell "+
+				"how to reach a running fleet: %q", want, out)
+		}
 	}
 }
 

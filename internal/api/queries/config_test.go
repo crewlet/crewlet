@@ -33,7 +33,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		id, _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		id, err := db.Configs().InsertActive(t.Context(), store.Revision{
 			Source: "test", CreatedBy: "operator", Summary: "revision",
 			Payload: payload, CreatedAt: pinned.Add(time.Duration(i) * time.Minute),
 		})

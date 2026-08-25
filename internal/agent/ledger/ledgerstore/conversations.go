@@ -206,3 +206,16 @@ func (s *SQLConversations) Purge(ctx context.Context, cutoff time.Time) (int64, 
 	}
 	return rowsAffected(res)
 }
+
+// rowsAffected reads a result's row count, naming the package in the failure.
+//
+// Its own function because a driver that cannot report one is a driver
+// problem rather than a query problem, and a caller reading a bare
+// "unsupported" from three call sites cannot tell which.
+func rowsAffected(res sql.Result) (int64, error) {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("ledgerstore: rows affected: %w", err)
+	}
+	return n, nil
+}

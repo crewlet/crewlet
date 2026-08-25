@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -31,7 +32,7 @@ import (
 type Reconciler struct {
 	engine  *Engine
 	configs *store.Configs
-	plane   *store.ConfigPlane
+	plane   coord.Plane
 	nodeID  string
 	cipher  secrets.Cipher
 
@@ -56,8 +57,13 @@ type Reconciler struct {
 
 // ReconcilerOptions configure a reconciler.
 type ReconcilerOptions struct {
-	// Store is where the pointer and the per-node status live. Required.
+	// Store is where the revision PAYLOADS live. Required.
 	Store *store.DB
+
+	// Fleet is where the activation pointer and the per-node apply status
+	// live. Required: they are what the fleet converges on, and a node
+	// reading its own database would converge on itself.
+	Fleet coord.Plane
 
 	// NodeID identifies this node's row in the apply status. Required: the
 	// table upserts on it, so an empty one makes every node that forgot it
@@ -77,13 +83,21 @@ type ReconcilerOptions struct {
 	Now func() time.Time
 }
 
-// ErrNoStore reports a reconciler built without somewhere to read the pointer.
+// ErrNoStore reports a reconciler built without somewhere to read revisions.
 var ErrNoStore = errors.New("engine: reconciler needs a store")
+
+// ErrNoPlane reports a reconciler built without a coordination plane. Its own
+// sentinel because the two are different deployments to fix: one is a missing
+// database, the other a node with no coordination store to converge through.
+var ErrNoPlane = errors.New("engine: reconciler needs a coordination plane")
 
 // NewReconciler builds the loop.
 func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	if opts.Store == nil {
 		return nil, ErrNoStore
+	}
+	if opts.Fleet == nil {
+		return nil, ErrNoPlane
 	}
 	if opts.NodeID == "" {
 		return nil, fmt.Errorf("engine: reconciler needs a node id")
@@ -95,7 +109,7 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	return &Reconciler{
 		engine:  e,
 		configs: opts.Store.Configs(),
-		plane:   opts.Store.ControlPlane(),
+		plane:   opts.Fleet,
 		nodeID:  opts.NodeID,
 		cipher:  opts.Cipher,
 		onApply: opts.OnApply,
@@ -141,8 +155,7 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 		return configplane.FleetView{TargetEpoch: applied, AppliedEpoch: applied,
 			SelfStatus: configplane.StatusOK}, nil
 	}
-	ok, reported, err := r.plane.PeerHealth(ctx, target.Epoch, r.nodeID,
-		r.now().Add(-configplane.PeerStatusFreshness))
+	ok, reported, err := r.peerHealth(ctx, target.Epoch)
 	if err != nil {
 		return configplane.FleetView{}, err
 	}
@@ -218,7 +231,7 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 
 // apply loads, opens, parses and publishes one revision, then records what
 // happened for the rest of the fleet to read.
-func (r *Reconciler) apply(ctx context.Context, target store.Activation) error {
+func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 	status, err := r.applyRevision(ctx, target)
 	r.record(ctx, target, status, err)
 	if status == configplane.StatusOK {
@@ -232,7 +245,7 @@ func (r *Reconciler) apply(ctx context.Context, target store.Activation) error {
 }
 
 // applyRevision is the part that can fail, separated so every exit records.
-func (r *Reconciler) applyRevision(ctx context.Context, target store.Activation) (configplane.ApplyStatus, error) {
+func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (configplane.ApplyStatus, error) {
 	revision, found, err := r.configs.Get(ctx, target.RevisionID)
 	if err != nil {
 		return configplane.StatusError, fmt.Errorf("engine: read revision %s: %w",
@@ -276,14 +289,14 @@ func (r *Reconciler) applyRevision(ctx context.Context, target store.Activation)
 // tick because the note could not be written would retry an apply that
 // succeeded. What it costs is that peers see this node as stale, which the
 // freshness bound already treats as "no evidence" rather than as failure.
-func (r *Reconciler) record(ctx context.Context, target store.Activation, status configplane.ApplyStatus, cause error) {
+func (r *Reconciler) record(ctx context.Context, target coord.Activation, status configplane.ApplyStatus, cause error) {
 	message := ""
 	if cause != nil {
 		message = cause.Error()
 	}
-	if err := r.plane.RecordApply(ctx, store.NodeApply{
+	if err := r.plane.RecordApply(ctx, coord.NodeApply{
 		NodeID: r.nodeID, Epoch: target.Epoch, RevisionID: target.RevisionID,
-		Status: status, Error: message, UpdatedAt: r.now(),
+		Status: string(status), Error: message, UpdatedAt: r.now(),
 	}); err != nil {
 		log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
 			"error", err, "detail", "peers will read this node as stale")
@@ -312,4 +325,39 @@ func (r *Reconciler) Run(ctx context.Context) {
 		}
 		timer.Reset(configplane.ReconcileDelay())
 	}
+}
+
+// peerHealth counts the PEERS that reported success at an epoch, and how many
+// reported at all.
+//
+// Derived from the fleet view rather than asked of the coordination store,
+// because it is a QUESTION about the data rather than a thing a store can do
+// better: the contract stays four methods, and the freshness bound stays here
+// beside the posture that reads it.
+//
+// The ASKER IS EXCLUDED, which is the part that matters. A node counting its
+// own row would read a fleet of one as unanimous and shed nothing however far
+// behind its peers were — and a node is never evidence about itself, because
+// its own status is already SelfStatus.
+func (r *Reconciler) peerHealth(ctx context.Context, epoch int64) (ok, reported int, err error) {
+	rows, err := r.plane.Fleet(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	floor := r.now().Add(-configplane.PeerStatusFreshness)
+	for _, row := range rows {
+		switch {
+		case row.NodeID == r.nodeID, row.Epoch != epoch, row.UpdatedAt.Before(floor):
+			// A stale row is NO EVIDENCE rather than a failure: a
+			// node that stopped reporting may be gone, may be slow,
+			// and treating either as a vote would let one dead node
+			// decide the fleet's posture.
+			continue
+		}
+		reported++
+		if configplane.ApplyStatus(row.Status) == configplane.StatusOK {
+			ok++
+		}
+	}
+	return ok, reported, nil
 }

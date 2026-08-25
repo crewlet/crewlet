@@ -44,7 +44,6 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewSQLStore(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
 		jobs = append(jobs, maintenance.LedgerJobs(
-			ledgerstore.NewCompletions(db),
 			ledgerstore.NewConversations(db),
 			e.ConversationRetention())...)
 	}

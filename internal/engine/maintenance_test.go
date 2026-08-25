@@ -8,7 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -34,16 +33,17 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	got := w.Jobs()
 	slices.Sort(got)
 	want := []string{
+		// NOT HERE: webhook_deliveries, rate_limits, turn_completions
+		// and config_apply_status. All four moved to the coordination
+		// store, where a bucket's own age is the retention and the
+		// BROKER expires the records — so there is nothing on this node
+		// left to sweep.
 		"a2a_channels",
 		"a2a_channels_idle",
 		"chat_thread_follows",
-		"config_apply_status",
 		"conversation_sessions",
 		"events",
-		"rate_limits",
 		"scheduled_runs",
-		"turn_completions",
-		"webhook_deliveries",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -58,15 +58,14 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 	t.Parallel()
 	for table, horizon := range map[string]time.Duration{
-		"webhook_deliveries":    maintenance.DeliveryRetention,
-		"rate_limits":           maintenance.RateLimitRetention,
+		// NOT turn_completions: it is retained by the COORDINATION
+		// bucket now, whose age no sweep here ticks against.
+		// coordtest holds that horizon to the catchup ceiling.
 		"scheduled_runs":        maintenance.ScheduledRunRetention,
-		"turn_completions":      maintenance.CompletionRetention,
 		"conversation_sessions": maintenance.ConversationRetention,
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
-		"config_apply_status":   maintenance.ApplyStatusRetention,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",
@@ -75,14 +74,14 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 	}
 }
 
-// The completion ledger answers "has this trigger already been worked?", so
-// deleting a row a tick could still evaluate lets that fire run TWICE. Its
-// floor is the catchup ceiling, not a number somebody liked.
-func TestTheCompletionHorizonOutlastsTheCatchupCeiling(t *testing.T) {
+// A scheduler claim answers "did this fire already run?", so deleting a row a
+// tick could still evaluate lets that fire run TWICE. Its floor is the catchup
+// ceiling, not a number somebody liked. The completion ledger is held to the
+// same rule in coordtest, against coord.LedgerRetention.
+func TestTheScheduleHorizonOutlastsTheCatchupCeiling(t *testing.T) {
 	t.Parallel()
 	for name, horizon := range map[string]time.Duration{
-		"turn_completions": maintenance.CompletionRetention,
-		"scheduled_runs":   maintenance.ScheduledRunRetention,
+		"scheduled_runs": maintenance.ScheduledRunRetention,
 	} {
 		if horizon <= schedule.DefaultCatchupMax {
 			t.Errorf("%s retention (%v) can delete a row a tick could still evaluate (catchup %v)",
@@ -114,13 +113,8 @@ turn_engine:
 	}
 }
 
-// The delivery horizon is derived from the claim TTL rather than written as
-// a number, so raising one raises the other and a sweep can never delete a
-// row a claim would still consult.
-func TestTheDeliveryHorizonTracksTheClaimTTL(t *testing.T) {
-	t.Parallel()
-	if maintenance.DeliveryRetention <= store.DeliveryTTL {
-		t.Fatalf("the sweep (%v) can reach rows a claim still consults (%v)",
-			maintenance.DeliveryRetention, store.DeliveryTTL)
-	}
-}
+// The delivery horizon and the rate-window sweep are GONE, not forgotten:
+// both moved to the coordination store, where the bucket's own age is the
+// retention and the broker expires the records. The equivalent guard is
+// coordtest's TestTheRetentionsOutlastWhatTheyCover, which holds the bucket
+// ages against the cadences they have to outlast.

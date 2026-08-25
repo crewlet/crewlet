@@ -52,14 +52,22 @@ const revisionColumns = `revision_id, parent_revision_id, created_at, created_by
 	source, summary, payload, is_active, activated_at`
 
 // InsertActive writes a new revision and makes it the active one, returning
-// its id and the epoch the activation reached.
+// its id.
 //
-// ONE transaction covers the deactivate, the insert and the pointer append.
-// The partial unique index refuses two active rows, so a deactivate that
-// landed without its insert would leave a company with no configuration; and a
-// pointer that moved without the row — or a row that activated without the
-// pointer — is a fleet converging on a revision nobody can read.
-func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, int64, error) {
+// # It stores the revision; it does NOT move the fleet's pointer
+//
+// The pointer is coordination state — its epoch is a fencing token every node
+// has to agree on — and this database is the node's own. So publishing is two
+// steps in two stores, and the ORDER is the safe one: the revision is stored
+// FIRST, then the caller points the fleet at it with coord.Plane.Activate. A
+// crash between them leaves a revision nothing points at, which is inert and
+// re-activatable; the other order would point a fleet at a revision nobody
+// can read.
+//
+// ONE transaction still covers the deactivate and the insert. The partial
+// unique index refuses two active rows, so a deactivate that landed without
+// its insert would leave a company with no configuration.
+func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, error) {
 	id := r.ID
 	if id == "" {
 		id = uuid.NewString()
@@ -72,48 +80,42 @@ func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, int64, 
 	if len(payload) == 0 {
 		payload = json.RawMessage("{}")
 	}
-	var epoch int64
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
+		_, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
 			      source, summary, payload, is_active, activated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
 			id, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.Source, r.Summary, string(payload), EncodeTime(at)); err != nil {
-			return err
-		}
-		res, err := tx.ExecContext(ctx, ActivationInsertSQL, id, EncodeTime(at), r.Summary)
-		if err != nil {
-			return err
-		}
-		epoch, err = res.LastInsertId()
+			r.Source, r.Summary, string(payload), EncodeTime(at))
 		return err
 	})
 	if err != nil {
-		return "", 0, fmt.Errorf("store: insert config revision: %w", err)
+		return "", fmt.Errorf("store: insert config revision: %w", err)
 	}
-	log.InfoContext(ctx, "config_revision_activated",
-		"revision", id, "source", r.Source, "by", r.CreatedBy, "epoch", epoch)
-	return id, epoch, nil
+	log.InfoContext(ctx, "config_revision_stored",
+		"revision", id, "source", r.Source, "by", r.CreatedBy)
+	return id, nil
 }
 
-// Activate makes an existing revision the active one and moves the pointer.
+// Activate makes an existing revision the active one LOCALLY and returns its
+// summary, for the caller to publish with the pointer. See [Configs.InsertActive]
+// for why the two are separate steps.
 //
 // Re-activating the revision that is ALREADY active is a supported gesture,
 // not a no-op: it is how an operator asks a running fleet to re-resolve its
 // ${VAR} references and pick up a rotated credential. The pointer append is
 // unconditional for exactly that reason — keyed on the revision id it could
 // never express "the same configuration, resolved again".
-func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time) (int64, error) {
+func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time) (string, error) {
 	if at.IsZero() {
 		at = now()
 	}
-	var epoch int64
+	var summary string
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
@@ -136,27 +138,18 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 		if n == 0 {
 			return fmt.Errorf("%w: %s", ErrNoRevision, revisionID)
 		}
-		var summary string
-		if err = tx.QueryRowContext(ctx,
+		return tx.QueryRowContext(ctx,
 			`SELECT summary FROM company_config WHERE revision_id = ?`,
-			revisionID).Scan(&summary); err != nil {
-			return err
-		}
-		out, err := tx.ExecContext(ctx, ActivationInsertSQL, revisionID, EncodeTime(at), summary)
-		if err != nil {
-			return err
-		}
-		epoch, err = out.LastInsertId()
-		return err
+			revisionID).Scan(&summary)
 	})
 	if err != nil {
 		if errors.Is(err, ErrNoRevision) {
-			return 0, err
+			return "", err
 		}
-		return 0, fmt.Errorf("store: activate revision %s: %w", revisionID, err)
+		return "", fmt.Errorf("store: activate revision %s: %w", revisionID, err)
 	}
-	log.InfoContext(ctx, "config_revision_reactivated", "revision", revisionID, "epoch", epoch)
-	return epoch, nil
+	log.InfoContext(ctx, "config_revision_marked_active", "revision", revisionID)
+	return summary, nil
 }
 
 // Active returns the currently-active revision, and whether there is one.

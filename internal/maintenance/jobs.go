@@ -16,20 +16,14 @@ import (
 // different horizons, and a shared constant would be wrong for all of them at
 // once — too short for the ledger a scheduler still consults, too long for a
 // dedupe window that stops mattering in minutes.
+//
+// Only the tables THIS NODE owns are here. The four that answer a question a
+// fleet has to agree on — the completion ledger, the delivery dedupe, the
+// rate valve and the per-node apply status — moved to internal/coord, and
+// their retentions moved with them: a bucket's own age, declared beside the
+// contract in coord/fleet.go. Restating them here would be two numbers to
+// keep equal for no reader's benefit.
 const (
-	// DeliveryRetention is garbage collection, NOT expiry. Claim enforces
-	// the TTL itself in its conflict clause, so a row past it is already
-	// re-claimable and deleting it changes no behaviour. The multiplier
-	// keeps that true when the sweep is late: a row goes only once it is
-	// well past the point any claim could still consult it.
-	DeliveryRetention = 4 * store.DeliveryTTL
-
-	// RateLimitRetention is one width past the widest window any caller
-	// could plausibly ask for. The valve's own window is a second and
-	// Allow only ever reads the CURRENT one, so an hour is three orders of
-	// magnitude of headroom on a row that cannot affect an answer.
-	RateLimitRetention = time.Hour
-
 	// ScheduledRunRetention is bounded by how far back a fire could still
 	// be re-evaluated, not by how much history is pleasant to read: a
 	// claim row older than the catchup ceiling can no longer refuse any
@@ -40,13 +34,6 @@ const (
 	// — and a week of scheduled runs is both a useful history and a
 	// trivial number of rows.
 	ScheduledRunRetention = 7 * 24 * time.Hour
-
-	// CompletionRetention is the same bound for the same reason, and it is
-	// the one with teeth: the completion ledger answers "has this trigger
-	// already been worked?", so deleting a row a tick could still evaluate
-	// lets that fire run TWICE. Its floor is therefore the catchup
-	// ceiling, and the week is margin on top.
-	CompletionRetention = 7 * 24 * time.Hour
 
 	// ConversationRetention is how long a seat remembers what it already
 	// said in one thread. Thirty days is the default; it is the one
@@ -90,15 +77,6 @@ const (
 	// every inbound chat message. A cheap, self-healing miss beats an
 	// unbounded read.
 	FollowRetention = 90 * 24 * time.Hour
-
-	// ApplyStatusRetention bounds the config plane's per-node rows.
-	//
-	// The odd one out, and the reason it went unswept longest: it is keyed
-	// by NODE rather than by event, so it does not look like a
-	// short-horizon table. It grows the same way regardless — a node that
-	// is scaled in, redeployed or crashed leaves its last row behind,
-	// which under generated pod names is one row per pod that ever ran.
-	ApplyStatusRetention = 7 * 24 * time.Hour
 )
 
 // StoreJobs is the sweep for everything in the main store.
@@ -119,9 +97,12 @@ func StoreJobs(db *store.DB) []Job {
 		{Name: "events", Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
 			return log.Purge(ctx)
 		}},
-		Purge("webhook_deliveries", DeliveryRetention, db.DeliveryLog().Purge),
-		Purge("rate_limits", RateLimitRetention, db.RateLimits().Purge),
-		Purge("config_apply_status", ApplyStatusRetention, db.ControlPlane().Purge),
+		// NOT HERE any more: webhook_deliveries, rate_limits,
+		// turn_completions and config_apply_status. All four moved to the
+		// coordination store, where a bucket's own age is the retention
+		// and the BROKER expires the records — so there is nothing left
+		// for a sweep to delete, and a job that swept an empty table
+		// every tick would only report that it had.
 		Purge("chat_thread_follows", FollowRetention, db.ThreadFollows().Purge),
 	}
 }
@@ -159,21 +140,22 @@ func ScheduleJobs(l schedule.Ledger) []Job {
 
 // LedgerJobs is the sweep for the turn ledgers.
 //
+// ONE JOB, not two: the completion ledger moved to the coordination store,
+// where the bucket's own age is the retention and the broker expires the
+// records — see coord.LedgerRetention, and coordtest's guard that it still
+// outlasts the scheduler's catchup ceiling.
+//
 // conversationRetention is the operator-facing horizon. Zero or less takes
 // [ConversationRetention] — the engine's config validation refuses a
 // retention below one day, so this floor is for a caller that built its
 // stores directly, and it exists because the alternative reading of zero is
 // "delete every conversation on the next tick".
-func LedgerJobs(c ledgerstore.Completions, s ledgerstore.Conversations, conversationRetention time.Duration) []Job {
+func LedgerJobs(s ledgerstore.Conversations, conversationRetention time.Duration) []Job {
 	if conversationRetention <= 0 {
 		conversationRetention = ConversationRetention
 	}
-	var jobs []Job
-	if c != nil {
-		jobs = append(jobs, Purge("turn_completions", CompletionRetention, c.Purge))
+	if s == nil {
+		return nil
 	}
-	if s != nil {
-		jobs = append(jobs, Purge("conversation_sessions", conversationRetention, s.Purge))
-	}
-	return jobs
+	return []Job{Purge("conversation_sessions", conversationRetention, s.Purge)}
 }

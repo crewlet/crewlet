@@ -40,6 +40,16 @@ type Backends struct {
 	Queue queue.EventQueue
 	Coord coord.Backend
 
+	// Fleet is the shared state beyond ownership: the notification valve's
+	// counter, inbound-delivery claims, the turn-completion ledger,
+	// credential cooldowns and the config activation pointer.
+	//
+	// Beside Coord rather than inside Store, because Store is this node's
+	// LOCAL database — one file, one process — and every one of these has
+	// to be agreed across the fleet to mean anything. See coord/fleet.go
+	// for what each was doing while it was per-node.
+	Fleet coord.Fleet
+
 	// Store is this node's local materialized index — the third thing a
 	// node runs on, and the one that is not replicated. It is opened here
 	// with the other two because everything that writes to it is driven by
@@ -244,6 +254,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
 		out.Coord = coordmem.New()
+		out.Fleet = coordmem.NewFleet()
 		return out, nil
 	}
 
@@ -266,7 +277,14 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		out.Close(ctx)
 		return nil, fmt.Errorf("engine: coordination: %w", err)
 	}
+	shared, err := openFleet(ctx, conn, b.Stream.Replicas)
+	if err != nil {
+		conn.Close()
+		out.Close(ctx)
+		return nil, fmt.Errorf("engine: coordination: %w", err)
+	}
 	out.Coord = leases
+	out.Fleet = shared
 	out.conn = conn
 	return out, nil
 }
@@ -397,8 +415,31 @@ func openCoordinationEstate(ctx context.Context, b *config.Bootstrap, out *Backe
 		out.Close(ctx)
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
+	shared, err := openFleet(ctx, conn, estate.Replicas)
+	if err != nil {
+		out.Close(ctx)
+		return fmt.Errorf("engine: coordination: %w", err)
+	}
 	out.Coord = leases
+	out.Fleet = shared
 	return nil
+}
+
+// openFleet builds the shared-state store beside the leases.
+//
+// The retentions are supplied HERE for the same reason leaseTTL is: each one
+// is a BUCKET's age, fixed when the bucket is created, so a silent default
+// would decide it at the moment nobody was looking. Every number is the one
+// the subsystem that reads it already uses, named at its own package.
+func openFleet(ctx context.Context, conn *nats.Conn, replicas int) (coord.Fleet, error) {
+	return kv.OpenFleet(ctx, conn, kv.FleetConfig{
+		RateWindow:      coord.RateWindow,
+		ClaimTTL:        coord.ClaimTTL,
+		LedgerRetention: coord.LedgerRetention,
+		CooldownMax:     coord.CooldownMax,
+		StatusFreshness: coord.StatusFreshness,
+		Replicas:        replicas,
+	})
 }
 
 // leaseTTL is the lease TTL both slots must agree on.

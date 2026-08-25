@@ -28,6 +28,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -52,6 +53,7 @@ const (
 // Service is the /config surface.
 type Service struct {
 	configs *store.Configs
+	plane   coord.Plane
 	cipher  secrets.Cipher
 	now     func() time.Time
 }
@@ -61,6 +63,11 @@ type Options struct {
 	// Store holds the revisions. Required — without it there is no
 	// surface, and the routes are not registered at all.
 	Store *store.DB
+
+	// Plane publishes the fleet's activation pointer. Required for the
+	// write routes: storing a revision nothing points at activates
+	// nothing, and a caller that got a 201 back would believe otherwise.
+	Plane coord.Plane
 
 	// Cipher opens and seals a stored revision. Nil reads plaintext and
 	// writes plaintext, which is the documented opt-out.
@@ -83,7 +90,7 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{configs: opts.Store.Configs(), cipher: opts.Cipher, now: now}
+	return &Service{configs: opts.Store.Configs(), plane: opts.Plane, cipher: opts.Cipher, now: now}
 }
 
 // Routes registers the surface on the API's mux.
@@ -334,17 +341,28 @@ func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.
 		return
 	}
 	operator, _ := auth.OperatorFrom(r.Context())
-	id, epoch, err := s.configs.InsertActive(r.Context(), store.Revision{
+	at := s.now()
+	// STORED FIRST, then pointed at. A crash between the two leaves a
+	// revision nothing points at — inert, and re-activatable through the
+	// activate route — while the other order would point the fleet at a
+	// revision no node can read.
+	id, err := s.configs.InsertActive(r.Context(), store.Revision{
 		ParentID: parent, Source: "api", CreatedBy: operator,
-		Summary: summary, Payload: payload, CreatedAt: s.now(),
+		Summary: summary, Payload: payload, CreatedAt: at,
 	})
+	if err != nil {
+		s.fail(w, "store the config", err)
+		return
+	}
+	published, err := s.plane.Activate(r.Context(), id, summary, at)
 	if err != nil {
 		s.fail(w, "activate the config", err)
 		return
 	}
 	log.InfoContext(r.Context(), "config_revision_written",
-		"revision", id, "epoch", epoch, "by", operator, "summary", summary)
-	writeJSON(w, http.StatusCreated, map[string]any{"revision_id": id, "epoch": epoch})
+		"revision", id, "epoch", published.Epoch, "by", operator, "summary", summary)
+	writeJSON(w, http.StatusCreated,
+		map[string]any{"revision_id": id, "epoch": published.Epoch})
 }
 
 // checkPrecondition enforces If-Match, the optimistic-concurrency guard.

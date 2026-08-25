@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The fleet, read from the LEASE TABLE rather than from a fan-out of /health
@@ -69,7 +68,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		}
 		status := applied[id]
 		row["config_epoch"] = status.Epoch
-		row["config_status"] = string(status.Status)
+		row["config_status"] = status.Status
 		row["config_error"] = status.Error
 		// WHEN this node last reported. Without it a node that stopped
 		// reporting is indistinguishable from one that reported the same
@@ -125,7 +124,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 // still the answer to "which node holds what", and refusing the whole view
 // because one of its columns is unreadable would blank the screen an operator
 // opens when nodes are dying.
-func (s Sources) applyStatus(ctx context.Context) map[string]store.NodeApply {
+func (s Sources) applyStatus(ctx context.Context) map[string]coord.NodeApply {
 	if s.Plane == nil {
 		return nil
 	}
@@ -134,7 +133,7 @@ func (s Sources) applyStatus(ctx context.Context) map[string]store.NodeApply {
 		log.WarnContext(ctx, "fleet_apply_status_failed", "error", err)
 		return nil
 	}
-	out := make(map[string]store.NodeApply, len(rows))
+	out := make(map[string]coord.NodeApply, len(rows))
 	for _, row := range rows {
 		out[row.NodeID] = row
 	}

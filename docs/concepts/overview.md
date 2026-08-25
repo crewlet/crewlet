@@ -130,7 +130,9 @@ One local file, opened through one of two certified pure-Go drivers (Turso by de
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
 - **`secret_values`** — the [secret store](secret-store.md): one encrypted row per env-var name, consulted ahead of the process environment when the config layer resolves a `${VAR}` reference. Sealed with the Tier A keyring; no plaintext mode.
 
-Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `turn_completions`, `pending_sandbox_run`, `scheduled_runs`, `webhook_deliveries`, `chat_thread_follows`, `a2a_channels`, `rate_limits`, `token_budget_usage` — and the config plane's `company_config`, `config_activations` and `config_apply_status`. The full migration list is in `internal/store/schema/`.
+Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `pending_sandbox_run`, `scheduled_runs`, `chat_thread_follows`, `a2a_channels`, `token_budget_usage` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
+
+What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the credential cooldowns, the activation pointer and each node's apply status all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file.
 
 Everything else is YAML config, in-memory state, or an external tool.
 
