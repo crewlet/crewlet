@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,15 +77,25 @@ func containerUserArgs(ctx context.Context, runtime string) []string {
 // runtimeIsRootless asks the runtime whether it maps container root onto this
 // user.
 //
-// One query, decoded permissively, because Docker and Podman report it in
-// different places and there is no format string that reads both: Docker
-// carries `name=rootless` among its top-level SecurityOptions, Podman a
-// boolean at host.security.rootless. Anything else — a daemon that is down, an
-// `info` this build cannot parse — is not an answer, and the caller's default
-// covers it.
+// ONE QUESTION, ASKED THE WAY EACH RUNTIME ANSWERS IT. Docker reports it among
+// its top-level SecurityOptions, Podman as a boolean at host.security.rootless,
+// and there is no format string that reads both — so the query is chosen by
+// which binary [ResolveContainerRuntime] picked, using a plain single-value
+// template rather than a whole-document dump, which is what every version of
+// both CLIs supports.
+//
+// Anything else — a daemon that is down, an answer this build does not
+// recognise — is not an answer, and the caller's default covers it.
 func runtimeIsRootless(ctx context.Context, runtime string) bool {
+	var format string
+	switch filepath.Base(runtime) {
+	case "podman":
+		format = "{{.Host.Security.Rootless}}"
+	default:
+		format = "{{.SecurityOptions}}"
+	}
 	result, err := runHost(ctx, hostCommand{
-		argv:    []string{runtime, "info", "--format", "{{json .}}"},
+		argv:    []string{runtime, "info", "--format", format},
 		timeout: containerProbeTimeout,
 	})
 	if err != nil || result.ExitCode != 0 {
@@ -94,27 +103,14 @@ func runtimeIsRootless(ctx context.Context, runtime string) bool {
 			"runtime", runtime, "exit", result.ExitCode)
 		return false
 	}
-	var info struct {
-		SecurityOptions []string `json:"SecurityOptions"` // Docker
-		Host            struct { // Podman
-			Security struct {
-				Rootless bool `json:"rootless"`
-			} `json:"security"`
-		} `json:"host"`
-	}
-	if err := json.Unmarshal([]byte(result.Stdout), &info); err != nil {
-		log.Debug("local_sandbox_rootless_probe_unparsed", "runtime", runtime)
-		return false
-	}
-	if info.Host.Security.Rootless {
+	answer := strings.TrimSpace(result.Stdout)
+	// Podman answers the boolean itself; Docker answers a list in which the
+	// option is present or absent. "false" is Podman saying no, and must not
+	// be read as a Docker list that happens to mention the word.
+	if answer == "true" {
 		return true
 	}
-	for _, option := range info.SecurityOptions {
-		if strings.Contains(option, "rootless") {
-			return true
-		}
-	}
-	return false
+	return answer != "false" && strings.Contains(answer, "rootless")
 }
 
 // execer is the one thing the mount proof needs from a box.

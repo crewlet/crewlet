@@ -18,18 +18,34 @@ import (
 // agent's shim or reclaim the box's disk. Neither shows up as an error at the
 // point it happens.
 
-// fakeRuntime writes a script that answers `info` with the given JSON, so the
-// rootless probe can be exercised without a daemon.
-func fakeRuntime(t *testing.T, info string, exit int) string {
+// fakeRuntime writes a script under the runtime's own NAME — which is what
+// picks the probe — answering `info` with the given text, and ONLY when asked
+// with the template that runtime actually understands.
+//
+// The wrong template is a template error on a real CLI, and answering it
+// anyway would let a probe that asked Podman a Docker question look like it
+// worked.
+func fakeRuntime(t *testing.T, name, wantFormat, info string, exit int) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "runtime")
-	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = info ]; then printf '%%s' '%s'; exit %d; fi\nexit 0\n",
-		info, exit)
+	path := filepath.Join(t.TempDir(), name)
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$1" = info ] || exit 0
+[ "$3" = '%s' ] || { echo "template error: $3" >&2; exit 125; }
+printf '%%s' '%s'
+exit %d
+`, wantFormat, info, exit)
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
+
+// The template each runtime answers. Docker carries the flag among its
+// top-level security options; Podman reports it as a boolean of its own.
+const (
+	dockerRootlessFormat = "{{.SecurityOptions}}"
+	podmanRootlessFormat = "{{.Host.Security.Rootless}}"
+)
 
 // THE CONTAINER RUNS AS THE ENGINE USER ON A ROOTFUL RUNTIME, and does not on
 // a rootless one — where the user namespace already maps container root onto
@@ -40,26 +56,39 @@ func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 	want := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	for _, tc := range []struct {
 		name     string
+		runtime  string
+		format   string
 		info     string
 		exit     int
 		wantUser bool
 	}{
-		{"rootful docker", `{"SecurityOptions":["name=seccomp,profile=builtin"]}`, 0, true},
-		{"rootless docker", `{"SecurityOptions":["name=rootless","name=seccomp"]}`, 0, false},
-		{"rootless podman", `{"host":{"security":{"rootless":true}}}`, 0, false},
-		{"rootful podman", `{"host":{"security":{"rootless":false}}}`, 0, true},
+		{"rootful docker", "docker", dockerRootlessFormat,
+			`[name=seccomp,profile=builtin name=cgroupns]`, 0, true},
+		{"rootless docker", "docker", dockerRootlessFormat,
+			`[name=rootless name=seccomp,profile=builtin]`, 0, false},
+		{"rootless podman", "podman", podmanRootlessFormat, `true`, 0, false},
+		// Podman answers the boolean itself, so "false" must not be read
+		// as a list that happens to mention the word.
+		{"rootful podman", "podman", podmanRootlessFormat, `false`, 0, true},
 		// An unanswered probe takes the LOUD side. --user against a
 		// rootless runtime fails the mount proof at creation with a
 		// message that names the cause; the opposite mistake is silent
 		// until the engine host is full of undeletable box directories.
-		{"a daemon that is down", ``, 1, true},
-		{"an info this build cannot parse", `not json`, 0, true},
+		//
+		// A NON-ZERO EXIT IS NOT AN ANSWER even when something reached
+		// stdout: `docker info` against an unreachable daemon still
+		// prints its client section — which lists plugins, `rootlesskit`
+		// among them — and fails afterwards.
+		{"a daemon that is down mid-answer", "docker", dockerRootlessFormat,
+			`rootlesskit`, 1, true},
+		{"an answer this build does not recognise", "docker", dockerRootlessFormat,
+			`something else`, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			l := &Local{
 				opts:    LocalOptions{Containment: Container, Image: "img"},
-				runtime: fakeRuntime(t, tc.info, tc.exit),
+				runtime: fakeRuntime(t, tc.runtime, tc.format, tc.info, tc.exit),
 			}
 			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
 			at := slices.Index(argv, "--user")
@@ -87,7 +116,7 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 			Containment: Container, Image: "img",
 			Network: "none", RunArgs: []string{"--user", "0:0", "--cap-add", "SYS_PTRACE"},
 		},
-		runtime: fakeRuntime(t, `{"SecurityOptions":[]}`, 0),
+		runtime: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0),
 	}
 	argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
 
@@ -226,11 +255,11 @@ func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 // command line: what these cases are about is what Create does with the answer.
 func stubRuntime(t *testing.T, stateDir string, faithful bool) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "runtime")
+	path := filepath.Join(t.TempDir(), "docker")
 	script := `#!/bin/sh
 verb="$1"
 case "$verb" in
-info) printf '%s' '{"SecurityOptions":[]}'; exit 0 ;;
+info) printf '%s' '[name=seccomp]'; exit 0 ;;
 exec)
   root=""
   for candidate in "` + filepath.Join(stateDir, "boxes") + `"/*; do root="$candidate"; done
