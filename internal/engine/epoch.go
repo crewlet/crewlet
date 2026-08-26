@@ -134,6 +134,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// parser would route the new revision's work items by the old
 	// company's org chart.
 	e.reconcilePlane(next)
+	e.reconcileConfluence(next)
 	e.reconcileJira(ctx, next)
 	e.reconcileGitLab(ctx, next)
 

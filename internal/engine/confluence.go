@@ -125,6 +125,54 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	return parts, nil
 }
 
+// reconcileConfluence rebuilds the knowledge base for a newly applied epoch.
+//
+// EVERYTHING THE PARSER AND SEARCHER HOLD IS DERIVED FROM THE COMPANY, and
+// two halves of it move on an apply. The SPACE-LEAD MAP is the org chart, so
+// a node that kept its boot-time parser routes the new revision's page
+// activity to the seat that led that space under the old one — silently,
+// because a lead-fallback notification looks identical whoever it reached.
+// The CREDENTIAL is the other half: after a rotation the old client 401s on
+// every read, and the Plan phase's knowledge block goes empty with nothing
+// saying why.
+//
+// The tracker beside this one is reconciled for the first reason, and this
+// package needed the same edge from the moment it had a lead map.
+func (e *Engine) reconcileConfluence(c *Company) {
+	cfg := c.Config.Integrations.Confluence
+	if cfg == nil {
+		return
+	}
+	e.notify.mu.Lock()
+	svc, running := e.notify.service, e.notify.confluence.parser != nil
+	e.notify.mu.Unlock()
+	if svc == nil || !running {
+		// Not started, or started without a knowledge base. Boot owns
+		// that case; re-running it here would race the boot path.
+		return
+	}
+
+	parts, err := e.startConfluence(c, cfg)
+	if err != nil || parts.parser == nil {
+		// THE PREVIOUS WIRING KEEPS RUNNING. A revision whose Confluence
+		// block is broken must not leave the company with no knowledge
+		// base at all — the old one reads by a stale credential, which is
+		// worse than the new one and much better than nothing.
+		log.Error("confluence_reconcile_failed", "error", errorText(err),
+			"detail", "the previous knowledge-base wiring is still current")
+		return
+	}
+	if err := svc.Replace(parts.parser, confluencePrompt()); err != nil {
+		log.Error("confluence_reconcile_failed", "error", err.Error(),
+			"detail", "the previous knowledge-base wiring is still current")
+		return
+	}
+	e.notify.mu.Lock()
+	e.notify.confluence = parts
+	e.notify.mu.Unlock()
+	log.Info("confluence_reconciled", "company", c.Config.Name)
+}
+
 // seatConfluenceClient resolves a seat's own credential.
 //
 // The second result is what [knowledge.Permitted] turns on: TRUE means the
