@@ -109,7 +109,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// a company whose sandbox-enabled seats plan around a box that will
 	// never be minted.
 	if e.sandboxCoordinator != nil {
-		manager, err := buildSandbox(next.Config)
+		manager, err := buildSandbox(next.Config, e.resolver())
 		if err != nil {
 			log.WarnContext(ctx, "config_apply_failed", "error", err,
 				"detail", "the revision's providers.sandbox could not be built; "+

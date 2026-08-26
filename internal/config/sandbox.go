@@ -6,6 +6,11 @@ import "strings"
 type SandboxType string
 
 const (
+	// SandboxE2B is a remote box — the vendor cloud, or a self-hosted
+	// cluster named by `domain`. A fresh machine per run that is not the
+	// engine's, which is what makes it the right choice for anything
+	// shared.
+	SandboxE2B SandboxType = "e2b"
 	// SandboxLocal is the ENGINE HOST as a backend, so code work can use
 	// the subscription CLI login `crewlet llm login` already established,
 	// with no remote account and no API key.
@@ -19,16 +24,17 @@ const (
 
 // SandboxTypes is the closed set — THE ONES THIS ENGINE CAN BUILD.
 //
-// A remote backend was in this set and was the DEFAULT, with nothing behind
-// it: buildSandboxProvider had a case that refused it by name. So a company
-// that wrote `providers.sandbox:` and no type validated cleanly, reported a
+// `e2b` was once in this set, was the DEFAULT, and had nothing behind it:
+// buildSandboxProvider had a case that refused it by name. So a company that
+// wrote `providers.sandbox:` and no type validated cleanly, reported a
 // configured sandbox on the dashboard, and failed at its first coding run —
 // an operator surface saying yes and a runtime saying no, which is the
-// distance this closed set exists to close.
+// distance this closed set exists to close. It is back because the backend
+// is, not because the value was restored.
 //
-// A value here is a backend `buildSandboxProvider` constructs. Adding one
-// without that is how the last entry got in.
-var SandboxTypes = []SandboxType{SandboxLocal, SandboxFake, SandboxNone}
+// A value here is a backend `buildSandboxProvider` constructs, and a test
+// walks this list against that switch.
+var SandboxTypes = []SandboxType{SandboxE2B, SandboxLocal, SandboxFake, SandboxNone}
 
 // CodingAgent is which coding CLI runs inside a box.
 type CodingAgent string
@@ -69,7 +75,7 @@ type SandboxProvider struct {
 	//
 	// A block with no type is an operator who has not decided, and the
 	// honest answer is to ask rather than to pick.
-	Type SandboxType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=local|fake|none" desc:"Backend: local, fake, or none. Required — there is no default."`
+	Type SandboxType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=e2b|local|fake|none" desc:"Backend: e2b, local, fake, or none. Required — there is no default."`
 
 	// Local is the local backend's block. Required when Type is local and
 	// refused otherwise: type local without it would silently take the
@@ -77,11 +83,16 @@ type SandboxProvider struct {
 	// with no host isolation and must be a deliberate choice.
 	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The local backend's block. Required for type local, refused otherwise."`
 
-	// APIKey authenticates a remote provider. Empty falls back to that
-	// provider's conventional variable at construction time.
-	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; ${VAR} supported."`
+	// APIKey authenticates the remote provider, and is REQUIRED for it —
+	// including against a self-hosted cluster, where Domain changes which
+	// API is talked to and never whether it authenticates.
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; required for type e2b. ${VAR} supported."`
 
 	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
+	//
+	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
+	// address and every box's own hostname are both derived from it, so
+	// there is no second address that can disagree with the first.
 	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
 
 	// Template is the box image.
@@ -190,6 +201,39 @@ func (s *SandboxProvider) validate(path string) error {
 				"the block, or change the type", kind)
 	case s.Local != nil:
 		p.wrap(s.Local.validate(at(path, "local")))
+	}
+
+	// THE REMOTE FIELDS ONLY MEAN ANYTHING TO THE REMOTE BACKEND, and a
+	// value that means nothing where it is written is the silence this
+	// package spends most of its rules on: `domain` beside `type: local`
+	// reads as a cluster address and configures nothing.
+	if kind != SandboxE2B {
+		for _, unread := range []struct {
+			field, value string
+		}{
+			{"api_key", s.APIKey},
+			{"domain", s.Domain},
+			{"template", s.Template},
+		} {
+			if strings.TrimSpace(unread.value) == "" {
+				continue
+			}
+			p.add(at(path, unread.field), ErrConflict,
+				"only applies to type e2b (this is type %q), so nothing "+
+					"would read it. Remove it, or change the type", kind)
+		}
+	}
+	if kind == SandboxE2B && strings.TrimSpace(s.APIKey) == "" {
+		// REQUIRED, and checked here rather than at construction so a
+		// `crewlet validate` catches it: the API authenticates every call
+		// on both the cloud and a self-hosted cluster, so a run without
+		// one 401s at its first create — minutes into a turn that already
+		// spent a Plan phase.
+		p.add(at(path, "api_key"), ErrMissing,
+			"required for type e2b — the API authenticates every call, "+
+				"including against a self-hosted cluster, where `domain` "+
+				"changes which API is talked to and not whether it "+
+				"authenticates")
 	}
 
 	if s.DefaultCodingAgent != "" && !oneOf(s.DefaultCodingAgent, CodingAgents) {

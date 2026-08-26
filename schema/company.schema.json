@@ -1470,7 +1470,7 @@
       "additionalProperties": false,
       "properties": {
         "api_key": {
-          "description": "Remote sandbox API key; ${VAR} supported.",
+          "description": "Remote sandbox API key; required for type e2b. ${VAR} supported.",
           "type": "string"
         },
         "default_coding_agent": {
@@ -1511,8 +1511,9 @@
           "type": "string"
         },
         "type": {
-          "description": "Backend: local, fake, or none. Required — there is no default.",
+          "description": "Backend: e2b, local, fake, or none. Required — there is no default.",
           "enum": [
+            "e2b",
             "local",
             "fake",
             "none"

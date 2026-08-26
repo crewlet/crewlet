@@ -96,17 +96,24 @@ providers:
   # role.llm_sandbox at it (otherwise the sandbox run fails credential
   # validation — SandboxCredentialError — at launch).
   sandbox:
-    # THE ENGINE HOST IS THE BACKEND. `type: local` runs each coding job as
-    # a process tree on the machine running `crewlet run` — no remote
-    # account, no API key, nothing to provision. Don't want code work at
-    # all? Set ``type: none`` and the engineers fall back to native
-    # Execute. (``type: fake`` is in-process stubs for tests — it runs no
-    # real coding agent and no real MCP.)
+    # THE ENGINE HOST IS THE BACKEND HERE. `type: local` runs each coding
+    # job as a process tree on the machine running `crewlet run` — no
+    # remote account, no API key, nothing to provision, which is what
+    # makes it the right choice for a company running on your own machine
+    # against your own checkouts.
     #
-    # PREREQUISITE: the coding agent named below must be installed on that
-    # machine, since `direct` runs it as a child process. `opencode` here;
-    # `claude-code` is the other supported one.
-    type: local                                  # local | fake | none (omit = disabled)
+    # For anything shared, `type: e2b` gives every run a fresh VM that is
+    # not the engine's — set `api_key` (and `domain` for a self-hosted
+    # cluster). Don't want code work at all? Set ``type: none`` and the
+    # engineers fall back to native Execute. (``type: fake`` is in-process
+    # stubs for tests — it runs no real coding agent and no real MCP.)
+    # There is NO DEFAULT: `local` runs code on this host and `none` turns
+    # code work off, and neither is a choice to make for you.
+    #
+    # PREREQUISITE for `local`: the coding agent named below must be
+    # installed on that machine, since `direct` runs it as a child
+    # process. `opencode` here; `claude-code` is the other supported one.
+    type: local                                  # e2b | local | fake | none (required)
     local:
       # `direct` isolates STATE, not the host: each box gets its own HOME,
       # XDG directories and an allowlisted environment (never the engine's

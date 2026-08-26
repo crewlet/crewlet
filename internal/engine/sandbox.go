@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,12 +43,12 @@ import (
 // What is NOT ordinary is a configured provider that cannot be constructed —
 // that fails the apply, because the alternative publishes a company whose
 // sandbox-enabled seats plan around a box they will never get.
-func buildSandbox(c *config.Company) (*sandbox.Manager, error) {
+func buildSandbox(c *config.Company, env *config.Resolver) (*sandbox.Manager, error) {
 	spec := c.Providers.Sandbox
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
 	}
-	provider, err := buildSandboxProvider(spec)
+	provider, err := buildSandboxProvider(spec, env)
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +69,26 @@ func buildSandbox(c *config.Company) (*sandbox.Manager, error) {
 	})
 }
 
-func buildSandboxProvider(spec *config.SandboxProvider) (sandbox.Provider, error) {
+func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver) (sandbox.Provider, error) {
 	switch spec.Type {
+	case config.SandboxE2B:
+		// RESOLVED HERE, at the moment the provider is built, which is
+		// the only place the key's value exists in this process. Tier B
+		// stores its references verbatim — that is what keeps an exported
+		// revision free of resolved secrets — so a backend handed
+		// spec.APIKey directly would authenticate with the literal
+		// "${E2B_API_KEY}" and get a 401 naming the vendor rather than
+		// the misconfiguration.
+		//
+		// The DOMAIN is resolved on the same terms and for a reason of its
+		// own: a staging cluster and a production one are the same config
+		// with a different variable, and passing the reference through
+		// would point every box at a host called "${E2B_DOMAIN}".
+		return sandbox.NewE2B(sandbox.E2BOptions{
+			APIKey:   resolvedOr(env, spec.APIKey),
+			Domain:   resolvedOr(env, spec.Domain),
+			Template: spec.Template,
+		})
 	case config.SandboxLocal:
 		local := spec.Local
 		if local == nil {
@@ -107,6 +126,19 @@ func buildSandboxProvider(spec *config.SandboxProvider) (sandbox.Provider, error
 // import the config package: a setup step is a runtime instruction, and
 // keeping the two apart is what lets the sandbox layer be tested with a step
 // built in a test rather than a YAML document parsed into one.
+// resolvedOr reads a config value through this node's chain, falling back to
+// the literal when there is no resolver.
+//
+// A NIL RESOLVER IS A CALLER INSIDE THE PROCESS — a test, an embedder — and
+// handing it the literal is right: it wrote the literal. A running engine
+// always has one.
+func resolvedOr(env *config.Resolver, value string) string {
+	if env == nil {
+		return strings.TrimSpace(value)
+	}
+	return strings.TrimSpace(env.Value(value))
+}
+
 func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 	if len(steps) == 0 {
 		return nil
@@ -520,7 +552,7 @@ func (e *Engine) sandboxManager() *sandbox.Manager {
 // what its fleet-singleton duty is claimed under. Doing both at once meant one
 // of the two ran against a nil.
 func (e *Engine) buildSandboxRuntime(company *Company) error {
-	manager, err := buildSandbox(company.Config)
+	manager, err := buildSandbox(company.Config, e.resolver())
 	if err != nil {
 		return err
 	}

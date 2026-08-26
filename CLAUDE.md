@@ -191,7 +191,7 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 | `tools` | The registry, holding four kinds of tool under one contract and recording WHICH at registration — the only frame that knows, and the last that can say |
 | `mcp` | MCP client and child supervision. A stdio server is a process TREE, not a process. See `decisions/602` |
 | `providers/llm` | The model contract. It does NOT retry (rotation belongs to the credential pool, fallback to the chain) and does NOT decide what a failure means beyond a coarse kind |
-| `sandbox` | Code work as a suspended Execute phase. A coding run is DETACHED: the tool starts it, the loop suspends, and the engine resumes that same loop — minutes later, possibly after a restart, possibly on another node. Nothing parks a goroutine on a running job |
+| `sandbox` | Code work as a suspended Execute phase. A coding run is DETACHED: the tool starts it, the loop suspends, and the engine resumes that same loop — minutes later, possibly after a restart, possibly on another node. Nothing parks a goroutine on a running job. Two real backends behind one contract — a remote VM per run (E2B, cloud or self-hosted) and the engine host itself — and the closed set `providers.sandbox.type` accepts is asserted against the switch that builds them |
 | `learning` | What a seat remembers. Everything here is BEST EFFORT by design: a failed write is logged, a failed read answers empty |
 | `schedule` | Role- and unit-scoped cron work, with at-most-once delivery, missed-tick catchup and a wall-clock cap |
 
@@ -275,7 +275,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 12. **Seat Ownership** — which node runs which seat, and how a fleet converges without a coordinator
 13. **Tool Registry** — builtins + MCP tools + A2A tools, each recording its origin
 14. **Tool Skills** — knowledge-base-sourced prompt fragments injected per phase
-15. **Code Sandbox** — a per-role coding-agent Execute backend; a run is detached and resumes a suspended loop
+15. **Code Sandbox** — a per-role coding-agent Execute backend; a run is detached and resumes a suspended loop. E2B for a remote VM, the engine host for a local one
 16. **API + Dashboard** — one wiring, embedded or standalone; the websocket is the dashboard's only data channel
 17. **Scheduler** — role/unit-scoped cron work with at-most-once delivery, catchup and a wall-clock cap
 18. **Control Plane** — the config activation pointer and per-node apply status; lag alone never sheds

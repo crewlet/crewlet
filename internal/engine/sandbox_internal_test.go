@@ -275,6 +275,13 @@ func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
 	t.Parallel()
 	for _, kind := range config.SandboxTypes {
 		spec := &config.SandboxProvider{Type: kind}
+		if kind == config.SandboxE2B {
+			// The one backend with a required credential of its own: the
+			// API authenticates every call, so a provider built without
+			// a key would report a configured sandbox and 401 at the
+			// first create.
+			spec.APIKey = "e2b_test_key"
+		}
 		if kind == config.SandboxLocal {
 			// The one backend with a required block of its own: type
 			// local with none would silently take `direct` containment,
@@ -290,7 +297,10 @@ func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
 			}
 			continue
 		}
-		provider, err := buildSandboxProvider(spec)
+		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
+		// and a nil resolver hands the literal through, which is what an
+		// in-process caller wrote.
+		provider, err := buildSandboxProvider(spec, nil)
 		if err != nil {
 			t.Errorf("providers.sandbox.type %q is accepted by the config and "+
 				"cannot be built: %v", kind, err)

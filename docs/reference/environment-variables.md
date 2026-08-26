@@ -198,13 +198,12 @@ When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the engine exports OTel spans to the 
 
 ## Code Runtime (Sandbox, Optional)
 
-Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated sandbox — see [Code Sandbox](../concepts/code-sandbox.md). Requires the `sandbox` extra — `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout) — which pulls in the `e2b` SDK. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
+Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated sandbox — see [Code Sandbox](../concepts/code-sandbox.md). There is nothing to install: the binary carries every backend it has, and talks to E2B's REST API directly. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `E2B_API_KEY` | E2B API key (`providers.sandbox.api_key`). **Required even for self-hosted/local E2B** — the SDK always authenticates (sends it as an `X-API-KEY` header); `E2B_DOMAIN` only changes *which* API it talks to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted E2B's key management |
-| `E2B_DOMAIN` | Self-hosted / local E2B cluster domain (`providers.sandbox.domain`). Omit for E2B cloud. | Your self-hosted E2B deployment |
-| `E2B_VALIDATE_API_KEY` | Set to `false` to skip the SDK's `e2b_<hex>` key-format check — needed if your self-hosted cluster issues keys in a different format. Default `true`. Read directly by the `e2b` SDK from the env. | — |
+| `E2B_API_KEY` | E2B API key, referenced by `providers.sandbox.api_key`. **Required for self-hosted clusters too** — every call authenticates with it, sent as `X-API-KEY`; the cluster domain only changes *which* API is talked to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted cluster's key management |
+| `E2B_DOMAIN` | Self-hosted / local cluster domain, referenced by `providers.sandbox.domain`. Omit for the vendor cloud. The engine reads it **through the config field**, never from the environment directly, so a stale export cannot silently reroute a box. | Your self-hosted E2B deployment |
 | `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read by every node: the externally-reachable base URL of whichever node serves your webhooks (an `ingress` one) (e.g. `http://host.docker.internal:80`). When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route and sandbox runs export telemetry through it (forwarded to `OTEL_EXPORTER_OTLP_*` when configured). Unset = no sandbox telemetry. | Your engine's public address |
 
 Inside each sandbox run the engine **injects** `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL` — the running agent's identity facts, readable by `role.sandbox.setup` recipes (e.g. to configure `git config user.name`/`user.email`). They are outputs of the engine, not inputs you set.
