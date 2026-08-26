@@ -207,10 +207,6 @@ type refusedField struct {
 // to say "off", which the validator accepts and the schema must too.
 func refusedDocuments() map[string]refusedField {
 	return map[string]refusedField{
-		"company:integrations.confluence": {tier: TierCompany,
-			off: "name: Acme\n",
-			on:  "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: \"${CONFLUENCE_TOKEN}\"}\n",
-		},
 		// The off document here is the bug, written down: a block carrying
 		// its own switch is off when the switch is off, not when the key is
 		// absent. An operator turning GitHub off leaves the block behind
@@ -219,29 +215,6 @@ func refusedDocuments() map[string]refusedField {
 		"company:integrations.github": {tier: TierCompany,
 			off: "name: Acme\nintegrations:\n  github: {enabled: false, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
 			on:  "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
-		},
-		// A list is off when it is empty — an unscoped read scope, which
-		// is the documented default rather than a mistake.
-		"company:knowledge.confluence_spaces": {tier: TierCompany,
-			off: "name: Acme\nknowledge:\n  confluence_spaces: []\n",
-			on:  "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
-		},
-		// The wiki space a seat or a unit claims. Not a credential — WHERE
-		// work files and where deliveries route — which is why leaving it
-		// standing is the same silence as the org block: recorded,
-		// rendered, never consulted. Three paths, because both a seat and a
-		// unit can claim one and a seat can live in either place.
-		"company:roles[].integrations.confluence": {tier: TierCompany,
-			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
-			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {confluence: {space: HANDBOOK}}}\n",
-		},
-		"company:units[].integrations.confluence": {tier: TierCompany,
-			off: "name: Acme\nunits:\n  - {name: Engineering, integrations: {}}\n",
-			on:  "name: Acme\nunits:\n  - {name: Engineering, integrations: {confluence: {space: HANDBOOK}}}\n",
-		},
-		"company:units[].roles[].integrations.confluence": {tier: TierCompany,
-			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
-			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {confluence: {space: HANDBOOK}}}]}\n",
 		},
 	}
 }
@@ -537,9 +510,16 @@ units:
 		// Confluence is refused outright now, so the Confluence-XOR-Plane
 		// rule it exercised can no longer be reached — a document that sets
 		// both is refused for the block, not for the overlap.
+		// The knowledge base, which IS served — and its own read scope
+		// beside it, because a scope with no backend is a validator rule
+		// a JSON Schema cannot express.
 		{
-			name: "an unserved knowledge base", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: t}\n",
+			name: "a confluence knowledge base", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
+		},
+		{
+			name: "both knowledge backends at once", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\n  plane: {enabled: true, url: \"https://p\", workspace: w, webhook_secret: s}\n",
 		},
 		// The hosted chat surface, which IS served. Neither layer may
 		// refuse it: the schema because it would underline a working
@@ -586,7 +566,12 @@ units:
 			yaml: "name: Acme\nknowledge:\n  plane_projects: [ENG]\n",
 		},
 		{
-			name: "a confluence read scope with no confluence searcher", tier: TierCompany, editorCatches: true,
+			// The mirror of the Plane case above, and it is validatorOnly
+			// rather than editorCatches for one reason: the schema cannot
+			// express "this list needs that block", so what used to catch
+			// it was the blanket refusal on the field itself — which is
+			// gone with the refusal.
+			name: "a confluence read scope with no confluence", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
 		},
 		{

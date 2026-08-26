@@ -23,7 +23,7 @@ import (
 // how Slack is enabled with nothing overridden.
 type Integrations struct {
 	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
-	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser. The knowledge base this build serves is integrations.plane."`
+	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
 	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
 	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."`
@@ -49,6 +49,9 @@ func (i *Integrations) validate(path string) error {
 	if i.Jira != nil {
 		p.wrap(i.Jira.validate(at(path, "jira")))
 	}
+	if i.Confluence != nil {
+		p.wrap(i.Confluence.validate(at(path, "confluence")))
+	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
 	}
@@ -65,11 +68,11 @@ func (i *Integrations) validate(path string) error {
 // the same role instead.
 //
 // The engine wires Mattermost and Slack for chat, Plane and Jira for the
-// tracker, and GitLab for the code host (decisions/701,
-// decisions/703). The remaining two have config models, webhook routes and
-// generated schema, and no parser, no transport and no searcher behind them:
-// startNotifications builds its parser and prompt lists from the served
-// blocks alone.
+// tracker, Plane and Confluence for the knowledge base, and GitLab for the
+// code host (decisions/701, decisions/703). GitHub is the last
+// one left: it has a config model, a webhook route and generated schema, and
+// no parser behind it — startNotifications builds its parser and prompt
+// lists from the served blocks alone.
 //
 // So a company naming one got a block that validated, appeared in the
 // dashboard, and did nothing. Silently, which is the part that matters —
@@ -84,15 +87,13 @@ func (i *Integrations) validate(path string) error {
 var unservedIntegrations = []struct {
 	field string
 	// active reports whether the block is switched on, in that block's own
-	// terms: Confluence is on by its mere presence, and GitHub carries an
-	// Enabled flag.
+	// terms — GitHub carries an Enabled flag rather than being on by its
+	// mere presence.
 	active func(*Integrations) bool
 	// instead names the role and what serves it, because an error a person
 	// reads has to say what to do about it.
 	instead string
 }{
-	{"confluence", func(i *Integrations) bool { return i.Confluence != nil },
-		"the knowledge base this build serves is Plane (integrations.plane)"},
 	{"github", func(i *Integrations) bool { return i.GitHub != nil && i.GitHub.Enabled },
 		"the code host this build serves is GitLab (integrations.gitlab)"},
 }
@@ -238,6 +239,12 @@ type Confluence struct {
 	Token         string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Admin API token or PAT; ${VAR} supported."`
 	Email         string `yaml:"email,omitempty" json:"email,omitempty" desc:"Set for Cloud Basic auth; omit for bearer-token auth."`
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for Data Center webhooks."`
+
+	// SkillsSpace holds the tool-skill pages. Excluded from routing and
+	// from knowledge search alike: those pages are machinery, and a
+	// planner told to read one would follow an instruction written for a
+	// different phase of a different turn.
+	SkillsSpace string `yaml:"skills_space,omitempty" json:"skills_space,omitempty" desc:"Space holding tool-skill pages; excluded from routing and knowledge search. Default TS."`
 }
 
 // BaseURL is the REST base.
@@ -256,6 +263,72 @@ func (c *Confluence) ShareableBaseURL() string {
 		return c.SiteURL
 	}
 	return c.URL
+}
+
+// DefaultSkillsSpace is where tool-skill pages live when the config names no
+// space.
+const DefaultSkillsSpace = "TS"
+
+// SkillsSpaceKey is the tool-skills space, normalised.
+//
+// UPPER, because every space comparison in the integration is
+// case-insensitive and a config written in lower case must not silently mean
+// a different space from the same word written in upper.
+func (c *Confluence) SkillsSpaceKey() string {
+	if c == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(c.SkillsSpace); trimmed != "" {
+		return strings.ToUpper(trimmed)
+	}
+	return DefaultSkillsSpace
+}
+
+// validate checks the knowledge account.
+//
+// The same address rule as the tracker's, for the same reason: url and
+// cloud_id are two ways to say where the instance is, and resolving the
+// ambiguity silently would let a company that moved from Data Center to
+// Cloud keep looking correct while every read went to one place and every
+// link to the other.
+func (c *Confluence) validate(path string) error {
+	var probs problems
+	url, cloud := strings.TrimSpace(c.URL), strings.TrimSpace(c.CloudID)
+	switch {
+	case url == "" && cloud == "":
+		probs.add(path, ErrMissing,
+			"give url (a Data Center instance or a Cloud site) or cloud_id "+
+				"(an Atlassian Cloud id) — without one there is nowhere to "+
+				"search")
+	case url != "" && cloud != "":
+		probs.add(path, ErrConflict,
+			"url (%q) and cloud_id (%q) are two ways to name one instance; "+
+				"give one. The engine reads through the cloud gateway when both "+
+				"are set, so the url would be used for links only", c.URL, c.CloudID)
+	case url != "" && !hasHTTPScheme(c.URL):
+		probs.add(at(path, "url"), ErrUnknownValue,
+			"%q must start with http:// or https://", c.URL)
+	}
+	if site := strings.TrimSpace(c.SiteURL); site != "" && !hasHTTPScheme(c.SiteURL) {
+		probs.add(at(path, "site_url"), ErrUnknownValue,
+			"%q must start with http:// or https://", c.SiteURL)
+	}
+	if strings.TrimSpace(c.Token) == "" {
+		probs.add(at(path, "token"), ErrMissing,
+			"required — it is the account a seat with no Confluence "+
+				"credential of its own searches under, and the one the "+
+				"tool-skill walk reads with")
+	}
+	if strings.TrimSpace(c.WebhookSecret) == "" && cloud == "" {
+		// CLOUD IS EXEMPT: its events arrive through the Forge app on
+		// /webhooks/forge, verified by the app's invocation token, and
+		// there is no HMAC in that path at all.
+		probs.add(at(path, "webhook_secret"), ErrMissing,
+			"required for a Data Center instance — the /webhooks/confluence "+
+				"route has nothing to verify a delivery with otherwise, and "+
+				"answers 503 to every one")
+	}
+	return probs.err()
 }
 
 // WorkingStatus is when a seat raises the "is thinking…" indicator while it

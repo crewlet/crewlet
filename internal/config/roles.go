@@ -222,7 +222,7 @@ type RoleIntegrations struct {
 	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
 	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
-	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use role.integrations.plane."`
+	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this seat owns."`
 	Plane      *ProjectRef     `yaml:"plane,omitempty" json:"plane,omitempty" desc:"The Plane project this seat owns."`
 }
 
@@ -325,8 +325,6 @@ func (r *Role) validate(path string) error {
 	if s := r.Integrations.Slack; s != nil {
 		p.wrap(s.validate(at(path, "integrations.slack")))
 	}
-	refuseUnservedIdentities(&p, at(path, "integrations"), "role",
-		r.Integrations.Confluence)
 	if r.Integrations.Mattermost != nil {
 		p.wrap(r.Integrations.Mattermost.validate(at(path, "integrations.mattermost")))
 	}
@@ -487,7 +485,7 @@ type Unit struct {
 // is the vendor-neutral channel field, so it is deliberately not here.
 type UnitIntegrations struct {
 	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
-	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use unit.integrations.plane."`
+	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`
 	Plane      *ProjectRef `yaml:"plane,omitempty" json:"plane,omitempty" desc:"The Plane project this unit owns."`
 }
 
@@ -496,31 +494,11 @@ func (u UnitIntegrations) IsZero() bool {
 	return u.Jira == nil && u.Confluence == nil && u.Plane == nil
 }
 
-// refuseUnservedIdentities rejects the wiki space a seat or a unit claims on
-// a vendor this build does not serve.
-//
-// This is not a credential — it is WHERE work files and where deliveries
-// route to. That is exactly why it cannot be left standing: an operator
-// writes `confluence: {space: ENG}` to say this unit owns ENG, and with no
-// searcher to read a Confluence space the identity is recorded, rendered on
-// the dashboard, and never consulted. Same silence as the org-level block,
-// one level down. See [unservedIntegrations].
-func refuseUnservedIdentities(p *problems, path, owner string, confluence *SpaceRef) {
-	if confluence != nil {
-		p.add(at(path, "confluence"), ErrUnimplemented,
-			"no searcher and no parser read a Confluence space, so nothing "+
-				"would ever consult the space this %s owns — the knowledge base "+
-				"this build serves is Plane (%s.integrations.plane)", owner, owner)
-	}
-}
-
 func (u *Unit) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(u.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every unit needs a name")
 	}
-	refuseUnservedIdentities(&p, at(path, "integrations"), "unit",
-		u.Integrations.Confluence)
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}

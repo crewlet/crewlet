@@ -2,10 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -419,5 +425,152 @@ func TestThePeopleTableIsSkippedWhenThereAreNone(t *testing.T) {
 	printMembers(&out, []plane.Account{{Username: "bot", ID: "x", IsBot: true}})
 	if out.Len() != 0 {
 		t.Errorf("printed a table with no people in it:\n%s", out.String())
+	}
+}
+
+// EVERY VENDOR THE BINARY ROUTES HAS COMMANDS, AND EVERY VENDOR WITH
+// COMMANDS IS ROUTED.
+//
+// run()'s case list and [vendorCommands] are two hand-written lists naming
+// the same thing, and a vendor in one and not the other fails in a way
+// nobody sees: added to run() alone, `crewlet <vendor>` answers "no commands
+// for" instead of a usage line; added to the table alone, the whole vendor
+// is unreachable and the table reads as though it works.
+func TestEveryRoutedVendorHasCommands(t *testing.T) {
+	t.Parallel()
+
+	routed := map[string]bool{}
+	for _, cmd := range dispatchedCommands(t) {
+		if _, ok := vendorCommands[cmd]; ok {
+			routed[cmd] = true
+		}
+	}
+	for vendor := range vendorCommands {
+		if !routed[vendor] {
+			t.Errorf("vendorCommands has %q but run() never dispatches to "+
+				"runIntegration for it, so none of its commands can be reached",
+				vendor)
+		}
+	}
+	// The other direction: a vendor run() routes with nothing behind it.
+	// Read off the same case clause, so a vendor added there is caught
+	// whether or not anyone remembered this test.
+	for _, cmd := range dispatchedCommands(t) {
+		if !isVendorCase(t, cmd) {
+			continue
+		}
+		if len(vendorCommands[cmd]) == 0 {
+			t.Errorf("run() dispatches %q to runIntegration but vendorCommands "+
+				"has no entry, so every invocation answers an internal error", cmd)
+		}
+	}
+}
+
+// isVendorCase reports whether a command in run() is one of the vendor
+// cases — the clause whose body calls runIntegration.
+func isVendorCase(t *testing.T, command string) bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+	var vendor bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		clause, ok := n.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		var calls bool
+		ast.Inspect(clause, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "runIntegration" {
+				calls = true
+			}
+			return true
+		})
+		if !calls {
+			return true
+		}
+		for _, expr := range clause.List {
+			lit, ok := expr.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatalf("unquoting %s: %v", lit.Value, err)
+			}
+			if value == command {
+				vendor = true
+			}
+		}
+		return true
+	})
+	return vendor
+}
+
+// A VENDOR'S USAGE NAMES THE COMMANDS IT ACTUALLY HAS — no more.
+//
+// The usage text used to be written by hand beside the dispatch switch, and
+// it opened with a `provision` line for every vendor. Confluence has an
+// import and no provision, so `crewlet confluence` advertised a command that
+// answers "unknown confluence command" when you run it.
+func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
+	t.Parallel()
+
+	for vendor, commands := range vendorCommands {
+		var out bytes.Buffer
+		if err := runIntegration(vendor, nil, io.Discard, &out); !errors.Is(err, flag.ErrHelp) {
+			t.Fatalf("%s: bare invocation returned %v, want the help sentinel", vendor, err)
+		}
+		usage := out.String()
+		for _, command := range commands {
+			if !strings.Contains(usage, "crewlet "+vendor+" "+command.sub) {
+				t.Errorf("%s: usage never names %q:\n%s", vendor, command.sub, usage)
+			}
+			if command.run == nil {
+				// An advertised row with nothing behind it is the same
+				// defect one level in: usage names it, and running it
+				// panics instead of answering.
+				t.Errorf("%s: %q is advertised and runs nothing", vendor, command.sub)
+				continue
+			}
+			// AND IT REACHES THAT RUNNER. `-h` makes every subcommand
+			// print its flags and stop, which is the cheapest proof that
+			// the dispatch found it rather than falling through.
+			if err := runIntegration(vendor, []string{command.sub, "-h"},
+				io.Discard, io.Discard); errors.Is(err, errUnknownSub) {
+				t.Errorf("%s: usage names %q but dispatch does not reach it",
+					vendor, command.sub)
+			}
+		}
+		// AN UNKNOWN SUBCOMMAND IS AN ERROR, not a usage dump: a typo
+		// answered with help reads as though the command was accepted.
+		if err := runIntegration(vendor, []string{"nonesuch"},
+			io.Discard, io.Discard); !errors.Is(err, errUnknownSub) {
+			t.Errorf("%s: an unknown subcommand returned %v, want an unknown-command error",
+				vendor, err)
+		}
+		// Every subcommand spelled in the usage must be dispatchable.
+		for _, line := range strings.Split(strings.TrimSpace(usage), "\n") {
+			// "usage: crewlet <vendor> <sub> …", and the continuation
+			// lines are the same without the lead — so the subcommand is
+			// found relative to "crewlet", not from the start of the line.
+			fields := strings.Fields(line)
+			at := slices.Index(fields, "crewlet")
+			if at < 0 || len(fields) < at+3 {
+				t.Fatalf("%s: unreadable usage line %q", vendor, line)
+			}
+			sub := fields[at+2]
+			if !slices.ContainsFunc(commands, func(c vendorCommand) bool {
+				return c.sub == sub
+			}) {
+				t.Errorf("%s: usage advertises %q, which dispatches to nothing:\n%s",
+					vendor, sub, usage)
+			}
+		}
 	}
 }

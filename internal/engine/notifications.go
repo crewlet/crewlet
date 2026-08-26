@@ -40,6 +40,13 @@ type notifications struct {
 	// a second field rather than a choice between two.
 	slack *slack.Transport
 
+	// confluence is the knowledge base's contribution: a parser, a
+	// searcher and the skills-space reader. No lifecycle, for the same
+	// reason the tracker has none — it is inbound-only, so there is no
+	// connection to lose and an unreachable instance degrades the reads
+	// that enrich a Plan phase without taking a surface down.
+	confluence confluenceParts
+
 	// plane is the tracker's contribution: a parser and a knowledge
 	// searcher. No lifecycle, because Plane is inbound-only — there is no
 	// connection to lose, so an unreachable instance degrades the reads
@@ -249,6 +256,24 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if parser != nil {
 			parsers = append(parsers, parser)
 			prompts = append(prompts, jiraPrompt())
+		}
+	}
+	if cf := c.Config.Integrations.Confluence; cf != nil {
+		parts, err := e.startConfluence(c, cf)
+		if err != nil {
+			// Same posture as every other surface: the company runs
+			// WITHOUT its knowledge base rather than not at all.
+			log.Error("confluence_unavailable", "error", err.Error(),
+				"detail", "the company is running without its knowledge base, "+
+					"so every Plan phase gets an empty knowledge block")
+		}
+		if parts.parser != nil {
+			e.notify.mu.Lock()
+			e.notify.confluence = parts
+			e.notify.mu.Unlock()
+			parsers = append(parsers, parts.parser)
+			prompts = append(prompts, confluencePrompt())
+			e.startConfluenceSkillSync(ctx, c)
 		}
 	}
 	if p := c.Config.Integrations.Plane; p != nil && p.Enabled {

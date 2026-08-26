@@ -77,6 +77,10 @@
           "description": "Human-readable base for shareable links; needed with cloud_id.",
           "type": "string"
         },
+        "skills_space": {
+          "description": "Space holding tool-skill pages; excluded from routing and knowledge search. Default TS.",
+          "type": "string"
+        },
         "token": {
           "description": "Admin API token or PAT; ${VAR} supported.",
           "type": "string"
@@ -389,8 +393,8 @@
       "additionalProperties": false,
       "properties": {
         "confluence": {
-          "description": "NOT IMPLEMENTED in this build: no searcher and no parser. The knowledge base this build serves is integrations.plane.",
-          "not": {}
+          "$ref": "#/$defs/Confluence",
+          "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
@@ -472,8 +476,10 @@
       "additionalProperties": false,
       "properties": {
         "confluence_spaces": {
-          "description": "NOT IMPLEMENTED in this build: no searcher reads a Confluence space, so this would narrow nothing. Scope the knowledge base this build serves with knowledge.plane_projects.",
-          "maxItems": 0,
+          "description": "Org-wide Confluence read scope. Empty = unscoped, bounded by each seat's own ACLs. Requires integrations.confluence.",
+          "items": {
+            "type": "string"
+          },
           "type": "array"
         },
         "plane_projects": {
@@ -1306,8 +1312,8 @@
       "additionalProperties": false,
       "properties": {
         "confluence": {
-          "description": "NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use role.integrations.plane.",
-          "not": {}
+          "$ref": "#/$defs/SpaceRef",
+          "description": "The Confluence space this seat owns."
         },
         "jira": {
           "$ref": "#/$defs/ProjectRef",
@@ -2033,8 +2039,8 @@
       "additionalProperties": false,
       "properties": {
         "confluence": {
-          "description": "NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use unit.integrations.plane.",
-          "not": {}
+          "$ref": "#/$defs/SpaceRef",
+          "description": "The Confluence space this unit owns."
         },
         "jira": {
           "$ref": "#/$defs/ProjectRef",

@@ -71,8 +71,8 @@ integrations:
 
 Validated on every config parse:
 
-- `integrations.confluence` + an **enabled** `integrations.plane` → rejected (single-homed knowledge backend; also rules out Confluence *notifications* running alongside Plane). A `plane` block with `enabled: false` alongside Confluence is allowed (inert).
-- `knowledge.confluence_spaces` alongside an enabled Plane → rejected (scope list for the disabled backend); `knowledge.plane_projects` alongside Confluence → rejected; `knowledge.plane_projects` without an enabled Plane → rejected.
+- `integrations.confluence` + an **enabled** `integrations.plane` → rejected. Both are served knowledge backends, and the knowledge base is **single-homed**: two searchers would make an agent's answer to "what do we already know about this" depend on which one was asked, and neither would be wrong. A migration between them is a cut-over, not an overlap. (It rules out Confluence *notifications* running alongside Plane as a consequence, not as the reason.) A `plane` block with `enabled: false` alongside Confluence is allowed (inert).
+- `knowledge.confluence_spaces` without an `integrations.confluence` block → rejected; `knowledge.plane_projects` without an enabled `integrations.plane` → rejected. A read scope for a backend that is not there narrows nothing while reading as though it does. Since the blocks themselves are exclusive, so are the two scope lists.
 - **Jira + Plane may coexist** — the exclusivity is Confluence-shaped, not tracker-shaped.
 
 ### Knowledge scope

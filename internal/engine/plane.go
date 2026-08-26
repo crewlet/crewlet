@@ -376,6 +376,9 @@ func errorText(err error) string {
 func (e *Engine) Knowledge() knowledge.Searcher {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
+	if e.notify.confluence.searcher != nil {
+		return e.notify.confluence.searcher
+	}
 	if e.notify.plane.searcher == nil {
 		// A NIL INTERFACE, not a typed nil wrapping a nil pointer: the
 		// consumers check `searcher == nil`, and a typed nil passes that

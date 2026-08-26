@@ -62,7 +62,7 @@ Connecting the external surfaces agents work on:
 
 - **[Plane](integrations/plane.md)** — Self-hosted tracker **and** knowledge backend in one product: webhook routing, per-role MCP tools, knowledge search, `crewlet plane import`, tool-skill sync, skill promotion, `crewlet plane provision`, and a complete local docker-compose loop
 - **[Jira](integrations/jira.md)** — Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
-- **[Confluence](integrations/confluence.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
+- **[Confluence](integrations/confluence.md)** — Cloud or Data Center as the knowledge base: live CQL search run as the asking seat, page-change routing, tool-skill pages, and `crewlet confluence import`
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring
 - **[GitHub](integrations/github.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
 - **[Slack](integrations/slack.md)** — One app per agent: `crewlet slack provision` builds and installs them from a manifest, per-seat webhook routing with thread follows, a text-carrying working indicator, and the Slack MCP tool server

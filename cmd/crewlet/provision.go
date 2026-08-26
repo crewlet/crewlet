@@ -398,40 +398,87 @@ func printNotes(w io.Writer, notes []string) {
 	}
 }
 
+// vendorCommand is one `crewlet <vendor> <sub>`.
+type vendorCommand struct {
+	sub  string
+	args string // the operand spelling shown in usage, without the vendor
+	run  func(args []string, stdout, stderr io.Writer) error
+}
+
+// vendorCommands is the whole vendor CLI surface, and it is the ONLY list.
+//
+// Dispatch and usage both read this table because they were once two
+// hand-maintained lists, and every vendor added since has drifted between
+// them at least once: `crewlet plane` shipped with import and resync working
+// and advertised nowhere, and Confluence — which has an import and no
+// provision — was advertised with a `provision` subcommand that does not
+// exist. Both are the same defect, in opposite directions, and both are
+// invisible to anyone not reading the source. A table cannot drift from
+// itself.
+//
+// Ordered per vendor, because the printed usage is this slice.
+var vendorCommands = map[string][]vendorCommand{
+	"gitlab": {
+		{"provision", "<company.yaml>", runGitLabProvision},
+	},
+	"plane": {
+		{"provision", "<company.yaml>", runPlaneProvision},
+		{"import", "<company.yaml> <directory>", runPlaneImport},
+		{"resync", "<company.yaml>", runPlaneResync},
+	},
+	"jira": {
+		{"provision", "<company.yaml>", runJiraProvision},
+	},
+	"slack": {
+		{"provision", "<company.yaml>", runSlackProvision},
+	},
+	"confluence": {
+		{"import", "<company.yaml> <directory>", runConfluenceImport},
+	},
+	"mattermost": {
+		{"provision", "<company.yaml>", runMattermostProvision},
+		{"doctor", "<company.yaml>", runMattermostDoctor},
+	},
+}
+
+// errUnknownSub is `crewlet <vendor> <typo>`.
+//
+// A SENTINEL because the alternative for the caller is matching on the
+// message, and the one caller that has to tell "this vendor does not have
+// that command" from "that command ran and failed" is the test holding the
+// usage text and the dispatch table together.
+var errUnknownSub = errors.New("unknown command")
+
 // runIntegration dispatches `crewlet <vendor> <command>`.
 func runIntegration(vendor string, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
-	switch {
-	case vendor == "gitlab" && sub == "provision":
-		return runGitLabProvision(rest, stdout, stderr)
-	case vendor == "mattermost" && sub == "provision":
-		return runMattermostProvision(rest, stdout, stderr)
-	case vendor == "mattermost" && sub == "doctor":
-		return runMattermostDoctor(rest, stdout, stderr)
-	case vendor == "plane" && sub == "provision":
-		return runPlaneProvision(rest, stdout, stderr)
-	case vendor == "plane" && sub == "import":
-		return runPlaneImport(rest, stdout, stderr)
-	case vendor == "plane" && sub == "resync":
-		return runPlaneResync(rest, stdout, stderr)
-	case vendor == "jira" && sub == "provision":
-		return runJiraProvision(rest, stdout, stderr)
-	case vendor == "slack" && sub == "provision":
-		return runSlackProvision(rest, stdout, stderr)
-	case sub == "" || sub == "help":
-		fmt.Fprintf(stderr, "usage: crewlet %s provision <company.yaml>\n", vendor)
-		if vendor == "mattermost" {
-			fmt.Fprintln(stderr,
-				"       crewlet mattermost doctor <company.yaml>")
+	commands := vendorCommands[vendor]
+	if len(commands) == 0 {
+		// Unreachable through run(), whose case list and this table are
+		// asserted equal. Answered rather than panicked because a caller
+		// inside the process is not an operator to be crashed at.
+		return fmt.Errorf("no commands for %q", vendor)
+	}
+	for _, command := range commands {
+		if command.sub == sub {
+			return command.run(rest, stdout, stderr)
 		}
-		if vendor == "plane" {
-			fmt.Fprintln(stderr,
-				"       crewlet plane import <company.yaml> <directory>\n"+
-					"       crewlet plane resync <company.yaml>")
+	}
+	if sub != "" && sub != "help" {
+		return fmt.Errorf("%w: %s %q", errUnknownSub, vendor, sub)
+	}
+	printVendorUsage(stderr, vendor, commands)
+	return flag.ErrHelp
+}
+
+// printVendorUsage writes one vendor's subcommands, aligned under `usage:`.
+func printVendorUsage(w io.Writer, vendor string, commands []vendorCommand) {
+	for i, command := range commands {
+		lead := "usage:"
+		if i > 0 {
+			lead = "      "
 		}
-		return flag.ErrHelp
-	default:
-		return fmt.Errorf("unknown %s command %q", vendor, sub)
+		fmt.Fprintf(w, "%s crewlet %s %s %s\n", lead, vendor, command.sub, command.args)
 	}
 }
 

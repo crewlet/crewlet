@@ -234,14 +234,31 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"roles[0].name", ErrMissing,
 		},
 		{
-			// A REFUSED BLOCK REPLACES ITS OWN RULES. Confluence carries a
-			// url-or-cloud-id rule and a token rule, and neither runs: the
-			// block is refused before its own validation is reached, so an
-			// operator gets the error that matters instead of a field to
-			// fix on an integration they cannot use either way.
+			// A REFUSED BLOCK REPLACES ITS OWN RULES. GitHub carries a
+			// webhook-secret rule that never runs: the block is refused
+			// before its own validation is reached, so an operator gets
+			// the error that matters instead of a field to fix on an
+			// integration they cannot use either way.
 			"an unserved block, refused before its own rules",
-			"name: Acme\nintegrations:\n  confluence: {}\n",
-			"integrations.confluence", ErrUnimplemented,
+			"name: Acme\nintegrations:\n  github: {enabled: true}\n",
+			"integrations.github", ErrUnimplemented,
+		},
+		// The knowledge base's own rules, which DO run now that it is
+		// served.
+		{
+			"a confluence block naming the instance twice",
+			"name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", cloud_id: abc, token: t, webhook_secret: s}\n",
+			"integrations.confluence", ErrConflict,
+		},
+		{
+			"a confluence block with no org token",
+			"name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", webhook_secret: s}\n",
+			"integrations.confluence.token", ErrMissing,
+		},
+		{
+			"a data centre confluence with nothing to verify a delivery with",
+			"name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", token: t}\n",
+			"integrations.confluence.webhook_secret", ErrMissing,
 		},
 		// The Atlassian tracker's own rules, which DO run now that it is
 		// served.
@@ -318,45 +335,48 @@ func TestCompanyValidatorRejections(t *testing.T) {
 func TestKnowledgeBackendIsSingleHomed(t *testing.T) {
 	t.Parallel()
 
-	// ONE BACKEND CAN BE CONFIGURED AT ALL, which is what single-homing
-	// now means in practice: Confluence is refused outright because this
-	// build has no searcher for it, so the rule that used to hold two
-	// backends apart has one left to enforce against.
-	t.Run("confluence is refused rather than weighed against plane", func(t *testing.T) {
+	// BOTH IS REFUSED. Two searchers would make an agent's answer to "what
+	// do we already know about this" depend on which one was asked, and
+	// neither would be wrong — so a migration between them is a cut-over
+	// rather than an overlap.
+	t.Run("both backends at once", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, `
 name: Acme
 integrations:
-  confluence: {url: "https://x/wiki", token: t}
+  confluence: {url: "https://x/wiki", token: t, webhook_secret: s}
   plane: {enabled: true, url: "https://p", workspace: w, webhook_secret: s}
 `, "integrations.confluence")
-		if !errors.Is(err, ErrUnimplemented) {
-			t.Fatalf("want ErrUnimplemented, got %v", err)
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
 		}
 	})
 
-	// A SCOPE FOR A BACKEND NOBODY CAN CONFIGURE narrows nothing, and
-	// reads as a working scope. It is refused for the same reason as the
-	// integration block, and on its own — a config that names no
-	// integration at all still cannot ask for a Confluence read scope.
-	t.Run("a confluence scope is refused on its own", func(t *testing.T) {
+	// A SCOPE FOR A BACKEND THAT IS NOT THERE reads as a working narrowing
+	// and narrows nothing — the same silence as the block itself, one
+	// level down.
+	t.Run("a confluence scope with no confluence", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
 			"knowledge.confluence_spaces")
-		if !errors.Is(err, ErrUnimplemented) {
-			t.Fatalf("want ErrUnimplemented, got %v", err)
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
 		}
 	})
 
-	t.Run("a confluence scope beside an enabled plane is refused too", func(t *testing.T) {
+	// AND EITHER BACKEND ON ITS OWN LOADS, with its own scope.
+	t.Run("confluence alone", func(t *testing.T) {
 		t.Parallel()
-		rejects(t, `
+		cfg := mustCompany(t, `
 name: Acme
 integrations:
-  plane: {enabled: true, url: "https://p", workspace: w, webhook_secret: s}
+  confluence: {url: "https://wiki.example.com", token: "${T}", webhook_secret: "${S}"}
 knowledge:
-  confluence_spaces: [HANDBOOK]
-`, "knowledge.confluence_spaces")
+  confluence_spaces: [HANDBOOK, ENG]
+`)
+		if got := cfg.Integrations.Confluence.SkillsSpaceKey(); got != "TS" {
+			t.Errorf("skills space = %q, want the default", got)
+		}
 	})
 
 	t.Run("a plane scope with no plane", func(t *testing.T) {
@@ -446,10 +466,11 @@ func TestMinimalCompanyLoads(t *testing.T) {
 // AN INTEGRATION THIS BUILD CANNOT SERVE IS REFUSED, NOT ACCEPTED AND IGNORED.
 //
 // The engine wires Mattermost and Slack for chat, Plane and Jira for the
-// tracker, and GitLab for the code host. The remaining two have config
-// models, webhook routes and generated schema, and no parser, transport or
-// searcher behind them, so a company naming one gets a block that validates,
-// renders in the dashboard, and does nothing.
+// tracker, Plane and Confluence for the knowledge base, and GitLab for the
+// code host. GitHub is the last one left: it has a config model, a webhook
+// route and generated schema, and no parser behind it, so a company enabling
+// it gets a block that validates, renders in the dashboard, and does
+// nothing.
 //
 // Silently, which is the part that mattered: integrations.confluence is how
 // an operator says where the company's knowledge lives, and the answer was an
@@ -457,7 +478,6 @@ func TestMinimalCompanyLoads(t *testing.T) {
 func TestAnIntegrationThisBuildCannotServeIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, yaml, path, instead string }{
-		{"confluence", "  confluence: {url: \"https://x/wiki\", token: t}", "integrations.confluence", "Plane"},
 		{"github", "  github: {enabled: true, webhook_secret: s}", "integrations.github", "GitLab"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

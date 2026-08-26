@@ -1,23 +1,5 @@
 # Confluence Integration
 
-> **v1 status — `integrations.confluence` is REFUSED by this build**, along
-> with `knowledge.confluence_spaces` (its read scope) and the per-seat and
-> per-unit identities `role.integrations.confluence` and
-> `unit.integrations.confluence`. There is no Confluence searcher, no parser
-> and no publishing CLI, so the block named a knowledge base the engine never
-> queried — an empty `## Relevant knowledge` on every Plan phase, with
-> nothing saying why — and the space identities named a write home nothing
-> wrote to. Config validation now rejects all of them by name: the knowledge
-> base this build serves is [Plane](plane.md), scoped with
-> `knowledge.plane_projects`, owned per seat and unit with
-> `…integrations.plane`, and published with
-> [`crewlet plane import`](../reference/cli.md#crewlet-plane-import).
->
-> `POST /webhooks/confluence` still exists and fails closed at 503, and comes
-> alive in the same change that ships the searcher and parser. **Agents still
-> reach Confluence through MCP**, which is unaffected. Everything below
-> describes the intended contract.
-
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
@@ -157,15 +139,17 @@ Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature
 
 `webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 
-### Event Deduplication
+### Delivery deduplication
 
-The transport deduplicates webhook events using a composite key of timestamp + page ID + event type, with a 5-minute TTL. This applies to both Cloud and Data Center.
+Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. Cloud events relayed through Forge are deduplicated by the Forge route's own rules instead.
 
 ---
 
 ## Query-Time Confluence Search
 
-Crewlet does not maintain a local copy of Confluence content. Shared knowledge is searched **live at query time**: a Confluence searcher behind the knowledge seam would have the auxiliary LLM turn a turn's trigger context into a Confluence CQL query — once per turn — and runs it against the Confluence REST API (`/rest/api/content/search`). There is no startup walk, no pgvector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
+Crewlet keeps no local copy of Confluence content. Shared knowledge is searched **live at query time**: the auxiliary model turns a turn's trigger into a short text query — once per turn — and the searcher runs it as CQL against `/rest/api/content/search`. There is no startup walk, no vector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
+
+The query text is **capped and escaped** before it reaches the CQL literal. A pathologically long fragment is both a slow query and a sign the auxiliary model misbehaved, and an unescaped quote would end the literal early — turning a search into a query nobody wrote.
 
 The search backs the Plan-phase `## Relevant knowledge` prefetch (see [Knowledge System](../concepts/knowledge-system.md#relevant-knowledge-prefetch)). Agents that want to search or read Confluence directly use the `confluence_search` and `confluence_get_page` MCP tools.
 
@@ -176,7 +160,9 @@ The query-time search authenticates **as the agent's own Atlassian user**, reusi
 - **Cloud** — `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN`.
 - **Data Center** — `CONFLUENCE_PERSONAL_TOKEN`.
 
-Roles without a per-agent Confluence token fall back to the **org admin token** (`confluence.token`). Set per-agent tokens whenever you want per-agent permission scoping; an agent on the admin token sees whatever that account sees.
+The credential is read from `mcp_env.atlassian` or `mcp_env.confluence` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian`.
+
+Roles without a per-agent Confluence token fall back to the **org token** (`integrations.confluence.token`), which sees whatever that account sees. That fallback is exactly why an unscoped search is then **refused** rather than run: searching the whole instance on a shared credential is how one seat reads a page its own account never could.
 
 ### Page-level restrictions — enforced natively by Confluence
 
@@ -200,11 +186,19 @@ units:
       confluence: { space: "ENG" }    # ENG is Engineering's WRITE / routing home — it does NOT scope reads
 ```
 
-Read scope is computed at query time by `crewlet.knowledge.accessibility.accessible_spaces(org)` — just the normalised `org.confluence_spaces`. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `confluence_spaces` omitted it searches across everything its Atlassian account can read).
+Read scope is computed at query time from the normalised `knowledge.confluence_spaces`, so a live config edit to the scope takes effect with no restart and no refresh hook. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `confluence_spaces` omitted it searches across everything its Atlassian account can read).
+
+**Unreviewed auto-drafted skills never reach a planner.** A hit whose ancestor chain includes `Auto-Drafted Skills` is dropped, and so is one whose title still carries the `[Auto-draft] ` prefix — two tests, because the first can silently stop matching (an instance that answered without the ancestor expand) and an exclusion that quietly matches nothing looks exactly like a knowledge base with no drafts in it. A lead publishes a draft by **moving it out** of that parent, which is the review gesture; the prefix is cleared with it.
+
+**The tool-skills space is not knowledge.** Pages in `integrations.confluence.skills_space` (default `TS`) are machinery — a planner told to read one would follow an instruction written for a different phase of a different turn — so they are excluded from search and from routing alike, while still being indexed into the skill registry.
 
 ### When Confluence search is unavailable
 
-The `## Relevant knowledge` prefetch stays empty (logged, no error) when `confluence` is not configured. The query-time search needs a Confluence connection and an LLM for CQL generation — it does **not** need a database or an embeddings provider, so it works in test / in-memory mode whenever a Confluence endpoint is reachable.
+The `## Relevant knowledge` prefetch stays empty — logged, never an error — whenever the search cannot run: no `confluence` block, an org token that did not resolve, an unreachable instance, a refused query. **A turn must not die because a wiki was slow**, so every failure path is an empty result.
+
+There is also a cheap **no-I/O pre-gate**: when a search is a guaranteed no-op (no scope AND no per-seat credential), the Plan phase skips the auxiliary model call that would have generated the query. That call is the expensive half, so a gate that had to reach the network to answer would cost more than it saves.
+
+The search needs a Confluence connection and a model for query generation. It needs **no** database and **no** embeddings provider.
 
 ---
 
@@ -310,17 +304,16 @@ Agents use MCP tools directly to create or update pages. Common patterns:
 Operators publish locally authored markdown — [Tool Skills](../concepts/tool-skills.md) and [knowledge docs](../concepts/knowledge-system.md#publishing-knowledge-docs) — to Confluence with `crewlet confluence import`. Each `.md` file is routed by its frontmatter: a `trigger:` makes it a Tool Skill page (in the Tool Skills space); everything else becomes a knowledge doc whose **space is its parent-directory name** and **title is its first `# H1`**.
 
 ```bash
-# Publish (and overwrite) the example Nimbus pages.
-crewlet confluence import <company.yaml> examples/nimbus-docs --update
+crewlet confluence import <company.yaml> ./docs-to-publish
 ```
 
 (The Nimbus example org runs on Plane — its shipped `nimbus.company.yaml` carries an `integrations.plane` block, so point the command at a company YAML with a `confluence:` block. The docs tree itself is Confluence-importable as-is: the directory conventions are identical across backends.)
 
-- The **positional argument is the Tier B company YAML** — the Confluence credentials are read from its `confluence:` block, not from the Tier A bootstrap `config.yaml`.
-- **`--update` is required to overwrite existing pages.** Without it, pages that already exist are skipped and only new pages are created.
-- Credentials referenced as `${VAR}` in the `confluence:` block are resolved from the process environment. The command loads a `.env` next to the company YAML (falling back to `./.env`) first — just like `crewlet run` — so credentials kept only in `.env` work; real environment variables win over `.env`.
-- Add `--dry-run` to preview, or `--create-space` to auto-create any missing target space (needs space-admin on the tenant).
-- Add `--prune` to garbage-collect orphans: after publishing, it deletes import-managed skill pages whose source `.md` is gone (e.g. a renamed or removed bundled skill). It only touches pages the importer itself published — never user-authored pages or knowledge docs — and pairs with `--dry-run` to preview.
+- The **first positional argument is the Tier B company YAML** and the second is the directory — the Confluence credentials come from its `confluence:` block, resolved through the node's secret store and then the environment (pass `-config` to name a different Tier A document).
+- **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and guessing it is not this command's job.
+- **A page that exists is updated in place**, matched by title within its space. Confluence has no external-id field, so a page somebody renamed in the UI is orphaned and a re-import creates a second one — a real limitation of the backend, reported rather than worked around with a hidden marker page.
+- **Page failures are isolated.** A restricted page or one 403 does not cost the other forty; the run reports what failed and exits non-zero.
+- Add `-dry-run` to print the plan and write nothing.
 
 Publish first, then start the engine — two commands, in that order. The importer reads its credentials from the **Tier B company YAML**, so it works before a node is configured at all, and running it first means the engine's boot-time sync finds the pages already there.
 

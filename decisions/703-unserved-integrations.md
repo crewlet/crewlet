@@ -2,8 +2,8 @@
 
 Status: **decided by the project owner, implemented — and being unwound,
 vendor by vendor.** The refusal was never the destination: each entry is
-deleted by the change that ships that vendor. Jira and Slack are done;
-Confluence and GitHub follow.
+deleted by the change that ships that vendor. Jira, Slack and Confluence are
+done; GitHub is the last one left.
 Implementation: `internal/config/integrations.go`, `internal/config/roles.go`,
 `internal/config/company.go`, `internal/config/schema.go` ·
 Answers the question [`d-701`](701-vendor-order.md) left open.
@@ -34,7 +34,7 @@ silence this decision exists to end.
 |---|---|
 | `integrations.jira` | **Served.** Parser, prompt, client, seat-identity resolution, lead map and `crewlet jira provision`. `integrations.forge_app_id` came back with it: Jira Cloud is what rides the Forge route. `role.integrations.jira` and `unit.integrations.jira` are consulted again — they are the lead-fallback map. |
 | `integrations.slack` | **Served.** Parser, prompt, transport, per-seat app identities, thread follows, a text-carrying working indicator and `crewlet slack provision` — manifest CRUD, the OAuth install, and the app ledger. `role.integrations.slack` is a seat's own app again, and both its credentials are now required together. |
-| `integrations.confluence` | Refused, with `knowledge.confluence_spaces`. |
+| `integrations.confluence` | **Served.** Parser, prompt, client, a `knowledge.Searcher` over live CQL, the tool-skill codec and walk, and `crewlet confluence import`. `knowledge.confluence_spaces` is its read scope again, and `role`/`unit.integrations.confluence` its write and routing home. The single-homing rule came back with it: Confluence XOR Plane. |
 | `integrations.github` | Refused when enabled. |
 
 ## What the state actually was
@@ -63,14 +63,14 @@ message saying what serves that role instead:
 | Refused | Because | Instead |
 |---|---|---|
 | ~~`integrations.jira`~~ | *served — see the table above* | — |
-| `integrations.confluence` | no parser, no searcher | `integrations.plane` |
+| ~~`integrations.confluence`~~ | *served — see the table above* | — |
 | ~~`integrations.slack`~~ | *served — see the table above* | — |
 | `integrations.github` (enabled) | no parser | `integrations.gitlab` |
 | ~~`integrations.forge_app_id`~~ | *served — Jira Cloud rides it* | — |
 | ~~`role.integrations.slack`~~ | *served — a seat's own app* | — |
 | ~~`role.integrations.jira`, `unit.integrations.jira`~~ | *served — the lead-fallback map* | — |
-| `role.integrations.confluence`, `unit.integrations.confluence` | no parser, no searcher | `…integrations.plane` |
-| `knowledge.confluence_spaces` | a scope for a backend with no searcher | `knowledge.plane_projects` |
+| ~~`role.integrations.confluence`, `unit.integrations.confluence`~~ | *served — where a team writes* | — |
+| ~~`knowledge.confluence_spaces`~~ | *served — the read scope* | — |
 
 The per-seat and per-unit rows are not credentials — they are WHERE a seat or
 unit files work and where its deliveries route. That is precisely why they

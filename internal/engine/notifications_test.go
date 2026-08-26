@@ -373,3 +373,53 @@ func TestAnAbsentTrackerRoutesNothing(t *testing.T) {
 		t.Fatalf("a company with no jira block routes %v", e.RoutedSources())
 	}
 }
+
+// THE KNOWLEDGE BASE IS THE ONE INTEGRATION WHOSE ABSENCE IS INVISIBLE.
+//
+// A routing gap surfaces as an agent that never answers. A search gap
+// surfaces as an empty "## Relevant knowledge" block on every Plan phase,
+// which is indistinguishable from a company that has written nothing down —
+// so a configured Confluence has to produce a searcher, and a company with
+// no knowledge backend has to produce a nil one rather than a typed nil that
+// answers as though a search had run.
+func TestAConfiguredKnowledgeBaseProducesASearcher(t *testing.T) {
+	t.Parallel()
+	doc := companyDoc + `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: cf
+knowledge:
+  confluence_spaces: [HANDBOOK]
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a company on Confluence routes %v", e.RoutedSources())
+	}
+	searcher := e.Knowledge()
+	if searcher == nil {
+		t.Fatal("a configured knowledge base produced no searcher")
+	}
+	if got := searcher.Backend(); got != "confluence" {
+		t.Errorf("the searcher answers for %q", got)
+	}
+}
+
+// A COMPANY WITH NO KNOWLEDGE BACKEND ANSWERS A NIL INTERFACE, not a typed
+// nil: consumers check `searcher == nil`, and a typed nil passes that check
+// and then answers as though a search had run and found nothing — which
+// hides the fact that nothing is configured.
+func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := e.Knowledge(); got != nil {
+		t.Fatalf("a company with no knowledge base got %T", got)
+	}
+}

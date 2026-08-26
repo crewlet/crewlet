@@ -70,6 +70,9 @@ roles:
     integrations:
       mattermost:
         bot_token: mm-ceo
+      slack:
+        bot_token: xoxb-1
+        signing_secret: ceo-signing
   - name: CTO
     handle: cto
     llm: primary
@@ -127,6 +130,28 @@ roles:
     llm: primary
 `
 
+// confluenceYAML is the knowledge base on its own. It cannot join the
+// fixture above: the knowledge backend is single-homed, and that config
+// already runs Plane.
+var confluenceYAML = `
+name: Acme
+providers:
+  llm:
+    primary:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["key"]
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: cf
+roles:
+  - name: CEO
+    handle: ceo
+    llm: primary
+`
+
 // The two fixtures this file used to parse, kept verbatim as what they now
 // are: configs the engine refuses. See TestNoConfigCanSupplyAnUnservedSecret.
 const refusedSelfHostedYAML = `
@@ -172,19 +197,18 @@ providers:
       model: claude-sonnet-5
       api_keys: ["key"]
 integrations:
-  confluence:
-    url: https://acme.atlassian.net/wiki
-    token: t
-    webhook_secret: conf
+  github:
+    enabled: true
+    webhook_secret: gh
 roles:
   - name: CEO
     handle: ceo
     llm: primary
 `
 
-// unserved is the verification material for the vendors this build validates
-// and does not serve.
-type unserved struct{ github, confluence, slack string }
+// unserved is the verification material for the one vendor this build
+// validates and does not serve.
+type unserved struct{ github string }
 
 // secrets reads that material out of the epoch a build serving them would
 // have had.
@@ -207,23 +231,9 @@ func (u unserved) secrets(resolve func(string) string) webhooks.Secrets {
 		Name: "Acme",
 		Integrations: config.Integrations{
 			GitHub: &config.GitHub{Enabled: true, WebhookSecret: u.github},
-			Confluence: &config.Confluence{
-				URL: "https://acme.atlassian.net/wiki", Token: "t",
-				WebhookSecret: u.confluence,
-			},
 		},
 	}
-	// The CEO holds a Slack app and the CTO does not, because the per-seat
-	// map has to distinguish them.
-	organization := &org.Organization{
-		Name: "Acme",
-		Roles: []*org.Role{
-			{Name: "CEO", DeclaredHandle: "ceo",
-				Slack: org.SlackIdentity{BotToken: "xoxb-1", SigningSecret: u.slack}},
-			{Name: "CTO", DeclaredHandle: "cto"},
-		},
-	}
-	return webhooks.SecretsOf(company, organization, resolve)
+	return webhooks.SecretsOf(company, nil, resolve)
 }
 
 func secretsFor(t *testing.T, yaml string) webhooks.Secrets {
@@ -242,17 +252,15 @@ func secretsFor(t *testing.T, yaml string) webhooks.Secrets {
 func TestSecretsComeFromTheEpoch(t *testing.T) {
 	t.Parallel()
 	served := secretsFor(t, servedYAML)
-	unwired := unserved{
-		github: "gh", confluence: "conf", slack: "ceo-signing",
-	}.secrets(literal)
+	unwired := unserved{github: "gh"}.secrets(literal)
 
 	for _, tc := range []struct{ name, got, want string }{
 		{"gitlab", served.GitLab, gitLabFixtureSecret},
 		{"plane", served.Plane, "pl"},
 		{"jira", served.Jira, "jr"},
+		{"confluence", secretsFor(t, confluenceYAML).Confluence, "cf"},
 		{"forge app id", served.ForgeAppID, "forge-app"},
 		{"github", unwired.GitHub, "gh"},
-		{"confluence", unwired.Confluence, "conf"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
@@ -261,19 +269,21 @@ func TestSecretsComeFromTheEpoch(t *testing.T) {
 
 	// PER SEAT, keyed by handle: Slack gives each agent its own app, and
 	// the handle is what the URL path carries.
-	if unwired.Slack["ceo"] != "ceo-signing" {
-		t.Errorf("ceo's signing secret = %q", unwired.Slack["ceo"])
+	if served.Slack["ceo"] != "ceo-signing" {
+		t.Errorf("ceo's signing secret = %q", served.Slack["ceo"])
 	}
-	if _, present := unwired.Slack["cto"]; present {
+	if _, present := served.Slack["cto"]; present {
 		t.Error("a seat with no Slack app got an entry, which would open a route " +
 			"that answers 401 instead of saying nothing is configured")
 	}
-	// A Mattermost seat opens no per-seat route: that transport holds a
-	// websocket open rather than receiving deliveries, so this map stays
-	// empty however many bots the company runs.
-	if served.Slack != nil {
-		t.Errorf("a company whose seats are on Mattermost got a per-seat "+
-			"webhook map: %v", served.Slack)
+	// A MATTERMOST SEAT OPENS NO PER-SEAT ROUTE, even in a company that
+	// also runs Slack: that transport holds a websocket open rather than
+	// receiving deliveries, so only the Slack apps appear here. The CEO
+	// carries both identities in this fixture, which is what makes the
+	// point — one entry, not two.
+	if len(served.Slack) != 1 {
+		t.Errorf("a company on both chat surfaces got %d per-seat route(s): %v",
+			len(served.Slack), served.Slack)
 	}
 }
 
@@ -315,8 +325,8 @@ func TestNoConfigCanSupplyAnUnservedSecret(t *testing.T) {
 		fields []string
 	}{
 		{"github", refusedSelfHostedYAML, []string{"integrations.github"}},
-		{"confluence", refusedAtlassianYAML,
-			[]string{"integrations.confluence"}},
+		{"github, the other way round", refusedAtlassianYAML,
+			[]string{"integrations.github"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -492,14 +502,11 @@ func TestEveryVerifierGetsAResolvedSecret(t *testing.T) {
 	}
 
 	got := webhooks.SecretsOf(company, organization, resolve)
-	unwired := unserved{
-		github: "${GH}", confluence: "${CF}", slack: "${SLACK_CEO}",
-	}.secrets(resolve)
+	unwired := unserved{github: "${GH}"}.secrets(resolve)
 	for label, value := range map[string]string{
 		"gitlab": got.GitLab, "plane": got.Plane,
 		"jira": got.Jira, "forge app id": got.ForgeAppID,
-		"github": unwired.GitHub, "confluence": unwired.Confluence,
-		"slack/ceo": unwired.Slack["ceo"],
+		"github": unwired.GitHub,
 	} {
 		if strings.Contains(value, "${") {
 			t.Errorf("%s verifies against the reference %q, not its value", label, value)
@@ -520,13 +527,12 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	got := webhooks.SecretsOf(company, nil, nil)
-	if got.GitLab != "" || got.Plane != "" || got.Jira != "" || got.ForgeAppID != "" {
+	if got.GitLab != "" || got.Plane != "" || got.Jira != "" || got.ForgeAppID != "" ||
+		got.Confluence != "" {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", got)
 	}
-	unwired := unserved{
-		github: "${GH}", confluence: "${CF}", slack: "${SLACK_CEO}",
-	}.secrets(nil)
-	if unwired.GitHub != "" || unwired.Confluence != "" || unwired.Slack != nil {
+	unwired := unserved{github: "${GH}"}.secrets(nil)
+	if unwired.GitHub != "" {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", unwired)
 	}
 }

@@ -174,20 +174,24 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 | | Options |
 |---|---|
 | **LLM** | [Anthropic](docs/getting-started/quickstart.md#llm-options), OpenAI, or **any OpenAI-compatible endpoint** — including your own vLLM / LiteLLM gateway |
-| **Tracker + knowledge base** | [Plane](docs/integrations/plane.md) — self-hosted, covers both |
+| **Tracker** | [Plane](docs/integrations/plane.md) — self-hosted, tracker and knowledge base in one — or [Jira](docs/integrations/jira.md), Cloud or Data Center |
+| **Knowledge base** | [Plane](docs/integrations/plane.md) pages, or [Confluence](docs/integrations/confluence.md) — the search behind every Plan phase, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted |
-| **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent |
+| **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent — or [Slack](docs/integrations/slack.md), one app per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
 
-**Refused by this build** — [Jira](docs/integrations/jira.md),
-[Confluence](docs/integrations/confluence.md), [GitHub](docs/integrations/github.md)
-and [Slack](docs/integrations/slack.md) have no parser turning a delivery into a
-notification, so configuring one bought a webhook that verified events and reached
-nobody. `crewlet validate` rejects those blocks by name and says which vendor serves
-the role instead. Agents still reach all four through **MCP**, which is a separate
-surface and unaffected. Each page says exactly what is live.
+The knowledge base is **single-homed** — Plane or Confluence, never both, because two
+searchers would make an agent's answer to "what do we already know about this" depend
+on which one was asked. Everything else composes: a company can run Jira beside Plane,
+or Slack beside Mattermost, which is what a migration actually looks like.
 
-For Mattermost, Plane and GitLab, one command provisions the whole fleet — a bot or
+**Refused by this build** — [GitHub](docs/integrations/github.md) has no parser turning
+a delivery into a notification, so configuring one bought a webhook that verified events
+and reached nobody. `crewlet validate` rejects the block by name and says which vendor
+serves the role instead. Agents still reach GitHub through **MCP**, which is a separate
+surface and unaffected.
+
+For Mattermost, Slack, Plane, Jira and GitLab, one command provisions the whole fleet — a bot or
 service account per seat, memberships, per-agent tokens minted into your config's own
 `${VAR}` references, and the webhooks:
 
@@ -195,6 +199,8 @@ service account per seat, memberships, per-agent tokens minted into your config'
 crewlet mattermost provision company.yaml
 crewlet plane      provision company.yaml
 crewlet gitlab     provision company.yaml -public-url <url>
+crewlet jira       provision company.yaml -public-url <url> -env-file .env
+crewlet slack      provision company.yaml -public-url <url> -env-file .env
 ```
 
 Mattermost takes no URL because nothing has to reach the engine: it holds one

@@ -72,11 +72,16 @@ func (e *Engine) auditSkills(c *Company) {
 // backend is configured without a skills project. Both are ordinary, and
 // both mean the catalogue stays empty rather than the engine inventing one.
 func (e *Engine) SkillsProject(c *Company) string {
-	plane := c.Config.Integrations.Plane
-	if plane == nil || !plane.Enabled {
-		return ""
+	if plane := c.Config.Integrations.Plane; plane != nil && plane.Enabled {
+		return plane.SkillsProjectKey()
 	}
-	return plane.SkillsProjectKey()
+	// THE KNOWLEDGE BACKEND IS SINGLE-HOMED (config enforces Confluence
+	// XOR Plane), so this is a lookup rather than a precedence: whichever
+	// backend the company runs is the one holding its skills.
+	if cf := c.Config.Integrations.Confluence; cf != nil {
+		return cf.SkillsSpaceKey()
+	}
+	return ""
 }
 
 // Skills is this node's tool-skill registry.
