@@ -19,6 +19,14 @@
 # ...except the committed template.
 !.env.example
 
+# The Slack provisioning ledger `crewlet slack provision` writes beside a
+# company document. It holds the app client secrets and signing secrets
+# Slack serves once, at creation, and the operator's app-configuration
+# token pair — so it is a secrets file exactly like .env, and committing
+# it publishes credentials nothing can rotate for you.
+slack-apps.json
+**/slack-apps.json
+
 # Pulsar JWT signing key + tokens the deployment guide's auth recipe lands
 # in the repo root — see docs/guides/deployment.md "Authentication". Key
 # material never belongs in git, hence the blanket *.key / *.pem too.

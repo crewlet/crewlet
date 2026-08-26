@@ -60,7 +60,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
-| `POST` | `/webhooks/slack/{handle}` | Receive Slack webhooks (per-agent) — **inert**: the config block is refused, so 503 |
+| `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — **inert**: the config block is refused, so 503 |
 | `POST` | `/webhooks/gitlab` | Receive GitLab webhooks |

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/notify"
 )
 
 // The registry is DERIVED from one org and answers for it permanently, so an
@@ -66,16 +65,16 @@ func TestARegistryIsNeverNil(t *testing.T) {
 	if got := e.Registry(); got == nil {
 		t.Fatal("Registry returned nil")
 	}
-	// With no chat backend the driver is OFF rather than absent, so the
-	// turn engine says what phase it is in without first asking whether
-	// indicators exist anywhere — a question about this node's wiring
-	// that a turn has no business knowing the answer to.
+	// With no chat backend the driver set is EMPTY rather than absent, so
+	// the turn engine says what phase it is in without first asking
+	// whether indicators exist anywhere — a question about this node's
+	// wiring that a turn has no business knowing the answer to.
 	driver := e.Status()
 	if driver == nil {
 		t.Fatal("Status returned nil")
 	}
-	if driver.Mode() != notify.StatusOff {
-		t.Fatalf("a company with no chat backend is in mode %q", driver.Mode())
+	if got := driver.Backends(); len(got) != 0 {
+		t.Fatalf("a company with no chat backend drives %v", got)
 	}
 	session := driver.Begin(
 		context.Background(), "ceo", "turn-1", "plan", map[string]string{
@@ -321,6 +320,43 @@ integrations:
 	// delivery it would have routed.
 	if got := e.WebhookSecrets().Jira; got != "jira-secret" {
 		t.Errorf("jira webhook secret = %q", got)
+	}
+}
+
+// THE HOSTED CHAT SURFACE ROUTES TOO, and its per-seat apps are what the
+// inbound edge verifies with — so a company on Slack needs both halves and
+// each is silent without the other.
+func TestAConfiguredHostedChatSurfaceActuallyRoutes(t *testing.T) {
+	// NOT parallel: the seat's app credentials come from the environment.
+	t.Setenv("SLACK_CEO_TOKEN", "xoxb-ceo")
+	t.Setenv("SLACK_CEO_SIGNING", "ceo-signing-secret")
+	doc := strings.Replace(companyDoc, `  - name: CEO
+    handle: ceo
+    llm: zulu`, `  - name: CEO
+    handle: ceo
+    llm: zulu
+    integrations:
+      slack:
+        bot_token: ${SLACK_CEO_TOKEN}
+        signing_secret: ${SLACK_CEO_SIGNING}`, 1) + `
+integrations:
+  slack:
+    typing_status: addressed
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// The workspace is unreachable, so no seat identity resolves and the
+	// transport reports itself unavailable — which is the documented
+	// degradation, not a company that failed to start.
+	if e.Company() == nil {
+		t.Fatal("an unreachable workspace stopped the company")
+	}
+	// The per-seat signing secret reaches the edge either way: it is what
+	// answers a delivery, and it comes from config rather than from Slack.
+	if got := e.WebhookSecrets().Slack["ceo"]; got != "ceo-signing-secret" {
+		t.Errorf("the seat's signing secret = %q", got)
 	}
 }
 

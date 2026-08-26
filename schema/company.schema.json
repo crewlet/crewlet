@@ -429,8 +429,8 @@
           "description": "Plane instance, workspace and webhook secret. Absent = disabled."
         },
         "slack": {
-          "description": "NOT IMPLEMENTED in this build: no parser routes a Slack delivery. The chat surface this build serves is integrations.mattermost.",
-          "not": {}
+          "$ref": "#/$defs/Slack",
+          "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
         }
       },
       "type": "object"
@@ -1322,8 +1322,8 @@
           "description": "The Plane project this seat owns."
         },
         "slack": {
-          "description": "NOT IMPLEMENTED in this build: no parser routes a Slack delivery, so this seat's app would verify deliveries that reach nobody. Use role.integrations.mattermost.",
-          "not": {}
+          "$ref": "#/$defs/RoleSlack",
+          "description": "This seat's own Slack app: bot token and signing secret."
         }
       },
       "type": "object"

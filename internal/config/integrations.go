@@ -24,7 +24,7 @@ import (
 type Integrations struct {
 	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
 	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser. The knowledge base this build serves is integrations.plane."`
-	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Slack delivery. The chat surface this build serves is integrations.mattermost."`
+	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
 	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."`
 	GitLab     *GitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
@@ -64,10 +64,10 @@ func (i *Integrations) validate(path string) error {
 // The integrations this build VALIDATES and does not SERVE, with what fills
 // the same role instead.
 //
-// The engine wires Mattermost for chat, Plane and Jira for the tracker, and
-// GitLab for the code host (decisions/701, decisions/703). The
-// remaining three have config models, webhook routes and generated schema,
-// and no parser, no transport and no searcher behind them:
+// The engine wires Mattermost and Slack for chat, Plane and Jira for the
+// tracker, and GitLab for the code host (decisions/701,
+// decisions/703). The remaining two have config models, webhook routes and
+// generated schema, and no parser, no transport and no searcher behind them:
 // startNotifications builds its parser and prompt lists from the served
 // blocks alone.
 //
@@ -84,8 +84,8 @@ func (i *Integrations) validate(path string) error {
 var unservedIntegrations = []struct {
 	field string
 	// active reports whether the block is switched on, in that block's own
-	// terms: two of the three are on by their mere presence, and GitHub
-	// carries an Enabled flag.
+	// terms: Confluence is on by its mere presence, and GitHub carries an
+	// Enabled flag.
 	active func(*Integrations) bool
 	// instead names the role and what serves it, because an error a person
 	// reads has to say what to do about it.
@@ -93,8 +93,6 @@ var unservedIntegrations = []struct {
 }{
 	{"confluence", func(i *Integrations) bool { return i.Confluence != nil },
 		"the knowledge base this build serves is Plane (integrations.plane)"},
-	{"slack", func(i *Integrations) bool { return i.Slack != nil },
-		"the chat surface this build serves is Mattermost (integrations.mattermost)"},
 	{"github", func(i *Integrations) bool { return i.GitHub != nil && i.GitHub.Enabled },
 		"the code host this build serves is GitLab (integrations.gitlab)"},
 }

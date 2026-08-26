@@ -2,8 +2,8 @@
 
 Status: **decided by the project owner, implemented — and being unwound,
 vendor by vendor.** The refusal was never the destination: each entry is
-deleted by the change that ships that vendor. Jira is done; Slack, Confluence
-and GitHub follow.
+deleted by the change that ships that vendor. Jira and Slack are done;
+Confluence and GitHub follow.
 Implementation: `internal/config/integrations.go`, `internal/config/roles.go`,
 `internal/config/company.go`, `internal/config/schema.go` ·
 Answers the question [`d-701`](701-vendor-order.md) left open.
@@ -33,7 +33,7 @@ silence this decision exists to end.
 | Vendor | State |
 |---|---|
 | `integrations.jira` | **Served.** Parser, prompt, client, seat-identity resolution, lead map and `crewlet jira provision`. `integrations.forge_app_id` came back with it: Jira Cloud is what rides the Forge route. `role.integrations.jira` and `unit.integrations.jira` are consulted again — they are the lead-fallback map. |
-| `integrations.slack` | Refused. |
+| `integrations.slack` | **Served.** Parser, prompt, transport, per-seat app identities, thread follows, a text-carrying working indicator and `crewlet slack provision` — manifest CRUD, the OAuth install, and the app ledger. `role.integrations.slack` is a seat's own app again, and both its credentials are now required together. |
 | `integrations.confluence` | Refused, with `knowledge.confluence_spaces`. |
 | `integrations.github` | Refused when enabled. |
 
@@ -64,10 +64,10 @@ message saying what serves that role instead:
 |---|---|---|
 | ~~`integrations.jira`~~ | *served — see the table above* | — |
 | `integrations.confluence` | no parser, no searcher | `integrations.plane` |
-| `integrations.slack` | no parser | `integrations.mattermost` |
+| ~~`integrations.slack`~~ | *served — see the table above* | — |
 | `integrations.github` (enabled) | no parser | `integrations.gitlab` |
 | ~~`integrations.forge_app_id`~~ | *served — Jira Cloud rides it* | — |
-| `role.integrations.slack` | no parser | `role.integrations.mattermost` |
+| ~~`role.integrations.slack`~~ | *served — a seat's own app* | — |
 | ~~`role.integrations.jira`, `unit.integrations.jira`~~ | *served — the lead-fallback map* | — |
 | `role.integrations.confluence`, `unit.integrations.confluence` | no parser, no searcher | `…integrations.plane` |
 | `knowledge.confluence_spaces` | a scope for a backend with no searcher | `knowledge.plane_projects` |
@@ -124,10 +124,14 @@ verification against Atlassian's published keys is real engineering) that
 comes straight back when a vendor ships. They are marked inert in the API
 reference so nobody reads a live endpoint into them.
 
-That prediction is what actually happened, and it is the strongest argument
-for the shape: `POST /webhooks/jira` and `POST /webhooks/forge` came alive in
-the commit that shipped the parser, with no change to either route beyond the
-delivery-id key Jira had been sending all along.
+That prediction is what actually happened, twice, and it is the strongest
+argument for the shape. `POST /webhooks/jira` and `POST /webhooks/forge` came
+alive in the commit that shipped the Jira parser, with no change to either
+route beyond the delivery-id key Jira had been sending all along. `POST
+/webhooks/slack/{handle}` and its OAuth landing came alive in the Slack
+commit with **no change to the route at all** — including the
+url_verification exemption, which had been written and tested against a
+vendor nothing could yet route.
 
 **MCP is untouched.** Agents still reach Jira, Confluence, GitHub and Slack
 through their MCP servers, which is a different surface entirely: `mcp_servers`

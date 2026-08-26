@@ -416,6 +416,8 @@ func runIntegration(vendor string, args []string, stdout, stderr io.Writer) erro
 		return runPlaneResync(rest, stdout, stderr)
 	case vendor == "jira" && sub == "provision":
 		return runJiraProvision(rest, stdout, stderr)
+	case vendor == "slack" && sub == "provision":
+		return runSlackProvision(rest, stdout, stderr)
 	case sub == "" || sub == "help":
 		fmt.Fprintf(stderr, "usage: crewlet %s provision <company.yaml>\n", vendor)
 		if vendor == "mattermost" {

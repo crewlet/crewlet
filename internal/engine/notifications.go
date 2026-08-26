@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 // The inbound edge, wired.
@@ -33,6 +34,12 @@ type notifications struct {
 	service    *notify.Service
 	mattermost *mattermost.Transport
 
+	// slack is the hosted chat surface. A company may run BOTH — they are
+	// different workspaces with different people in them, and an org
+	// migrating from one to the other runs both for a while — so this is
+	// a second field rather than a choice between two.
+	slack *slack.Transport
+
 	// plane is the tracker's contribution: a parser and a knowledge
 	// searcher. No lifecycle, because Plane is inbound-only — there is no
 	// connection to lose, so an unreachable instance degrades the reads
@@ -52,10 +59,6 @@ type notifications struct {
 	// revision that changed something else must not re-spend a request
 	// per seat to re-learn what it already knows.
 	gitlab gitlabIdentities
-
-	// off is the driver a company with no chat backend gets, built once
-	// and shared: it holds no state and raises nothing.
-	off *notify.StatusDriver
 }
 
 // Registry is the live party registry.
@@ -95,24 +98,31 @@ func (e *Engine) RoutedSources() []string {
 	return svc.Sources()
 }
 
-// Status is the working-indicator driver for chat-triggered turns.
+// Status is the working-indicator driver set for chat-triggered turns.
+//
+// A SET rather than one driver, because a company can run both chat
+// surfaces and a turn is triggered by exactly one of them. Handing out "the"
+// driver would raise the indicator on the wrong backend or, far more likely,
+// on none — a driver refuses a trigger whose transport is not its own, so
+// the second surface would go silently unindicated for ever.
 //
 // NEVER NIL, like the registry and for the same reason: a company with no
-// chat backend gets a driver that is OFF, whose Begin reports no session and
-// whose nil session's methods are no-ops. The turn engine then says what
-// phase it is in without first asking whether indicators exist anywhere —
-// which is a question about this node's wiring that a turn has no business
-// knowing the answer to.
-func (e *Engine) Status() *notify.StatusDriver {
+// chat backend gets an empty set, whose Begin reports no session and whose
+// nil session's methods are no-ops. The turn engine then says what phase it
+// is in without first asking whether indicators exist anywhere — which is a
+// question about this node's wiring that a turn has no business knowing the
+// answer to.
+func (e *Engine) Status() *notify.Statuses {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
-	if e.notify.mattermost == nil {
-		if e.notify.off == nil {
-			e.notify.off = notify.NewStatusDriver(notify.StatusOptions{})
-		}
-		return e.notify.off
+	var drivers []*notify.StatusDriver
+	if e.notify.mattermost != nil {
+		drivers = append(drivers, e.notify.mattermost.Status())
 	}
-	return e.notify.mattermost.Status()
+	if e.notify.slack != nil {
+		drivers = append(drivers, e.notify.slack.Status())
+	}
+	return notify.NewStatuses(drivers...)
 }
 
 // refreshParties rebuilds the registry for a newly applied epoch.
@@ -147,11 +157,20 @@ func (e *Engine) refreshParties(c *Company) {
 
 	e.notify.mu.Lock()
 	e.notify.registry = reg
-	transport := e.notify.mattermost
+	chat := e.notify.mattermost
+	hosted := e.notify.slack
 	e.notify.mu.Unlock()
 
-	if transport != nil {
-		transport.Reregister(reg)
+	// THE CHAT IDENTITIES ARE CARRIED ACROSS, not rebuilt: they are facts
+	// about a live server that the transports resolved once at connect,
+	// where a tracker's or a code host's are config-derived and rebuilt
+	// above. Losing them on an apply would make every agent's own message
+	// annotate as a stranger until something reconnected.
+	if chat != nil {
+		chat.Reregister(reg)
+	}
+	if hosted != nil {
+		hosted.Reregister(reg)
 	}
 	log.Info("parties_indexed", "company", c.Config.Name, "parties", reg.Len(),
 		"human_contacts", rec.Registered, "unresolved", rec.Unresolved,
@@ -183,6 +202,23 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			// tracker work too.
 			log.Error("mattermost_unavailable", "error", err.Error(),
 				"detail", "the company is running without its chat surface")
+		}
+		if transport != nil {
+			parsers = append(parsers, transport.Parser())
+			prompts = append(prompts, transport.Prompt())
+		}
+	}
+	if sl := c.Config.Integrations.Slack; sl != nil {
+		transport, err := e.startSlack(ctx, c, sl)
+		if err != nil {
+			// Same posture as the self-hosted chat surface: the company
+			// runs WITHOUT it rather than not at all. A workspace that
+			// refuses a seat's token is an ordinary state — a token gets
+			// revoked, an app gets uninstalled — and refusing to start
+			// the company over it would take every seat's tracker and
+			// scheduled work down with it.
+			log.Error("slack_unavailable", "error", err.Error(),
+				"detail", "the company is running without its hosted chat surface")
 		}
 		if transport != nil {
 			parsers = append(parsers, transport.Parser())
@@ -450,10 +486,18 @@ func (e *Engine) admits() bool {
 // stopNotifications takes the inbound edge down.
 func (e *Engine) stopNotifications(ctx context.Context) {
 	e.notify.mu.Lock()
-	transport := e.notify.mattermost
-	e.notify.mattermost = nil
+	chat := e.notify.mattermost
+	hosted := e.notify.slack
+	e.notify.mattermost, e.notify.slack = nil, nil
 	e.notify.mu.Unlock()
-	if transport != nil {
-		transport.Stop(ctx)
+	if chat != nil {
+		chat.Stop(ctx)
+	}
+	if hosted != nil {
+		// Nothing to disconnect — the inbound half is the API edge — but
+		// a raised working indicator outlives the process visibly, so a
+		// seat that vanished mid-turn would look like it was still
+		// thinking until Slack expired it.
+		hosted.Stop(ctx)
 	}
 }

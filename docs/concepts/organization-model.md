@@ -66,9 +66,10 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                       summarisation work)
 ├── learning_enabled: bool? (per-role override for the agent-learning
 │                            subsystem)
-├── slack: dict        (REFUSED in this build — role.integrations.slack is
-│                       not served; the per-agent transport identity that
-│                       is, is mattermost: {bot_token})
+├── slack: dict        (role.integrations.slack — this seat's OWN Slack
+│                       app: bot_token + signing_secret, both required
+│                       together. Slack gives each agent its own app, so
+│                       there is no company-wide credential)
 └── schedules: Schedule[]  (role-scoped recurring work; see
                             [Scheduling](scheduling.md))
 ```

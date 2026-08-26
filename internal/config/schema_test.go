@@ -211,10 +211,6 @@ func refusedDocuments() map[string]refusedField {
 			off: "name: Acme\n",
 			on:  "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: \"${CONFLUENCE_TOKEN}\"}\n",
 		},
-		"company:integrations.slack": {tier: TierCompany,
-			off: "name: Acme\n",
-			on:  "name: Acme\nintegrations:\n  slack: {typing_status: addressed}\n",
-		},
 		// The off document here is the bug, written down: a block carrying
 		// its own switch is off when the switch is off, not when the key is
 		// absent. An operator turning GitHub off leaves the block behind
@@ -229,14 +225,6 @@ func refusedDocuments() map[string]refusedField {
 		"company:knowledge.confluence_spaces": {tier: TierCompany,
 			off: "name: Acme\nknowledge:\n  confluence_spaces: []\n",
 			on:  "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
-		},
-		// The same field, reached the other way. A seat inside a unit is
-		// validated through the unit walk rather than the top-level one, and
-		// a refusal that landed on only one of the two paths would leave
-		// every real org chart — which is all units — unguarded.
-		"company:units[].roles[].integrations.slack": {tier: TierCompany,
-			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
-			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}]}\n",
 		},
 		// The wiki space a seat or a unit claims. Not a credential — WHERE
 		// work files and where deliveries route — which is why leaving it
@@ -254,10 +242,6 @@ func refusedDocuments() map[string]refusedField {
 		"company:units[].roles[].integrations.confluence": {tier: TierCompany,
 			off: "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {}}]}\n",
 			on:  "name: Acme\nunits:\n  - {name: Engineering, roles: [{name: CTO, integrations: {confluence: {space: HANDBOOK}}}]}\n",
-		},
-		"company:roles[].integrations.slack": {tier: TierCompany,
-			off: "name: Acme\nroles:\n  - {name: CEO, integrations: {}}\n",
-			on:  "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
 		},
 	}
 }
@@ -557,8 +541,11 @@ units:
 			name: "an unserved knowledge base", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nintegrations:\n  confluence: {url: https://acme.example.com/wiki, token: t}\n",
 		},
+		// The hosted chat surface, which IS served. Neither layer may
+		// refuse it: the schema because it would underline a working
+		// file, the validator because the engine boots on it.
 		{
-			name: "an unserved chat surface", tier: TierCompany, editorCatches: true,
+			name: "a slack working indicator", tier: TierCompany,
 			yaml: "name: Acme\nintegrations:\n  slack: {typing_status: addressed}\n",
 		},
 		{
@@ -581,12 +568,18 @@ units:
 			name: "a jira block naming its instance twice", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", cloud_id: acme-cloud, token: t, webhook_secret: s}\n",
 		},
-		// The per-seat half of the same refusal. Leaving it standing while
-		// the org block was refused would provision an app, hand the seat a
-		// token, accept deliveries — and wake nobody.
+		// The per-seat half: an app with BOTH credentials is a working
+		// config, and one with a single half is a validator rule a JSON
+		// Schema cannot express (a required pair inside an optional
+		// object).
 		{
-			name: "a per-seat Slack app", tier: TierCompany, editorCatches: true,
+			name: "a per-seat Slack app", tier: TierCompany,
 			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
+		},
+		{
+			name: "a per-seat Slack app with half its credentials",
+			tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\"}}}\n",
 		},
 		{
 			name: "a plane scope with no plane", tier: TierCompany, editorCatches: true,

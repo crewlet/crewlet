@@ -270,16 +270,19 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, site_url: acme.example.com, token: t}\n",
 			"integrations.jira.site_url", ErrUnknownValue,
 		},
+		// A per-seat Slack app needs BOTH credentials, and each half fails
+		// silently on its own: without a token the seat receives messages
+		// it cannot answer, without a secret its route answers 503 while
+		// the app's settings page reports a healthy request URL.
 		{
-			// A PER-SEAT SLACK APP IS REFUSED BEFORE ITS OWN RULES RUN.
-			// It used to be checked for a signing secret without a bot
-			// token and for a mixed literal/${VAR} pair; neither matters
-			// now, because no parser routes a Slack delivery and the app
-			// would verify messages that reach nobody. Those rules return
-			// with the vendor.
-			"a per-seat slack app",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"${TOK}\"\n        signing_secret: \"${S}\"\n",
-			"roles[0].integrations.slack", ErrUnimplemented,
+			"a slack app with no signing secret",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"${TOK}\"\n",
+			"roles[0].integrations.slack.signing_secret", ErrMissing,
+		},
+		{
+			"a slack app with no bot token",
+			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        signing_secret: \"${S}\"\n",
+			"roles[0].integrations.slack.bot_token", ErrMissing,
 		},
 		{
 			"a Mattermost username the server would refuse",
@@ -442,11 +445,11 @@ func TestMinimalCompanyLoads(t *testing.T) {
 
 // AN INTEGRATION THIS BUILD CANNOT SERVE IS REFUSED, NOT ACCEPTED AND IGNORED.
 //
-// The engine wires Mattermost for chat, Plane and Jira for the tracker, and
-// GitLab for the code host. The remaining three have config models, webhook
-// routes and generated schema, and no parser, transport or searcher behind
-// them, so a company naming one gets a block that validates, renders in the
-// dashboard, and does nothing.
+// The engine wires Mattermost and Slack for chat, Plane and Jira for the
+// tracker, and GitLab for the code host. The remaining two have config
+// models, webhook routes and generated schema, and no parser, transport or
+// searcher behind them, so a company naming one gets a block that validates,
+// renders in the dashboard, and does nothing.
 //
 // Silently, which is the part that mattered: integrations.confluence is how
 // an operator says where the company's knowledge lives, and the answer was an
@@ -455,7 +458,6 @@ func TestAnIntegrationThisBuildCannotServeIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, yaml, path, instead string }{
 		{"confluence", "  confluence: {url: \"https://x/wiki\", token: t}", "integrations.confluence", "Plane"},
-		{"slack", "  slack: {}", "integrations.slack", "Mattermost"},
 		{"github", "  github: {enabled: true, webhook_secret: s}", "integrations.github", "GitLab"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

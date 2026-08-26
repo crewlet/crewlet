@@ -65,7 +65,7 @@ Connecting the external surfaces agents work on:
 - **[Confluence](integrations/confluence.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring
 - **[GitHub](integrations/github.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
-- **[Slack](integrations/slack.md)** — **Refused by this build.** What the block did, why no parser routes it, and what to use instead
+- **[Slack](integrations/slack.md)** — One app per agent: `crewlet slack provision` builds and installs them from a manifest, per-seat webhook routing with thread follows, a text-carrying working indicator, and the Slack MCP tool server
 - **[Mattermost](integrations/mattermost.md)** — Self-hosted open-source chat: one bot account per agent, `crewlet mattermost provision`, a websocket event fleet instead of webhooks (no public URL needed), and thread routing
 
 ## Guides

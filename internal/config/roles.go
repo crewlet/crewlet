@@ -219,7 +219,7 @@ func (s *RoleSandbox) validate(path string) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a Slack delivery, so this seat's app would verify deliveries that reach nobody. Use role.integrations.mattermost."`
+	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
 	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
 	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no searcher and no parser read a Confluence space. Use role.integrations.plane."`
@@ -256,6 +256,31 @@ type RoleSlack struct {
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
 	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel id for this seat."`
+}
+
+// validate checks a seat's Slack app.
+//
+// THE TWO CREDENTIALS ARE NOT INTERCHANGEABLE and each half fails silently
+// on its own. Without a bot token the seat receives messages it can never
+// answer; without a signing secret its route answers 503 to every delivery
+// while the app's own settings page reports a healthy request URL. So
+// declaring the block at all means declaring both.
+func (s *RoleSlack) validate(path string) error {
+	var p problems
+	if strings.TrimSpace(s.BotToken) == "" {
+		p.add(at(path, "bot_token"), ErrMissing,
+			"required — without it this seat receives messages it cannot "+
+				"answer. `crewlet slack provision` mints one into the ${VAR} "+
+				"this field points at")
+	}
+	if strings.TrimSpace(s.SigningSecret) == "" {
+		p.add(at(path, "signing_secret"), ErrMissing,
+			"required — this seat's /webhooks/slack/<handle> route has nothing "+
+				"to verify a delivery with otherwise and answers 503 to every "+
+				"one, while the app's own settings page reports a healthy "+
+				"request URL")
+	}
+	return p.err()
 }
 
 // RoleMattermost is a seat's Mattermost bot.
@@ -297,18 +322,8 @@ func (r *Role) validate(path string) error {
 	if strings.TrimSpace(r.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every seat needs a name")
 	}
-	if r.Integrations.Slack != nil {
-		// REFUSED FOR THE SAME REASON AS THE ORG-LEVEL BLOCK. A per-seat
-		// Slack app is what the inbound route verifies with, and no parser
-		// turns a verified Slack delivery into a notification — so the app
-		// is provisioned, the seat carries a token, the route accepts
-		// deliveries, and no agent is ever woken. Refusing only the org
-		// block would leave that half standing, which is the same silence
-		// in a smaller place. See [unservedIntegrations].
-		p.add(at(path, "integrations.slack"), ErrUnimplemented,
-			"no parser is wired for Slack, so this seat's app would verify "+
-				"deliveries that reach nobody — the chat surface this build "+
-				"serves is Mattermost (role.integrations.mattermost)")
+	if s := r.Integrations.Slack; s != nil {
+		p.wrap(s.validate(at(path, "integrations.slack")))
 	}
 	refuseUnservedIdentities(&p, at(path, "integrations"), "role",
 		r.Integrations.Confluence)

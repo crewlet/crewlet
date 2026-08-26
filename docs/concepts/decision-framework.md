@@ -25,7 +25,7 @@ There is no decision engine or special tooling. Agents use their team's **channe
 4. **Approver approves or rejects** — replies with the final call
 5. **Informed parties see the thread** — visibility is automatic
 
-The team channel is configured on the OrgUnit. The chat surface this build serves is [Mattermost](../integrations/mattermost.md) — `integrations.slack` and `role.integrations.slack` are [refused](../integrations/slack.md), so a seat's transport identity is its Mattermost bot:
+The team channel is configured on the OrgUnit, and it is vendor-neutral: the same field serves whichever chat backend the company runs. A seat's transport identity is its own bot — a [Mattermost](../integrations/mattermost.md) bot token, or a [Slack](../integrations/slack.md) app:
 
 ```yaml
 units:

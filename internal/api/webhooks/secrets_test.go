@@ -314,8 +314,7 @@ func TestNoConfigCanSupplyAnUnservedSecret(t *testing.T) {
 		yaml   string
 		fields []string
 	}{
-		{"github, and the per-seat Slack app", refusedSelfHostedYAML,
-			[]string{"integrations.github", "roles[0].integrations.slack"}},
+		{"github", refusedSelfHostedYAML, []string{"integrations.github"}},
 		{"confluence", refusedAtlassianYAML,
 			[]string{"integrations.confluence"}},
 	} {
