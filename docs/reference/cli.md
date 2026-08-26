@@ -29,6 +29,12 @@ subcommand below is served by it.
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
+| `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
+| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns (`-no-smoke` stops before the completion) |
+| `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md), `-token-stdin` for one you already hold |
+| `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
+| `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
+| `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet plane import <company.yaml> <directory>` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) — `trigger:` ⇒ skill in the Tool Skills project, otherwise ⇒ doc in its parent-directory project. Idempotent by `external_id`; `-prune` removes orphaned skill pages. |
 | `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
@@ -375,6 +381,55 @@ name: "Acme AI"
 ```
 
 See [Authoring with an AI assistant](../getting-started/ai-authoring.md).
+
+---
+
+## `crewlet llm`
+
+```
+crewlet llm list
+crewlet llm doctor [KEY] [-no-smoke]
+crewlet llm login  <KEY> [-from-host | -capture-token | -token-stdin |
+                          -username U -password-stdin] [-home PATH]
+crewlet llm status <KEY>
+crewlet llm logout <KEY>
+crewlet llm export <KEY> [-secret-store]
+```
+
+The operator side of a [subscription LLM backend](../concepts/subscription-llm-backends.md):
+a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
+the operator's Pro/Max plan instead of an API key, and the login that makes
+that work is established here rather than in the config document. `KEY` is the
+`providers.llm` key; commands that take one and are given none act on the only
+`cli-agent` provider when there is exactly one.
+
+**`list`** is the inventory — provider key, CLI, model and whether it is
+logged in. **`doctor`** is the one to run before a company's first turn: it
+checks the CLI is installed, the credentials answer, and — unless you pass
+`-no-smoke` — that a real completion comes back, which is the only check that
+catches a plan whose quota is exhausted.
+
+**`login`** has four shapes because the vendors do:
+
+| Shape | When |
+|---|---|
+| *(no flag)* | Broker the vendor's own interactive login and keep the result |
+| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand |
+| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and credential *files* never leave the engine host |
+| `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
+
+**`export`** packs a login into one portable blob so another host can come up
+already authenticated. There is no matching `import`: the engine restores the
+blob **itself**, at boot, from `cli.auth.credential_bundle` or the conventional
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable, and only into an empty credential
+directory — so a fresh container is authenticated before its first turn rather
+than after an operator remembers a command. See
+[environment variables](environment-variables.md).
+
+`-secret-store` writes to this node's [secret store](../concepts/secret-store.md)
+instead of stdout. Without it the blob goes to stdout in the clear, which is
+what you want when piping into your own secret manager and never what you want
+in a shell history.
 
 ---
 
