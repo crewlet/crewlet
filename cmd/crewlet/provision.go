@@ -437,6 +437,7 @@ var vendorCommands = map[string][]vendorCommand{
 	},
 	"confluence": {
 		{"import", "<company.yaml> <directory>", runConfluenceImport},
+		{"resync", "<company.yaml>", runConfluenceResync},
 	},
 	"mattermost": {
 		{"provision", "<company.yaml>", runMattermostProvision},

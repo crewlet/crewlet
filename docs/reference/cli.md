@@ -33,6 +33,7 @@ subcommand below is served by it.
 | `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
+| `crewlet confluence resync <company.yaml>` | Re-run the engine's own tool-skill walk of the Confluence skills space against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
 | `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
@@ -657,3 +658,39 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 | `-dry-run` | Print the plan and write nothing. |
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
+
+---
+
+## `crewlet confluence resync`
+
+```
+crewlet confluence resync <company.yaml> [-space KEY] [-config PATH]
+```
+
+Runs the engine's **own** [tool-skill](../concepts/tool-skills.md) walk of the
+Confluence skills space against a throwaway registry and prints what admitted,
+so you can see what the next boot will see. The counterpart of
+[`crewlet plane resync`](#crewlet-plane-resync), and it exists for the same
+reason: the registry is populated by one walk at boot, so a page that fails to
+admit is **invisible** — the only symptom is guidance that never appears in a
+Plan prompt.
+
+```
+TS holds 12 page(s): 9 skill(s), 3 ordinary page(s).
+  deploy                       Cutting a release
+  incident-review              Running a post-incident review
+```
+
+A page that declares a `trigger:` and does **not** parse is printed separately
+and exits non-zero. That is the case worth failing on: somebody wrote a trigger
+and got the rest wrong, and counting it as an ordinary page is exactly how a
+skill goes missing unnoticed.
+
+`-space` overrides `integrations.confluence.skills_space`, for checking a space
+the company document does not name yet.
+
+**Skills only.** Knowledge docs are searched live at query time and never
+loaded into a registry, so for them there is nothing to resync.
+
+**It does not reach into a running engine.** Restart it, or wait for the next
+webhook, to apply what you changed.

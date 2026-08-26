@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 )
@@ -134,4 +135,98 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 			len(res.Failed), strings.Join(res.Failed, "\n  "))
 	}
 	printNotes(w, res.Notes)
+}
+
+// `crewlet confluence resync` — the knowledge base's read-only diagnostic.
+//
+// The counterpart of `crewlet plane resync`, and it exists for the same
+// reason: the tool-skill registry is populated by a full walk of one space at
+// boot, and a skill that does not load is INVISIBLE — the only symptom is
+// guidance that never appears in a Plan prompt. This runs the engine's own
+// walk against a THROWAWAY registry and prints what it found, so an operator
+// can see what the next boot will see without restarting anything.
+//
+// It deliberately does NOT reach into a running engine. Applying a change
+// there is the engine's own job, on the next boot or the next webhook.
+//
+// SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
+// at query time and never loaded into a registry, so for them there is
+// nothing to resync.
+func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
+	companyPath, args := splitSubject(args)
+
+	fs := flag.NewFlagSet("confluence resync", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	space := fs.String("space", "",
+		"the skills space key; empty takes integrations.confluence.skills_space")
+	bootstrapPath := bootstrapFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	tail := fs.Args()
+	if companyPath == "" && len(tail) == 1 {
+		companyPath, tail = tail[0], nil
+	}
+	if companyPath == "" || len(tail) > 0 {
+		fmt.Fprintln(stderr,
+			"usage: crewlet confluence resync <company.yaml> [-space KEY]")
+		return errors.New("name exactly one company document")
+	}
+
+	company, err := config.LoadCompany(companyPath)
+	if err != nil {
+		return err
+	}
+	cfg := company.Integrations.Confluence
+	if cfg == nil {
+		return errors.New(
+			"confluence: the company config has no integrations.confluence " +
+				"block, so there is no instance to read")
+	}
+
+	ctx := context.Background()
+	env, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeEnv()
+
+	resolved := config.Confluence{
+		URL:     strings.TrimSpace(env.Value(cfg.URL)),
+		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
+	}
+	client, err := confluence.NewClient(confluence.ClientOptions{
+		URL: resolved.BaseURL(), Email: env.Value(cfg.Email),
+		Token: env.Value(cfg.Token),
+	})
+	if err != nil {
+		return err
+	}
+
+	key := strings.TrimSpace(*space)
+	if key == "" {
+		key = cfg.SkillsSpaceKey()
+	}
+	pages, err := confluence.SkillPages(ctx, client, key)
+	if err != nil {
+		return err
+	}
+	loaded, report := skills.Admit(pages)
+	fmt.Fprintf(stdout, "%s holds %d page(s): %d skill(s), %d ordinary page(s).\n",
+		key, report.Pages, len(loaded), report.Ordinary)
+	for _, skill := range loaded {
+		fmt.Fprintf(stdout, "  %-28s %s\n", skill.Key, skill.Title)
+	}
+	if len(report.Undecodable) > 0 {
+		// A PAGE THAT LOOKS LIKE A SKILL AND DOES NOT PARSE is the case
+		// worth printing: somebody wrote a trigger and got the rest wrong,
+		// and the only other symptom is guidance that never appears.
+		fmt.Fprintf(stdout, "\n%d page(s) declare a trigger and did not parse:\n",
+			len(report.Undecodable))
+		for _, title := range report.Undecodable {
+			fmt.Fprintf(stdout, "  - %s\n", title)
+		}
+		return fmt.Errorf("%d page(s) could not be decoded", len(report.Undecodable))
+	}
+	return nil
 }

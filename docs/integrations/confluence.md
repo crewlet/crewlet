@@ -317,6 +317,8 @@ crewlet confluence import <company.yaml> ./docs-to-publish
 
 Publish first, then start the engine — two commands, in that order. The importer reads its credentials from the **Tier B company YAML**, so it works before a node is configured at all, and running it first means the engine's boot-time sync finds the pages already there.
 
+`crewlet confluence resync <company.yaml>` is the read-only diagnostic beside it, and the counterpart of [`crewlet plane resync`](plane.md): it runs the **same** walk and the **same** admission the engine's boot sync runs, against a throwaway registry, and prints the keys that loaded plus any page that declares a `trigger:` and does not parse. It answers "why is this skill not being applied", not "make it apply" — it does **not** reach into a running engine, which picks changes up on its next boot or the next webhook. `-space` targets a space other than the configured one, for checking a container before pointing the company at it. It exits non-zero on a page that meant to be a skill and failed to decode, because the only other symptom is guidance that never appears. See the [CLI reference](../reference/cli.md#crewlet-confluence-resync).
+
 ---
 
 ## Teaching Agents to Use Confluence
