@@ -14,7 +14,10 @@ A useful mental model: for each integration there is usually
    you.
 2. **Per-agent identities inside it** — service accounts, bot apps, tokens.
    For Mattermost, Slack, Plane, and GitLab a provisioning CLI creates
-   these idempotently; for Atlassian and GitHub you create them by hand.
+   these idempotently; for Atlassian and GitHub you create them by hand,
+   because neither vendor issues a credential on a provisioner's behalf.
+   Those two still have a CLI — it reports which account each seat's own
+   credential turned out to be, and registers the webhooks.
 3. **A webhook back to the engine** — so external activity wakes the right
    agent. Self-registered where the API allows it, manual where it doesn't.
    Mattermost is the exception: it has no usable inbound webhook, so the
@@ -179,19 +182,30 @@ Details: [GitLab integration](../integrations/gitlab.md).
 
 ### Option B: GitHub
 
-github.com only (no self-hosted GitHub support in the integration):
+github.com or a GitHub Enterprise Server — leave `integrations.github.url`
+unset for the former, name the instance for the latter:
 
 1. **Create the org/repos** (you), plus **one PAT per engineer seat** — GitHub
    has no API-provisionable service accounts, so per-agent identities are
    machine users or fine-grained PATs you create by hand
    (`role.mcp_env.github` carries `Authorization: Bearer ${GITHUB_TOKEN_X}`).
-2. **Register the webhook** on the repos/org (manual): target
-   `POST /webhooks/github` with the shared `integrations.github.webhook_secret`.
+   The engine derives each seat's login from its own token; nothing is
+   declared.
+2. **Register the webhooks** with
+   [`crewlet github provision`](../reference/cli.md#crewlet-github-provision),
+   which mints the secret and registers one organization hook where the
+   credential may (covering repositories created later) or one per repository
+   where it may not — and reports which account each seat turned out to be,
+   which is the finding that decides whether the integration routes at all.
 3. Agents get the full toolset of the hosted
    [GitHub MCP server](https://github.com/github/github-mcp-server) per role;
    the sandbox git-auth recipe has a GitHub form (credential helper on
    `github.com` + `GITHUB_TOKEN` in `role.sandbox.env`) — see
    [GitHub integration](../integrations/github.md).
+
+A company can run **both** hosts: they are two hosts with different
+repositories on them, which is what a migration and an open-source presence
+both look like.
 
 ---
 

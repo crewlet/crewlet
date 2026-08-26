@@ -277,12 +277,50 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Turn inbound GitHub webhooks on.",
+          "description": "Turn the integration on.",
           "type": "boolean"
         },
-        "webhook_secret": {
-          "description": "HMAC secret for inbound deliveries.",
+        "provisioning": {
+          "$ref": "#/$defs/GitHubProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "token": {
+          "description": "Read token for participant fan-out; empty degrades thread routing.",
           "type": "string"
+        },
+        "url": {
+          "description": "Enterprise Server base URL, e.g. https://github.example.com. Empty = github.com.",
+          "type": "string"
+        },
+        "webhook_secret": {
+          "description": "HMAC secret for inbound deliveries; required when enabled.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GitHubProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "description": "GitHub organization holding the repositories.",
+          "type": "string"
+        },
+        "org_webhook": {
+          "description": "auto (one org hook where the credential may), true, or false.",
+          "enum": [
+            "auto",
+            "true",
+            "false"
+          ],
+          "type": "string"
+        },
+        "repos": {
+          "description": "owner/repo entries to hook individually.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -401,20 +439,8 @@
           "type": "string"
         },
         "github": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/GitHub",
-              "description": "NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."
-            },
-            {
-              "properties": {
-                "enabled": {
-                  "const": false
-                }
-              }
-            }
-          ],
-          "description": "NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."
+          "$ref": "#/$defs/GitHub",
+          "description": "GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."
         },
         "gitlab": {
           "$ref": "#/$defs/GitLab",

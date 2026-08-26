@@ -66,6 +66,12 @@ type notifications struct {
 	// revision that changed something else must not re-spend a request
 	// per seat to re-learn what it already knows.
 	gitlab gitlabIdentities
+
+	// github is the hosted code host's, on identical terms. A company may
+	// run BOTH — an org whose own work is on one host and whose
+	// open-source contributions are on the other, or one mid-migration —
+	// so this is a second field rather than a choice between two.
+	github githubIdentities
 }
 
 // Registry is the live party registry.
@@ -155,6 +161,9 @@ func (e *Engine) refreshParties(c *Company) {
 	if gl := c.Config.Integrations.GitLab; gl != nil && gl.Enabled {
 		e.notify.gitlab.register(reg, c, e.resolver())
 	}
+	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
+		e.notify.github.register(reg, c, e.resolver())
+	}
 	// THE TRACKER'S ARE TOO, and for the same reason: a Jira account id is
 	// what a webhook names a seat by, and the mapping is derived from the
 	// seat's own credential rather than declared anywhere in the org.
@@ -243,6 +252,19 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if parser != nil {
 			parsers = append(parsers, parser)
 			prompts = append(prompts, gitlabPrompt())
+		}
+	}
+	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
+		parser, err := e.startGitHub(ctx, c, gh)
+		if err != nil {
+			// Same posture as every other surface: the company runs
+			// without its hosted code host rather than not at all.
+			log.Error("github_unavailable", "error", err.Error(),
+				"detail", "the company is running without its hosted code host")
+		}
+		if parser != nil {
+			parsers = append(parsers, parser)
+			prompts = append(prompts, githubPrompt())
 		}
 	}
 	if j := c.Config.Integrations.Jira; j != nil {

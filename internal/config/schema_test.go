@@ -3,11 +3,8 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -80,17 +77,16 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"LocalSandbox", "containment", strs(Containments)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
-		// Slack's definition is still generated and still committed, even
-		// though integrations.slack is refused (`not: {}`) and so nothing
-		// references it today. It is asserted for the same reason the type
-		// is kept: the def is where the vendor's schema lands when its
-		// parser ships, and an enum that drifted in the meantime would
-		// drift silently.
 		{"Slack", "typing_status", strs(WorkingStatuses)},
 		{"Mattermost", "typing_status", strs(WorkingStatuses)},
 		{"PlaneProvisioning", "role", strs(PlaneRoles)},
 		{"GitLabProvisioning", "access_level", strs(GitLabAccessLevels)},
-		{"GitLabProvisioning", "group_webhook", strs(GroupWebhookModes)},
+		{"GitLabProvisioning", "group_webhook", strs(ContainerWebhookModes)},
+		// The same closed set on both code hosts, which is why it is one
+		// type — and why both rows are here: a rename that updated one
+		// field's tag and not the other would leave two enums that agree
+		// today and drift on the next value.
+		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)
@@ -183,186 +179,6 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// refusedField is the pair of documents that pins one refusal in place: the
-// same config with the setting OFF and with it ON.
-type refusedField struct {
-	tier    Tier
-	off, on string
-}
-
-// THE PAIRS ARE WRITTEN HERE; THE LIST OF FIELDS IS DERIVED FROM THE MODELS.
-//
-// That asymmetry is the whole point. The parity table above is hand-written
-// on both sides, so a field nobody thought to write down is a field nobody
-// checks — and integrations.github is what that cost: the generator refused
-// the KEY, so `github: {enabled: false}` was red-underlined by an editor and
-// booted happily by the engine, in both directions of the invariant at once.
-// A field tagged js:"unimplemented" with no pair below fails the sweep.
-//
-// The OFF document is the load-bearing half. Everyone remembers to prove a
-// refusal refuses; the direction that breaks is the setting an operator uses
-// to say "off", which the validator accepts and the schema must too.
-func refusedDocuments() map[string]refusedField {
-	return map[string]refusedField{
-		// The off document here is the bug, written down: a block carrying
-		// its own switch is off when the switch is off, not when the key is
-		// absent. An operator turning GitHub off leaves the block behind
-		// with its secret reference intact, which is what makes turning it
-		// back on a one-line change.
-		"company:integrations.github": {tier: TierCompany,
-			off: "name: Acme\nintegrations:\n  github: {enabled: false, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
-			on:  "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"}\n",
-		},
-	}
-}
-
-// A REFUSAL MUST LAND WHERE THE VALIDATOR PUTS IT, NOT ON THE KEY.
-//
-// The schema and the validator each decide, independently, what "this build
-// does not serve that" means for a given field. They agree today because
-// [schemaGen.refuseWhenOn] reads the field's shape the same way the
-// validators do. This is what holds them there, and it sweeps the models so
-// a field added to one side cannot go unchecked on the other.
-func TestEveryRefusedFieldIsRefusedWhereTheValidatorRefusesIt(t *testing.T) {
-	t.Parallel()
-	compiled := map[Tier]*jsonschema.Schema{
-		TierBootstrap: compileSchema(t, TierBootstrap),
-		TierCompany:   compileSchema(t, TierCompany),
-	}
-	roots := map[Tier]reflect.Type{
-		TierBootstrap: reflect.TypeOf(Bootstrap{}),
-		TierCompany:   reflect.TypeOf(Company{}),
-	}
-	if len(roots) != len(SchemaTiers) {
-		t.Fatalf("a tier grew a root this sweep does not walk: %v", SchemaTiers)
-	}
-
-	var found []string
-	for _, tier := range SchemaTiers {
-		var paths []string
-		refusedPaths(roots[tier], "", map[reflect.Type]bool{}, &paths)
-		for _, path := range paths {
-			found = append(found, string(tier)+":"+path)
-		}
-	}
-	if len(found) == 0 {
-		t.Fatal("the sweep found no refused fields, so it certifies nothing — " +
-			"if the last vendor shipped, delete this test along with it")
-	}
-
-	docs := refusedDocuments()
-	for _, key := range found {
-		pair, ok := docs[key]
-		if !ok {
-			t.Errorf("%s is refused by this build and has no pair of documents, "+
-				"so nothing checks that the schema refuses it in the same place "+
-				"the validator does — add one to refusedDocuments", key)
-			continue
-		}
-		t.Run(key, func(t *testing.T) {
-			t.Parallel()
-			if err := validateTier(pair.tier, pair.off); err != nil {
-				t.Fatalf("the engine refuses the OFF document, so it cannot say "+
-					"what the schema is allowed to accept — fix the fixture:\n%v", err)
-			}
-			if err := compiled[pair.tier].Validate(asJSON(t, pair.off)); err != nil {
-				t.Fatalf("the schema refuses a config the engine runs, so an editor "+
-					"red-underlines a working file:\n%v", err)
-			}
-			if err := validateTier(pair.tier, pair.on); err == nil {
-				t.Fatal("the engine accepts the ON document, so this field is no " +
-					"longer refused and the js:\"unimplemented\" tag should go with it")
-			}
-			if err := compiled[pair.tier].Validate(asJSON(t, pair.on)); err == nil {
-				t.Fatal("the schema blesses a setting the engine refuses to boot on")
-			}
-		})
-	}
-	for key := range docs {
-		if !slices.Contains(found, key) {
-			t.Errorf("%s carries a pair of documents and is no longer refused by "+
-				"the models — the pair is stale", key)
-		}
-	}
-}
-
-// A REFUSAL THE GENERATOR CANNOT STATE IS A FAULT, NOT A GUESS.
-//
-// The convenient fallback for an unknown shape is the blanket refusal that
-// caused the bug above, so the generator has to be loud instead: a tag it
-// cannot translate fails generation, which fails the build's schema tests
-// long before the artifact could ship.
-func TestARefusalTheGeneratorCannotStateFailsGeneration(t *testing.T) {
-	t.Parallel()
-	type untranslatable struct {
-		Whatever any `yaml:"whatever,omitempty" js:"unimplemented" desc:"a shape with no notion of off"`
-	}
-	g := &schemaGen{defs: map[string]map[string]any{}}
-	g.structSchema(reflect.TypeOf(untranslatable{}))
-	if g.err == nil {
-		t.Fatal("the generator described a shape it has no rule for, so the " +
-			"schema now states a refusal nobody checked against the validator")
-	}
-	if !errors.Is(g.err, ErrUnknownValue) {
-		t.Errorf("the fault is not one a caller can match on: %v", g.err)
-	}
-	if !strings.Contains(g.err.Error(), "refuseWhenOn") {
-		t.Errorf("the fault does not name where to add the rule: %v", g.err)
-	}
-}
-
-// refusedPaths appends the dotted YAML path of every js:"unimplemented"
-// field under a config root, following the same walk the generator does:
-// through embedded structs, pointers, slice elements and map values, with a
-// guard on the path so a unit holding child units terminates.
-func refusedPaths(t reflect.Type, prefix string, onPath map[reflect.Type]bool, out *[]string) {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct || onPath[t] {
-		return
-	}
-	onPath[t] = true
-	defer delete(onPath, t)
-
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if f.PkgPath != "" {
-			continue
-		}
-		if f.Anonymous && f.Type.Kind() == reflect.Struct {
-			refusedPaths(f.Type, prefix, onPath, out)
-			continue
-		}
-		name, ok := yamlName(f)
-		if !ok {
-			continue
-		}
-		path := name
-		if prefix != "" {
-			path = prefix + "." + name
-		}
-		if _, refused := parseDirectives(f.Tag.Get("js"))["unimplemented"]; refused {
-			// The whole subtree goes with it; there is nothing below a key
-			// no document may carry.
-			*out = append(*out, path)
-			continue
-		}
-		ft := f.Type
-		for ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-		switch ft.Kind() {
-		case reflect.Slice, reflect.Array:
-			refusedPaths(ft.Elem(), path+"[]", onPath, out)
-		case reflect.Map:
-			refusedPaths(ft.Elem(), path+"{}", onPath, out)
-		case reflect.Struct:
-			refusedPaths(ft, path, onPath, out)
-		}
 	}
 }
 
@@ -498,21 +314,14 @@ units:
 			name: "an mcp server with no name", tier: TierCompany, editorCatches: true,
 			yaml: "name: Acme\nmcp_servers:\n  - {command: uvx}\n",
 		},
-		// THE INTEGRATIONS THIS BUILD VALIDATES AND DOES NOT SERVE.
+		// EVERY VENDOR BLOCK IS SERVED NOW, so what these cases pin is
+		// the other direction: neither layer may refuse a config the
+		// engine boots on. The schema because it would underline a
+		// working file, the validator because the engine runs it.
 		//
-		// Both layers refuse each of these, and the schema's half is the
-		// half that matters here: a config the engine will not boot on must
-		// be underlined while the author is still typing, not accepted by
-		// the editor and then refused by `crewlet validate`. Each case dies
-		// with the change that ships that vendor's parser and transport.
-		//
-		// This is what became of the old "both knowledge backends" case:
-		// Confluence is refused outright now, so the Confluence-XOR-Plane
-		// rule it exercised can no longer be reached — a document that sets
-		// both is refused for the block, not for the overlap.
-		// The knowledge base, which IS served — and its own read scope
-		// beside it, because a scope with no backend is a validator rule
-		// a JSON Schema cannot express.
+		// The knowledge base, and its own read scope beside it — a scope
+		// with no backend is a validator rule a JSON Schema cannot
+		// express, because it turns on a block's mere presence.
 		{
 			name: "a confluence knowledge base", tier: TierCompany,
 			yaml: "name: Acme\nintegrations:\n  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
@@ -528,9 +337,17 @@ units:
 			name: "a slack working indicator", tier: TierCompany,
 			yaml: "name: Acme\nintegrations:\n  slack: {typing_status: addressed}\n",
 		},
+		// The hosted code host, which IS served — with an Enterprise
+		// Server address, since github.com is the shape that carries no
+		// url at all and would prove nothing about the field.
 		{
-			name: "an unserved code host", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s}\n",
+			name: "a github enterprise deployment", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  github: {enabled: true, url: \"https://github.example.com\", webhook_secret: s, provisioning: {org: acme, repos: [acme/engine], org_webhook: auto}}\n",
+		},
+		{
+			name: "a github repo that is not owner/repo", tier: TierCompany,
+			validatorOnly: true,
+			yaml:          "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {repos: [engine]}}\n",
 		},
 		// The Atlassian tracker, which IS served: a Cloud site named by its
 		// cloud id, delivering through the Forge app. Neither layer may

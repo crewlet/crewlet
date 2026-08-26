@@ -26,12 +26,9 @@ import (
 // and a next-run projection are both measured against it.
 var pinned = time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)
 
-// The fixture names only vendors this build SERVES — Mattermost for chat,
-// GitLab for the code host — because config validation refuses the rest
-// (config.ErrUnimplemented), so a company naming one no longer parses at all.
-// Nothing here is about those vendors: the org block plus a per-seat identity
-// is the shape these answers project, and Mattermost carries it exactly as the
-// Slack pair it replaced did.
+// Nothing here is about which vendors the fixture names: the org block plus a
+// per-seat identity is the shape these answers project, and every vendor
+// carries it identically.
 const companyDoc = `
 name: Acme
 providers:
@@ -260,10 +257,9 @@ func TestASurfaceWithNoSecretReportsNull(t *testing.T) {
 	// Reporting either as a secret that is present would invite an operator
 	// to go looking for the one they had not set.
 	cfg := company(t)
-	// SET DIRECTLY, because forge_app_id can no longer come from a config:
-	// this build refuses it with config.ErrUnimplemented (the Forge route
-	// carries Jira and Confluence Cloud, and neither is wired). The row is
-	// still built from the field, and it still has to answer null.
+	// SET DIRECTLY rather than parsed, because the assertion is about the
+	// FIELD: the row is built from it, and it has to answer null however
+	// the field got there.
 	cfg.Integrations.ForgeAppID = "app-123"
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },

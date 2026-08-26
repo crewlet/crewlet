@@ -1,7 +1,6 @@
 package webhooks_test
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,18 +12,15 @@ import (
 
 // ONE served config, where this file used to need two.
 //
-// A company can name only the three vendors this build wires — Mattermost for
-// chat, GitLab for the code host, Plane for the tracker and the knowledge base
-// — and of those three only GitLab and Plane put a secret in an epoch, because
-// Mattermost has no inbound route at all: it holds a websocket open instead.
+// EVERY FIELD IS REACHABLE FROM A CONFIG NOW, which is what these fixtures
+// are: whole companies, parsed, with the secret each route verifies against
+// read back out. Mattermost is the one integration that contributes none —
+// it has no inbound route at all, holding a websocket open instead — and
+// that absence is asserted rather than assumed.
 //
-// The rest of the Secrets struct is no longer REACHABLE FROM A CONFIG. Jira,
-// Confluence, GitHub, the Forge app id and every Slack app, org-level or per
-// seat, are refused at validation with config.ErrUnimplemented
-// (decisions/703) — held below by TestNoConfigCanSupplyAnUnservedSecret,
-// because that refusal is what keeps those routes answering 503. Their fields
-// and the routes that read them stay, so the mapping is still held to filling
-// them, over the only epoch that can still carry one: [unserved], built by hand.
+// A field wired to the wrong secret is invisible until a real delivery from a
+// real vendor refuses to verify, with the vendor's settings page showing a
+// healthy hook. That is what the mapping is held to here.
 
 // gitLabFixtureSecret is whsec_ over standard base64 of a 32-byte key — the
 // only shape GitLab's API accepts, and so the only shape config validation
@@ -62,6 +58,9 @@ integrations:
     url: https://jira.example.com
     token: t
     webhook_secret: jr
+  github:
+    enabled: true
+    webhook_secret: gh
   forge_app_id: forge-app
 roles:
   - name: CEO
@@ -123,6 +122,9 @@ integrations:
     url: https://jira.example.com
     token: t
     webhook_secret: ${JR}
+  github:
+    enabled: true
+    webhook_secret: ${GH}
   forge_app_id: ${FORGE}
 roles:
   - name: CEO
@@ -152,90 +154,6 @@ roles:
     llm: primary
 `
 
-// The two fixtures this file used to parse, kept verbatim as what they now
-// are: configs the engine refuses. See TestNoConfigCanSupplyAnUnservedSecret.
-const refusedSelfHostedYAML = `
-name: Acme
-providers:
-  llm:
-    primary:
-      type: anthropic
-      model: claude-sonnet-5
-      api_keys: ["key"]
-integrations:
-  github:
-    enabled: true
-    webhook_secret: gh
-  gitlab:
-    enabled: true
-    url: https://gitlab.example.com
-    signing_secret: whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=
-  plane:
-    enabled: true
-    url: https://plane.example.com
-    workspace: acme
-    webhook_secret: pl
-roles:
-  - name: CEO
-    handle: ceo
-    llm: primary
-    integrations:
-      slack:
-        bot_token: xoxb-1
-        signing_secret: ceo-signing
-  - name: CTO
-    handle: cto
-    llm: primary
-`
-
-const refusedAtlassianYAML = `
-name: Acme
-providers:
-  llm:
-    primary:
-      type: anthropic
-      model: claude-sonnet-5
-      api_keys: ["key"]
-integrations:
-  github:
-    enabled: true
-    webhook_secret: gh
-roles:
-  - name: CEO
-    handle: ceo
-    llm: primary
-`
-
-// unserved is the verification material for the one vendor this build
-// validates and does not serve.
-type unserved struct{ github string }
-
-// secrets reads that material out of the epoch a build serving them would
-// have had.
-//
-// BUILT BY HAND, because no config produces one any more: every block below is
-// refused with config.ErrUnimplemented, so a parsed company reaches SecretsOf
-// with each of these fields empty and each of those routes therefore answering
-// 503 — which is the whole point of the refusal (decisions/703), and is
-// asserted directly by TestNoConfigCanSupplyAnUnservedSecret.
-//
-// The mapping stays held all the same. The routes are still registered and
-// still read these fields, an embedder still builds a Secrets directly, and the
-// day one of those vendors ships its parser the field is what a delivery is
-// verified against. A field wired to the wrong secret is invisible until a real
-// delivery from a real vendor refuses to verify — with the vendor's settings
-// page showing a healthy hook — so it is held here rather than dropped along
-// with the fixtures that used to reach it.
-func (u unserved) secrets(resolve func(string) string) webhooks.Secrets {
-	company := &config.Company{
-		Name: "Acme",
-		Integrations: config.Integrations{
-			GitHub: &config.GitHub{Enabled: true, WebhookSecret: u.github},
-		},
-	}
-	return webhooks.SecretsOf(company, nil, resolve)
-}
-
 func secretsFor(t *testing.T, yaml string) webhooks.Secrets {
 	t.Helper()
 	company, err := config.ParseCompany([]byte(yaml))
@@ -252,7 +170,6 @@ func secretsFor(t *testing.T, yaml string) webhooks.Secrets {
 func TestSecretsComeFromTheEpoch(t *testing.T) {
 	t.Parallel()
 	served := secretsFor(t, servedYAML)
-	unwired := unserved{github: "gh"}.secrets(literal)
 
 	for _, tc := range []struct{ name, got, want string }{
 		{"gitlab", served.GitLab, gitLabFixtureSecret},
@@ -260,7 +177,7 @@ func TestSecretsComeFromTheEpoch(t *testing.T) {
 		{"jira", served.Jira, "jr"},
 		{"confluence", secretsFor(t, confluenceYAML).Confluence, "cf"},
 		{"forge app id", served.ForgeAppID, "forge-app"},
-		{"github", unwired.GitHub, "gh"},
+		{"github", served.GitHub, "gh"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
@@ -303,44 +220,6 @@ func TestAnIntegrationLeftOutIsNotHalfConfigured(t *testing.T) {
 	}
 	if got.Slack != nil {
 		t.Errorf("a company with no Slack apps produced a map: %v", got.Slack)
-	}
-}
-
-// NO CONFIG CAN SUPPLY AN UNSERVED VENDOR'S SECRET, which is what makes the
-// hand-built epoch in [unserved.secrets] the only one there is.
-//
-// This is the inversion of the two fixtures this file used to parse, kept as
-// they were written. What they demonstrate now is worth what they used to:
-// each is refused with ErrUnimplemented, so no delivery to those routes is
-// ever verified in a build with no parser to hand it to. Held here rather than
-// left to internal/config alone, because it is the reason THIS package may keep
-// registering routes for vendors it cannot serve — take the refusal away and
-// they come back to life with nothing behind them, silently, which is the
-// failure d-703 exists to end.
-func TestNoConfigCanSupplyAnUnservedSecret(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name   string
-		yaml   string
-		fields []string
-	}{
-		{"github", refusedSelfHostedYAML, []string{"integrations.github"}},
-		{"github, the other way round", refusedAtlassianYAML,
-			[]string{"integrations.github"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := config.ParseCompany([]byte(tc.yaml))
-			if !errors.Is(err, config.ErrUnimplemented) {
-				t.Fatalf("parse = %v, want config.ErrUnimplemented", err)
-			}
-			for _, field := range tc.fields {
-				if !strings.Contains(err.Error(), field) {
-					t.Errorf("the refusal never names %s, so an operator is "+
-						"not told which block to remove: %v", field, err)
-				}
-			}
-		})
 	}
 }
 
@@ -502,11 +381,10 @@ func TestEveryVerifierGetsAResolvedSecret(t *testing.T) {
 	}
 
 	got := webhooks.SecretsOf(company, organization, resolve)
-	unwired := unserved{github: "${GH}"}.secrets(resolve)
 	for label, value := range map[string]string{
 		"gitlab": got.GitLab, "plane": got.Plane,
 		"jira": got.Jira, "forge app id": got.ForgeAppID,
-		"github": unwired.GitHub,
+		"github": got.GitHub,
 	} {
 		if strings.Contains(value, "${") {
 			t.Errorf("%s verifies against the reference %q, not its value", label, value)
@@ -528,11 +406,7 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 	}
 	got := webhooks.SecretsOf(company, nil, nil)
 	if got.GitLab != "" || got.Plane != "" || got.Jira != "" || got.ForgeAppID != "" ||
-		got.Confluence != "" {
+		got.Confluence != "" || got.GitHub != "" {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", got)
-	}
-	unwired := unserved{github: "${GH}"}.secrets(nil)
-	if unwired.GitHub != "" {
-		t.Errorf("secrets appeared with nothing to resolve them: %+v", unwired)
 	}
 }

@@ -67,9 +67,6 @@ func Schema(tier Tier) ([]byte, error) {
 
 	g := &schemaGen{defs: map[string]map[string]any{}}
 	body := g.structSchema(root)
-	if g.err != nil {
-		return nil, g.err
-	}
 	doc := map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"$id":     id,
@@ -93,113 +90,16 @@ func Schema(tier Tier) ([]byte, error) {
 
 // schemaGen walks the struct tree once, registering each named struct in
 // $defs so a recursive type (a unit holding child units) terminates.
+//
+// IT CANNOT FAIL, and that is a property of what it now describes rather
+// than an omission. Every shape here has a rule: a struct, a scalar, a
+// slice, a map, or one of the hand-written [overrides]. It once carried a
+// fault channel for the one directive that could meet a shape it had no rule
+// for — see decisions/703 — and that directive is gone with the last vendor
+// it refused. An error return nothing can populate reads as a guard against
+// something.
 type schemaGen struct {
 	defs map[string]map[string]any
-
-	// err is the first shape the walk could not describe. The walk returns
-	// maps rather than errors, so the fault rides here and [Schema] returns
-	// it: a tag the generator cannot translate must fail generation rather
-	// than emit a fragment that guesses at what it means.
-	err error
-}
-
-// fail records a fault, keeping the first — the later ones are usually the
-// same tag seen again through another parent.
-func (g *schemaGen) fail(err error) {
-	if g.err == nil {
-		g.err = err
-	}
-}
-
-// refuseWhenOn narrows a field's schema to refuse exactly the values that
-// switch the feature ON, and nothing else.
-//
-// A field this build validates and does not SERVE is rejected by the
-// validator, so the schema has to reject it too — one that blessed it would
-// have an editor approve a config the engine will not boot on. But the
-// refusal has to be the field's OWN off switch rather than the key itself.
-// `integrations.github: {enabled: false}` is an operator saying the
-// integration is off, which is precisely what this build wants and what the
-// validator accepts; a blanket refusal of the key red-underlines a working
-// config, which the package doc above calls worse than no schema at all.
-// That is not hypothetical — it is the bug this function exists to fix.
-//
-// So "on" is read from the field's own shape, the same way the validators
-// read it: a block carrying an `enabled` flag is on when that flag is true,
-// any other block is on by its mere presence, and a scalar or a collection
-// is on when it holds something. A shape with no rule here is one whose
-// refusal cannot be stated, and it FAULTS rather than falling back to a
-// blanket refusal — the schema is regenerated and compared by a test on
-// every build, so an untranslatable tag cannot reach a release.
-func (g *schemaGen) refuseWhenOn(schema map[string]any, f reflect.StructField, label string) map[string]any {
-	desc := f.Tag.Get("desc")
-	refuse := func(narrowing map[string]any) map[string]any {
-		out := map[string]any{}
-		for k, v := range narrowing {
-			out[k] = v
-		}
-		if desc != "" {
-			out["description"] = desc
-		}
-		return out
-	}
-
-	t := f.Type
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	switch t.Kind() {
-	case reflect.Struct:
-		// A block with its own on/off flag keeps its whole schema and gains
-		// one constraint, so an editor still type-checks a disabled block
-		// for typos instead of going quiet on it. `enabled` is constrained
-		// but not required: an absent flag is a false one.
-		if hasEnabledFlag(t) {
-			return map[string]any{
-				"allOf": []any{schema, map[string]any{
-					"properties": map[string]any{
-						"enabled": map[string]any{"const": false},
-					},
-				}},
-				"description": desc,
-			}
-		}
-		// `not: {}` matches nothing, so any value at all is a schema error.
-		return refuse(map[string]any{"not": map[string]any{}})
-	case reflect.String:
-		return refuse(map[string]any{"type": "string", "const": ""})
-	case reflect.Bool:
-		return refuse(map[string]any{"type": "boolean", "const": false})
-	case reflect.Slice, reflect.Array:
-		return refuse(map[string]any{"type": "array", "maxItems": 0})
-	case reflect.Map:
-		return refuse(map[string]any{"type": "object", "maxProperties": 0})
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return refuse(map[string]any{"type": "number", "const": 0})
-	}
-	g.fail(fault(label, ErrUnknownValue,
-		`js:"unimplemented" is set on a %s, and the generator has no rule for `+
-			`what "on" means for that shape — give it one in refuseWhenOn, `+
-			"because a schema that guesses would flag a config the engine runs",
-		t.Kind()))
-	return schema
-}
-
-// hasEnabledFlag reports whether a block carries its own on/off switch,
-// which is what decides whether presence alone means the feature is on.
-func hasEnabledFlag(t reflect.Type) bool {
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if f.Anonymous && f.Type.Kind() == reflect.Struct && hasEnabledFlag(f.Type) {
-			return true
-		}
-		if name, ok := yamlName(f); ok && name == "enabled" && f.Type.Kind() == reflect.Bool {
-			return true
-		}
-	}
-	return false
 }
 
 // overrides are the types the walk cannot see through, because their YAML
@@ -279,9 +179,6 @@ func (g *schemaGen) structSchema(t reflect.Type) map[string]any {
 			schema := g.fieldSchema(f.Type, directives)
 			if desc := f.Tag.Get("desc"); desc != "" {
 				schema["description"] = desc
-			}
-			if _, off := directives["unimplemented"]; off {
-				schema = g.refuseWhenOn(schema, f, typ.Name()+"."+f.Name)
 			}
 			props[name] = schema
 			if _, isRequired := directives["required"]; isRequired {
@@ -482,15 +379,17 @@ func constField(field string, value any) map[string]any {
 func companyRules() []any {
 	planeEnabled := has("plane", constField("enabled", true))
 
-	// THE SINGLE-HOMING RULE HAS ONE BACKEND LEFT TO STATE IT AGAINST.
+	// ONE CROSS-FIELD RULE, AND IT IS THE ONE THE SCHEMA CAN STATE.
 	//
-	// The two rules that paired integrations.confluence and
-	// knowledge.confluence_spaces against an enabled Plane are gone: both
-	// are refused outright now (see [unservedIntegrations]), by the field
-	// schema their `unimplemented` tag generates, so neither cross-field
-	// rule could ever be the clause that decided a document. A rule that
-	// cannot fire reads as an invariant stronger than it is — the same
-	// reason validateKnowledgeBackend dropped its half.
+	// The validator holds three: a Plane read scope needs an enabled Plane,
+	// a Confluence read scope needs a Confluence block, and the two
+	// knowledge backends are mutually exclusive. Only the first is
+	// expressible as a clause that fires on what a document CONTAINS; the
+	// other two turn on a block's mere presence, which a JSON Schema `if`
+	// can express only by enumerating what "present" means for every shape
+	// the block can take. An editor that got that subtly wrong would
+	// red-underline a config the engine runs, which the package doc above
+	// calls worse than no schema at all.
 	planeScopeNeedsPlane := map[string]any{
 		"$comment": "knowledge.plane_projects requires an enabled integrations.plane.",
 		"if":       has("knowledge", has("plane_projects", map[string]any{"minItems": 1})),

@@ -33,8 +33,8 @@ const (
 // companyDoc is a company carrying one credential of each kind this surface
 // has to keep out of a response: a literal provider key, a ${VAR} reference
 // that must survive an edit, and an integration secret. The integration is
-// GitLab because that is the code host this build serves — the unserved
-// ones are refused by validation and would never reach these routes.
+// GitLab because its signing secret has a SHAPE the validator checks, which
+// makes it the one whose redaction cannot be faked by a fixture.
 const companyDoc = `
 name: Acme
 providers:

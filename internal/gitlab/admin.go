@@ -418,7 +418,7 @@ func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, erro
 //
 // The path for an instance whose tier has no group hooks — Premium on
 // gitlab.com, absent from Community Edition — where this is the only way a
-// hook exists at all. See [config.GroupWebhookMode].
+// hook exists at all. See [config.ContainerWebhookMode].
 func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret string) (Hook, error) {
 	var out Hook
 	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",

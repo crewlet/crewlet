@@ -30,9 +30,9 @@ integrations:
       token_scopes: [api]        # scopes minted on each service-account PAT
 ```
 
-Unlike `integrations.github`, three fields differ:
+Three fields differ from the [hosted code host's](github.md) block beside it:
 
-- **`url` is required** when GitLab is enabled — the instance address is needed for webhook links, boot-time identity resolution (`GET {url}/api/v4/user`), and provisioning. GitHub's is implied.
+- **`url` is required** when GitLab is enabled — the instance address is needed for webhook links, boot-time identity resolution (`GET {url}/api/v4/user`), and provisioning. GitHub's is optional, because github.com serves its API from a different host and needs no address at all.
 - **`signing_secret` is required** when enabled — it is the HMAC key every inbound delivery is verified against, and the route's **only** credential (see [Verification](#verification)). It must be `whsec_` followed by standard base64 over a 32-byte key, the only shape GitLab signs with; a value that is not one is refused at validation, and one arriving through an unresolved `${VAR}` stops the code host at boot rather than 503-ing every delivery in silence. A GitLab older than **19.1** cannot sign at all and therefore cannot deliver to this engine. Point it at a `${VAR}` and you don't even have to invent a value: when `crewlet gitlab provision -public-url …` runs and that var is unset, the provisioner **generates a `whsec_…` secret**, stamps it on the hook, and writes it back to the token sink — see [Provisioning](#what-a-run-does). See [Webhooks](#webhooks).
 - **`token` (optional)** enables **participants-based routing**: comments and state changes fan out to everyone participating in the issue/MR — GitLab's own notification reach — instead of only assignees and mentioned users. Webhook payloads don't carry the participants list, so this costs one `GET …/participants` REST call per comment/state-change event, made with this credential (any group member's PAT with `read_api`; the provisioner mints a dedicated read-only `crewlet-engine` account for the referenced `${VAR}` automatically). Without it, routing degrades to payload-derived targets — directed events are unaffected. This mirrors `integrations.jira`'s admin token, which exists for the same reason (watcher lookups). See [Event routing](#event-routing).
 

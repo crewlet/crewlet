@@ -158,30 +158,35 @@ roles:
 	}
 }
 
-// The refused halves of that same transform can no longer be reached from a
-// config: role.integrations.slack, .jira and .confluence are all refused
-// with ErrUnimplemented, because nothing parses a delivery from any of them,
-// so the seat would carry an app and two routing identities that wake
-// nobody. The TRANSFORM is still live code — the webhook route resolves each
-// seat's signing secret out of org.Role.Slack, and the dashboard reports
-// which identities a seat carries — so the authored seat is built directly
-// here. Parsing YAML would assert the refusal instead of what this test is
-// about, and deleting the transform would take working code out with the
-// vendor it is waiting for.
-func TestSeatTransformStillCarriesTheRefusedIdentities(t *testing.T) {
+// THE OTHER HALF OF THAT TRANSFORM: the per-seat identities, which are three
+// different things wearing one shape.
+//
+// A seat's Slack block is a CREDENTIAL — the webhook route resolves each
+// seat's signing secret out of org.Role.Slack, so a seat that lost it stops
+// verifying its own app's deliveries. Its Jira and Confluence blocks are
+// ROUTING IDENTITY: where the seat files work, and where activity with no
+// better recipient lands. All three are read off the authored config and
+// none is declared anywhere else, so a transform that dropped one leaves a
+// seat that looks complete and is unreachable.
+//
+// Through YAML rather than a struct literal, because the authored document
+// is the surface this is a transform OF.
+func TestSeatTransformCarriesEveryPerSeatIdentity(t *testing.T) {
 	t.Parallel()
-	seat := (&Role{
-		Name: "Agent SWE",
-		Integrations: RoleIntegrations{
-			Slack: &RoleSlack{
-				BotToken:      "${SLACK_SWE}",
-				SigningSecret: "${SIGN_SWE}",
-				Channel:       "C123",
-			},
-			Jira:       &ProjectRef{Project: "ENG"},
-			Confluence: &SpaceRef{Space: "ENGSPACE"},
-		},
-	}).Seat()
+	cfg := mustCompany(t, `
+name: Acme
+roles:
+  - name: Agent SWE
+    handle: swe
+    integrations:
+      slack:
+        bot_token: "${SLACK_SWE}"
+        signing_secret: "${SIGN_SWE}"
+        channel: C123
+      jira: {project: ENG}
+      confluence: {space: ENGSPACE}
+`)
+	seat := cfg.Roles[0].Seat()
 
 	if seat.JiraProject != "ENG" || seat.ConfluenceSpace != "ENGSPACE" {
 		t.Errorf("identities = %q %q", seat.JiraProject, seat.ConfluenceSpace)

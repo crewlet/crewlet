@@ -133,8 +133,9 @@ Rules:
 
 ```
 cmd/crewlet/          # The one binary. run / validate / schema / migrate /
-                      #   budgets / secrets / config, and the six vendor CLIs
-                      #   (gitlab, plane, jira, slack, confluence, mattermost).
+                      #   budgets / secrets / config, and the seven vendor CLIs
+                      #   (gitlab, github, plane, jira, slack, confluence,
+                      #   mattermost).
                       #   Every command the switch dispatches must appear in
                       #   usage() — nothing connects them, and a test asserts it
 internal/             # Everything else. No package here is importable from
@@ -203,7 +204,7 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 | `api/stream` | The `/ws/stream` socket: pushes, plus a request/response query channel that is a thin adapter over the SAME function each REST route calls |
 | `observe` | The observability edge, and the two routes are deliberately different: the STORE is written by a publish listener inline on the publishing node (no consumer group, so no two nodes can write one row); the PROJECTION is fed by an ephemeral per-caller broadcast |
 | `notify` | The backend-neutral notification spine — conversation keys, digest coalescing, party resolution, the rate valve. Built before any vendor sat on it, because a spine built after its first vendor has that vendor welded into it |
-| `mattermost`, `slack`, `plane`, `gitlab`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and its reconcile reports rather than mints (Jira issues no credential on a provisioner's behalf) |
+| `mattermost`, `slack`, `plane`, `gitlab`, `github`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and why its reconcile and GitHub's report rather than mint (neither vendor issues a credential on a provisioner's behalf) |
 | `secrets`, `provision`, `envref`, `envfile`, `redact`, `workkey` | The small shared grammars. Each imports nothing from the rest of the engine, which is what lets `config` itself depend on them |
 
 ## Pre-commit Checks
@@ -266,7 +267,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 4. **Task Engine** — execution tracking, external PM tool integration
 5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Plane page search, or Confluence CQL — single-homed, one per company) + per-agent diary
-7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The vendors this build serves are Mattermost, Slack, Plane, GitLab, Jira and Confluence (`decisions/701`, `decisions/703`); GitHub is the last one still refused rather than served
+7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The seven vendors this build serves are Mattermost, Slack, Plane, GitLab, GitHub, Jira and Confluence (`decisions/701`, `decisions/703`); every one routes end to end, and no integration block is refused any more
 8. **Notification Service** — queue-based spine, vendors on top
 9. **Provider Layer** — pluggable LLM and embeddings, with a credential pool and a fallback chain around them
 10. **Store** — the node's own embedded database (Turso, or mainline SQLite); coordination lives in the KV layer instead, never here

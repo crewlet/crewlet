@@ -137,6 +137,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	e.reconcileConfluence(next)
 	e.reconcileJira(ctx, next)
 	e.reconcileGitLab(ctx, next)
+	e.reconcileGitHub(ctx, next)
 
 	previous := e.Company()
 	e.epoch.current.Store(next)

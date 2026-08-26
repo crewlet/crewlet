@@ -62,7 +62,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
-| `POST` | `/webhooks/github` | Receive GitHub webhooks — **inert**: the config block is refused, so 503 |
+| `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/gitlab` | Receive GitLab webhooks |
 | `POST` | `/webhooks/plane` | Receive Plane webhooks |
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
@@ -1050,11 +1050,11 @@ Notes:
 
 ### `/webhooks/jira`
 
-Receives Jira webhook payloads (issue created, updated, commented). Verifies HMAC-SHA256 signature if `webhook_secret` is configured. Publishes parsed events to `crewlet.notifications.inbound`. Jira Cloud and Confluence Cloud both ride this route and are served end to end — see the integration pages.
+Receives **Data Center** Jira webhook payloads (issue created, updated, commented, assigned). Verifies HMAC-SHA256 over the raw body against `X-Hub-Signature`, keyed on `integrations.jira.webhook_secret`; a route with no resolved secret answers 503 rather than accepting the delivery. Deduped on `X-Atlassian-Webhook-Identifier`, which is stable across Jira's own retries. **Jira Cloud does not use this route** — a Cloud webhook belongs to an app, so those events arrive through [`/webhooks/forge`](#webhooksforge) with their own JWT, and `webhook_secret` is unused there. Publishes to `crewlet.notifications.inbound`. See [Jira Integration — Webhooks](../integrations/jira.md#webhooks).
 
 ### `/webhooks/slack/{handle}`
 
-Receives Slack Events API payloads for a specific agent (identified by handle). Verifies the signing secret for that agent's Slack app. Publishes to `crewlet.notifications.inbound`. Slack's `url_verification` challenge is answered unconditionally (no engine or company config needed), so a freshly provisioned app's Request URL verifies even before the engine is configured. Jira Cloud and Confluence Cloud both ride this route and are served end to end — see the integration pages.
+Receives Slack Events API payloads for a specific agent (identified by handle). Verifies the signing secret for **that agent's own app** — Slack gives each seat its own, so the handle in the path is what selects the key. Publishes to `crewlet.notifications.inbound`. Slack's `url_verification` challenge is answered unconditionally (no engine or company config needed), so a freshly provisioned app's Request URL verifies even before the engine is configured — it has to, because during provisioning that app's signing secret does not exist yet. See [Slack Integration](../integrations/slack.md).
 
 ### `GET /webhooks/slack-oauth`
 
@@ -1062,7 +1062,7 @@ The OAuth install landing page for [`crewlet slack provision`](../integrations/s
 
 ### `/webhooks/github`
 
-Receives GitHub webhook payloads. Verifies HMAC-SHA256 signature via the `x-hub-signature-256` header using the required `webhook_secret` from the `github` config block. Invalid or missing signatures are rejected with 401. Returns 500 if the server has no `webhook_secret` configured. Publishes to `crewlet.notifications.inbound`. Jira Cloud and Confluence Cloud both ride this route and are served end to end — see the integration pages.
+Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against the `x-hub-signature-256` header, keyed on the required `webhook_secret` from the `github` config block; invalid or missing signatures are rejected with 401, and a route with no resolved secret answers 503 with a `Retry-After` so the delivery is held for retry rather than blamed on the sender. Deliveries are deduped on `X-GitHub-Delivery`, which is stable across GitHub's own retries and an operator's manual redelivery. **The event name is in the `X-GitHub-Event` header**, not the body — the payload carries only the action — so the header is carried onto the envelope and read by the parser. Publishes to `crewlet.notifications.inbound`. See [GitHub Integration — Webhooks](../integrations/github.md#webhooks).
 
 ### `/webhooks/gitlab`
 
@@ -1074,7 +1074,7 @@ Receives Plane webhook payloads from the [Plane fork](../integrations/plane.md).
 
 ### `/webhooks/confluence`
 
-Receives Confluence webhook payloads (page created/updated, comments). Publishes to `crewlet.notifications.inbound`. Jira Cloud and Confluence Cloud both ride this route and are served end to end — see the integration pages.
+Receives **Data Center** Confluence webhook payloads (page created/updated, comments). Verifies HMAC-SHA256 over the raw body against `X-Hub-Signature`, keyed on `integrations.confluence.webhook_secret`; a route with no resolved secret answers 503. **Confluence Cloud does not use this route** — those events arrive through [`/webhooks/forge`](#webhooksforge), which is why `webhook_secret` is required on Data Center and unused on Cloud. Publishes to `crewlet.notifications.inbound`. See [Confluence Integration](../integrations/confluence.md).
 
 ### `/webhooks/forge`
 

@@ -421,6 +421,9 @@ var vendorCommands = map[string][]vendorCommand{
 	"gitlab": {
 		{"provision", "<company.yaml>", runGitLabProvision},
 	},
+	"github": {
+		{"provision", "<company.yaml>", runGitHubProvision},
+	},
 	"plane": {
 		{"provision", "<company.yaml>", runPlaneProvision},
 		{"import", "<company.yaml> <directory>", runPlaneImport},

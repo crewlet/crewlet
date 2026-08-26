@@ -691,18 +691,18 @@ func MintSigningSecret() (string, error) { return whsec.Mint() }
 // group and falls back, true demands the group, false goes straight to the
 // projects.
 func ensureHooks(ctx context.Context, opts Options, groupID int, projects []string, target string) ([]string, []string, error) {
-	mode := config.GroupWebhookAuto
+	mode := config.ContainerWebhookAuto
 	if pv := opts.Config.Provisioning; pv != nil && pv.GroupWebhook != "" {
 		mode = pv.GroupWebhook
 	}
 	secret := opts.SigningSecret
 
-	if mode != config.GroupWebhookNever {
+	if mode != config.ContainerWebhookNever {
 		err := ensureGroupHook(ctx, opts.Client, groupID, target, secret)
 		switch {
 		case err == nil:
 			return []string{"group"}, nil, nil
-		case mode == config.GroupWebhookRequire:
+		case mode == config.ContainerWebhookRequire:
 			return nil, nil, fmt.Errorf(
 				"%w\n\ngroup_webhook is \"true\", so no per-project fallback was "+
 					"tried. Group webhooks are a GitLab Premium feature: on Free "+

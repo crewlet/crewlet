@@ -1400,7 +1400,7 @@ func TestGroupWebhookFalseNeverTouchesTheGroup(t *testing.T) {
 	res, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
-			o.Config.Provisioning.GroupWebhook = config.GroupWebhookNever
+			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookNever
 		})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -1426,7 +1426,7 @@ func TestGroupWebhookTrueFailsRatherThanFallingBack(t *testing.T) {
 	_, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
-			o.Config.Provisioning.GroupWebhook = config.GroupWebhookRequire
+			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookRequire
 		})
 	if err == nil {
 		t.Fatal("a required group hook was not available and the run succeeded")
@@ -1465,7 +1465,7 @@ func TestPerProjectHooksWithNoProjectsRefuses(t *testing.T) {
 	_, err := reconcileWith(t, f, newRecordingSink(),
 		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
-			o.Config.Provisioning.GroupWebhook = config.GroupWebhookNever
+			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookNever
 			o.Config.Provisioning.Projects = nil
 		})
 	if err == nil {

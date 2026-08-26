@@ -26,7 +26,7 @@ type Integrations struct {
 	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
 	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
-	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" js:"unimplemented" desc:"NOT IMPLEMENTED in this build: no parser routes a GitHub delivery. The code host this build serves is integrations.gitlab."`
+	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
 	GitLab     *GitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
 	Plane      *Plane      `yaml:"plane,omitempty" json:"plane,omitempty" desc:"Plane instance, workspace and webhook secret. Absent = disabled."`
 
@@ -39,13 +39,6 @@ type Integrations struct {
 func (i *Integrations) validate(path string) error {
 	var p problems
 
-	// REFUSED FIRST, AND INSTEAD. A block this build cannot serve gets one
-	// error saying so — not that plus "url is required", which would send
-	// an operator off to fix a field on an integration they cannot use
-	// either way. See [unservedIntegrations].
-	if refused := i.refuseUnserved(&p, path); refused {
-		return p.err()
-	}
 	if i.Jira != nil {
 		p.wrap(i.Jira.validate(at(path, "jira")))
 	}
@@ -55,6 +48,9 @@ func (i *Integrations) validate(path string) error {
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
 	}
+	if i.GitHub != nil {
+		p.wrap(i.GitHub.validate(at(path, "github")))
+	}
 	if i.GitLab != nil {
 		p.wrap(i.GitLab.validate(at(path, "gitlab")))
 	}
@@ -62,56 +58,6 @@ func (i *Integrations) validate(path string) error {
 		p.wrap(i.Plane.validate(at(path, "plane")))
 	}
 	return p.err()
-}
-
-// The integrations this build VALIDATES and does not SERVE, with what fills
-// the same role instead.
-//
-// The engine wires Mattermost and Slack for chat, Plane and Jira for the
-// tracker, Plane and Confluence for the knowledge base, and GitLab for the
-// code host (decisions/701, decisions/703). GitHub is the last
-// one left: it has a config model, a webhook route and generated schema, and
-// no parser behind it — startNotifications builds its parser and prompt
-// lists from the served blocks alone.
-//
-// So a company naming one got a block that validated, appeared in the
-// dashboard, and did nothing. Silently, which is the part that matters —
-// integrations.confluence is how an operator says where the company's
-// knowledge lives, and the answer was an empty "## Relevant knowledge" on
-// every Plan phase.
-//
-// Refusing is what providers.sandbox.type: e2b already does, one layer down,
-// for the same reason. Each entry is deleted by the change that ships that
-// vendor's parser, transport and prompt — a config field ships with the code
-// that reads it.
-var unservedIntegrations = []struct {
-	field string
-	// active reports whether the block is switched on, in that block's own
-	// terms — GitHub carries an Enabled flag rather than being on by its
-	// mere presence.
-	active func(*Integrations) bool
-	// instead names the role and what serves it, because an error a person
-	// reads has to say what to do about it.
-	instead string
-}{
-	{"github", func(i *Integrations) bool { return i.GitHub != nil && i.GitHub.Enabled },
-		"the code host this build serves is GitLab (integrations.gitlab)"},
-}
-
-// refuseUnserved rejects any integration block nothing behind the config
-// reads, and reports whether it found one. See [unservedIntegrations].
-func (i *Integrations) refuseUnserved(p *problems, path string) bool {
-	var unserved bool
-	for _, entry := range unservedIntegrations {
-		if entry.active(i) {
-			unserved = true
-			p.add(at(path, entry.field), ErrUnimplemented,
-				"no parser or transport is wired for it, so a delivery would "+
-					"be verified, stored, and then reach nobody — %s",
-				entry.instead)
-		}
-	}
-	return unserved
 }
 
 // The Atlassian Cloud gateways a cloud id resolves against.
@@ -498,17 +444,105 @@ func hasHTTPScheme(url string) bool {
 		envref.Has(url)
 }
 
-// GitHub is the org-level GitHub block — the webhook side only.
+// GitHub is the org-level GitHub block.
 //
-// The tool server is a shared: false http MCP entry; each agent supplies
-// its token there as an Authorization header.
+// Symmetric with [GitLab] with two differences, and both come from what
+// GitHub is rather than from a choice made here:
+//
+//   - URL IS OPTIONAL. github.com is where most companies are, and its API
+//     lives on a different host from its web UI (api.github.com), so there
+//     is no instance address to write. An Enterprise Server deployment names
+//     itself and the API is derived from it — see [GitHub.APIBase].
+//   - THE PROVISIONER MINTS NOTHING. GitHub issues no user account and no
+//     personal access token on a provisioner's behalf: a token belongs to
+//     the person who created it, and the API to create one on somebody's
+//     behalf was withdrawn in 2020. So `crewlet github provision` reports
+//     what each seat's own credential authenticates as and registers the
+//     webhooks — the same shape as Jira's, for the same reason.
+//
+// The tool server is a separate `shared: false` http MCP entry; each agent
+// supplies its token there as an Authorization header, and that is the same
+// credential this integration reads a seat's login from.
 type GitHub struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn inbound GitHub webhooks on."`
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
+
+	// URL is an Enterprise Server base, or empty for github.com.
+	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"Enterprise Server base URL, e.g. https://github.example.com. Empty = github.com."`
 
 	// WebhookSecret verifies inbound deliveries. Required when enabled: a
 	// route with nothing to verify with cannot tell a real delivery from
 	// anyone's POST.
-	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound deliveries."`
+	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound deliveries; required when enabled."`
+
+	// Token is an optional READ credential for participant fan-out.
+	//
+	// A webhook payload carries the author, the assignees and the
+	// requested reviewers, but not who has COMMENTED or REVIEWED — which
+	// is most of the set GitHub itself would notify. Recovering it costs
+	// one REST call per issue event and two per pull request. When empty,
+	// routing degrades to the payload-derived targets; directed events are
+	// unaffected.
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read token for participant fan-out; empty degrades thread routing."`
+
+	Provisioning *GitHubProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
+}
+
+// githubAPIHost is github.com's API, which is a different host from its web
+// UI rather than a path on it.
+const githubAPIHost = "https://api.github.com"
+
+// githubEnterpriseAPIPath is the REST prefix on an Enterprise Server.
+const githubEnterpriseAPIPath = "/api/v3"
+
+// APIBase is the REST base for this deployment.
+//
+// DERIVED, never configured, because the two forms disagree in a way an
+// operator has no reason to know: github.com serves its API from
+// api.github.com, and an Enterprise Server serves it from /api/v3 on the
+// instance itself. A single `api_url` field would be a second address to
+// keep in step with the first, and the failure of getting it wrong is a 404
+// on every call with nothing naming the cause.
+func (g *GitHub) APIBase() string {
+	base := strings.TrimRight(strings.TrimSpace(g.URL), "/")
+	if base == "" {
+		return githubAPIHost
+	}
+	// An operator writes the instance URL; a copy-paste from GitHub's own
+	// docs writes the API base. Accepting both is the difference between a
+	// working config and a path with /api/v3 in it twice.
+	if strings.HasSuffix(base, githubEnterpriseAPIPath) {
+		return base
+	}
+	return base + githubEnterpriseAPIPath
+}
+
+// WebURL is the base a shareable link is built on.
+func (g *GitHub) WebURL() string {
+	if base := strings.TrimRight(strings.TrimSpace(g.URL), "/"); base != "" {
+		return strings.TrimSuffix(base, githubEnterpriseAPIPath)
+	}
+	return "https://github.com"
+}
+
+// GitHubProvisioning is the provisioning CLI's inputs.
+//
+// SHORT, and deliberately so: the GitLab block beside it carries access
+// levels, a username prefix and token scopes because GitLab's provisioner
+// CREATES accounts and mints their tokens. GitHub's cannot, so a field here
+// describing an account it will never create would be a promise the command
+// does not keep.
+type GitHubProvisioning struct {
+	// Org is the GitHub organization the repositories live under. Setting
+	// it lets one ORG-LEVEL webhook cover every repository in it, which is
+	// the difference between one hook and one per repository on a company
+	// with fifty of them.
+	Org string `yaml:"org,omitempty" json:"org,omitempty" desc:"GitHub organization holding the repositories."`
+
+	// Repos are `owner/repo` entries to register webhooks on, beyond the
+	// organization itself.
+	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty" desc:"owner/repo entries to hook individually."`
+
+	OrgWebhook ContainerWebhookMode `yaml:"org_webhook,omitempty" json:"org_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one org hook where the credential may), true, or false."`
 }
 
 // GitLabAccessLevel is a service account's membership level.
@@ -523,22 +557,36 @@ const (
 // GitLabAccessLevels is the closed set.
 var GitLabAccessLevels = []GitLabAccessLevel{GitLabDeveloper, GitLabMaintainer}
 
-// GroupWebhookMode is how the provisioner registers hooks.
-type GroupWebhookMode string
+// ContainerWebhookMode is how a provisioner registers hooks: once on the
+// container that holds the repositories, or once per repository.
+//
+// ONE type for both code hosts, because it is one question — a GitLab group
+// and a GitHub organization are the same thing here, and both hosts can
+// refuse a container hook for the same kind of reason (a plan that does not
+// include them, a credential without the scope). Two enums with three
+// identical values would be two `Valid()` methods to keep in step and two
+// chances for `auto` to come to mean different things.
+//
+// The FIELD names stay each vendor's own — `group_webhook` on GitLab,
+// `org_webhook` on GitHub — because those are the words their own
+// documentation uses.
+type ContainerWebhookMode string
 
-// The group-webhook modes.
+// The container-webhook modes.
 const (
-	// GroupWebhookAuto uses one group hook where the instance accepts it
-	// and falls back to per-project hooks where it does not.
-	GroupWebhookAuto GroupWebhookMode = "auto"
-	// GroupWebhookRequire demands a group hook and fails without one.
-	GroupWebhookRequire GroupWebhookMode = "true"
-	// GroupWebhookNever always registers per-project hooks.
-	GroupWebhookNever GroupWebhookMode = "false"
+	// ContainerWebhookAuto uses one container hook where the host accepts
+	// it and falls back to per-repository hooks where it does not.
+	ContainerWebhookAuto ContainerWebhookMode = "auto"
+	// ContainerWebhookRequire demands a container hook and fails without
+	// one.
+	ContainerWebhookRequire ContainerWebhookMode = "true"
+	// ContainerWebhookNever always registers per-repository hooks.
+	ContainerWebhookNever ContainerWebhookMode = "false"
 )
 
-// GroupWebhookModes is the closed set.
-var GroupWebhookModes = []GroupWebhookMode{GroupWebhookAuto, GroupWebhookRequire, GroupWebhookNever}
+// ContainerWebhookModes is the closed set.
+var ContainerWebhookModes = []ContainerWebhookMode{
+	ContainerWebhookAuto, ContainerWebhookRequire, ContainerWebhookNever}
 
 // GitLab is the org-level GitLab block.
 //
@@ -593,10 +641,63 @@ type GitLabProvisioning struct {
 	// webhooks on, beyond the group itself.
 	Projects []string `yaml:"projects,omitempty" json:"projects,omitempty" desc:"Extra projects to join and hook."`
 
-	GroupWebhook GroupWebhookMode `yaml:"group_webhook,omitempty" json:"group_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one group hook if the plan allows), true, or false."`
+	GroupWebhook ContainerWebhookMode `yaml:"group_webhook,omitempty" json:"group_webhook,omitempty" js:"enum=auto|true|false" desc:"auto (one group hook if the plan allows), true, or false."`
 
 	// TokenScopes are minted on each service-account token.
 	TokenScopes []string `yaml:"token_scopes,omitempty" json:"token_scopes,omitempty" desc:"Scopes minted on each service-account token."`
+}
+
+func (g *GitHub) validate(path string) error {
+	var p problems
+	if g.Enabled {
+		// A URL IS OPTIONAL AND ITS SHAPE IS NOT. An Enterprise Server
+		// address without a scheme resolves against nothing and produces
+		// a request to a relative path — which fails as a malformed URL
+		// rather than as "your instance address is missing https://".
+		if url := strings.TrimSpace(g.URL); url != "" && !hasHTTPScheme(url) {
+			p.add(at(path, "url"), ErrUnknownValue,
+				"%q must start with http:// or https:// — leave it unset for "+
+					"github.com, which is a different API host rather than a "+
+					"path on the web UI", g.URL)
+		}
+		if strings.TrimSpace(g.WebhookSecret) == "" {
+			p.add(at(path, "webhook_secret"), ErrMissing,
+				"required when github is enabled — every delivery is verified "+
+					"against it, and a route with nothing to verify with "+
+					"answers 503 rather than accepting one")
+		}
+		// NO SHAPE CHECK on the secret, unlike GitLab's. GitHub takes any
+		// string as a webhook secret and signs with it verbatim, so there
+		// is no wrong shape to catch — only a wrong VALUE, which is
+		// indistinguishable from a right one until a delivery arrives.
+	}
+	if g.Provisioning == nil {
+		return p.err()
+	}
+	pv := g.Provisioning
+	pp := at(path, "provisioning")
+	if pv.OrgWebhook != "" && !oneOf(pv.OrgWebhook, ContainerWebhookModes) {
+		p.add(at(pp, "org_webhook"), ErrUnknownValue, "%q (want %s)",
+			pv.OrgWebhook, names(ContainerWebhookModes))
+	}
+	if pv.OrgWebhook == ContainerWebhookRequire && strings.TrimSpace(pv.Org) == "" {
+		p.add(at(pp, "org"), ErrMissing,
+			"org_webhook: true demands one organization-level hook, and there "+
+				"is no organization named to register it on")
+	}
+	for i, repo := range pv.Repos {
+		// owner/repo, both halves present. A bare "repo" is the mistake
+		// this catches, and it is otherwise a 404 per repository on a run
+		// whose whole promise is that it says what it found.
+		owner, name, ok := strings.Cut(strings.TrimSpace(repo), "/")
+		if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" ||
+			strings.Contains(name, "/") {
+			p.add(idx(at(pp, "repos"), i), ErrShape,
+				"%q is not owner/repo — GitHub has no repository-only "+
+					"addressing, so there is nothing for a run to look up", repo)
+		}
+	}
+	return p.err()
 }
 
 func (g *GitLab) validate(path string) error {
@@ -649,9 +750,9 @@ func (g *GitLab) validate(path string) error {
 				pv.AccessLevels[handle], names(GitLabAccessLevels))
 		}
 	}
-	if pv.GroupWebhook != "" && !oneOf(pv.GroupWebhook, GroupWebhookModes) {
+	if pv.GroupWebhook != "" && !oneOf(pv.GroupWebhook, ContainerWebhookModes) {
 		p.add(at(pp, "group_webhook"), ErrUnknownValue, "%q (want %s)",
-			pv.GroupWebhook, names(GroupWebhookModes))
+			pv.GroupWebhook, names(ContainerWebhookModes))
 	}
 	return p.err()
 }

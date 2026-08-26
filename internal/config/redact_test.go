@@ -13,12 +13,10 @@ import (
 // document must be able to come back — a config nobody can edit is a config
 // nobody maintains.
 //
-// The fixture names the three vendors this build serves — Mattermost, Plane
-// and GitLab — because it has to PARSE: a company configuring an unserved one
-// is refused with config.ErrUnimplemented before Redact is ever reached. The
-// vendor is incidental to every assertion below; what each block contributes
-// is a SHAPE — a literal credential, a ${VAR} reference, a per-seat
-// credential, a credential inside a map.
+// The vendor each block names is incidental to every assertion below; what
+// each one contributes is a SHAPE — a literal credential, a ${VAR}
+// reference, a per-seat credential, a credential inside a map. The fixture
+// has to PARSE, so the blocks are written as the validator wants them.
 
 const credentialDoc = `
 name: Acme

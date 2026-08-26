@@ -1,12 +1,14 @@
 # d-703 — An integration this build cannot serve is refused
 
-Status: **decided by the project owner, implemented — and being unwound,
-vendor by vendor.** The refusal was never the destination: each entry is
-deleted by the change that ships that vendor. Jira, Slack and Confluence are
-done; GitHub is the last one left.
-Implementation: `internal/config/integrations.go`, `internal/config/roles.go`,
-`internal/config/company.go`, `internal/config/schema.go` ·
-Answers the question [`d-701`](701-vendor-order.md) left open.
+Status: **decided by the project owner, implemented, and now fully unwound.**
+Every vendor it refused is served, so the mechanism it describes — the
+`unservedIntegrations` table, `refuseUnserved`, the `ErrUnimplemented`
+sentinel and the `js:"unimplemented"` schema directive — is **deleted**.
+What outlives it is one rule, stated at the bottom.
+Implementation: none, deliberately · Answers the question
+[`d-701`](701-vendor-order.md) left open · Kept because the shape it
+describes is the one to rebuild if a vendor is ever ahead of its parser
+again.
 
 ## The question d-701 left open
 
@@ -21,21 +23,17 @@ of this document describes and what the code did.
 
 **Then the project owner reversed it.** All four had working implementations
 in the Python engine that this build replaced, and dropping them was a
-regression rather than a scoping decision. So they ship, and this document
-becomes the record of an interim state and of the ONE rule that outlives it:
-**a config field ships with the code that reads it.** A vendor's row leaves
-`unservedIntegrations` in the same commit that gives it a parser — not
-before, because a field the engine accepts and never reads is exactly the
-silence this decision exists to end.
+regression rather than a scoping decision. So they shipped, one commit each,
+and this document became the record of an interim state.
 
-### What has shipped since
+## The vendors, and what shipped
 
 | Vendor | State |
 |---|---|
 | `integrations.jira` | **Served.** Parser, prompt, client, seat-identity resolution, lead map and `crewlet jira provision`. `integrations.forge_app_id` came back with it: Jira Cloud is what rides the Forge route. `role.integrations.jira` and `unit.integrations.jira` are consulted again — they are the lead-fallback map. |
 | `integrations.slack` | **Served.** Parser, prompt, transport, per-seat app identities, thread follows, a text-carrying working indicator and `crewlet slack provision` — manifest CRUD, the OAuth install, and the app ledger. `role.integrations.slack` is a seat's own app again, and both its credentials are now required together. |
 | `integrations.confluence` | **Served.** Parser, prompt, client, a `knowledge.Searcher` over live CQL, the tool-skill codec and walk, and `crewlet confluence import`. `knowledge.confluence_spaces` is its read scope again, and `role`/`unit.integrations.confluence` its write and routing home. The single-homing rule came back with it: Confluence XOR Plane. |
-| `integrations.github` | Refused when enabled. |
+| `integrations.github` | **Served.** Parser, prompt, client, participant fan-out, derived seat logins and `crewlet github provision` — organization or per-repository webhooks, and a report of which account each seat's own credential authenticates as. `url` is optional, because github.com serves its API from a different host and needs no address. |
 
 ## What the state actually was
 
@@ -55,93 +53,114 @@ an operator says where the company's knowledge lives; the answer was an empty
 saying why. `integrations.github` bought a webhook endpoint that verified
 GitHub's signatures correctly and woke nobody.
 
-## The decision
+## The decision, as it stood
 
-Config validation refuses each of them by name, with `ErrUnimplemented` and a
-message saying what serves that role instead:
-
-| Refused | Because | Instead |
-|---|---|---|
-| ~~`integrations.jira`~~ | *served — see the table above* | — |
-| ~~`integrations.confluence`~~ | *served — see the table above* | — |
-| ~~`integrations.slack`~~ | *served — see the table above* | — |
-| `integrations.github` (enabled) | no parser | `integrations.gitlab` |
-| ~~`integrations.forge_app_id`~~ | *served — Jira Cloud rides it* | — |
-| ~~`role.integrations.slack`~~ | *served — a seat's own app* | — |
-| ~~`role.integrations.jira`, `unit.integrations.jira`~~ | *served — the lead-fallback map* | — |
-| ~~`role.integrations.confluence`, `unit.integrations.confluence`~~ | *served — where a team writes* | — |
-| ~~`knowledge.confluence_spaces`~~ | *served — the read scope* | — |
-
-The per-seat and per-unit rows are not credentials — they are WHERE a seat or
-unit files work and where its deliveries route. That is precisely why they
-could not be left standing: an operator writes `confluence: {space: ENG}` to
-say this unit owns ENG, and the identity is recorded, rendered on the
+Config validation refused each block by name, with an `ErrUnimplemented`
+sentinel and a message saying what served that role instead. The per-seat and
+per-unit rows were refused alongside the org-level blocks — not because they
+are credentials, but because they are **where a seat or unit files work and
+where its deliveries route**. An operator writes `confluence: {space: ENG}`
+to say this unit owns ENG, and the identity was recorded, rendered on the
 dashboard, and never consulted. Refusing only the org-level block would have
-left the same silence one level down, in a smaller place. And it is why they
-come back with their vendor rather than after it: `jira: {project: ENG}` is
-now read on every unrouted issue.
+left the same silence one level down, in a smaller place.
 
-`ErrUnimplemented` is its own sentinel rather than reusing `ErrUnknownValue`
-or `ErrConflict`, because it is the one failure that is **not the operator's
+That is also why they came back **with** their vendor rather than after it:
+`jira: {project: ENG}` is read on every unrouted issue, so it had to be live
+in the commit that made it matter.
+
+`ErrUnimplemented` was its own sentinel rather than `ErrUnknownValue` or
+`ErrConflict`, because it was the one failure that is **not the operator's
 mistake**: the config is well-formed and names a real capability, and the
-engine simply has no code behind it. An error that blamed the author would be
-the wrong story.
+engine simply has no code behind it. An error that blamed the author would
+have been the wrong story.
 
-A **disabled** block is untouched. `github: {enabled: false}` is an operator
-who already agrees, and failing their config would be pedantry.
+A **disabled** block was untouched throughout. `github: {enabled: false}` is
+an operator who already agrees, and failing their config would be pedantry.
+That rule survives the refusal in a different form: a disabled block still
+skips its own required-field checks, because those are requirements of
+*running* an integration.
 
 ## Three consequences that had to be handled
 
-**The generated schema refuses them too — and only where the validator does.**
-A JSON Schema that accepted what the validator rejects is worse than no
+**The generated schema refused them too — and only where the validator did.**
+A JSON Schema that accepts what the validator rejects is worse than no
 schema: an editor blesses a config the engine will not boot on. But the
 converse is worse still, because it is the direction an author *sees*. A
 schema that red-underlines a working file teaches them to ignore it, and
 then it catches nothing at all.
 
-So `js:"unimplemented"` does not emit a blanket refusal of the key. It reads
+So `js:"unimplemented"` did not emit a blanket refusal of the key. It read
 the field's own notion of "on", the same way the validators do: a block
-carrying an `enabled` flag is refused only when that flag is true, any other
-block is refused by its mere presence, and a scalar or a list is refused when
-it holds something. `integrations.github: {enabled: false}` and
-`knowledge.confluence_spaces: []` are configs the engine runs, so the schema
-accepts them.
+carrying an `enabled` flag was refused only when that flag was true, any
+other block by its mere presence, and a scalar or a list when it held
+something.
 
 It did not, first time out. The generator emitted `{"not": {}}` for every
 tagged field while the validator keyed on `Enabled`, so the two disagreed
 about `github: {enabled: false}` in both directions at once — and the parity
-table, hand-written on both sides, had no case for it. What holds them
-together now is a sweep that DERIVES the field list from the models: a field
-tagged `unimplemented` with no pair of documents behind it fails the suite,
-and a shape the generator has no rule for fails generation rather than
-guessing.
+table, hand-written on both sides, had no case for it. What held them
+together afterwards was a sweep that DERIVED the field list from the models:
+a field tagged `unimplemented` with no pair of documents behind it failed the
+suite, and a shape the generator had no rule for failed generation rather
+than guessing. That sweep is what announced the end: with the last vendor
+served it found nothing to certify, and said so rather than passing
+vacuously.
 
-**The webhook routes stay, and fail closed.** They are still registered, and
-with no config able to supply a secret they answer 503 — the same answer the
-edge already gives a route with nothing to verify with, for the same reason.
-Deleting them would throw away correct, tested work (the Forge JWT
-verification against Atlassian's published keys is real engineering) that
-comes straight back when a vendor ships. They are marked inert in the API
-reference so nobody reads a live endpoint into them.
+**The webhook routes stayed, and failed closed.** They remained registered,
+and with no config able to supply a secret they answered 503 — the same
+answer the edge gives any route with nothing to verify with. Deleting them
+would have thrown away correct, tested work (the Forge JWT verification
+against Atlassian's published keys is real engineering) that comes straight
+back when a vendor ships.
 
-That prediction is what actually happened, twice, and it is the strongest
-argument for the shape. `POST /webhooks/jira` and `POST /webhooks/forge` came
-alive in the commit that shipped the Jira parser, with no change to either
-route beyond the delivery-id key Jira had been sending all along. `POST
-/webhooks/slack/{handle}` and its OAuth landing came alive in the Slack
-commit with **no change to the route at all** — including the
-url_verification exemption, which had been written and tested against a
-vendor nothing could yet route.
+That prediction is what actually happened, four times, and it is the
+strongest argument for the shape:
 
-**MCP is untouched.** Agents still reach Jira, Confluence, GitHub and Slack
-through their MCP servers, which is a different surface entirely: `mcp_servers`
-plus each seat's `mcp_env`. What is refused is the inbound-routing config, and
-the integration pages say so, because "GitHub is refused" would otherwise read
-as "agents cannot use GitHub".
+- `POST /webhooks/jira` and `POST /webhooks/forge` came alive in the commit
+  that shipped the Jira parser, with no change to either route beyond the
+  delivery-id key Jira had been sending all along.
+- `POST /webhooks/slack/{handle}` and its OAuth landing came alive with **no
+  change to the route at all** — including the `url_verification` exemption,
+  written and tested against a vendor nothing could yet route.
+- `POST /webhooks/confluence` came alive with no change whatsoever.
+- `POST /webhooks/github` came alive with no change whatsoever: the HMAC
+  verifier, the `X-GitHub-Delivery` dedupe key and the captured
+  `X-GitHub-Event` header were all already correct, and the last of those is
+  load-bearing — GitHub puts the event name in a header and only the action
+  in the body, so a parser reading the body alone cannot tell an issue
+  comment from a review comment.
 
-## What undoes an entry
+**MCP was untouched.** Agents reached Jira, Confluence, GitHub and Slack
+through their MCP servers throughout, which is a different surface entirely:
+`mcp_servers` plus each seat's `mcp_env`. What was refused was the
+inbound-routing config, and the integration pages said so, because "GitHub is
+refused" would otherwise read as "agents cannot use GitHub".
 
-The change that ships that vendor's parser, transport and — for Confluence —
-searcher, deletes its row from `unservedIntegrations` in the same commit. A
-config field ships with the code that reads it, which is the rule this
-document exists to enforce and the one it was written because nobody had.
+## What the mechanism cost, and why it is gone
+
+The table cost four commits' worth of test fixtures written around a refusal
+and rewritten when it lifted, plus a schema directive, a sentinel, and a
+derived sweep to hold the two layers together. That was the right price while
+four vendors were ahead of their parsers.
+
+It is gone now because **an empty table is not a dormant capability, it is
+dead code**: a loop over nothing, a directive no field sets, a sentinel
+nothing returns, and a sweep certifying an empty set. Each would have to be
+read and re-understood by every future contributor to conclude, correctly,
+that it does nothing. This document is the cheaper form of the same
+knowledge, and `git log` holds the implementation for whoever needs it back.
+
+If a vendor is ever ahead of its parser again, rebuild this shape rather than
+inventing another: refuse the block by name in `Integrations.validate` with
+its own sentinel, mirror the refusal in the generated schema keyed on the
+field's own notion of "on", leave the webhook route registered and failing
+closed, and delete the entry in the commit that ships the parser.
+
+## The rule that outlives it
+
+**A config field ships with the code that reads it.**
+
+Not before — because a field the engine accepts and never reads is exactly
+the silence this decision exists to end, and it is invisible from every
+operator surface there is: the config validates, the dashboard renders it,
+the webhook verifies, and nothing happens.

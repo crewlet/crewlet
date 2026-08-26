@@ -233,15 +233,32 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nroles:\n  - goal: ship\n",
 			"roles[0].name", ErrMissing,
 		},
+		// The hosted code host's own rules, which run now that it is
+		// served.
 		{
-			// A REFUSED BLOCK REPLACES ITS OWN RULES. GitHub carries a
-			// webhook-secret rule that never runs: the block is refused
-			// before its own validation is reached, so an operator gets
-			// the error that matters instead of a field to fix on an
-			// integration they cannot use either way.
-			"an unserved block, refused before its own rules",
+			"a github block with nothing to verify a delivery with",
 			"name: Acme\nintegrations:\n  github: {enabled: true}\n",
-			"integrations.github", ErrUnimplemented,
+			"integrations.github.webhook_secret", ErrMissing,
+		},
+		{
+			"an enterprise server address with no scheme",
+			"name: Acme\nintegrations:\n  github: {enabled: true, url: github.example.com, webhook_secret: s}\n",
+			"integrations.github.url", ErrUnknownValue,
+		},
+		{
+			"a github repo that is not owner/repo",
+			"name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {repos: [engine]}}\n",
+			"integrations.github.provisioning.repos[0]", ErrShape,
+		},
+		{
+			"a demanded org hook with no org to put it on",
+			"name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {org_webhook: \"true\"}}\n",
+			"integrations.github.provisioning.org", ErrMissing,
+		},
+		{
+			"an unknown github org-webhook mode",
+			"name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {org: acme, org_webhook: maybe}}\n",
+			"integrations.github.provisioning.org_webhook", ErrUnknownValue,
 		},
 		// The knowledge base's own rules, which DO run now that it is
 		// served.
@@ -463,46 +480,17 @@ func TestMinimalCompanyLoads(t *testing.T) {
 	}
 }
 
-// AN INTEGRATION THIS BUILD CANNOT SERVE IS REFUSED, NOT ACCEPTED AND IGNORED.
+// A DISABLED BLOCK SKIPS ITS OWN REQUIRED FIELDS.
 //
-// The engine wires Mattermost and Slack for chat, Plane and Jira for the
-// tracker, Plane and Confluence for the knowledge base, and GitLab for the
-// code host. GitHub is the last one left: it has a config model, a webhook
-// route and generated schema, and no parser behind it, so a company enabling
-// it gets a block that validates, renders in the dashboard, and does
-// nothing.
-//
-// Silently, which is the part that mattered: integrations.confluence is how
-// an operator says where the company's knowledge lives, and the answer was an
-// empty "## Relevant knowledge" on every Plan phase.
-func TestAnIntegrationThisBuildCannotServeIsRefused(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct{ name, yaml, path, instead string }{
-		{"github", "  github: {enabled: true, webhook_secret: s}", "integrations.github", "GitLab"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			err := rejects(t, "name: Acme\nintegrations:\n"+tc.yaml+"\n", tc.path)
-			if !errors.Is(err, ErrUnimplemented) {
-				t.Fatalf("want ErrUnimplemented, got %v", err)
-			}
-			// THE ERROR SAYS WHAT TO DO. An operator told only "not
-			// implemented" has to guess which of the three vendors covers
-			// the role they were configuring.
-			if tc.instead != "" && !strings.Contains(err.Error(), tc.instead) {
-				t.Errorf("the error does not name %s as what serves this role: %v",
-					tc.instead, err)
-			}
-		})
-	}
-}
-
-// A DISABLED BLOCK IS NOT A CONFIGURED ONE. `github: {enabled: false}` is an
-// operator who turned it off, and refusing that would fail a config whose
-// author already agreed with us.
-func TestADisabledUnservedIntegrationIsInert(t *testing.T) {
+// `github: {enabled: false}` is an operator who turned the integration off
+// and left the block behind — which is how a block gets turned off, since
+// deleting it would lose the settings. Its webhook_secret rule is a
+// requirement of RUNNING it, so applying it to a block that is not running
+// would fail a config whose author already agreed with us.
+func TestADisabledIntegrationSkipsItsOwnRules(t *testing.T) {
 	t.Parallel()
 	mustCompany(t, "name: Acme\nintegrations:\n  github: {enabled: false}\n")
+	mustCompany(t, "name: Acme\nintegrations:\n  gitlab: {enabled: false}\n")
 }
 
 // FORGE IS A JIRA CLOUD CONFIG, NOT A REFUSAL. forge_app_id is the Atlassian

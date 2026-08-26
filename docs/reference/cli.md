@@ -36,6 +36,7 @@ subcommand below is served by it.
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
 | `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
+| `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config — which account each seat's own credential authenticates as — and register the inbound webhooks with a minted secret: one on the organization where the credential may, otherwise one per named repository. GitHub issues no credentials on a provisioner's behalf, so this run reports more than it changes |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). A re-run leaves a working token alone; `-rotate` mints fresh ones. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits, a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
 | `crewlet --version` | Show the installed version |
@@ -568,6 +569,36 @@ A hook somebody else registered is reported and never touched: an instance may c
 The run refuses outright when the org credential in `integrations.jira.token` is rejected — nothing else it reported would be trustworthy.
 
 See [Jira Integration — Provisioning](../integrations/jira.md#provisioning) for the full walkthrough.
+
+## `crewlet github provision`
+
+```
+crewlet github provision <company.yaml> [-secret-store | -env-file PATH | -print]
+                                        [-public-url URL]
+                                        [-recreate-webhooks] [-dry-run]
+```
+
+The hosted code host's reconcile, and it is the same shape as Jira's for the same reason: **GitHub issues no credentials on a provisioner's behalf.** There is no API that creates a user, and the API that once minted a token for somebody else was withdrawn in 2020 — so a command that offered to provision accounts would be printing instructions dressed as actions. What it does instead is the two things GitHub genuinely allows:
+
+1. **Which account each seat's credential authenticates as.** It calls `GET /user` with every seat's own token, read from `mcp_env.github` under whichever key that seat's tools use (`GITHUB_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `GH_TOKEN`, or an `Authorization` header), and reports the seats that resolved and the seats that did not. A seat with no login receives **no GitHub events at all** — the routing gate drops every target that names it — and nothing else in the engine says so. Human seats are never probed: they hold no tool credential and are reached by `contact.github_login`.
+2. **The inbound webhooks**, at `<public-url>/webhooks/github`, subscribed to exactly the events the parser routes and delivering JSON — GitHub's own default is form-encoded, which nothing here can decode. One hook on the **organization** where the credential may register it, covering every repository in the org including ones created later; otherwise one per repository named in `provisioning.repos`. `org_webhook: true` turns a credential that cannot into a failed run rather than a silent fallback, because an operator who asked for the org arrangement must not quietly get the other one. `admin:org_hook` is the scope, which a fine-grained token cannot carry at all.
+
+**A working webhook secret is never replaced.** If `integrations.github.webhook_secret` already resolves, that value is registered as-is. Minting on every run would be an outage: the engine holds the *old* secret, so GitHub would start signing every delivery with a key nothing can verify. A secret that resolves to nothing is minted into the `${VAR}` the config points at and recorded in the sink you chose; `-recreate-webhooks` forces a rotation, which invalidates the secret every other deployment of this company holds.
+
+**One unhookable repository does not stop the rest.** A list will contain one that was renamed, archived, or made private to a team this credential is not in; each is reported with what is wrong and the others are still hooked. GitHub answers **404 for both "absent" and "invisible to this credential"** — deliberately, so a probe cannot enumerate what exists — so the report says both rather than sending an operator to look for a repository that is right there.
+
+| Flag | Description |
+|------|-------------|
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
+| `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. Omit to skip registration — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
+| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. |
+| `-dry-run` | Read GitHub and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
+
+A hook somebody else registered is left alone: matching is on the **delivery URL**, never on a name, because GitHub gives a webhook no name at all and an organization carries hooks other integrations put there.
+
+The run refuses outright when the credential in `integrations.github.token` is rejected — nothing else it reported would be trustworthy. That token is optional for the *engine* (without it, thread activity degrades to the payload's author and assignees) and required here, because there is no degraded form of registering a webhook.
+
+See [GitHub Integration — Provisioning](../integrations/github.md#provisioning--crewlet-github-provision) for the full walkthrough.
 
 ## `crewlet slack provision`
 
