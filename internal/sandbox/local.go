@@ -423,26 +423,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	name := l.containerName(id)
-	argv := []string{
-		l.runtime, "run", "-d",
-		"--name", name,
-		"-v", layout.root + ":" + DefaultHome,
-		"-w", DefaultHome + "/" + WorkspaceSubdir,
-		"-e", "HOME=" + DefaultHome,
-		// A reaping PID 1. The detached coding job is backgrounded inside an
-		// `exec`, so without an init that reaps it, a finished job lingers as
-		// a zombie — which `kill -0` reports as ALIVE, hanging the runner's
-		// completion check on a job that already died.
-		"--init",
-	}
-	if l.opts.Network != "" {
-		argv = append(argv, "--network", l.opts.Network)
-	}
-	argv = append(argv, l.opts.RunArgs...)
-	// PID 1 exists only to hold the namespace open; every command is an
-	// `exec` into it, which is what makes a detached coding job survive the
-	// turn that started it.
-	argv = append(argv, l.opts.Image, "sleep", "infinity")
+	argv := l.runArgv(ctx, layout, name)
 
 	result, err := runHost(ctx, hostCommand{argv: argv})
 	if err != nil || result.ExitCode != 0 {
@@ -457,12 +438,56 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		return nil, localErrorf("could not start sandbox container from image %q: %s",
 			l.opts.Image, truncate(detail, 400))
 	}
-	log.Info("local_sandbox_created",
-		"sandbox_id", id, "containment", "container", "image", l.opts.Image, "container", name)
-	return &containerBox{
+	box := &containerBox{
 		layout: layout, runtime: l.runtime, container: name,
 		env: spec.Env, credentials: spec.CredentialFiles,
-	}, nil
+	}
+	// PROVEN BEFORE THE BOX IS HANDED OUT. Both properties this mode rests
+	// on fail silently and only much later — see verifyMount — so the box is
+	// torn down here rather than returned to do half its job.
+	if err := verifyMount(ctx, box, layout); err != nil {
+		_, _ = runHost(context.WithoutCancel(ctx), hostCommand{
+			argv: []string{l.runtime, "rm", "-f", name},
+		})
+		_ = os.RemoveAll(layout.root)
+		return nil, err
+	}
+	log.Info("local_sandbox_created",
+		"sandbox_id", id, "containment", "container", "image", l.opts.Image, "container", name)
+	return box, nil
+}
+
+// runArgv is the container-run command line for one box.
+//
+// Separated from Create so the argument order is assertable without a running
+// daemon: what an operator's own run_args may override is a function of where
+// they are spliced, and nothing else says it.
+func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []string {
+	argv := []string{
+		l.runtime, "run", "-d",
+		"--name", name,
+		"-v", layout.root + ":" + DefaultHome,
+		"-w", DefaultHome + "/" + WorkspaceSubdir,
+		"-e", "HOME=" + DefaultHome,
+		// A reaping PID 1. The detached coding job is backgrounded inside an
+		// `exec`, so without an init that reaps it, a finished job lingers as
+		// a zombie — which `kill -0` reports as ALIVE, hanging the runner's
+		// completion check on a job that already died.
+		"--init",
+	}
+	argv = append(argv, containerUserArgs(ctx, l.runtime)...)
+	if l.opts.Network != "" {
+		argv = append(argv, "--network", l.opts.Network)
+	}
+	// LAST, so an operator's own flags win. Both runtimes take the final
+	// occurrence of a repeated flag, which makes run_args the escape hatch
+	// for an image that genuinely needs its own user (`--user 0:0`) without
+	// a config knob whose only job is to undo the line above.
+	argv = append(argv, l.opts.RunArgs...)
+	// PID 1 exists only to hold the namespace open; every command is an
+	// `exec` into it, which is what makes a detached coding job survive the
+	// turn that started it.
+	return append(argv, l.opts.Image, "sleep", "infinity")
 }
 
 // Connect reattaches to an existing box by id, live or paused.
