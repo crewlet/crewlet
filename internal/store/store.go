@@ -145,6 +145,16 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// BEFORE THE POOL, because the Turso driver loads its native library on
+	// the first connection and PANICS if the shared cache it loads from is
+	// half-written — see turso.go. Preparing it here turns a process that
+	// dies on its first query into an error a caller can read, and stops
+	// two engines starting at once from corrupting that cache at all.
+	if drv == DriverTurso {
+		if err = prepareTursoLibrary(); err != nil {
+			return nil, err
+		}
+	}
 	maxConns := opts.MaxOpenConns
 	if maxConns <= 0 {
 		maxConns = defaultMaxOpenConns

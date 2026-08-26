@@ -12,6 +12,7 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 |----------|-------------|-----------------|
 | `CREWLET_NODE_ID` | This process's identity, when `node.id` is unset in the Tier A file. Labels every log line, health payload, and config-apply event. Must be **stable across restarts**; defaults to `node-0` | Your orchestrator (Kubernetes pod name / StatefulSet ordinal, or the host name) |
 | `CREWLET_STORE_DRIVER` | Which certified driver opens the store file — `turso` (the default) or `sqlite`. Overridden by `store.driver` in the Tier A file | Leave unset unless you are exercising the fallback driver |
+| `TURSO_GO_CACHE_DIR` | Read directly by the `turso` driver (and by the engine, which prepares it): where its embedded ~20 MB native library is extracted and loaded from. Default `os.UserCacheDir()` — `~/.cache` on Linux. Point it at a writable, persistent path in an ephemeral container, or every restart pays the extraction again. See [Deployment § The store](../guides/deployment.md#the-store) | — |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |
 | `LLM_API_KEY` | API key for your LLM provider (`providers.llm.default.api_keys`) | Your LLM provider dashboard |
 | `LLM_MODEL` | Model id served by your OpenAI-compatible endpoint (`providers.llm.default.model` in the example) | Your LLM provider docs |

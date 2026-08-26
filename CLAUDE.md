@@ -18,7 +18,7 @@ See `docs/index.md` for the full documentation index.
 ## Tech Stack
 - **Go 1.27+** — the module pins its own toolchain; `GOTOOLCHAIN=auto` fetches it rather than failing on a mismatch. Everything is pure Go: `CGO_ENABLED=0` builds every release target, which is what makes the cross-compile matrix a plain `GOOS`/`GOARCH` loop
 - **The standard library first.** `net/http` for servers and clients, `log/slog` for logging, `context` for cancellation, `encoding/json`. A dependency has to earn its place against what `std` already does
-- **Turso** (`turso.tech/database/tursogo`) — the embedded store, with `modernc.org/sqlite` as the certified fallback driver. Both pure Go, both run the same schema, both certified by the same suite
+- **Turso** (`turso.tech/database/tursogo`) — the embedded store, with `modernc.org/sqlite` as the certified fallback driver. Both pure Go, both run the same schema, both certified by the same suite. Turso is pure Go in the sense that matters — no cgo, no C toolchain — but it is not self-contained: its engine ships as a ~20 MB native library embedded in the driver and extracted at runtime into a shared per-user cache, which `internal/store/turso.go` prepares under a lock because upstream writes it non-atomically and PANICS on what a concurrent reader sees
 - **Embedded NATS JetStream** (`github.com/nats-io/nats-server`) — the default event stream, running *in the engine's own process*. Apache Pulsar is the external alternative for a fleet
 - **`github.com/modelcontextprotocol/go-sdk`** — MCP client and server
 - **Official vendor SDKs** where one exists; a thin typed client where one does not (Plane, Mattermost, GitLab)

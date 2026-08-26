@@ -66,6 +66,15 @@ without it** — a green run has simply not exercised them.
   the narrower of the two and nothing else catches a statement that only one
   of them accepts.
 
+  Turso also carries a native library — pure Go to *build* (no cgo), but its
+  engine is a ~20 MB binary embedded in the driver and extracted at runtime
+  into `$TURSO_GO_CACHE_DIR` (default `~/.cache/turso-go`), shared by every
+  process on the machine. Upstream writes it without a rename and panics on
+  what a concurrent reader sees, so `internal/store/turso.go` prepares it
+  under a lock and heals a cache entry that will not verify. If a test binary
+  ever dies with `unable to load turso library`, that cache is the place to
+  look — `go test ./internal/store/ -run LibraryCache` covers it.
+
   ```bash
   CREWLET_STORE_DRIVER=sqlite go test ./internal/store/...
   ```

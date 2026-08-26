@@ -13,6 +13,7 @@ require (
 	github.com/nats-io/nats.go v1.53.1
 	github.com/openai/openai-go/v3 v3.52.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.7
 	github.com/yuin/goldmark v1.8.5
 	golang.org/x/text v0.41.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -74,7 +75,6 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.7 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
