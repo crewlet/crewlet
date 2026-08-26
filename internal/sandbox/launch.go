@@ -131,7 +131,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 
 	handle, err := runner.Start(ctx, box, RunRequest{
 		Brief:      buildBrief(req),
-		Env:        req.Spec.Env,
+		Env:        withTelemetry(m, req),
 		Limits:     req.Limits,
 		LLM:        req.LLM,
 		MCPServers: req.MCPServers,
@@ -277,4 +277,65 @@ func buildBrief(req LaunchRequest) string {
 	b.WriteString("\n")
 	b.WriteString(EnvironmentBrief(req.Setup, names))
 	return b.String()
+}
+
+// withTelemetry adds the run's OTel environment to the spec's.
+//
+// MERGED HERE rather than in the spec, because the endpoint carries a token
+// scoped to THIS run and minted with a TTL: putting it in the spec would have
+// it persisted with the pending row and re-used by a resume hours later,
+// against a token that expired while the run was parked.
+//
+// THE OPERATOR'S OWN VALUES WIN. role.sandbox.env is where an operator
+// declares what a box gets, and a deployment that points its coding agents at
+// its own collector directly has said so deliberately — silently overriding
+// it would be the engine choosing where somebody else's telemetry goes.
+func withTelemetry(m *Manager, req LaunchRequest) map[string]string {
+	if m.telemetry == nil {
+		return req.Spec.Env
+	}
+	added := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
+		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
+	if len(added) == 0 {
+		return req.Spec.Env
+	}
+	env := make(map[string]string, len(req.Spec.Env)+len(added))
+	for k, v := range added {
+		env[k] = v
+	}
+	for k, v := range req.Spec.Env {
+		env[k] = v
+	}
+	return env
+}
+
+// otelTokenTTL is how long a run's export endpoint stays valid.
+//
+// TIED TO THE BOX'S OWN LIFETIME rather than picked: a token that expires
+// while its box is still running loses the tail of the run's telemetry —
+// exactly the part that explains a failure — and one that outlives the box is
+// a credential nothing needs. The pause TTL is added because a run parked on
+// a human's answer resumes into the same box and keeps exporting, and the
+// doubling covers the keepalive refreshing the box's own timer.
+func otelTokenTTL(spec Spec) time.Duration {
+	ttl := time.Duration(spec.TimeoutSec) * time.Second
+	if ttl <= 0 {
+		ttl = DefaultBoxTimeout
+	}
+	ttl *= 2
+	if pause := time.Duration(spec.PauseTTLSec) * time.Second; pause > 0 {
+		ttl += pause
+	}
+	return ttl
+}
+
+// RunEnvFor is [withTelemetry] under a name a test can reach.
+//
+// EXPORTED FOR THE ONE PROPERTY THAT IS OTHERWISE UNOBSERVABLE: the merge
+// order between the engine's telemetry variables and the operator's own. Both
+// end up inside a box that a test cannot look into, and getting the order
+// wrong sends somebody else's spans to the engine — silently, because they do
+// arrive somewhere.
+func RunEnvFor(m *Manager, req LaunchRequest) map[string]string {
+	return withTelemetry(m, req)
 }

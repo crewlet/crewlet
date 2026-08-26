@@ -458,8 +458,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	})
 
 	app := api.New(api.Options{
-		Bootstrap:    boot,
-		Runtime:      engineRuntime{engine: e, reconciler: reconciler},
+		Bootstrap: boot,
+		Runtime:   engineRuntime{engine: e, reconciler: reconciler},
+		// THE ENGINE'S OWN RECEIVER, not a second one built here. In a
+		// merged process the API verifies tokens the engine minted, and
+		// two receivers would sign with two per-process keys unless a
+		// keyring happened to be configured.
+		OtelReceiver: e.OtelReceiver(),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than

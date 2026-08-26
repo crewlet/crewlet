@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -86,6 +87,17 @@ type Options struct {
 	// Config serves /config. Nil serves none, which is what a process with
 	// no store genuinely has.
 	Config *configapi.Service
+
+	// OtelReceiver serves the sandbox telemetry edge. Nil serves none, and
+	// the route is then ABSENT rather than refusing — an endpoint that
+	// exists and answers 503 to everything reads as broken, while one that
+	// is not there matches what the config says.
+	//
+	// It belongs to the API rather than to the engine because in a SPLIT
+	// deployment this is the externally reachable process: the engine
+	// mints a run's endpoint, and a different process verifies the token.
+	// That is why the token is signed rather than stored.
+	OtelReceiver *sandbox.OtelReceiver
 
 	// Budgets is the fleet's token counter. Supplied separately from
 	// Sources.Budget, which is the READ half: a reset is an operator
@@ -201,6 +213,11 @@ func New(opts Options) *App {
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
 	a.mountWebhooks(mux, opts.Inbound, sources, now)
+	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
+	// the same reason: the exporter inside a box holds no API token, and
+	// giving it one would hand a sandbox the credential that reads the
+	// whole company. Its per-run token is in the path instead.
+	a.mountOTLP(mux, opts.OtelReceiver)
 	// The config surface. GUARDED in full, reads included: the auth
 	// package makes /config the one prefix never eligible for
 	// allow_anonymous_read, because reading it exposes the whole company

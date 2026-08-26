@@ -63,6 +63,12 @@ type ManagerOptions struct {
 	// none of its own, so these two config lists are the ONLY provisioning
 	// a box receives.
 	DefaultSetup []SetupStep
+
+	// Telemetry mints each run's OTel environment. Nil exports nothing
+	// from inside the box, which is an ordinary configuration: the run's
+	// engine-side lifecycle events and its published transcript are the
+	// observability surface either way.
+	Telemetry *OtelReceiver
 }
 
 // Manager is the engine-held sandbox lifecycle.
@@ -81,6 +87,7 @@ type Manager struct {
 	timeout     time.Duration
 	pauseTTL    time.Duration
 	setup       []SetupStep
+	telemetry   *OtelReceiver
 }
 
 // NewManager validates the options and returns the manager.
@@ -99,6 +106,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		timeout:     opts.DefaultTimeout,
 		pauseTTL:    opts.DefaultPauseTTL,
 		setup:       slices.Clone(opts.DefaultSetup),
+		telemetry:   opts.Telemetry,
 	}
 	if m.codingAgent == "" {
 		m.codingAgent = DefaultCodingAgent

@@ -43,7 +43,7 @@ import (
 // What is NOT ordinary is a configured provider that cannot be constructed —
 // that fails the apply, because the alternative publishes a company whose
 // sandbox-enabled seats plan around a box they will never get.
-func buildSandbox(c *config.Company, env *config.Resolver) (*sandbox.Manager, error) {
+func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelReceiver) (*sandbox.Manager, error) {
 	spec := c.Providers.Sandbox
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
@@ -66,6 +66,7 @@ func buildSandbox(c *config.Company, env *config.Resolver) (*sandbox.Manager, er
 		DefaultTimeout:     seconds(spec.Timeout()),
 		DefaultPauseTTL:    seconds(spec.PauseTTL()),
 		DefaultSetup:       setupSteps(spec.Setup),
+		Telemetry:          otel,
 	})
 }
 
@@ -552,7 +553,7 @@ func (e *Engine) sandboxManager() *sandbox.Manager {
 // what its fleet-singleton duty is claimed under. Doing both at once meant one
 // of the two ran against a nil.
 func (e *Engine) buildSandboxRuntime(company *Company) error {
-	manager, err := buildSandbox(company.Config, e.resolver())
+	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel)
 	if err != nil {
 		return err
 	}

@@ -109,6 +109,12 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"Maximum depth of agent-to-agent delegation chains.",
 		"github.com/crewlet/crewlet/internal/queue/topics",
 		"Prefix on each bot username, e.g. agent-.",
+		// A name that STARTS like a subject and continues into
+		// something a subject never contains. The OTel resource
+		// attribute below is the real one; the others are the shape.
+		"crewlet.agent_handle=",
+		"crewlet.agent_handle",
+		"crewlet.events_seen",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",
@@ -292,7 +298,7 @@ func isSupportPackage(dir string) bool { return strings.HasSuffix(dir, "test") }
 func violation(markers map[string]bool, value string) (string, bool) {
 	for marker := range markers {
 		if strings.Contains(marker, ".") {
-			if strings.Contains(value, marker) {
+			if containsSubject(value, marker) {
 				return marker, true
 			}
 			continue
@@ -310,6 +316,42 @@ func violation(markers map[string]bool, value string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// containsSubject reports a dotted marker appearing where a SUBJECT could
+// continue, rather than merely as a substring.
+//
+// A subject prefix is always followed by a `.`, a `>` or the end of the
+// value: `crewlet.agent.alice.inbox`, `crewlet.agent.`, `crewlet.events.>`.
+// Plain containment also matches names that merely START the same way and
+// are not subjects at all — `crewlet.agent_handle=`, an OpenTelemetry
+// resource-attribute key, was the first — and a guard that cries wolf on
+// those is one somebody eventually silences with an allowance entry.
+//
+// This NARROWS the matcher, so every literal it flagged before that really
+// is a subject is still flagged: the positives above cover each shape.
+func containsSubject(value, marker string) bool {
+	// A marker that already ENDS in a separator carries its own boundary —
+	// `dlq.` cannot be the start of a longer word — so containment is the
+	// whole test for it.
+	if strings.HasSuffix(marker, ".") {
+		return strings.Contains(value, marker)
+	}
+	for at := 0; ; {
+		i := strings.Index(value[at:], marker)
+		if i < 0 {
+			return false
+		}
+		end := at + i + len(marker)
+		if end == len(value) {
+			return true
+		}
+		switch value[end] {
+		case '.', '>', '*':
+			return true
+		}
+		at = end
+	}
 }
 
 // isWireName reports whether every character could appear in a consumer group

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,6 +79,16 @@ type Engine struct {
 	sandboxCoordinator *sandbox.Coordinator
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
+
+	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
+	// nothing from inside a box, which is the ordinary configuration.
+	//
+	// Held here and handed OUT to the API rather than built twice: in a
+	// split deployment the API verifies tokens this process minted, and
+	// two receivers would sign with two per-process keys unless a keyring
+	// happens to be configured — which is exactly the case that must not
+	// depend on happening to be configured.
+	sandboxOtel *sandbox.OtelReceiver
 
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
@@ -170,6 +181,11 @@ type Options struct {
 	Bootstrap *config.Bootstrap
 	Company   *config.Company
 
+	// OtelReceiver mints the per-run OTLP endpoints a sandbox exports to.
+	// Nil builds one from the environment; see
+	// [sandbox.BuildOtelReceiver].
+	OtelReceiver *sandbox.OtelReceiver
+
 	// Backends may be supplied by a caller that already opened them — the
 	// API process and the engine share one broker when they run merged.
 	// Nil opens them from the bootstrap config, and the engine then owns
@@ -240,11 +256,29 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// Only what this engine OPENED does it close. A caller that supplied
 	// backends keeps their lifetime — the merged API process outlives the
 	// engine's own shutdown and still needs its broker.
+	// BUILT BEFORE THE SANDBOX RUNTIME, because the manager takes it: a
+	// receiver constructed after the first apply would leave every run
+	// launched in between exporting nowhere, silently.
+	otel := opts.OtelReceiver
+	if otel == nil {
+		built, err := sandbox.BuildOtelReceiver(os.Getenv,
+			keyMaterial(opts.Bootstrap))
+		if err != nil {
+			// A receiver URL that is set and unusable is a deployment
+			// that asked for in-box telemetry and would get none, so it
+			// is refused rather than dropped: the alternative is a
+			// config that looks complete and exports nothing.
+			return nil, fmt.Errorf("engine: sandbox telemetry: %w", err)
+		}
+		otel = built
+	}
+
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
-		mcp:       mcp.NewBridge(nil),
-		startedAt: time.Now().UTC(),
+		mcp:         mcp.NewBridge(nil),
+		sandboxOtel: otel,
+		startedAt:   time.Now().UTC(),
 	}
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
@@ -712,4 +746,28 @@ func (e *Engine) notifyApplied(ctx context.Context) {
 	if fn := e.onApplied.Load(); fn != nil && *fn != nil {
 		(*fn)(ctx)
 	}
+}
+
+// OtelReceiver is this node's sandbox telemetry receiver, or nil.
+//
+// Handed to the API so a merged process mounts the route the engine mints
+// against, and so a SPLIT one is visibly missing it rather than answering 401
+// with a key nobody shares.
+func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
+
+// keyMaterial is the Tier A keyring, as the OTLP token key is derived from.
+//
+// THE REFERENCES ARE NOT RESOLVED HERE, and must not be: this runs before the
+// secret store is open, and the store's own key is what would resolve them.
+// Two processes reading the same document derive the same key either way —
+// what matters is that they agree, not that the material is the plaintext.
+func keyMaterial(boot *config.Bootstrap) []string {
+	if boot == nil {
+		return nil
+	}
+	out := make([]string, 0, len(boot.Secrets.Keys))
+	for _, key := range boot.Secrets.Keys {
+		out = append(out, key.ID+":"+key.Material)
+	}
+	return out
 }
