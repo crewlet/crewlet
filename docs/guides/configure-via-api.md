@@ -131,6 +131,12 @@ consequences worth knowing before you script against it:
 - **The path is the identity.** `PUT /config/roles/ceo` replaces whatever is
   at `ceo`; a body carrying a different handle does not move it. Renaming is a
   full-document edit.
+- **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
+  answers `405`. Removal is a full-document edit for the same reason creation
+  is, only more so — deleting a seat also strands its mailbox and its in-flight
+  work, and deleting a provider silently repoints every role that named it. If
+  that is going to happen, it should happen in a document you looked at, and
+  land as one reviewable revision. Export, edit, `PUT /config`.
 
 A seat inside a unit is reachable by handle like any other — you do not have
 to know which list it lives in, or how deeply the unit is nested.

@@ -243,3 +243,37 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 		t.Errorf("the refusal does not name what is missing: %s", res.Body.String())
 	}
 }
+
+// PUT IS THE ONLY VERB ON AN ENTITY PATH, and the refusal has to be legible.
+//
+// The previous engine served DELETE here, so an operator carrying those
+// scripts forward will send one. They get 405 with an Allow header naming PUT
+// — a *routing* answer rather than a handler that 404s or, worse, one that
+// quietly succeeds having done nothing.
+//
+// Removal is a full-document edit on purpose, for the same reason creation is
+// and more so: deleting a seat strands its mailbox and its in-flight work, and
+// deleting a provider silently repoints every role that named it. Both belong
+// in a document somebody looked at. docs/guides/configure-via-api.md states
+// this status code, which is why it is asserted rather than assumed.
+func TestAnEntityPathRefusesEveryVerbButPut(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	for _, kind := range configapi.EntityKinds() {
+		for _, method := range []string{http.MethodDelete, http.MethodPost, http.MethodPatch} {
+			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)
+			if res.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s /config/%s/ceo = %d, want 405 — an entity path serves "+
+					"PUT alone, and any other answer leaves an operator guessing "+
+					"whether the write happened", method, kind, res.Code)
+				continue
+			}
+			if allow := res.Header().Get("Allow"); !strings.Contains(allow, http.MethodPut) {
+				t.Errorf("%s /config/%s/ceo: Allow = %q, which does not name PUT — "+
+					"the one verb this path has", method, kind, allow)
+			}
+		}
+	}
+}
