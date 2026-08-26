@@ -140,6 +140,13 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	key := attachKey{topic, group}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	// A hold on a closed client gates nothing: Stop dropped every
+	// attachment and cleared the hold map on the way out. Returning nil
+	// here told a shutdown path it had gated a subscription that no longer
+	// existed. See queue.EventQueue's Stop.
+	if q.closed {
+		return ErrClosed
+	}
 	if q.holds[key] == nil {
 		q.holds[key] = map[string]struct{}{}
 	}
@@ -155,6 +162,9 @@ func (q *Queue) ResumeTopic(_ context.Context, topic, group, reason string) erro
 	key := attachKey{topic, group}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		return ErrClosed
+	}
 	delete(q.holds[key], reason)
 	if len(q.holds[key]) == 0 {
 		delete(q.holds, key)
@@ -536,6 +546,9 @@ func (a *attachment) act(cons pulsar.Consumer, action brokerAction, msg pulsar.M
 // goroutine, so it reaches the close only after the handler it was running has
 // applied its outcome to a live consumer.
 func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
+	if q.isClosed() {
+		return false, ErrClosed
+	}
 	atts := q.lookup(topic, group)
 	for _, a := range atts {
 		a.quiesced.Store(true)
@@ -556,6 +569,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // still be legitimately paused for a running sandbox, and clearing that would
 // deliver into a suspended turn.
 func (q *Queue) Unquiesce(_ context.Context, topic, group string) (bool, error) {
+	if q.isClosed() {
+		return false, ErrClosed
+	}
 	var was bool
 	for _, a := range q.lookup(topic, group) {
 		if a.quiesced.Swap(false) {
@@ -595,6 +611,10 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 func (q *Queue) detach(topic, group string, grace time.Duration) (bool, error) {
 	key := attachKey{topic, group}
 	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return false, ErrClosed
+	}
 	atts := q.attachments[key]
 	delete(q.attachments, key)
 	delete(q.holds, key)

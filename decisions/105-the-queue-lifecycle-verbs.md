@@ -45,6 +45,39 @@ closed`, while `Quiesce`, `Unquiesce`, `Detach`, `PauseTopic` and
 next life to leak into — `Start` cannot revive it — but a shutdown path could
 believe it had gated a subscription that no longer existed.
 
+**Pulsar**, measured on a stopped queue after the rule above was already
+written, failed it in *both* ways at once — and is the reason this section now
+lists three backends rather than two:
+
+```
+Publish/Subscribe/SubscribeBatch/SubscribeStream
+                    -> pulsar: queue closed   <- refused, but NOT ErrNotLive
+Quiesce/Unquiesce/Detach/PauseTopic/ResumeTopic
+                    -> false, nil             <- succeeded
+EnsureSubscription  -> true,  nil             <- CREATED broker state
+DeleteSubscription  -> true,  nil             <- DESTROYED broker state
+```
+
+The two admin verbs are the sharp edge and are particular to this backend.
+Subscription lifecycle here runs over the **REST admin endpoint**, which is a
+separate client that `Stop` does not close — so unlike JetStream, where a
+closed connection refuses on its own, a stopped Pulsar queue could still
+provision a durable subscription nothing in the process would ever attach to,
+or delete one along with the mail it retained. Nothing about the client being
+gone stops it; only the flag does, so the guard is the whole mechanism rather
+than a second line of defence.
+
+`DeleteSubscription` gets no flag check of its own: it detaches locally first,
+and that detach is the gate, so the admin call is unreachable on a stopped
+queue. A second check there would be a guard no test could tell apart from the
+first — and this repo does not keep guards nothing can falsify.
+
+Pulsar reached this state honestly: it was written before the rule and
+certified by a suite that only a CI job with a real broker runs, so the gap
+was invisible to every local `go test ./...`. That is why the eleven verbs are
+now also asserted against a *stopped offline queue* in the backend's own
+package, where the answers are decided before anything reaches the wire.
+
 ## The rule, and why it is two rules
 
 The two points a queue is not live are not the same point, and one rule
@@ -102,7 +135,7 @@ the one path where the node is trying to hand it back.
 Telling those apart cannot mean asking which backend is running; nothing above
 `internal/queue` may. So the contract owns one sentinel, `queue.ErrNotLive`,
 and each backend's own error wraps it — `jetstream.ErrClosed`,
-`memory.ErrNotStarted`. `a_stopped_queue_refuses_every_verb` checks for it, so
+`memory.ErrNotStarted`, `pulsar.ErrClosed`. `a_stopped_queue_refuses_every_verb` checks for it, so
 a backend cannot refuse in a way its callers cannot read.
 
 JetStream needed a second fix to satisfy that: its broker verbs surfaced

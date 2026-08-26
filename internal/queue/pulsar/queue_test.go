@@ -303,3 +303,86 @@ func TestBackendIsStableAndLowercase(t *testing.T) {
 		t.Fatalf("Backend() = %q, want pulsar", got)
 	}
 }
+
+// EVERY VERB IS REFUSED AFTER STOP, AND WITH THE CONTRACT'S SENTINEL.
+//
+// The certification suite asserts this against a real broker, which is where
+// it was caught — but the broker is not what makes it true, and a rule only a
+// CI job with a container can check is a rule this package can regress on any
+// afternoon. So the same eleven verbs run here against a stopped offline
+// queue: the answers are decided before anything reaches the wire, so they are
+// checkable without one.
+//
+// Two things were wrong and each is separately silent. Seven verbs — the two
+// admin ones over a REST client Stop does not close, and the five that only
+// touch process-local maps — returned SUCCESS, so a shutdown path believed it
+// had gated, detached or provisioned a subscription that no longer existed;
+// EnsureSubscription genuinely created durable broker state a stopped queue
+// would never attach to or delete. And the refusals that did happen carried
+// only this backend's own error, so a seat release testing queue.ErrNotLive
+// read "the mailbox is already down" as "the detach failed" — and KEPT THE
+// LEASE.
+func TestEveryVerbIsRefusedAfterStop(t *testing.T) {
+	t.Parallel()
+	q := offlineQueue(t)
+	ctx := context.Background()
+	if err := q.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	handler := func(context.Context, *events.Event) queue.Result { return queue.Ack() }
+	batch := func(context.Context, []*events.Event) queue.Result { return queue.Ack() }
+	stream := func(context.Context, string, *events.Event) {}
+	unsub, streamErr := q.SubscribeStream(ctx, "topic.>", stream)
+	if unsub != nil {
+		_ = unsub(ctx)
+	}
+
+	second := func(_ bool, err error) error { return err }
+	for _, verb := range []struct {
+		name string
+		err  error
+	}{
+		{"Publish", q.Publish(ctx, "topic.t", &events.Event{Type: "probe"})},
+		{"Subscribe", q.Subscribe(ctx, "topic.t", "g", handler)},
+		{"SubscribeBatch", q.SubscribeBatch(ctx, "topic.t", "g", batch, nil, nil)},
+		{"Quiesce", second(q.Quiesce(ctx, "topic.t", "g"))},
+		{"Unquiesce", second(q.Unquiesce(ctx, "topic.t", "g"))},
+		{"Detach", second(q.Detach(ctx, "topic.t", "g"))},
+		{"EnsureSubscription", second(q.EnsureSubscription(ctx, "topic.t", "g"))},
+		{"DeleteSubscription", second(q.DeleteSubscription(ctx, "topic.t", "g"))},
+		{"SubscribeStream", streamErr},
+		{"PauseTopic", q.PauseTopic(ctx, "topic.t", "g", "test")},
+		{"ResumeTopic", q.ResumeTopic(ctx, "topic.t", "g", "test")},
+	} {
+		if verb.err == nil {
+			t.Errorf("%s succeeded on a stopped queue; whatever it did was done "+
+				"through a closed client, and any state it left behind outlives "+
+				"the queue that took it", verb.name)
+			continue
+		}
+		if !errors.Is(verb.err, queue.ErrNotLive) {
+			t.Errorf("%s refused with %v, which is not queue.ErrNotLive; a caller "+
+				"above the queue cannot tell a torn-down mailbox from a failed "+
+				"teardown without branching on the backend", verb.name, verb.err)
+		}
+	}
+}
+
+// AND THE ADMIN ENDPOINT IS REALLY REACHABLE OTHERWISE, or the case above
+// proves only that an offline queue cannot talk to a broker it never had.
+//
+// EnsureSubscription and DeleteSubscription run over a REST client that Stop
+// does NOT close, which is exactly why they need a guard of their own: the one
+// thing that stops them is the flag, and this is what says the flag is the
+// only thing that stopped them.
+func TestTheAdminVerbsWorkUntilTheQueueIsStopped(t *testing.T) {
+	t.Parallel()
+	q := offlineQueue(t)
+	ctx := context.Background()
+	if _, err := q.EnsureSubscription(ctx, "topic.t", "g"); err != nil {
+		t.Fatalf("EnsureSubscription on a live queue: %v", err)
+	}
+	if _, err := q.DeleteSubscription(ctx, "topic.t", "g"); err != nil {
+		t.Fatalf("DeleteSubscription on a live queue: %v", err)
+	}
+}

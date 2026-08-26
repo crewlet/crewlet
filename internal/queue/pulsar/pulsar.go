@@ -60,6 +60,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // Errors this backend reports. Callers branch on these; everything else is
@@ -68,8 +70,12 @@ var (
 	// ErrSubject means a subject cannot become a Pulsar topic — a publish
 	// that would land where nobody can consume, or nowhere at all.
 	ErrSubject = errors.New("pulsar: unroutable subject")
-	// ErrClosed means the queue has been stopped.
-	ErrClosed = errors.New("pulsar: queue closed")
+	// ErrClosed means the queue has been stopped. It wraps
+	// queue.ErrNotLive, which is what callers above this package test:
+	// a seat release reads that sentinel to tell "the mailbox is already
+	// down" from "the detach failed", and it may not ask which backend is
+	// running to find out.
+	ErrClosed = fmt.Errorf("pulsar: queue closed: %w", queue.ErrNotLive)
 	// ErrConfig means the configuration cannot produce a working client.
 	ErrConfig = errors.New("pulsar: invalid configuration")
 )

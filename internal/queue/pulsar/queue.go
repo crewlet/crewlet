@@ -147,6 +147,17 @@ func (q *Queue) Backend() string { return "pulsar" }
 // established in Open, so there is nothing deferred to do here.
 func (q *Queue) Start(context.Context) error { return nil }
 
+// isClosed reports whether Stop has run.
+//
+// Every verb in the contract asks this, so it is one method rather than a
+// hand-rolled lock in each: the eleven verbs disagreed about the answer for
+// exactly as long as each one owned its own copy of the question.
+func (q *Queue) isClosed() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.closed
+}
+
 // InFlightCount reports handler invocations currently mid-flight.
 func (q *Queue) InFlightCount() int { return q.inFlight.Count() }
 
@@ -283,6 +294,14 @@ func (q *Queue) callListener(ctx context.Context, l queue.PublishListener, topic
 // subscription covers, which is the contract's stated behaviour rather than a
 // surprise.
 func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bool, error) {
+	// THE ADMIN ENDPOINT IS A SEPARATE CONNECTION, and that is exactly why
+	// this check has to be here: closing the Pulsar client does not close
+	// the REST client, so without it a stopped queue would happily create a
+	// durable subscription on the broker that nothing in this process will
+	// ever attach to or delete. See queue.EventQueue's Stop.
+	if q.isClosed() {
+		return false, ErrClosed
+	}
 	return q.admin.EnsureSubscription(ctx, topic, group)
 }
 
@@ -294,6 +313,11 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 // seat. The local wait is bounded, so a wedged handler turns into a legible
 // broker error rather than a hang.
 func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bool, error) {
+	// The local detach is also this verb's LIFECYCLE GATE, and the order is
+	// what makes that safe: it refuses a stopped queue before the admin call
+	// — which runs over a REST client Stop does not close — can destroy a
+	// subscription and the mail it retains. A second flag check here would
+	// be a guard no test could distinguish from this one.
 	if _, err := q.detach(topic, group, detachGrace); err != nil {
 		return false, err
 	}
