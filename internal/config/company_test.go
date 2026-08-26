@@ -92,9 +92,19 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.sandbox.local", ErrMissing,
 		},
 		{
-			"local block on a remote sandbox",
-			"name: Acme\nproviders:\n  sandbox:\n    type: e2b\n    local: {containment: direct}\n",
+			"a local block on a backend that is not local",
+			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    local: {containment: direct}\n",
 			"providers.sandbox.local", ErrConflict,
+		},
+		{
+			// THE BACKEND IS A CHOICE, and every default is wrong in a
+			// way nobody sees: `local` runs the coding agent on this
+			// host, `none` turns code work off while the config says it
+			// is on, and the default this replaced named a backend the
+			// engine had no code to build.
+			"a sandbox block that names no backend",
+			"name: Acme\nproviders:\n  sandbox:\n    default_coding_agent: opencode\n",
+			"providers.sandbox.type", ErrMissing,
 		},
 		{
 			"container containment with no image",
@@ -108,12 +118,12 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		},
 		{
 			"unbounded pause",
-			"name: Acme\nproviders:\n  sandbox:\n    type: e2b\n    default_pause_ttl_seconds: -1\n",
+			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    default_pause_ttl_seconds: -1\n",
 			"providers.sandbox.default_pause_ttl_seconds", ErrOutOfRange,
 		},
 		{
 			"a setup step that does nothing",
-			"name: Acme\nproviders:\n  sandbox:\n    type: e2b\n    setup:\n      - name: empty\n",
+			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    setup:\n      - name: empty\n",
 			"providers.sandbox.setup[0]", ErrMissing,
 		},
 

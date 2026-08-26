@@ -258,3 +258,47 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 		t.Error("underlay dropped defaults onto a nil environment")
 	}
 }
+
+// EVERY BACKEND THE CONFIG ACCEPTS IS ONE THIS ENGINE CAN BUILD.
+//
+// `config.SandboxTypes` is the closed set an operator's `type:` is checked
+// against, and `buildSandboxProvider` is what turns one into a running
+// backend. Nothing connects them, and when they last disagreed the config's
+// DEFAULT was the offender: `providers.sandbox: {}` validated, reported a
+// configured sandbox on every operator surface, and failed at the first
+// coding run with an error naming a backend nobody had written.
+//
+// It fails in the direction that is hardest to see — the config says yes and
+// the runtime says no — and only for a company that actually runs code, so a
+// boot proves nothing. Hence a test that walks the set.
+func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
+	t.Parallel()
+	for _, kind := range config.SandboxTypes {
+		spec := &config.SandboxProvider{Type: kind}
+		if kind == config.SandboxLocal {
+			// The one backend with a required block of its own: type
+			// local with none would silently take `direct` containment,
+			// which runs the coding agent as the engine's user.
+			spec.Local = &config.LocalSandbox{Containment: config.ContainmentDirect}
+		}
+		if kind == config.SandboxNone {
+			// Not a backend — it is how an operator says "no code work",
+			// and buildSandbox never reaches the switch for it.
+			if spec.Enabled() {
+				t.Errorf("%q reports itself enabled, so the engine would try "+
+					"to build a backend for the value that means there is none", kind)
+			}
+			continue
+		}
+		provider, err := buildSandboxProvider(spec)
+		if err != nil {
+			t.Errorf("providers.sandbox.type %q is accepted by the config and "+
+				"cannot be built: %v", kind, err)
+			continue
+		}
+		if provider == nil {
+			t.Errorf("providers.sandbox.type %q built no provider and no error, "+
+				"so a sandbox-enabled seat plans around a box it never gets", kind)
+		}
+	}
+}

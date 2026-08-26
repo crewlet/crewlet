@@ -6,9 +6,6 @@ import "strings"
 type SandboxType string
 
 const (
-	// SandboxE2B is a remote box — cloud, or a self-hosted cluster via
-	// domain.
-	SandboxE2B SandboxType = "e2b"
 	// SandboxLocal is the ENGINE HOST as a backend, so code work can use
 	// the subscription CLI login `crewlet llm login` already established,
 	// with no remote account and no API key.
@@ -20,8 +17,18 @@ const (
 	SandboxNone SandboxType = "none"
 )
 
-// SandboxTypes is the closed set.
-var SandboxTypes = []SandboxType{SandboxE2B, SandboxLocal, SandboxFake, SandboxNone}
+// SandboxTypes is the closed set — THE ONES THIS ENGINE CAN BUILD.
+//
+// A remote backend was in this set and was the DEFAULT, with nothing behind
+// it: buildSandboxProvider had a case that refused it by name. So a company
+// that wrote `providers.sandbox:` and no type validated cleanly, reported a
+// configured sandbox on the dashboard, and failed at its first coding run —
+// an operator surface saying yes and a runtime saying no, which is the
+// distance this closed set exists to close.
+//
+// A value here is a backend `buildSandboxProvider` constructs. Adding one
+// without that is how the last entry got in.
+var SandboxTypes = []SandboxType{SandboxLocal, SandboxFake, SandboxNone}
 
 // CodingAgent is which coding CLI runs inside a box.
 type CodingAgent string
@@ -42,7 +49,27 @@ var CodingAgents = []CodingAgent{CodingAgentClaudeCode, CodingAgentOpenCode}
 // backend; the per-seat gate is role.sandbox, and a seat without one never
 // sees the tool.
 type SandboxProvider struct {
-	Type SandboxType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=e2b|local|fake|none" desc:"e2b (default), local, fake, or none."`
+	// Type is the backend, and it is REQUIRED whenever a sandbox: block is
+	// present.
+	//
+	// THERE IS NO DEFAULT, and the absence of one is the whole point.
+	// Every candidate default is wrong in a way that is silent:
+	//
+	//   - `local` runs the coding agent on the ENGINE HOST. Its `direct`
+	//     containment runs as the engine's user with the engine's
+	//     filesystem access, which is a deliberate trade an operator makes
+	//     for their own machine and must never be made for them.
+	//   - `none` reads as "code work is on" in the config and off in the
+	//     engine, which is the silence a whole class of bugs here comes
+	//     from.
+	//   - A REMOTE backend was the default, and the engine had no code to
+	//     build one. `providers.sandbox: {}` therefore validated, reported
+	//     a configured sandbox on every operator surface, and failed at the
+	//     first coding run with an error naming a type nobody had written.
+	//
+	// A block with no type is an operator who has not decided, and the
+	// honest answer is to ask rather than to pick.
+	Type SandboxType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=local|fake|none" desc:"Backend: local, fake, or none. Required — there is no default."`
 
 	// Local is the local backend's block. Required when Type is local and
 	// refused otherwise: type local without it would silently take the
@@ -131,14 +158,24 @@ func (s *SandboxProvider) Enabled() bool {
 
 func (s *SandboxProvider) validate(path string) error {
 	var p problems
-	if s.Type != "" && !oneOf(s.Type, SandboxTypes) {
+	switch {
+	case s.Type == "":
+		// REQUIRED, AND REPORTED AS A CHOICE rather than as a missing
+		// field, because the three answers do materially different
+		// things to the machine the engine runs on. See [SandboxProvider].
+		p.add(at(path, "type"), ErrMissing,
+			"a sandbox block has to name its backend (%s) — there is no "+
+				"default, because `local` runs the coding agent on this host "+
+				"and `none` turns code work off, and neither may be chosen "+
+				"for an operator who has not said which they meant. Remove "+
+				"the block entirely to leave the sandbox unconfigured",
+			names(SandboxTypes))
+		return p.err()
+	case !oneOf(s.Type, SandboxTypes):
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(SandboxTypes))
 		return p.err()
 	}
 	kind := s.Type
-	if kind == "" {
-		kind = SandboxE2B
-	}
 
 	switch {
 	case kind == SandboxLocal && s.Local == nil:

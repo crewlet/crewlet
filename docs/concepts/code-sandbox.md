@@ -1,12 +1,16 @@
 # Code Sandbox
 
-> **v1 status — local backends only.** This build ships `type: local` —
-> `direct` (a process tree) and `container` (Docker or Podman). The E2B
-> backend is not here yet, so the remote-sandbox passages below describe the
-> intended contract rather than something you can configure today. Nor is the
-> engine-fronted OTLP receiver — a coding run's own telemetry has no
-> collector to export to yet, though the run's engine-side lifecycle events
-> and its published transcript are all here.
+> **v1 status — local backends only.** This build runs code in `type: local`
+> boxes: `direct` (a process tree) and `container` (Docker or Podman). The
+> **remote E2B backend is not in this build** — `type: e2b` names no code
+> here, so it is not a value `providers.sandbox.type` accepts at all rather
+> than one accepted and refused at the first coding run. The remote-sandbox
+> passages below describe the contract it is written against, and are kept
+> because the engine ran E2B boxes before the Go rewrite and every one of
+> them still names a real constraint (a paused box bills, a cloud box cannot
+> reach your laptop). Nor is the engine-fronted OTLP receiver here — a coding
+> run's own telemetry has no collector to export to yet, though the run's
+> engine-side lifecycle events and its published transcript are all here.
 
 Crewlet agents author code through the **`run_sandbox` Execute tool**: the executor calls it with a concrete code task, the engine provisions an isolated sandbox (a real VM with a shell, a filesystem, and a git checkout), and a **coding agent** — Claude Code or OpenCode — works on the task autonomously inside it. The call is **detached**: the Execute tool-loop *suspends* when the job starts, the engine persists the in-flight conversation, and when the job completes — minutes or hours later — the **same loop resumes** with the coding agent's findings spliced in as that tool call's reply. The executor then reports and acts with its own tools (replying on the originating channel, updating the ticket) in the same turn, with full context.
 
@@ -64,12 +68,9 @@ A sibling of `providers.llm`, live-reloadable, with secrets kept as `${VAR}` ref
 ```yaml
 providers:
   sandbox:
-    type: e2b                     # e2b | fake | none (omit = disabled)
-    api_key: "${E2B_API_KEY}"     # required — the SDK authenticates on every call
-    domain: ""                    # set → self-hosted / local E2B; empty → e2b.dev cloud
-    template: ""                  # empty → E2B's prebuilt claude / opencode template
-                                  #   per coding agent; or a custom derived image.
-                                  #   ALSO how box resources are sized (below)
+    type: local                   # local | fake | none — REQUIRED, no default
+    local:                        # required for type local (see Local sandboxes)
+      containment: direct
     default_coding_agent: claude-code   # claude-code | opencode
     default_timeout_seconds: 900  # box TTL / keepalive window — NOT a run cap (below)
     default_pause_ttl_seconds: 1800     # how long a blocked run's paused box is
@@ -77,9 +78,11 @@ providers:
     setup: []                     # engine-wide provisioning steps (see Setup steps)
 ```
 
+- **`type` is required and has no default.** Every candidate default is wrong in a way nobody sees. `local` runs the coding agent on the **engine host** — its `direct` containment as the engine's own user — which is a trade an operator makes deliberately for their own machine and must never have made for them. `none` reads as "code work is on" in the document and off in the engine. And the default this replaced named a remote backend the engine had no code to build: `providers.sandbox: {}` validated, showed a configured sandbox on every operator surface, and failed at the first coding run. A block with no `type` is an operator who has not decided, so `crewlet validate` asks. **Leave the block out entirely** to run with no sandbox at all.
+
 - **`default_timeout_seconds` is not a run-time limit.** It is the box's TTL / keepalive window: the completion poll refreshes a running box's TTL to this value on every tick, so the clock never kills a live job. It is effectively the *orphan-reclaim grace* — how long a box outlives an engine that stopped heart-beating (a crash) before E2B reaps it. A coding job is never force-stopped on a timer.
 - **`default_pause_ttl_seconds`** bounds how long a run blocked on a human answer keeps its *paused* box. E2B holds a paused sandbox indefinitely — there is no provider-side TTL — and bills for the snapshot, so expiring it is the engine's job: past this age the completion poll [reaps it](#mid-run-clarification-crewlet-ask) and the run re-seeds from the pushed branch when the answer arrives. 30 minutes trades a bounded snapshot bill against exact resume for the replies that come back quickly; raise it if your teams answer in hours. `0` means never pause — the box is torn down the moment the run blocks, for zero snapshot cost. Negative values are rejected here: an unbounded pause is the leak the knob exists to prevent. A *role* inherits this default by leaving `role.sandbox.pause_ttl_seconds` out entirely — the older spelling, `-1`, still means the same thing and is still accepted. Correctness never depends on the box: the durable state is the pushed branch plus the persisted row.
-- **Sizing is `template`, not a limits knob.** There is deliberately no `default_limits`. A box's vCPU and RAM are properties of its **template**, fixed when the template is built (`e2b template build --cpu-count N --memory-mb M`); the sandbox-*create* API accepts no resource arguments at all, and disk is not exposed in either place. An engine-side limits field could only ever be parsed and dropped — an operator setting `memory_mb: 16384` would silently get whatever the template had. To give agents bigger boxes, build a template with the resources you want and name it in `template:`.
+- **There is deliberately no `default_limits`.** A box's vCPU and RAM are properties of the image or template it is built from, not of the request that creates it — the create APIs accept no resource arguments at all, and disk is not exposed in either place. An engine-side limits field could only ever be parsed and dropped: an operator setting `memory_mb: 16384` would silently get whatever the image had. Size a `container` box with `local.image` and `local.run_args` instead.
 - **Hot-reload:** a changed `providers.sandbox` re-instantiates the provider on the next apply; in-flight runs keep their handles, the next launch picks up the new one.
 
 ### Per-role gate — `role.sandbox`
@@ -112,16 +115,15 @@ roles:
 
 ## Sandbox backends
 
-The provider layer is pluggable behind the `SandboxProvider` interface (`internal/sandbox/protocol.go`). Four backends ship:
+The provider layer is pluggable behind the `SandboxProvider` interface (`internal/sandbox/protocol.go`). Two backends run code, and one turns it off:
 
-- **E2B cloud** (`type: e2b`, no `domain`). Sign up at [e2b.dev](https://e2b.dev), export `E2B_API_KEY` from the dashboard. The engine uses the open-source [`e2b`](https://pypi.org/project/e2b/) async SDK and E2B's prebuilt [`claude`](https://e2b.dev/docs/agents/claude-code) / [`opencode`](https://e2b.dev/docs/agents/opencode) templates (the coding-agent CLI preinstalled), picked automatically per coding agent when `template` is empty.
-- **Self-hosted / local E2B** (`type: e2b` + `domain`). E2B's infrastructure is open source ([e2b-dev/infra](https://github.com/e2b-dev/infra)); set `domain` to your cluster's domain and the **same class and code path** talks to it — one field is the whole cloud↔self-hosted switch. The cluster still issues its own `E2B_API_KEY` (the SDK always authenticates; `domain` only changes *which* API it talks to). If your self-hosted keys aren't in the SDK's `e2b_<hex>` format, set `E2B_VALIDATE_API_KEY=false` — see [Environment Variables](../reference/environment-variables.md#code-runtime-sandbox-optional).
-- **[Local](#local-sandboxes)** (`type: local`). The engine host itself — `direct` (a process tree) or `container` (Docker/Podman). No E2B account, and the coding agent can use the **subscription login** `crewlet llm login` already established. See below.
+- **[Local](#local-sandboxes)** (`type: local`). The engine host itself — `direct` (a process tree) or `container` (Docker/Podman). No remote account and no API key, and the coding agent can use the **subscription login** `crewlet llm login` already established. See below.
 - **`fake`** — deterministic in-process stubs (`internal/sandbox/fake.go`): an in-memory filesystem, scripted coding-agent results, no network. The unit-test substrate; it does **not** run real code.
+- **`none`** — code work is off. Sandbox-gated seats fall back to the native Execute loop, and `run_sandbox` never appears.
 
-> **Watch for a leftover `E2B_DOMAIN`.** The E2B SDK reads `E2B_DOMAIN` from the environment directly. With no `domain` in config you are targeting e2b.dev cloud — make sure a stale `E2B_DOMAIN` export from an earlier self-hosted experiment isn't silently routing the SDK to a dead cluster.
+There is no optional dependency to install for any of this: the binary carries every backend it has, and the closed set `type` is checked against is exactly the set the engine can construct — a test walks it, because a value the config accepts and the engine cannot build fails at the first coding run and nowhere earlier.
 
-There is no optional dependency to install for any of this: the binary carries every backend it has. `providers.sandbox.type: e2b` is refused at construction with an error naming what to use instead, rather than being silently downgraded to `local` — which would run the operator's generated code on the engine host without saying so.
+> **A remote backend is not in this build** — see the status note at the top. `local` with `containment: container` is the isolated-box option here.
 
 ### Local sandboxes
 
@@ -146,7 +148,7 @@ The `local:` block is **required** and has no implied default, because choosing 
 | Isolates state (per box) | yes | yes |
 | Isolates the **host** | **no** | yes |
 | Needs an image | no | yes (`image:`, no default) |
-| System paths in setup steps | refused | work, as on E2B |
+| System paths in setup steps | refused | work, as in a remote box |
 | Sizing | the host | `run_args: ["--cpus", "2", "--memory", "4g"]` |
 
 **Both modes isolate state.** Each box gets its own directory with `HOME`, the XDG variables and `TMPDIR` pointed inside it, an **allowlisted** environment (PATH, locale, TLS trust, proxy — never the engine's own `SLACK_BOT_TOKEN` or database DSN), and an empty per-box workspace as the working directory. In `container` mode the run environment is handed to the runtime through an `--env-file` inside the box rather than as `-e KEY=value`, because a process's argv is world-readable on the host (`/proc/<pid>/cmdline`, every `ps`) and that environment carries the seat's LLM key and whatever token `role.sandbox.env` declares.

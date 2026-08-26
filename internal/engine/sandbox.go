@@ -88,14 +88,14 @@ func buildSandboxProvider(spec *config.SandboxProvider) (sandbox.Provider, error
 		// without a real box. Named in config rather than inferred, so
 		// nobody runs one by accident.
 		return sandbox.NewFakeProvider(), nil
-	case config.SandboxE2B:
-		// The seam ships in v1; the backend lands when a deployment needs
-		// it. Refused rather than silently downgraded to local, which would
-		// run the operator's code on the engine host without saying so.
-		return nil, fmt.Errorf("providers.sandbox.type %q is not built into this engine yet; "+
-			"use %q (containment %q or %q)", config.SandboxE2B,
-			config.SandboxLocal, config.ContainmentDirect, config.ContainmentContainer)
 	default:
+		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
+		// this switch are the same list — asserted by a test, because
+		// nothing else connects them and the last time they disagreed the
+		// config's default named a backend with no case here.
+		//
+		// Answered rather than panicked: an embedder building a spec by
+		// hand is a caller, not an operator to be crashed at.
 		return nil, fmt.Errorf("providers.sandbox.type %q is not one of %v",
 			spec.Type, config.SandboxTypes)
 	}
