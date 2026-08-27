@@ -19,6 +19,7 @@ type workspace struct {
 	mu      sync.Mutex
 	queries []string
 	scopes  []string
+	sizes   []string
 	// pages answers a query; a query with no entry returns nothing, which
 	// is what drives the relaxation ladder.
 	pages map[string][]map[string]any
@@ -35,6 +36,7 @@ func newWorkspace(t *testing.T) *workspace {
 			w.mu.Lock()
 			w.queries = append(w.queries, q)
 			w.scopes = append(w.scopes, r.URL.Query().Get("projects"))
+			w.sizes = append(w.sizes, r.URL.Query().Get("per_page"))
 			hits := w.pages[q]
 			w.mu.Unlock()
 			json.NewEncoder(rw).Encode(map[string]any{"results": hits})
@@ -62,6 +64,12 @@ func (w *workspace) scoped() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]string(nil), w.scopes...)
+}
+
+func (w *workspace) pageSizes() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.sizes...)
 }
 
 func page(id, name, project, body string) map[string]any {
@@ -392,23 +400,22 @@ func TestTheCallersLimitBoundsWhatComesBack(t *testing.T) {
 // Asking for more than the endpoint accepts is a 400, which turns an
 // over-eager caller into NO knowledge rather than slightly less of it.
 func TestAnOverLargeLimitIsClampedRatherThanRefused(t *testing.T) {
+	// THROUGH THE ORDINARY STAND-IN, not a handler swapped onto it:
+	// http.Server documents its fields as unwritable once Serve has begun,
+	// and net/http reads Handler from every connection's own goroutine —
+	// so replacing it under a live server is a data race with whatever is
+	// still in flight, and the `seen` slice it closed over was a second
+	// one.
 	w := newWorkspace(t)
-	var seen []string
-	w.Server.Config.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Content-Type", "application/json")
-		if strings.HasSuffix(r.URL.Path, "/pages/search/") {
-			seen = append(seen, r.URL.Query().Get("per_page"))
-		}
-		rw.Write([]byte(`{"results":[]}`))
-	})
 	s := searcher(t, w, true)
 
 	s.Search(t.Context(), knowledge.Query{Text: "deploy", Org: company(), Limit: 5000})
-	if len(seen) == 0 {
+	sizes := w.pageSizes()
+	if len(sizes) == 0 {
 		t.Fatal("nothing was asked")
 	}
-	if seen[0] != "100" {
-		t.Fatalf("per_page was sent as %q, want the endpoint's ceiling", seen[0])
+	if sizes[0] != "100" {
+		t.Fatalf("per_page was sent as %q, want the endpoint's ceiling", sizes[0])
 	}
 }
 
