@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 )
 
@@ -49,6 +50,18 @@ func (r *logRecorder) Handle(_ context.Context, rec slog.Record) error {
 
 func (r *logRecorder) WithAttrs([]slog.Attr) slog.Handler { return r }
 func (r *logRecorder) WithGroup(string) slog.Handler      { return r }
+
+// all is every record captured so far.
+//
+// A COPY, taken under the lock: the logger is handed to code with live
+// goroutines of its own — a stdio child's stderr pump logs a record for
+// every line the child prints, long after the call that started it
+// returned — so ranging over r.records directly is a read racing an append.
+func (r *logRecorder) all() []recorded {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.records)
+}
 
 // find returns every record with this event name.
 func (r *logRecorder) find(event string) []recorded {

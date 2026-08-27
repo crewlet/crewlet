@@ -376,7 +376,7 @@ func TestEmptyDeclaredEnvVarIsWarned(t *testing.T) {
 	if len(keys) != 1 || keys[0] != "SOME_API_TOKEN" {
 		t.Fatalf("empty_keys = %v, want [SOME_API_TOKEN]", keys)
 	}
-	for _, r := range rec.records {
+	for _, r := range rec.all() {
 		for k, v := range r.Attrs {
 			if s, ok := v.(string); ok && s == "a-secret-value" {
 				t.Fatalf("a declared env VALUE reached the logs under %q", k)

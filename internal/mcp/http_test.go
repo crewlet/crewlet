@@ -237,7 +237,7 @@ func TestHTTPRequestBodyIsNotLogged(t *testing.T) {
 	t.Cleanup(func() { _ = c.stop(t.Context()) })
 	_, _ = c.callTool(t.Context(), "leaky", map[string]any{"token": "sk-super-secret"})
 
-	for _, r := range rec.records {
+	for _, r := range rec.all() {
 		for k, v := range r.Attrs {
 			if s, ok := v.(string); ok && strings.Contains(s, "sk-super-secret") {
 				t.Fatalf("a tool argument reached the logs under %q: %q", k, s)
