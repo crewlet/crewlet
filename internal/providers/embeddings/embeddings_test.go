@@ -7,21 +7,50 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
 // server is a fake OpenAI-compatible embedding endpoint.
+//
+// EVERYTHING BUT THE URL IS UNDER THE LOCK. The handler runs on the HTTP
+// server's own goroutines while the test body both writes what to answer
+// with next and reads what was asked — two goroutines on one field, which
+// is a data race whether or not the run that found it was unlucky.
 type server struct {
 	url string
 
-	width   int
-	body    string
-	status  int
-	asked   []map[string]any
-	handler func(map[string]any) string
+	mu     sync.Mutex
+	width  int
+	body   string
+	status int
+	asked  []map[string]any
+}
+
+// answers sets the status and body the endpoint replies with next.
+func (s *server) answers(status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status, s.body = status, body
+}
+
+// widens sets the width of the vector the endpoint returns, for the
+// mid-deployment model change a caller has to notice.
+func (s *server) widens(width int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.width = width
+}
+
+// requests is what the endpoint was asked for.
+func (s *server) requests() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.asked)
 }
 
 func fakeAPI(t *testing.T, width int) *server {
@@ -31,17 +60,17 @@ func fakeAPI(t *testing.T, width int) *server {
 		func(w http.ResponseWriter, r *http.Request) {
 			var req map[string]any
 			json.NewDecoder(r.Body).Decode(&req)
+			s.mu.Lock()
 			s.asked = append(s.asked, req)
+			status, body, width := s.status, s.body, s.width
+			s.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(s.status)
-			switch {
-			case s.handler != nil:
-				w.Write([]byte(s.handler(req)))
-			case s.body != "":
-				w.Write([]byte(s.body))
-			default:
-				w.Write([]byte(vectorBody(s.width)))
+			w.WriteHeader(status)
+			if body != "" {
+				w.Write([]byte(body))
+				return
 			}
+			w.Write([]byte(vectorBody(width)))
 		}))
 	t.Cleanup(srv.Close)
 	s.url = srv.URL
@@ -91,7 +120,7 @@ func TestTheConfiguredWidthIsRequested(t *testing.T) {
 	if _, err := provider(t, s, 8).Embed(t.Context(), "text"); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
-	if got := s.asked[0]["dimensions"]; got != float64(8) {
+	if got := s.requests()[0]["dimensions"]; got != float64(8) {
 		t.Fatalf("dimensions = %v, want the configured width", got)
 	}
 }
@@ -123,7 +152,7 @@ func TestTheWidthIsCheckedOnEveryCall(t *testing.T) {
 	if _, err := p.Embed(t.Context(), "first"); err != nil {
 		t.Fatalf("the first call failed: %v", err)
 	}
-	s.width = 4 // the aggregator moved to another model
+	s.widens(4) // the aggregator moved to another model
 	if _, err := p.Embed(t.Context(), "second"); err == nil {
 		t.Fatal("a mid-deployment width change was accepted")
 	}
@@ -140,7 +169,7 @@ func TestEmptyTextIsItsOwnAnswer(t *testing.T) {
 			t.Fatalf("Embed(%q) = %v, want ErrEmpty", text, err)
 		}
 	}
-	if len(s.asked) != 0 {
+	if len(s.requests()) != 0 {
 		t.Fatal("an empty task reached the network")
 	}
 }
@@ -161,16 +190,16 @@ func TestFormattingDoesNotChangeTheVector(t *testing.T) {
 			t.Fatalf("Embed: %v", err)
 		}
 	}
-	if s.asked[0]["input"] != s.asked[1]["input"] {
+	if asked := s.requests(); asked[0]["input"] != asked[1]["input"] {
 		t.Fatalf("two formattings sent %q and %q",
-			s.asked[0]["input"], s.asked[1]["input"])
+			asked[0]["input"], asked[1]["input"])
 	}
 }
 
 func TestARefusedCallIsAnErrorNotAnEmptyVector(t *testing.T) {
 	t.Parallel()
 	s := fakeAPI(t, 8)
-	s.status, s.body = http.StatusUnauthorized, `{"error":{"message":"bad key"}}`
+	s.answers(http.StatusUnauthorized, `{"error":{"message":"bad key"}}`)
 	got, err := provider(t, s, 8).Embed(t.Context(), "text")
 	if err == nil {
 		t.Fatalf("a 401 came back as %v with no error", got)
@@ -386,7 +415,7 @@ func TestANamedKeyBeatsTheEnvironment(t *testing.T) {
 func TestASuccessfulResponseWithNoVectorIsRefused(t *testing.T) {
 	t.Parallel()
 	s := fakeAPI(t, 4)
-	s.body = `{"object":"list","data":[],"model":"m"}`
+	s.answers(http.StatusOK, `{"object":"list","data":[],"model":"m"}`)
 	got, err := provider(t, s, 4).Embed(t.Context(), "text")
 	if err == nil {
 		t.Fatal("an empty data array was accepted")
@@ -428,11 +457,11 @@ func TestTheFakeIgnoresCase(t *testing.T) {
 func TestAFailedCallIsNotRetried(t *testing.T) {
 	t.Parallel()
 	s := fakeAPI(t, 8)
-	s.status, s.body = http.StatusTooManyRequests, `{"error":{"message":"slow down"}}`
+	s.answers(http.StatusTooManyRequests, `{"error":{"message":"slow down"}}`)
 	if _, err := provider(t, s, 8).Embed(t.Context(), "text"); err == nil {
 		t.Fatal("a 429 came back with no error")
 	}
-	if len(s.asked) != 1 {
-		t.Fatalf("the endpoint was called %d times, want exactly 1", len(s.asked))
+	if asked := s.requests(); len(asked) != 1 {
+		t.Fatalf("the endpoint was called %d times, want exactly 1", len(asked))
 	}
 }
