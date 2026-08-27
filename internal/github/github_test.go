@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -648,11 +649,136 @@ func TestADigestKeepsOnlyTheBodiesSomebodyWrote(t *testing.T) {
 
 // # The client
 
-// newTestClient points a client at a stub and asserts the request shape
-// every call has to carry.
-func newTestClient(t *testing.T, handler http.HandlerFunc) *github.Client {
+// stub is the record of what a GitHub stand-in was asked for.
+//
+// SYNCHRONIZED, and not out of caution: a handler runs on the HTTP server's
+// OWN goroutines and more than one can be in flight at once. ParticipantsOf
+// reads a pull request's comments and its reviews concurrently, and a
+// reconcile resolves every seat's credential in parallel — so a map or slice
+// captured straight by a handler closure is two goroutines writing one
+// value, which is the data race `-race` exists to find. Recording through
+// one type is what stops the next stub below from reintroducing it.
+type stub struct {
+	mu     sync.Mutex
+	paths  map[string]int
+	posts  []string
+	bodies map[string][][]byte
+}
+
+// record notes one request and hands the handler back a body it can still
+// read: consuming r.Body here without restoring it would leave every
+// handler decoding an empty request.
+func (s *stub) record(r *http.Request) error {
+	var body []byte
+	if r.Body != nil {
+		var err error
+		if body, err = io.ReadAll(r.Body); err != nil {
+			return err
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paths[r.URL.Path]++
+	if r.Method == http.MethodPost {
+		s.posts = append(s.posts, r.URL.Path)
+		s.bodies[r.URL.Path] = append(s.bodies[r.URL.Path], body)
+	}
+	return nil
+}
+
+// saw reports whether a path was asked for.
+func (s *stub) saw(path string) bool { return s.count(path) > 0 }
+
+// count is how many times a path was asked for. A round trip that was NOT
+// made is as much a property as one that was: a seat with no credential is
+// reported without a lookup, and asking anyway would be a request per seat
+// against a deployment that has nothing to answer it with.
+func (s *stub) count(path string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.paths[path]
+}
+
+// seen is every path asked for, sorted, for a failure message.
+func (s *stub) seen() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.paths))
+	for path := range s.paths {
+		out = append(out, path)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// forget drops the record, so a second call can be asserted on without the
+// first call's paths still in it.
+func (s *stub) forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.paths)
+	s.posts = nil
+	clear(s.bodies)
+}
+
+// posted is the paths POSTed to, in arrival order.
+func (s *stub) posted() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.posts)
+}
+
+// postedTo decodes the body of the one POST to a path.
+//
+// DECODED HERE, on the test's own goroutine, rather than in the handler: a
+// t.Fatal from a server goroutine ends that goroutine instead of the test,
+// so the response is never written and the real failure reaches the test as
+// a client-side EOF naming nothing.
+func (s *stub) postedTo(t *testing.T, path string) map[string]any {
 	t.Helper()
+	s.mu.Lock()
+	raw := s.bodies[path]
+	s.mu.Unlock()
+	switch len(raw) {
+	case 1:
+	case 0:
+		t.Fatalf("nothing was POSTed to %s; the posts were %v", path, s.posted())
+	default:
+		// REFUSED RATHER THAN "the last one": a stub is written to from
+		// the server's goroutines, so which body arrived last is not a
+		// fact about anything, and a test asserting on it would pass or
+		// fail on scheduling.
+		t.Fatalf("%d bodies were POSTed to %s, so there is no one body to "+
+			"assert on", len(raw), path)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw[0], &body); err != nil {
+		t.Fatalf("the body POSTed to %s is not an object: %v", path, err)
+	}
+	return body
+}
+
+// newStub is an empty record.
+func newStub() *stub {
+	return &stub{paths: map[string]int{}, bodies: map[string][][]byte{}}
+}
+
+// newTestClient points a client at a stub and asserts the request shape
+// every call has to carry. The returned [stub] is what the client asked
+// for, recorded under a lock no handler can forget to take.
+func newTestClient(t *testing.T, handler http.HandlerFunc) (*github.Client, *stub) {
+	t.Helper()
+	rec := newStub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := rec.record(r); err != nil {
+			// Errorf, NOT Fatal: this runs on the server's goroutine,
+			// where Fatal ends the goroutine rather than the test and
+			// the caller sees an unexplained EOF instead of the reason.
+			t.Errorf("reading the %s %s body: %v", r.Method, r.URL.Path, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		// THE CREDENTIAL PROBE IS ANSWERED FOR EVERY STUB. A reconcile
 		// reads /user before it writes anything, because a run that
 		// registered webhooks with a dead credential would report
@@ -684,7 +810,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *github.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client
+	return client, rec
 }
 
 // PARTICIPANTS ARE COMPUTED, because GitHub has no endpoint for them — and a
@@ -692,9 +818,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *github.Client {
 // writing anything appears in neither the other.
 func TestParticipantsReadCommentsAndReviews(t *testing.T) {
 	t.Parallel()
-	seen := map[string]bool{}
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		seen[r.URL.Path] = true
+	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/issues/7/comments"):
 			_, _ = w.Write([]byte(`[{"user": {"login": "Commenter"}}]`))
@@ -709,8 +833,8 @@ func TestParticipantsReadCommentsAndReviews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !seen["/repos/acme/api/issues/7/comments"] || !seen["/repos/acme/api/pulls/7/reviews"] {
-		t.Fatalf("a pull request's participants came from one collection: %v", seen)
+	if !rec.saw("/repos/acme/api/issues/7/comments") || !rec.saw("/repos/acme/api/pulls/7/reviews") {
+		t.Fatalf("a pull request's participants came from one collection: %v", rec.seen())
 	}
 	want := map[string]bool{"commenter": true, "approver": true}
 	if len(got) != 2 {
@@ -727,11 +851,11 @@ func TestParticipantsReadCommentsAndReviews(t *testing.T) {
 
 	// AN ISSUE HAS NO REVIEWS, so asking for them would 404 on every
 	// comment in the company.
-	clear(seen)
+	rec.forget()
 	if _, err := client.ParticipantsOf(context.Background(), "acme", "api", "issue", 7); err != nil {
 		t.Fatal(err)
 	}
-	if seen["/repos/acme/api/pulls/7/reviews"] {
+	if rec.saw("/repos/acme/api/pulls/7/reviews") {
 		t.Error("an issue's participants were looked for in the reviews collection")
 	}
 }
@@ -740,7 +864,7 @@ func TestParticipantsReadCommentsAndReviews(t *testing.T) {
 // substring-match a message GitHub changes freely.
 func TestARefusalCarriesItsStatus(t *testing.T) {
 	t.Parallel()
-	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"message": "Not Found"}`))
 	})
@@ -785,17 +909,14 @@ func TestAnAccountWithNoLoginIsRefused(t *testing.T) {
 // that no verifier or parser here can decode.
 func TestAHookIsCreatedWithTheShapeTheEdgeReads(t *testing.T) {
 	t.Parallel()
-	var body map[string]any
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
+	client, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
 	})
 	if _, err := client.CreateRepoWebhook(context.Background(), "acme", "api",
 		"https://x/webhooks/github", "s3cret"); err != nil {
 		t.Fatal(err)
 	}
+	body := rec.postedTo(t, "/repos/acme/api/hooks")
 	cfg, _ := body["config"].(map[string]any)
 	if cfg["content_type"] != "json" {
 		t.Errorf("content_type = %v, so every delivery arrives form-encoded", cfg["content_type"])
@@ -858,14 +979,142 @@ func TestASeatsCredentialIsFoundUnderEveryToolsSpelling(t *testing.T) {
 	}
 }
 
+// EVERY SEAT IS RESOLVED TO THE ACCOUNT ITS OWN CREDENTIAL HOLDS.
+//
+// That mapping is the whole of a seat's inbound routing and nothing in the
+// org chart declares it, so the two findings this walk exists to surface are
+// the seats it could NOT resolve: one with no credential receives no GitHub
+// events at all, and one whose credential is dead receives none either. Both
+// are reported rather than raised — failing the run over one seat would hide
+// the state of every other.
+//
+// The walk is CONCURRENT, which is part of the contract rather than a
+// tuning choice: it is one round trip per seat on a command an operator sits
+// and waits for. It also means several requests land on the stub at once,
+// which is the shape that produced this package's last -race failure — so
+// this test is where the recording stub has to hold under real parallelism.
+func TestEachSeatIsResolvedToTheAccountItsOwnCredentialHolds(t *testing.T) {
+	t.Parallel()
+	rec := newStub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := rec.record(r); err != nil {
+			// Errorf, NOT Fatal: a server goroutine is not the test's.
+			t.Errorf("reading the %s %s body: %v", r.Method, r.URL.Path, err)
+			return
+		}
+		// EACH CREDENTIAL AUTHENTICATES AS ITS OWN ACCOUNT, which is what
+		// a stub answering one login for every token could not tell apart
+		// from a walk that resolved one seat and copied it to the rest.
+		switch token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); token {
+		case "ghp_revoked":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message": "Bad credentials"}`))
+		default:
+			_, _ = w.Write([]byte(`{"login": "` + strings.TrimPrefix(token, "ghp_") + `"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := github.NewClient(github.ClientOptions{
+		APIBase: server.URL, WebBase: server.URL, Token: "ghp_engine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seat := func(name, handle, token string) *org.Role {
+		role := &org.Role{Name: name, DeclaredHandle: handle}
+		if token != "" {
+			role.MCPEnv = map[string]map[string]string{
+				github.SeatEnv: {"GITHUB_TOKEN": token},
+			}
+		}
+		return role
+	}
+	founder := seat("Founder", "founder", "ghp_founder")
+	founder.Kind = org.KindHuman
+
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{Enabled: true},
+		Org: &org.Organization{
+			Name:  "Acme",
+			Roles: []*org.Role{seat("Engineer", "eng", "${ENG_TOKEN}"), founder},
+			Units: []*org.Unit{{
+				Name: "Platform",
+				Roles: []*org.Role{
+					seat("Designer", "design", ""),
+					seat("Analyst", "analyst", "ghp_revoked"),
+					// A SECOND SEAT THAT RESOLVES, so a walk that
+					// wrote every answer into one slot would be
+					// caught: with one resolving seat, "everyone got
+					// seat zero's login" and "everyone got their own"
+					// are the same result.
+					seat("Reviewer", "review", "ghp_review-bot"),
+				},
+			}},
+		},
+		Value: func(v string) string {
+			if v == "${ENG_TOKEN}" {
+				return "ghp_eng-bot"
+			}
+			return v
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byHandle := map[string]github.SeatIdentity{}
+	for _, identity := range res.Seats {
+		byHandle[identity.Handle] = identity
+	}
+	if len(res.Seats) != 4 {
+		t.Fatalf("seats = %+v, want the four agent seats", res.Seats)
+	}
+	// A HUMAN SEAT IS NOT WALKED AT ALL: it holds no tool credential and is
+	// addressable through its own contact block, so reporting it unresolved
+	// would be a finding about nothing.
+	if _, walked := byHandle["founder"]; walked {
+		t.Errorf("a human seat was looked up as though it held a credential: %+v", res.Seats)
+	}
+	// A ROOT ROLE AND A ROLE IN A UNIT ARE BOTH WALKED, because the walk is
+	// the whole org chart — one that read only the root roles would report
+	// a two-tier company as having no seats below the top.
+	for handle, want := range map[string]string{"eng": "eng-bot", "review": "review-bot"} {
+		if got := byHandle[handle].Login; got != want {
+			t.Errorf("%s resolved to %q, want the account its own token holds (%q)",
+				handle, got, want)
+		}
+	}
+	if byHandle["design"].Routes() ||
+		!strings.Contains(byHandle["design"].Reason, "mcp_env."+github.SeatEnv) {
+		t.Errorf("a seat with no credential was reported as %+v — the reason has "+
+			"to name the block an operator fixes", byHandle["design"])
+	}
+	if byHandle["analyst"].Routes() || byHandle["analyst"].Reason == "" {
+		t.Errorf("a refused credential was reported as %+v", byHandle["analyst"])
+	}
+	if res.Routing() != 2 {
+		t.Errorf("Routing() = %d, want the two seats whose events can reach them",
+			res.Routing())
+	}
+	// FOUR PROBES, NOT FIVE: the org credential and the three seats that
+	// carry one. The seat with no credential is answered from the config
+	// alone, so a company where most seats are unconfigured does not pay a
+	// round trip per seat to be told so.
+	if got := rec.count("/user"); got != 4 {
+		t.Errorf("/user was asked %d times, want the org credential and the three "+
+			"seats that hold one", got)
+	}
+}
+
 // AN ORG HOOK COVERS EVERY REPOSITORY, so the repos are not hooked again:
 // two hooks on one repository deliver every event twice.
 func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 	t.Parallel()
-	var created []string
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			created = append(created, r.URL.Path)
 			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
 			return
 		}
@@ -886,7 +1135,7 @@ func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created) != 1 || created[0] != "/orgs/acme/hooks" {
+	if created := rec.posted(); len(created) != 1 || created[0] != "/orgs/acme/hooks" {
 		t.Fatalf("hooks were created at %v, want one organization hook", created)
 	}
 	if len(res.Hooks) != 1 || !res.Hooks[0].Hooked() {
@@ -900,8 +1149,7 @@ func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 // the most common credential the one this command refuses.
 func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 	t.Parallel()
-	var created []string
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/orgs/") {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"message": "Resource not accessible"}`))
@@ -909,7 +1157,6 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 		}
 		switch {
 		case r.Method == http.MethodPost:
-			created = append(created, r.URL.Path)
 			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
 		case strings.HasSuffix(r.URL.Path, "/hooks"):
 			_, _ = w.Write([]byte(`[]`))
@@ -931,7 +1178,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auto failed instead of falling back: %v", err)
 	}
-	if len(created) != 1 || created[0] != "/repos/acme/api/hooks" {
+	if created := rec.posted(); len(created) != 1 || created[0] != "/repos/acme/api/hooks" {
 		t.Fatalf("hooks were created at %v, want the repository's", created)
 	}
 	// AND THE FALLBACK IS SAID OUT LOUD, because per-repository hooks do
@@ -966,7 +1213,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 // over it leaves every other repository unhooked to punish one typo.
 func TestOneUnhookableRepositoryDoesNotStopTheRest(t *testing.T) {
 	t.Parallel()
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/repos/acme/gone"):
 			w.WriteHeader(http.StatusNotFound)
@@ -1030,18 +1277,8 @@ func TestOneUnhookableRepositoryDoesNotStopTheRest(t *testing.T) {
 // sign every delivery with a key the running engine does not hold.
 func TestAWorkingSecretIsNotReminted(t *testing.T) {
 	t.Parallel()
-	var registered string
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			var body struct {
-				Config struct {
-					Secret string `json:"secret"`
-				} `json:"config"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			registered = body.Config.Secret
 			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
 			return
 		}
@@ -1065,7 +1302,8 @@ func TestAWorkingSecretIsNotReminted(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if registered != "the-live-secret" {
+	cfg, _ := rec.postedTo(t, "/orgs/acme/hooks")["config"].(map[string]any)
+	if registered, _ := cfg["secret"].(string); registered != "the-live-secret" {
 		t.Errorf("the hook was registered with %q rather than the live secret", registered)
 	}
 	if len(sink.recorded) != 0 {
@@ -1078,7 +1316,7 @@ func TestAWorkingSecretIsNotReminted(t *testing.T) {
 // already points at.
 func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 	t.Parallel()
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
 			return
@@ -1125,7 +1363,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 // saying so beats registering a hook nothing can verify.
 func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 	t.Parallel()
-	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`[]`))
 	})
 	_, err := github.Reconcile(context.Background(), github.Options{
