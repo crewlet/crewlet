@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/jira"
@@ -16,6 +17,7 @@ import (
 // recorder is an instance that records what it was asked.
 type recorder struct {
 	*httptest.Server
+	mu      sync.Mutex
 	paths   []string
 	methods []string
 	auth    []string
@@ -23,16 +25,34 @@ type recorder struct {
 	reply   func(path string) (int, string)
 }
 
+// called is what the recorder was asked for on one call.
+//
+// UNDER A LOCK, like the sibling [instance] fixture and for the same reason:
+// the handler runs on the HTTP server's own goroutines, and the seat walk
+// this package's reconcile does puts one request per seat on a stand-in at
+// the same moment. A recorder that only ever sees one call today is one
+// concurrent test away from being the race the github package just shipped.
+func (r *recorder) called(i int) (path, method, auth string, body map[string]any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i >= len(r.paths) {
+		return "", "", "", nil
+	}
+	return r.paths[i], r.methods[i], r.auth[i], r.bodies[i]
+}
+
 func newRecorder(t *testing.T, reply func(path string) (int, string)) *recorder {
 	t.Helper()
 	r := &recorder{reply: reply}
 	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		r.mu.Lock()
 		r.paths = append(r.paths, req.URL.Path)
 		r.methods = append(r.methods, req.Method)
 		r.auth = append(r.auth, req.Header.Get("Authorization"))
-		var body map[string]any
-		_ = json.NewDecoder(req.Body).Decode(&body)
 		r.bodies = append(r.bodies, body)
+		r.mu.Unlock()
 
 		status, payload := r.reply(req.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
@@ -86,8 +106,8 @@ func TestEachDeploymentCallsItsOwnRESTVersion(t *testing.T) {
 		if _, err := client.Me(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if srv.paths[0] != tc.want {
-			t.Errorf("%s called %s, want %s", tc.deploy, srv.paths[0], tc.want)
+		if path, _, _, _ := srv.called(0); path != tc.want {
+			t.Errorf("%s called %s, want %s", tc.deploy, path, tc.want)
 		}
 	}
 }
@@ -101,12 +121,12 @@ func TestAnEmailSwitchesTheAuthenticationScheme(t *testing.T) {
 	t.Parallel()
 	basic := clientFor(t, jira.ClientOptions{Email: "ops@example.com", Token: "tok"})
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("ops@example.com:tok"))
-	if basic.auth[0] != want {
-		t.Errorf("with an email the header was %q", basic.auth[0])
+	if _, _, auth, _ := basic.called(0); auth != want {
+		t.Errorf("with an email the header was %q", auth)
 	}
 	bearer := clientFor(t, jira.ClientOptions{Token: "tok"})
-	if bearer.auth[0] != "Bearer tok" {
-		t.Errorf("with no email the header was %q", bearer.auth[0])
+	if _, _, auth, _ := bearer.called(0); auth != "Bearer tok" {
+		t.Errorf("with no email the header was %q", auth)
 	}
 }
 
@@ -142,8 +162,8 @@ func TestWatchersReadWhicheverIdentityTheInstanceUses(t *testing.T) {
 	if strings.Join(got, ",") != "acct-1,bob" {
 		t.Fatalf("watchers = %v", got)
 	}
-	if !strings.HasSuffix(srv.paths[0], "/issue/ENG-42/watchers") {
-		t.Errorf("called %s", srv.paths[0])
+	if path, _, _, _ := srv.called(0); !strings.HasSuffix(path, "/issue/ENG-42/watchers") {
+		t.Errorf("called %s", path)
 	}
 }
 
@@ -207,8 +227,8 @@ func TestWebhookAdministrationUsesItsOwnPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.paths[0] != "/rest/webhooks/1.0/webhook" {
-		t.Fatalf("called %s", srv.paths[0])
+	if path, _, _, _ := srv.called(0); path != "/rest/webhooks/1.0/webhook" {
+		t.Fatalf("called %s", path)
 	}
 	// The id is only in `self` on Data Center, so it is parsed from there
 	// rather than read from a field that does not exist.
@@ -235,7 +255,7 @@ func TestARegisteredHookIsSignedAndCarriesItsBody(t *testing.T) {
 		"crewlet", "https://engine.example.com/webhooks/jira", "s3cret"); err != nil {
 		t.Fatal(err)
 	}
-	body := srv.bodies[0]
+	_, _, _, body := srv.called(0)
 	if body["secret"] != "s3cret" {
 		t.Errorf("the hook was registered unsigned: %v", body)
 	}
