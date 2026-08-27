@@ -33,7 +33,7 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 	t.Helper()
 	inst := &instance{server: newServer(t), identities: identities, throttle: "2000"}
 	inst.siteURL = inst.URL
-	inst.server.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	inst.server.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
@@ -66,7 +66,7 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 			w.Write([]byte(`{}`))
 		}
 		return true
-	}
+	})
 	return inst
 }
 
@@ -388,7 +388,7 @@ func TestSeatsStartConcurrently(t *testing.T) {
 	var live atomic.Int32
 	var peak atomic.Int32
 	inst := newInstance(t, map[string]mattermost.User{})
-	inst.server.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	inst.server.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		if !strings.HasSuffix(r.URL.Path, "/users/me") {
 			w.Write([]byte(`{}`))
 			return true
@@ -406,7 +406,7 @@ func TestSeatsStartConcurrently(t *testing.T) {
 		w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
 		json.NewEncoder(w).Encode(mattermost.User{ID: "bot", Username: "agent"})
 		return true
-	}
+	})
 
 	const seats = 4
 	tr := transport(t, inst, func(o *mattermost.TransportOptions) {

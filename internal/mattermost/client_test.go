@@ -20,7 +20,19 @@ type server struct {
 	mu    sync.Mutex
 	calls []string
 	// respond is consulted per call; nil serves 200 with an empty object.
+	// Set it through [server.responds], never by assignment: the handler
+	// reads it on the HTTP server's own goroutines, so a bare write from
+	// the test races whatever is still in flight — and the transport's
+	// broadcast and the fleet reconcile both put several requests on this
+	// stand-in at once.
 	respond func(w http.ResponseWriter, r *http.Request) bool
+}
+
+// responds installs what the stand-in answers with next.
+func (s *server) responds(fn func(w http.ResponseWriter, r *http.Request) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.respond = fn
 }
 
 func newServer(t *testing.T) *server {
@@ -77,10 +89,10 @@ func TestAClientNeedsARealInstanceURL(t *testing.T) {
 func TestTheSessionRidesOnEveryCall(t *testing.T) {
 	s := newServer(t)
 	var auth atomic.Value
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		auth.Store(r.Header.Get("Authorization"))
 		return false
-	}
+	})
 
 	if _, err := client(t, s).Me(t.Context()); err != nil {
 		t.Fatalf("Me: %v", err)
@@ -94,11 +106,11 @@ func TestTheSessionRidesOnEveryCall(t *testing.T) {
 // "500 on /users/me" into "Invalid session".
 func TestAFailureCarriesTheServersOwnWords(t *testing.T) {
 	s := newServer(t)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"id":"api.context.session_expired","message":"Invalid or expired session"}`))
 		return true
-	}
+	})
 
 	_, err := client(t, s).Me(t.Context())
 	if err == nil {
@@ -123,10 +135,10 @@ func TestAFailureCarriesTheServersOwnWords(t *testing.T) {
 // budget and tells an operator nothing new.
 func TestAnAuthFailureIsNotRetried(t *testing.T) {
 	s := newServer(t)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusUnauthorized)
 		return true
-	}
+	})
 
 	if _, err := client(t, s).Me(t.Context()); err == nil {
 		t.Fatal("a 401 was not reported")
@@ -141,14 +153,14 @@ func TestAnAuthFailureIsNotRetried(t *testing.T) {
 func TestARestartingServerIsWaitedOut(t *testing.T) {
 	s := newServer(t)
 	var n atomic.Int32
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		if n.Add(1) <= 2 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return true
 		}
 		w.Write([]byte(`{"id":"u1","username":"agent-swe"}`))
 		return true
-	}
+	})
 
 	me, err := client(t, s).Me(t.Context())
 	if err != nil {
@@ -168,10 +180,10 @@ func TestARestartingServerIsWaitedOut(t *testing.T) {
 // which is the case that double-posts into a channel people read.
 func TestAPostIsNotRepeatedOnAnUnknowableFailure(t *testing.T) {
 	s := newServer(t)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusBadGateway)
 		return true
-	}
+	})
 
 	_, err := client(t, s).CreatePost(t.Context(), mattermost.PostRequest{
 		ChannelID: "C1", Message: "hello",
@@ -189,7 +201,7 @@ func TestAPostIsNotRepeatedOnAnUnknowableFailure(t *testing.T) {
 func TestARateLimitIsRepeatedForAnyMethod(t *testing.T) {
 	s := newServer(t)
 	var n atomic.Int32
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		if n.Add(1) == 1 {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -197,7 +209,7 @@ func TestARateLimitIsRepeatedForAnyMethod(t *testing.T) {
 		}
 		w.Write([]byte(`{"id":"p1"}`))
 		return true
-	}
+	})
 
 	got, err := client(t, s).CreatePost(t.Context(), mattermost.PostRequest{
 		ChannelID: "C1", Message: "hello",
@@ -218,14 +230,14 @@ func TestARateLimitIsRepeatedForAnyMethod(t *testing.T) {
 func TestAnIdempotentMethodIsRepeatedOnA502(t *testing.T) {
 	s := newServer(t)
 	var n atomic.Int32
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		if n.Add(1) == 1 {
 			w.WriteHeader(http.StatusBadGateway)
 			return true
 		}
 		w.Write([]byte(`{"id":"u1"}`))
 		return true
-	}
+	})
 
 	if _, err := client(t, s).Me(t.Context()); err != nil {
 		t.Fatalf("Me: %v", err)
@@ -242,14 +254,14 @@ func TestAnIdempotentMethodIsRepeatedOnA502(t *testing.T) {
 func TestARepeatableCallIsRepeated(t *testing.T) {
 	s := newServer(t)
 	var n atomic.Int32
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		if n.Add(1) == 1 {
 			w.WriteHeader(http.StatusBadGateway)
 			return true
 		}
 		w.Write([]byte(`{"id":"D1","type":"D"}`))
 		return true
-	}
+	})
 
 	ch, err := client(t, s).DirectChannel(t.Context(), "u1", "u2")
 	if err != nil {
@@ -267,10 +279,10 @@ func TestARepeatableCallIsRepeated(t *testing.T) {
 // retry budget is for a slow server, not for a caller that has gone away.
 func TestACancelledCallStopsRetrying(t *testing.T) {
 	s := newServer(t)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return true
-	}
+	})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -295,7 +307,7 @@ func TestACancelledCallStopsRetrying(t *testing.T) {
 // the answer before the question.
 func TestPostListsComeBackOldestFirst(t *testing.T) {
 	s := newServer(t)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		json.NewEncoder(w).Encode(map[string]any{
 			"order": []string{"p3", "p2", "p1"},
 			"posts": map[string]any{
@@ -305,7 +317,7 @@ func TestPostListsComeBackOldestFirst(t *testing.T) {
 			},
 		})
 		return true
-	}
+	})
 
 	got, err := client(t, s).PostsSince(t.Context(), "C1", time.UnixMilli(1718003000))
 	if err != nil {
@@ -325,13 +337,13 @@ func TestPostListsComeBackOldestFirst(t *testing.T) {
 	}
 	// An entry in the ordering with no post is skipped rather than
 	// producing a blank message.
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		json.NewEncoder(w).Encode(map[string]any{
 			"order": []string{"p9", "p1"},
 			"posts": map[string]any{"p1": map[string]any{"id": "p1"}},
 		})
 		return true
-	}
+	})
 	got, _ = client(t, s).Thread(t.Context(), "p1")
 	if len(got) != 1 || got[0].ID != "p1" {
 		t.Fatalf("a dangling ordering entry produced %+v", got)
@@ -344,11 +356,11 @@ func TestPostListsComeBackOldestFirst(t *testing.T) {
 func TestServerTimeComesFromTheServer(t *testing.T) {
 	s := newServer(t)
 	when := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", when.Format(http.TimeFormat))
 		w.Write([]byte(`{"id":"u1"}`))
 		return true
-	}
+	})
 
 	got, err := client(t, s).ServerTime(t.Context())
 	if err != nil {
@@ -361,11 +373,11 @@ func TestServerTimeComesFromTheServer(t *testing.T) {
 	// A server that sends no usable Date is reported rather than silently
 	// falling back to this process's clock, which is the thing this
 	// exists to avoid.
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", "not a date")
 		w.Write([]byte(`{}`))
 		return true
-	}
+	})
 	if _, err := client(t, s).ServerTime(t.Context()); err == nil {
 		t.Fatal("an unusable Date was accepted")
 	}

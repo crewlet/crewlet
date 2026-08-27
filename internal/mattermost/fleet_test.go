@@ -227,7 +227,7 @@ func TestTheBackfillWindowIsBounded(t *testing.T) {
 
 	var mu sync.Mutex
 	var cursors []string
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", serverNow().Format(http.TimeFormat))
 		switch {
 		case strings.Contains(r.URL.Path, "/posts"):
@@ -243,7 +243,7 @@ func TestTheBackfillWindowIsBounded(t *testing.T) {
 			w.Write([]byte(`{"id":"bot-1"}`))
 		}
 		return true
-	}
+	})
 
 	rec := &recorder{}
 	sockets := []*fakeSocket{
@@ -325,7 +325,7 @@ func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 	s := newServer(t)
 	serverNow := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	var backfilled atomic.Int32
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
 		// MOST SPECIFIC FIRST: a channels path is
 		// /users/{id}/teams/{id}/channels, so matching /teams before it
@@ -356,7 +356,7 @@ func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 			w.Write([]byte(`{"id":"bot-1","username":"agent-swe"}`))
 		}
 		return true
-	}
+	})
 
 	rec := &recorder{}
 	first := newSocket(frame("p1", "before the drop", nil))
@@ -400,14 +400,14 @@ func TestAReconnectReplaysTheGapInOrder(t *testing.T) {
 func TestAFirstConnectReplaysNothing(t *testing.T) {
 	s := newServer(t)
 	var backfilled atomic.Int32
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
 		if strings.Contains(r.URL.Path, "/posts") {
 			backfilled.Add(1)
 		}
 		w.Write([]byte(`{"id":"bot-1"}`))
 		return true
-	}
+	})
 
 	rec := &recorder{}
 	sock := newSocket(frame("p1", "hello", nil))
@@ -553,7 +553,7 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 
 	var mu sync.Mutex
 	var cursors []string
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
 		switch {
 		case strings.Contains(r.URL.Path, "/posts"):
@@ -575,7 +575,7 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 			w.Write([]byte(`{"id":"bot-1"}`))
 		}
 		return true
-	}
+	})
 
 	rec := &recorder{}
 	sockets := []*fakeSocket{
@@ -630,7 +630,7 @@ func TestTheCursorNeverRegresses(t *testing.T) {
 func TestOneUnreadableTeamDoesNotLoseTheRest(t *testing.T) {
 	s := newServer(t)
 	serverNow := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	s.respond = func(w http.ResponseWriter, r *http.Request) bool {
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Date", serverNow.Format(http.TimeFormat))
 		switch {
 		case strings.Contains(r.URL.Path, "/posts"):
@@ -654,7 +654,7 @@ func TestOneUnreadableTeamDoesNotLoseTheRest(t *testing.T) {
 			w.Write([]byte(`{"id":"bot-1"}`))
 		}
 		return true
-	}
+	})
 
 	rec := &recorder{}
 	sockets := []*fakeSocket{newSocket(frame("p1", "live", nil)), newSocket()}
