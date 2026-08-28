@@ -171,22 +171,17 @@ Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes
 
 Task state lives in Jira — the engine mirrors nothing. Webhooks become `ExternalNotification` inbox events for the routed agents (watchers, assignee, @-mentions, project-lead fallback), and every write back to Jira happens through the agents' own MCP tools:
 
-```
-Jira ticket created ──webhook──► API ──► EventQueue
-                                            │
-                                            ▼
-                                    Team lead wakes up
-                                    Assigns via MCP tools
-                                            │
-                                            ▼
-                            Assignment webhook fires
-                                            │
-                                            ▼
-                                    Assigned agent wakes up
-                                    Works on task, transitions
-                                    ticket via MCP tools
+```mermaid
+flowchart TD
+    A["Jira ticket created"] -->|webhook| B["POST /webhooks/jira"]
+    B --> C["crewlet.notifications.inbound"]
+    C --> D["The team lead wakes<br/>(project-lead fallback routing)"]
+    D --> E["Assigns the issue<br/>through its own MCP tools"]
+    E -->|"that write fires the next webhook"| F["Assignment webhook"]
+    F --> G["The assignee wakes"]
+    G --> H["Works the task, transitions<br/>the ticket through MCP tools"]
 ```
 
 There is no engine-side sync layer, no completion-comment automation, and no reconciliation poller: each MCP-tool action an agent takes fires the next webhook, which wakes the next participant — the same loop a human teammate drives. A webhook delivery that is lost is recovered the way it would be for a human: the issue's next activity (a comment, a transition, a nudge from a colleague) re-notifies the routed agents.
 
-See [Task Engine](../concepts/task-engine.md) for the passive `ExecutionTracker` exposed to extensions.
+See [Task Engine](../concepts/task-engine.md) for why the engine keeps no task state of its own.

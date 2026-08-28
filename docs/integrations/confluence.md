@@ -208,41 +208,19 @@ Confluence serves two roles in a Crewlet company: **knowledge source** (agents s
 
 ### Inbound: Confluence Content Changes Wake Agents
 
-```
-Confluence event
-  (page_updated, comment_created, etc.)
-        │
-        ▼
-POST /webhooks/confluence
-        │
-        ▼
-API publishes raw_webhook to EventQueue
-  topic: crewlet.notifications.inbound
-        │
-        ▼
-NotificationService._parse_and_route_webhook()
-        │
-        ▼
-ConfluenceTransport.handle_webhook()
-  ├─ Verify signature (HMAC-SHA256 for Data Center)
-  ├─ Deduplicate (5-min TTL on timestamp+page_id+event)
-  ├─ Self-ignore (skip events triggered by our agents)
-  └─ Route (by specificity):
-       1. Page watchers → via REST API (auto-added on edit)
-       2. @mentions → from comment body (auto-follow page)
-       3. Space leads → all unit leads for the space
-       4. Standard resolution → fallback
-        │
-        ▼
-ConfluenceNotificationPrompt.build()
-  (tool-agnostic task description for the agent)
-        │
-        ▼
-Publish to crewlet.agent.{handle}.inbox
-        │
-        ▼
-Agent wakes up, reads full page via MCP tools,
-takes action based on the event
+```mermaid
+flowchart TD
+    A["Confluence event<br/>(page_updated, comment_created, …)"] --> B["POST /webhooks/confluence"]
+    B --> C{"HMAC-SHA256 over the body<br/>(X-Hub-Signature)"}
+    C -- "no secret configured" --> R1["503 + Retry-After<br/>the delivery waits at Confluence"]
+    C -- "bad signature" --> R2["401 — nothing is recorded<br/>or published"]
+    C -- "verified" --> D["Published to<br/>crewlet.notifications.inbound"]
+    D --> E["notify.Service.Handle<br/>(internal/notify/service.go)"]
+    E --> F["confluence.Parser.Parse<br/>one Routed per recipient"]
+    F --> G["Route, by specificity:<br/>1. page watchers · 2. @mentions<br/>3. space leads · 4. standard resolution"]
+    G --> H["Prompt.Build renders the<br/>tool-agnostic task description"]
+    H --> I["crewlet.agent.{handle}.inbox"]
+    I --> J["The seat wakes, reads the page<br/>through its own MCP tools, acts"]
 ```
 
 ### Routing Strategy
@@ -347,7 +325,7 @@ Each unit's Confluence space can host an `Onboarding` page that fresh agents are
 
 ### 3. Query-time Confluence search (engine side)
 
-The Plan-phase `## Relevant knowledge` block runs a live Confluence search for the planner: the the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
+The Plan-phase `## Relevant knowledge` block runs a live Confluence search for the planner: the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
 
 This approach keeps tool guidance **configurable per-org** and **per-role** rather than hardcoded in the engine. The same Confluence MCP tools are available to all agents, but each agent's prompt scaffolding and accessible spaces determine how they use them.
 
@@ -375,24 +353,6 @@ When both Jira and Confluence are configured, agents can cross-reference between
 
 This works naturally because both integrations share the `mcp-atlassian` MCP server — all Jira and Confluence tools are available in the same tool list.
 
-# Cloud — webhooks via Forge app
-confluence_transport = ConfluenceTransport(ConfluenceConfig(
-    url="https://your-company.atlassian.net/wiki",
-    token="your-api-token",
-    email="admin@your-company.com",
-))
+---
 
-# Data Center — direct webhook with HMAC secret
-confluence_transport = ConfluenceTransport(ConfluenceConfig(
-    url="https://confluence.internal.company.com",
-    token="your-pat",
-    webhook_secret="your-hmac-secret",
-))
-
-engine = Engine(
-    organization=org,
-    notification_transports=[confluence_transport],
-)
-```
-
-The Confluence MCP *tool* server is declared separately in `mcp_servers` (the `atlassian` entry shown under [Configuration](#configuration)) — the transport above only handles webhooks and org-level REST calls. For Cloud, install the [Crewlet Forge app](https://github.com/crewlet/forge) which handles webhook delivery via Forge Remote.
+The Confluence MCP *tool* server is declared separately in `mcp_servers` (the `atlassian` entry shown under [Configuration](#configuration)), and it is a different surface from the one this page has been describing: the MCP server is what an **agent** calls, while the `integrations.confluence` block is what the **engine** reads — the inbound webhook, the knowledge search and the tool-skill walk. For Cloud, install the [Crewlet Forge app](https://github.com/crewlet/forge), which delivers webhooks over Forge Remote.

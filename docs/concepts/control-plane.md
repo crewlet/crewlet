@@ -152,7 +152,7 @@ The key is per-process and never persisted or logged. A bare hash of a short cre
 
 ## What a running turn sees
 
-A live apply mutates engine state **in place** so in-flight work keeps working: the LLM provider map is `clear()` + `update()`d (identity preserved on purpose), `_role_mcp_tools` is rewritten per role, an `AgentDefinition` is reassigned on the running instance, and the the turn-engine settings cell hands out a new model in one shot.
+A live apply mutates engine state **in place** so in-flight work keeps working: the LLM provider map is `clear()` + `update()`d (identity preserved on purpose), `_role_mcp_tools` is rewritten per role, an `AgentDefinition` is reassigned on the running instance, and the turn-engine settings cell hands out a new model in one shot.
 
 In-place is right — the alternative is a turn holding a reference to a dict nobody updates any more. But *keeps working* is not *stays coherent*, and each of those is read repeatedly within one turn: the ~18 turn-engine settings accessors re-read the cell on **every access**, `_role_mcp_tools` is read twice from two different places, and the agent's definition is read from roughly twenty. A turn could plan against one company and execute against another — one round cap for Plan and a different one for Execute, or a sub-agent budget sized from a fraction its parent never saw.
 

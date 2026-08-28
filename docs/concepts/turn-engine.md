@@ -1,6 +1,6 @@
 # Turn Engine
 
-Each agent turn in Crewlet runs through a three-phase **Plan → Execute → Review** loop orchestrated by the the turn engine (`internal/agent/turn/loop.go`). Each phase is an LLM call with a different system prompt, a different tool surface, and optionally a different model. The turn engine also owns ephemeral sub-agent spawning and enforces the delegation-depth / stall / sub-agent allowlist invariants in code.
+Each agent turn in Crewlet runs through a three-phase **Plan → Execute → Review** loop orchestrated by the turn engine (`internal/agent/turn/loop.go`). Each phase is an LLM call with a different system prompt, a different tool surface, and optionally a different model. The turn engine also owns ephemeral sub-agent spawning and enforces the delegation-depth / stall / sub-agent allowlist invariants in code.
 
 ---
 

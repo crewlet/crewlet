@@ -48,7 +48,7 @@ How the engine works, one subsystem per page:
 - **[Tool Skills](concepts/tool-skills.md)** — Knowledge-base-sourced prompt fragments (Confluence or Plane pages) that teach agents *how to use* each tool / MCP server
 - **[Tool Capabilities](concepts/tool-capabilities.md)** — How the engine stays tool-stack agnostic: capability prose + MCP annotations, no hardcoded tool names
 - **[Event System](concepts/event-system.md)** — EventQueue, topics, routing, inbox batching, distributed tracing
-- **[Task Engine](concepts/task-engine.md)** — ExecutionTracker, external PM tool integration
+- **[Task Engine](concepts/task-engine.md)** — why the engine keeps no task state: the PM tool is the source of truth
 - **[Scheduling](concepts/scheduling.md)** — Role/unit-scoped cron-style recurring work (standups, audits, nightly jobs)
 - **[Knowledge System](concepts/knowledge-system.md)** — Query-time knowledge-base search behind the `knowledge.Searcher` seam (Confluence CQL or Plane page search — one backend per org) + private `agent_diary`
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles

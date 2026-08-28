@@ -264,7 +264,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 1. **Event Queue** — durable pub/sub behind one contract: an embedded NATS JetStream by default, an external NATS or Apache Pulsar for a fleet, an in-memory twin for tests
 2. **Organization Model** — hierarchy is the execution graph
 3. **Agent Runtime** — queue-driven seats, a four-phase turn, an LLM tool loop that can suspend
-4. **Task Engine** — execution tracking, external PM tool integration
+4. **Task Engine** — there is none: task state lives in the PM tool, and the engine mirrors nothing
 5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Plane page search, or Confluence CQL — single-homed, one per company) + per-agent diary
 7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The seven vendors this build serves are Mattermost, Slack, Plane, GitLab, GitHub, Jira and Confluence (`decisions/701`, `decisions/703`); every one routes end to end, and no integration block is refused any more

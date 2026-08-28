@@ -86,7 +86,7 @@ The team lead's Plan-phase system prompt includes a compact team roster (names +
 
 ## External PM Tool as Source of Truth
 
-Task lifecycle lives in the PM tool (Jira, Plane, GitHub/GitLab issues), not in the engine. The `ExecutionTracker` is a thin orchestration layer that tracks agent-to-issue mappings and the dependency graph between issues — the orchestration concerns the PM tool doesn't cover.
+Task lifecycle lives in the PM tool (Jira, Plane, GitHub/GitLab issues), not in the engine, which keeps no task state at all — no assignee map, no dependency graph, no reconciliation poller. A mirror of somebody else's task state is a cache with no invalidation story; keeping nothing means there is nothing to be stale. See [Task Engine](../concepts/task-engine.md).
 
 This avoids duplicating task state and keeps the audit trail in the tool the team already uses.
 

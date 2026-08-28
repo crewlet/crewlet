@@ -1,34 +1,31 @@
 # Task Engine
 
-Task lifecycle management lives in an external PM tool (Jira, Plane, GitHub/GitLab issues). The engine uses `ExecutionTracker` — a thin orchestration layer that tracks which agent is working on which issue and the dependency graph between issues — the orchestration concerns the PM tool doesn't cover.
+**There is no task engine.** Task lifecycle lives entirely in an external PM
+tool — Jira, Plane, GitHub or GitLab issues — and the engine mirrors none of
+it: no task table, no status field, no assignee map, no dependency graph, no
+reconciliation poller. A ticket's state is whatever the PM tool says it is,
+read live through an agent's own MCP tools.
 
----
+That is the design, not a gap. A mirror of somebody else's task state is a
+cache with no invalidation story: every webhook you miss, every edit made in
+the PM tool's own UI, and every retry that arrives out of order leaves the
+engine confidently wrong about work a person can see is finished. Keeping
+nothing means there is nothing to be stale.
 
-## ExecutionTracker
-
-The `ExecutionTracker` is a passive data structure — it emits no events and enforces no transitions. Events originate from webhooks via the the notification service.
-
-**What it tracks**: bidirectional agent ↔ issue mappings and a dependency graph between issues.
-
-**What it does NOT track**: task status, transitions, storage, or lifecycle — all of that lives in the PM tool.
-
-**Interface**:
-
-| Method | Purpose |
-|--------|---------|
-| `track(issue_key, agent_id)` | Record that an agent is working on an issue (webhook assigned) |
-| `untrack(issue_key)` | Remove tracking (webhook resolved) |
-| `get_agent(issue_key)` | Look up which agent is on an issue |
-| `get_issue(issue_key)` | Get the full tracked issue metadata |
-| `get_issues(agent_id)` | List all issues an agent is working on |
-| `add_dependency(a, blocked_by_b)` | Record that issue A is blocked by issue B |
-| `dependencies_met(issue_key)` | Check if all blocking issues are resolved |
+> **Porting note.** The previous Python engine carried an `ExecutionTracker` —
+> a passive in-memory map of agent ↔ issue plus a dependency graph, with
+> `track` / `untrack` / `add_dependency` / `dependencies_met`. It has no
+> counterpart here and this page documented it long after it stopped existing.
+> Nothing read it but the turn context, and nothing in this engine needs it:
+> the routed agent is named by the webhook, and "is this unblocked" is a
+> question the PM tool already answers. If dependency-aware scheduling is
+> wanted, it is a new feature with a new design, not a restoration.
 
 ---
 
 ## How It Works with Webhooks
 
-PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the the notification service into an `ExternalNotification` delivered to the routed agents' inboxes — the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the PM tool through its own MCP tools.
+PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the notification service into an `ExternalNotification` delivered to the routed agents' inboxes — the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the PM tool through its own MCP tools.
 
 ```mermaid
 sequenceDiagram
@@ -44,7 +41,7 @@ sequenceDiagram
     Note over PM: Agent creates subtask, transitions ticket, posts<br/>comment — all through MCP tools, same as a human would
 ```
 
-The `TaskAssigned` event type exists for engine-internal work injection — the [Scheduler](scheduling.md) fires it for cron-style recurring tasks — not for the PM-tool webhook pipeline. The execution tracker itself is passive plumbing read through the turn context; the engine's only built-in mutation is untracking a removed role's issues during org hot-reload.
+The `TaskAssigned` event type exists for engine-internal work injection — the [Scheduler](scheduling.md) fires it for cron-style recurring tasks (`internal/schedule/scheduler.go`) — and never for the PM-tool webhook pipeline, which produces `ExternalNotification` instead. The two are deliberately different types: one is the engine giving a seat work, the other is the world telling a seat something happened.
 
 ---
 
