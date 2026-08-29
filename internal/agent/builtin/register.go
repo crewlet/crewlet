@@ -37,6 +37,33 @@ type Deps struct {
 	// a guard with no unlock would refuse tools the model cannot free.
 	ToolSkills ToolSkills
 
+	// EpisodeLimit is how many turns query_episodes returns when the model
+	// names no limit: the company's learning.episodic.retrieval_limit.
+	// Zero takes [DefaultEpisodeLimit].
+	//
+	// It reaches a builtin at all because the setting was otherwise inert —
+	// validated, schema'd, documented, and read by nothing, so
+	// `retrieval_limit: 20` produced a new revision and changed nothing an
+	// operator could observe.
+	EpisodeLimit int
+
+	// SkillBodyMax caps a refined skill's body:
+	// learning.skill_refinement.max_body_chars. Zero takes
+	// [DefaultSkillBodyMax].
+	SkillBodyMax int
+
+	// SkillVersionsKept caps a skill's archived history:
+	// learning.skill_refinement.max_versions_kept. Zero lets the store
+	// apply its own default.
+	SkillVersionsKept int
+
+	// Events is where the skill lifecycle's own telemetry goes. Nil
+	// publishes nothing, which is what a registry built outside an engine
+	// has — and what the shipped binary had until this existed, so
+	// skill_used, skill_refined and skill_promoted were registered types
+	// with topics and no publisher.
+	Events Telemetry
+
 	// Sandbox launches a detached coding run. Nil omits run_sandbox, which
 	// is what a build with no providers.sandbox has — and omitting it is
 	// the point: a seat offered a code tool that cannot start a box would
@@ -68,14 +95,22 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	}{
 		{&lookupColleague{}, true},
 		{&a2aAsk{svc: deps.A2A}, deps.A2A != nil},
-		{&useSkill{skills: deps.Skills}, deps.Skills != nil},
-		{&refineSkill{skills: deps.Refinable}, deps.Refinable != nil},
-		{&queryEpisodes{episodes: deps.Episodes}, deps.Episodes != nil},
+		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
+		{&refineSkill{
+			skills:   deps.Refinable,
+			events:   deps.Events,
+			bodyMax:  orDefault(deps.SkillBodyMax, DefaultSkillBodyMax),
+			versions: deps.SkillVersionsKept,
+		}, deps.Refinable != nil},
+		{&queryEpisodes{
+			episodes: deps.Episodes,
+			limit:    orDefault(deps.EpisodeLimit, DefaultEpisodeLimit),
+		}, deps.Episodes != nil},
 		{&refreshMemory{diary: deps.Diary}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
-		{&loadToolSkill{skills: deps.ToolSkills}, deps.ToolSkills != nil},
+		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
 	}
 
 	var names []string
@@ -139,4 +174,27 @@ func annotationsFor(name string) tools.Annotations {
 		// reflect_and_persist: a write, and each call is another note.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
 	}
+}
+
+// The shipped values for the knobs a caller may leave at zero.
+//
+// They MATCH config.DefaultLearning, and they exist separately because this
+// package does not import internal/config: a builtin registry built directly
+// — a test, an embedder — must land on the same numbers a parsed company
+// does, and a zero that meant "no episodes" or "no body at all" would be a
+// tool that refuses everything.
+const (
+	// DefaultEpisodeLimit is learning.episodic.retrieval_limit's default.
+	DefaultEpisodeLimit = 5
+
+	// DefaultSkillBodyMax is learning.skill_refinement.max_body_chars's
+	// default: the ceiling on a refined skill's whole body.
+	DefaultSkillBodyMax = 20000
+)
+
+func orDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

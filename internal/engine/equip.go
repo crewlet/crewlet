@@ -35,7 +35,18 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
-	deps := builtin.Deps{A2A: e.a2aFor(c), Sandbox: e.sandboxLauncher()}
+	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults. Each of these
+	// was validated, schema'd and documented and read by nobody, so setting
+	// one produced a revision and changed nothing an operator could observe.
+	refinement := c.Config.Learning.SkillRefinement
+	deps := builtin.Deps{
+		A2A:               e.a2aFor(c),
+		Sandbox:           e.sandboxLauncher(),
+		Events:            e.telemetry(),
+		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
+		SkillBodyMax:      refinement.MaxBodyChars,
+		SkillVersionsKept: refinement.MaxVersionsKept,
+	}
 	if db := e.backends.Store; db != nil {
 		skills := learning.NewSkills(db)
 		deps.Skills = skills
@@ -149,4 +160,16 @@ func (e *Engine) markers() runner.Markers {
 		return nil
 	}
 	return learning.NewOnboarding(e.backends.Store)
+}
+
+// telemetry is where a builtin's own lifecycle events go, or nil.
+//
+// Nil on a node with no queue — `crewlet validate` builds a registry to check
+// a config and publishes nothing — which the builtins read as "do not publish"
+// rather than as a reason to fail a tool call.
+func (e *Engine) telemetry() builtin.Telemetry {
+	if e.backends == nil || e.backends.Queue == nil {
+		return nil
+	}
+	return e.backends.Queue
 }

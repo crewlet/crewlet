@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -32,7 +33,20 @@ type RefinableSkills interface {
 // The prior body is kept (learning.RefineTool), which is what makes this safe
 // to offer an agent at all: a refinement that made a skill worse is one
 // rollback away rather than a loss.
-type refineSkill struct{ skills RefinableSkills }
+type refineSkill struct {
+	skills RefinableSkills
+
+	// bodyMax is learning.skill_refinement.max_body_chars: the ceiling on
+	// the whole procedure after the edit. It was documented as a runaway
+	// guard and enforced nowhere — refine.go clipped only the note.
+	bodyMax int
+
+	// versions is learning.skill_refinement.max_versions_kept, passed
+	// through to the store's prune. Zero lets the store apply its own.
+	versions int
+
+	events Telemetry
+}
 
 var _ tools.SeatCallable = (*refineSkill)(nil)
 
@@ -90,6 +104,18 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return failed("refine_skill needs `content`: the FULL corrected " +
 			"procedure. It replaces the current body, so a partial edit " +
 			"would delete the rest of the skill."), nil
+	case t.bodyMax > 0 && len(content) > t.bodyMax:
+		// REFUSED, not truncated. A skill is a procedure the seat will
+		// follow, and half a procedure is worse than the one it already
+		// has — a clip lands mid-step and the model reads the remainder
+		// as the whole. The cap exists because a body that grows an
+		// annotation per turn grows without bound, so the answer is to
+		// tighten the text, which is something the model can do.
+		return failed(fmt.Sprintf(
+			"That body is %d characters and this company caps a skill at %d "+
+				"(learning.skill_refinement.max_body_chars). Tighten it: drop "+
+				"what practice has superseded rather than appending to it.",
+			len(content), t.bodyMax)), nil
 	}
 
 	// This seat's own skills only. Editing a colleague's would let one
@@ -114,12 +140,25 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		rev.Description = sk.Description
 	}
 	updated, err := t.skills.Update(ctx, sk.ID, rev, learning.Refinement{
-		Kind: learning.RefineTool,
-		Note: clipTo(argString(args, "reason"), diaryNoteMax),
-		At:   time.Now().UTC(),
+		Kind:         learning.RefineTool,
+		Note:         clipTo(argString(args, "reason"), diaryNoteMax),
+		KeepVersions: t.versions,
+		At:           time.Now().UTC(),
 	})
 	if err != nil {
 		return failed(fmt.Sprintf("Could not refine %q: %v", clip(name), err)), nil
+	}
+	// The VERSION is what makes successive refinements distinguishable, and
+	// the kind tells a success annotation from a counter-example. Published
+	// after the write, because an event for a refinement that failed to
+	// store would put a version in the feed that no rollback can reach.
+	if agentID, why := seatAgentID(turn); why == "" {
+		note(ctx, t.events, turn, types.SkillRefined{
+			Agent: agentID, AgentHandle: handle, RoleName: turn.Role(),
+			TurnID: turn.ID, SkillName: updated.Name, SkillID: updated.ID,
+			SkillVersion:   updated.Version,
+			RefinementKind: string(learning.RefineTool),
+		})
 	}
 	return tools.Result{Output: fmt.Sprintf(
 		"Refined %q (now version %d). The previous version is kept.",

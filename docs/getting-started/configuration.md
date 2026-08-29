@@ -82,7 +82,8 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
 learning:                               # optional — agent-learning subsystem
   enabled: true                         # master switch (auto-disables without DB + embeddings)
   episodic:
-    retrieval_limit: 5                  # default limit for query_episodes results (1-20)
+    retrieval_limit: 5                  # default hits query_episodes returns when the
+                                        # model names no limit (1-20)
   reflect:
     enabled: true                       # ReflectEngine + reflect_and_persist tool
     persist_decider: true               # run the post-turn PersistDecider on every turn
@@ -110,7 +111,8 @@ learning:                               # optional — agent-learning subsystem
     auto_refine_on_success: true        # append "Observed in practice" on done
     auto_refine_on_failure: true        # append "Counter-example" on failed/self_iterate
     budget_tokens: 3000                 # soft cap on the refiner's LLM call
-    max_body_chars: 20000               # skip refinement once the body reaches this size
+    max_body_chars: 20000               # a refinement whose result exceeds this
+                                        # is refused, not truncated
     max_versions_kept: 10               # history retention per skill (older pruned)
   skill_promotion:
     enabled: true                       # cross-agent promotion pass in the scheduler

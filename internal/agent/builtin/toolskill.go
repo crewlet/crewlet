@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -32,9 +34,12 @@ type ToolSkills interface {
 // tools a required skill covers until this has run for it in the current
 // session. Which is why this tool is never itself gated — see
 // skills.ExemptTools.
-type loadToolSkill struct{ skills ToolSkills }
+type loadToolSkill struct {
+	skills ToolSkills
+	events Telemetry
+}
 
-var _ tools.Callable = (*loadToolSkill)(nil)
+var _ tools.SeatCallable = (*loadToolSkill)(nil)
 
 func (t *loadToolSkill) Name() string { return LoadToolSkillTool }
 
@@ -59,7 +64,17 @@ func (t *loadToolSkill) Parameters() map[string]any {
 	}
 }
 
-func (t *loadToolSkill) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+func (t *loadToolSkill) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+// CallForTurn is Call plus the seat, so a load can be counted.
+//
+// SEAT-AWARE ONLY FOR THE TELEMETRY. The body it returns is the company's,
+// identical for every seat — unlike use_skill, which resolves against the
+// caller's own synthesized skills and would hand one agent another's
+// procedure if it did not know who was asking.
+func (t *loadToolSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	key := argString(args, "key")
 	if key == "" {
 		return failed("load_tool_skill needs a `key` — one of the keys your " +
@@ -74,5 +89,10 @@ func (t *loadToolSkill) Call(_ context.Context, args map[string]any) (tools.Resu
 		return failed(fmt.Sprintf("No tool skill %q. Use a key exactly as "+
 			"your catalogue lists it.", key)), nil
 	}
+	// The REGISTRY kind, which is the whole reason SkillSourceKind has two
+	// values: a company-published tool skill being loaded and a seat
+	// reusing one it synthesized answer different questions, and a feed
+	// that could not tell them apart answers neither.
+	note(ctx, t.events, turn, skillUsed(turn, key, "", "", types.SkillSourceRegistry))
 	return tools.Result{Output: body}, nil
 }

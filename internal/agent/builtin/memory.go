@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -63,12 +64,14 @@ type (
 	}
 )
 
-// episodeLimit caps what a recall puts in front of a model.
+// noteLimit caps what refresh_memory puts in front of a model when the model
+// names no limit.
 //
-// Recall goes into a prompt, and a dozen half-relevant memories crowd out the
-// task they were fetched for — the same reasoning the store's own default
-// encodes. Five is what a model reads; more is what it skims.
-const episodeLimit = 5
+// A note goes into a prompt, and a dozen half-relevant ones crowd out the task
+// they were fetched for. Five is what a model reads; more is what it skims.
+// Distinct from an episode's limit — that one is the company's
+// learning.episodic.retrieval_limit, and a diary is not an episode history.
+const noteLimit = 5
 
 // maxEpisodeLimit bounds what a model may ask for. A tool that honoured
 // "limit: 500" would let one call spend a phase's whole context on history.
@@ -84,7 +87,10 @@ const diaryNoteMax = 2000
 
 // --- use_skill ------------------------------------------------------------ //
 
-type useSkill struct{ skills SkillStore }
+type useSkill struct {
+	skills SkillStore
+	events Telemetry
+}
 
 var _ tools.SeatCallable = (*useSkill)(nil)
 
@@ -143,6 +149,14 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// synthesizer drafts", and a write that failed must not cost the agent
 	// the skill it asked for.
 	t.skills.MarkUsed(ctx, sk.ID, time.Now().UTC())
+	// ONE EVENT PER LOAD, which is the measurement skill induction has to
+	// pass to be worth its cost: without it, "are the skills the
+	// synthesizer drafts ever loaded again" is answerable only by diffing
+	// a database column. Distinct from the per-OFFER stamp
+	// internal/learning deliberately keeps silent — that one fires for
+	// every skill the prompt merely listed.
+	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID, "",
+		types.SkillSourceSynthesized))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", sk.Name)
@@ -173,7 +187,14 @@ func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
 
 // --- query_episodes ------------------------------------------------------- //
 
-type queryEpisodes struct{ episodes EpisodeStore }
+type queryEpisodes struct {
+	episodes EpisodeStore
+
+	// limit is the company's configured default hit count. Bounded by
+	// maxEpisodeLimit whatever it says, because the ceiling is about what
+	// fits in a prompt rather than what an operator wants.
+	limit int
+}
 
 var _ tools.SeatCallable = (*queryEpisodes)(nil)
 
@@ -198,10 +219,17 @@ func (t *queryEpisodes) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many turns to recall (default %d, max %d)",
-					episodeLimit, maxEpisodeLimit),
+					t.defaultLimit(), maxEpisodeLimit),
 			},
 		},
 	}
+}
+
+// defaultLimit is the company's retrieval_limit, clamped to what a prompt can
+// carry. A registry built without one falls back to the shipped default rather
+// than to zero, which would be a tool that returns nothing.
+func (t *queryEpisodes) defaultLimit() int {
+	return clampInt(orDefault(t.limit, DefaultEpisodeLimit), 1, maxEpisodeLimit)
 }
 
 func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -216,7 +244,7 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.episodes == nil {
 		return failed("Episode memory is not configured on this deployment."), nil
 	}
-	limit := clampInt(argInt(args, "limit", episodeLimit), 1, maxEpisodeLimit)
+	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
 
 	var (
 		found []learning.Episode
@@ -272,7 +300,7 @@ func (t *refreshMemory) Parameters() map[string]any {
 		"properties": map[string]any{
 			"limit": map[string]any{
 				"type":        "integer",
-				"description": fmt.Sprintf("How many notes (default %d, max %d)", episodeLimit, maxEpisodeLimit),
+				"description": fmt.Sprintf("How many notes (default %d, max %d)", noteLimit, maxEpisodeLimit),
 			},
 		},
 	}
@@ -290,7 +318,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.diary == nil {
 		return failed("Durable memory is not configured on this deployment."), nil
 	}
-	limit := clampInt(argInt(args, "limit", episodeLimit), 1, maxEpisodeLimit)
+	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
 
 	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), limit)
 	if err != nil {
