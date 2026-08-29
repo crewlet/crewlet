@@ -116,7 +116,7 @@ Every successful rollout produces lag. The first node to apply advances the poin
 
 So lag has to be **confirmed** before it means anything: either this node recorded a failure for that epoch, or the lag outlasted what propagation could explain (three poll intervals, ~45 s — comfortably longer than a poll plus a normal apply, short enough that a genuinely stuck node leaves rotation quickly).
 
-Only then does peer health pick the action. And when *no* peer managed the epoch either, the honest conclusion is that the **revision** is bad rather than this node — so it keeps serving what rollback preserved and raises divergence loudly. Shedding there would take the whole fleet down over one bad revision, which is precisely what the rollback path exists to avoid.
+Only then does peer health pick the action. And when *no* peer managed the epoch either, the honest conclusion is that the **revision** is bad rather than this node — so it keeps serving the epoch it already had, which a refused apply leaves untouched, and raises divergence loudly. Shedding there would take the whole fleet down over one bad revision, which is precisely what publishing rather than mutating exists to avoid.
 
 Retry is **bounded** (three attempts). Without a bound, a revision that fails on one node only — a missing per-node env var, an MCP binary absent from that image — would re-apply every tick forever, restarting that node's MCP children each time.
 
@@ -225,7 +225,7 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 
 A node that stopped reporting **drops out of this list** once its status ages past the freshness bound — which is the same fact the posture decision reads, so what an operator sees and what the fleet concluded cannot disagree.
 
-One node `error` while peers are `ok` is a per-node problem: a missing env var, an image without some MCP binary. Every node `error` on the same epoch is the revision — revert it. Any node `degraded` needs a **restart** of that process specifically; rollback did not restore what the apply tore down, and nothing short of a restart will.
+One node `error` while peers are `ok` is a per-node problem: a missing env var, an image without some MCP binary. Every node `error` on the same epoch is the revision — revert it. Any node `degraded` needs a **restart** of that process specifically: the status exists precisely for a failure past something no later apply can put back, so nothing short of a restart will. No build reports it today — see [`d-404`](https://github.com/crewlet/crewlet/blob/main/decisions/404-hot-reload-epochs.md).
 
 ### After the fact
 
@@ -267,7 +267,7 @@ Like every other event this lives in each node's own log, so a node whose disk i
 
 - [Coordination](coordination.md) — the shared store this plane's two keys live in, and what else does
 - [Scaling Out](scaling.md) — the model this sits inside, and the other four kinds of coupling a fleet had to resolve
-- [Configuration](configuration.md) — the two-tier split, the apply itself, and rollback
+- [Configuration](configuration.md) — the two-tier split, and the apply itself stage by stage
 - [Secret Store](secret-store.md) — where rotated credentials live and how re-activation picks them up
 - [Deployment](../guides/deployment.md) — running more than one node
 - [Event System](event-system.md) — subscription types and why a competing group was the wrong one here
