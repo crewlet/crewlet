@@ -1,7 +1,7 @@
 # 407 — The builtin tool surface, and how a tool learns who called it
 
 Status: decided, implemented
-Relates to: [401 — context threading](401-context-threading.md), [404 — hot reload as immutable epochs](404-hot-reload-epochs.md), [601 — MCP annotations](601-mcp-annotations-and-child-supervision.md)
+Relates to: [401 — context threading](401-context-threading.md), [404 — hot reload as immutable epochs](404-hot-reload-epochs.md), [602 — MCP annotations](602-mcp-annotations-and-child-supervision.md)
 
 ## What was missing
 
