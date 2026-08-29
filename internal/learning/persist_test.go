@@ -898,3 +898,10 @@ func onlyPayload(t *testing.T, payloads []events.Payload) events.Payload {
 	}
 	return payloads[0]
 }
+
+// callCount is the number of completions served, read under the lock.
+func (p *auxProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}

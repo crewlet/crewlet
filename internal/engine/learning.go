@@ -101,6 +101,27 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		workers = append(workers, use)
 	}
 
+	// THE SYNTHESIZER, which is what makes synthesized_skills a table with
+	// rows in it. Everything that reads a skill — use_skill, the Plan-phase
+	// catalogue, refine_skill, the curator — shipped before anything wrote
+	// one, so all of it ran correctly over an empty table.
+	if cfg.SkillSynthesis.Enabled.Or(true) {
+		synth, err := learning.NewSynthesizer(models, learning.NewSkills(db),
+			learning.SynthesizerOptions{
+				MinToolCalls:              cfg.SkillSynthesis.MinToolCalls,
+				MaxSkillsPerAgent:         cfg.SkillSynthesis.MaxSkillsPerAgent,
+				DuplicateJaccardThreshold: cfg.SkillSynthesis.DuplicateJaccardThreshold,
+				MaxTokens:                 cfg.SkillSynthesis.BudgetTokens,
+			})
+		if err != nil {
+			log.Warn("skill_synthesizer_unavailable", "error", err,
+				"detail", "no skill will ever be drafted, so use_skill and the "+
+					"Plan-phase skill catalogue stay empty")
+		} else {
+			workers = append(workers, synth)
+		}
+	}
+
 	if cfg.Counterparty.Enabled.Or(true) {
 		profiler, err := learning.NewProfiler(models, learning.NewCounterparties(db),
 			learning.ProfilerOptions{MaxTokens: cfg.Counterparty.BudgetTokens})
