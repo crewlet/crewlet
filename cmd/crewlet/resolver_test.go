@@ -158,3 +158,61 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 		t.Errorf("a failed run announced a fallback it did not take: %q", notes.String())
 	}
 }
+
+// THE PREVIOUS ENGINE'S OPERATOR-CREDENTIAL NAMES STILL WORK.
+//
+// `--provision-token` / $GITLAB_PROVISION_TOKEN and $PLANE_PROVISION_TOKEN
+// were renamed to `-admin-token` / $*_ADMIN_TOKEN with no alias and no
+// migration note. An operator whose CI exports the old name got "no
+// administrator token" from a pipeline that had worked the day before, and
+// the error named only the new spelling — so the message actively pointed
+// away from the cause.
+//
+// The new name WINS when both are set: it is the one this engine documents,
+// and an operator who has migrated should not have a stale export silently
+// override the value they just wrote.
+func TestTheRenamedOperatorCredentialsStillRead(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		set   map[string]string
+		names []string
+		want  string
+	}{
+		{
+			name:  "the current name",
+			set:   map[string]string{"GITLAB_ADMIN_TOKEN": "current"},
+			names: []string{"GITLAB_ADMIN_TOKEN", "GITLAB_PROVISION_TOKEN"},
+			want:  "current",
+		},
+		{
+			name:  "the previous engine's name alone",
+			set:   map[string]string{"GITLAB_PROVISION_TOKEN": "legacy"},
+			names: []string{"GITLAB_ADMIN_TOKEN", "GITLAB_PROVISION_TOKEN"},
+			want:  "legacy",
+		},
+		{
+			name: "both, and the current one wins",
+			set: map[string]string{
+				"GITLAB_ADMIN_TOKEN":     "current",
+				"GITLAB_PROVISION_TOKEN": "legacy",
+			},
+			names: []string{"GITLAB_ADMIN_TOKEN", "GITLAB_PROVISION_TOKEN"},
+			want:  "current",
+		},
+		{
+			name:  "plane, the previous engine's name",
+			set:   map[string]string{"PLANE_PROVISION_TOKEN": "legacy-plane"},
+			names: []string{"PLANE_ADMIN_TOKEN", "PLANE_PROVISION_TOKEN"},
+			want:  "legacy-plane",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.set {
+				t.Setenv(k, v)
+			}
+			if got := operatorCredential(tc.names...); got != tc.want {
+				t.Errorf("operatorCredential(%v) = %q, want %q", tc.names, got, tc.want)
+			}
+		})
+	}
+}

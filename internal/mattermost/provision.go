@@ -104,6 +104,11 @@ func BotDisplayName(p *config.MattermostProvisioning, role string) string {
 type Bot struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
+	// DisplayName is the bot's own, which lives on the BOT record rather
+	// than on its user: the user's nickname is a different field the bots
+	// API does not set, so comparing against it would report drift on every
+	// run and rewrite a name that was already correct.
+	DisplayName string `json:"display_name"`
 }
 
 // BotByUsername finds a bot's account, reporting whether it exists.
@@ -262,4 +267,40 @@ func isConflictStatus(err error) bool {
 			strings.ToLower(e.Message), "already")
 	}
 	return false
+}
+
+// PatchBot updates a bot's display name.
+//
+// Provisioning is a RECONCILE, not a create-once: a role renamed in the
+// company document has to reach the bot account, or the roster in Mattermost
+// drifts from the org chart it is supposed to mirror and the only way back is
+// to edit every bot by hand. The previous engine kept this current and the
+// port only ever set the name on the create branch.
+func (c *Client) PatchBot(ctx context.Context, userID, displayName string) error {
+	_, err := c.request(ctx, http.MethodPut, "/bots/"+userID,
+		map[string]string{"display_name": displayName}, nil, false)
+	return err
+}
+
+// DisableBot deactivates a bot account without deleting it.
+//
+// DISABLE rather than delete, and the difference is the point: a deleted bot
+// takes its posts with it, so a decommission would silently rewrite the
+// history of every channel the seat ever spoke in. A disabled bot keeps what
+// it said and can say nothing more, which is what decommissioning a colleague
+// actually means.
+func (c *Client) DisableBot(ctx context.Context, userID string) error {
+	_, err := c.request(ctx, http.MethodPost, "/bots/"+userID+"/disable", nil, nil, false)
+	return err
+}
+
+// Bots lists the bot accounts the instance has, including disabled ones.
+//
+// Including disabled: a decommission that could not see them would try to
+// disable the same account on every run and report it as work done each time.
+func (c *Client) Bots(ctx context.Context) ([]Bot, error) {
+	var out []Bot
+	_, err := c.request(ctx, http.MethodGet,
+		"/bots?include_deleted=true&per_page=200", nil, &out, true)
+	return out, err
 }

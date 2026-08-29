@@ -16,7 +16,13 @@ import (
 
 // Result is what one reconcile did, for the report.
 type Result struct {
+	// Decommissioned names the bots this run disabled.
+	Decommissioned []string
+
 	Created []string
+	// Renamed names the bots whose display name was brought back in line
+	// with the company document.
+	Renamed []string
 	Rotated []string
 	// Kept names the seats whose existing token was left alone — the
 	// SUCCESSFUL outcome of a re-run, said out loud because a silent
@@ -56,6 +62,23 @@ type Options struct {
 	// An operator adding a tenth seat would take the other nine down,
 	// from a command whose whole promise is that it is safe to re-run.
 	Rotate bool
+
+	// Decommission disables managed bot accounts whose seats have left the
+	// company document, matching the flag GitLab and Plane already have.
+	//
+	// DISABLE, never delete: a deleted bot takes its posts with it, so this
+	// would silently rewrite the history of every channel the seat spoke
+	// in. A disabled bot keeps what it said and can say nothing more.
+	Decommission bool
+
+	// Only narrows the PROVISIONING loop to these handles. Empty does every
+	// seat.
+	//
+	// It deliberately does NOT narrow what Decommission keeps. Filtering the
+	// plan itself would be the obvious implementation and it is a footgun:
+	// `-handles ceo -decommission` would read every other seat as departed
+	// and disable the whole company. The keep-set is always the full plan.
+	Only []string
 }
 
 // Reconcile runs one pass.
@@ -86,13 +109,44 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			opts.Config.Team)
 	}
 
+	// THE PREFLIGHT, before a single write.
+	//
+	// Every failure it catches otherwise surfaces as a 403 on the FIRST bot
+	// creation — after the team lookup has succeeded, so the run looks like
+	// it was working — and the message names an endpoint rather than the
+	// setting an administrator has to change. Checked, not assumed, because
+	// all three are invisible from the config.
+	preflight := checkPreflight(ctx, opts)
+
 	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
 	// its own — a channel that does not exist, a bot that joined nothing
 	// — and a snapshot taken now would silently drop every one of them.
 	res := &Result{Joined: map[string][]string{}}
 	minted := map[string]mintedToken{}
 
+	// ONE bot listing per run, shared by the rename check and the
+	// decommission pass. The display name lives on the BOT record and not
+	// on its user, so without this the comparison has nothing true to read
+	// — and per-seat fetches would be a call each for a value one list
+	// already carries.
+	managed := map[string]Bot{}
+	if bots, err := opts.Client.Bots(ctx); err != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"could not list bots, so display names are not checked this run: %v", err))
+	} else {
+		for _, bot := range bots {
+			managed[strings.ToLower(bot.Username)] = bot
+		}
+	}
+
+	only := map[string]bool{}
+	for _, handle := range opts.Only {
+		only[handle] = true
+	}
 	for _, seat := range opts.Plan.Seats {
+		if len(only) > 0 && !only[seat.Handle] {
+			continue
+		}
 		username := BotUsername(opts.Config.Provisioning, seat.Handle)
 		user, exists, err := opts.Client.BotByUsername(ctx, username)
 		if err != nil {
@@ -109,6 +163,20 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			}
 			user = User{ID: bot.UserID, Username: bot.Username}
 			res.Created = append(res.Created, seat.Handle)
+		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" &&
+			managed[strings.ToLower(username)].DisplayName != want {
+			// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile,
+			// and a create-only display name means the roster in Mattermost
+			// drifts from the org chart it mirrors, with no way back but
+			// editing every bot by hand.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
+				res.Notes = append(res.Notes, fmt.Sprintf(
+					"%s: could not update the bot's display name to %q: %v",
+					seat.Handle, want, err))
+			} else {
+				res.Renamed = append(res.Renamed, seat.Handle)
+			}
 		}
 
 		if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
@@ -202,8 +270,107 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if err := opts.Sink.Flush(ctx); err != nil {
 		return nil, rollback(ctx, opts, minted, err)
 	}
-	res.Notes = append(notesOf(opts.Plan), res.Notes...)
+
+	// AFTER the flush, deliberately. Decommissioning touches accounts this
+	// run did not mint for, so it must not be able to roll back credentials
+	// that are already recorded and already in use.
+	if opts.Decommission {
+		disabled, notes := decommission(ctx, opts, managed)
+		res.Decommissioned = disabled
+		res.Notes = append(res.Notes, notes...)
+	}
+
+	res.Notes = append(notesOf(opts.Plan), append(preflight, res.Notes...)...)
 	return res, nil
+}
+
+// checkPreflight reports what would make this run fail on its first write.
+//
+// NOTES, not errors, and the distinction is deliberate: the two settings are
+// read from a config endpoint whose exact key set varies by server version,
+// so an absent key means "this server did not say", not "it is off". Refusing
+// on silence would make the provisioner unusable against a version this
+// engine has not seen; warning loudly on an explicit false is the honest
+// half.
+//
+// The admin role IS checked hard enough to be worth naming, because a token
+// without it fails every single write.
+func checkPreflight(ctx context.Context, opts Options) []string {
+	var notes []string
+	if me, err := opts.Client.Me(ctx); err != nil {
+		notes = append(notes, fmt.Sprintf(
+			"could not confirm the provisioning account: %v", err))
+	} else if !me.SystemAdmin() {
+		notes = append(notes, fmt.Sprintf(
+			"%s is not a system administrator (roles: %s) — creating a bot, "+
+				"minting an access token and adding a team member all require "+
+				"it, so this run will fail on its first write",
+			me.Username, orNone(me.Roles)))
+	}
+
+	cfg, err := opts.Client.ClientConfig(ctx)
+	if err != nil {
+		// Not worth a note of its own: the run is about to make real calls
+		// that will report the same reachability problem with more context.
+		return notes
+	}
+	for _, setting := range []struct{ key, why string }{
+		{"EnableBotAccountCreation", "no bot account can be created"},
+		{"EnableUserAccessTokens", "no bot can be given a token, so none of " +
+			"them can connect"},
+	} {
+		if cfg[setting.key] == "false" {
+			notes = append(notes, fmt.Sprintf(
+				"ServiceSettings.%s is false on this instance, so %s — "+
+					"an administrator has to enable it in the System Console",
+				setting.key, setting.why))
+		}
+	}
+	return notes
+}
+
+// decommission disables managed bots whose seats have left the config.
+//
+// Matched by the SAME username prefix the run mints under, so an account a
+// person created by hand is never touched — the prefix is the only thing that
+// makes a bot "managed", and widening the match would let this disable
+// somebody's own integration.
+func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]string, []string) {
+	prefix := strings.ToLower(BotUsername(opts.Config.Provisioning, ""))
+	if prefix == "" {
+		// Without a prefix every bot on the instance is a candidate, which
+		// is precisely the run an operator cannot undo.
+		return nil, []string{"decommission skipped: this config has no bot " +
+			"username prefix, so there is nothing that safely identifies a " +
+			"managed account"}
+	}
+	keep := make(map[string]bool, len(opts.Plan.Seats))
+	for _, seat := range opts.Plan.Seats {
+		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle))] = true
+	}
+	var disabled, notes []string
+	for _, bot := range managed {
+		username := strings.ToLower(bot.Username)
+		if !strings.HasPrefix(username, prefix) || keep[username] {
+			continue
+		}
+		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {
+			notes = append(notes, fmt.Sprintf(
+				"%s matches the managed prefix and could not be disabled: %v",
+				bot.Username, err))
+			continue
+		}
+		disabled = append(disabled, bot.Username)
+	}
+	return disabled, notes
+}
+
+// orNone renders an empty role list readably.
+func orNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "(none)"
+	}
+	return s
 }
 
 // mintedToken is one credential this run created, as its rollback needs it.

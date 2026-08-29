@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,18 @@ type User struct {
 	Nickname string `json:"nickname,omitempty"`
 	IsBot    bool   `json:"is_bot,omitempty"`
 	Email    string `json:"email,omitempty"`
+
+	// Roles is the space-separated role list Mattermost assigns. Read for
+	// ONE question: does the provisioning credential actually hold
+	// system_admin? Every write this provisioner makes needs it, and a
+	// token without it fails on the first bot creation with a 403 that
+	// names the endpoint rather than the missing role.
+	Roles string `json:"roles,omitempty"`
+}
+
+// SystemAdmin reports whether this account may provision.
+func (u User) SystemAdmin() bool {
+	return slices.Contains(strings.Fields(u.Roles), "system_admin")
 }
 
 // Post is one message.

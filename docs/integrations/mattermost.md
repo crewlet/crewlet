@@ -237,6 +237,17 @@ rendered. The setting exists only under `integrations.slack`.
 
 ## Automated Setup: `crewlet mattermost provision`
 
+**A preflight runs before the first write.** Three things a config cannot show
+are checked against the live instance: that the provisioning credential really
+holds `system_admin`, and that `ServiceSettings.EnableBotAccountCreation` and
+`ServiceSettings.EnableUserAccessTokens` are on. Each is reported as a note
+naming the setting — without them the run fails on its first bot creation with
+a 403 that names an endpoint rather than the thing an administrator has to
+change. They are notes rather than refusals because the settings are read from
+a config endpoint whose exact key set varies by server version: an absent key
+means "this server did not say", not "it is off".
+
+
 ```
 export MATTERMOST_ADMIN_TOKEN="..."      # a system-admin personal access token
 crewlet mattermost provision company.yaml
@@ -249,7 +260,7 @@ For every Mattermost-enabled agent seat the command:
 2. **re-enables it** if a previous decommission disabled it — a disabled bot
    still owns its username, so creating over it fails with a conflict nothing
    else would explain;
-3. keeps its **display name** current (`{role name}{display_name_suffix}`);
+3. keeps its **display name** current (`{role name}{display_name_suffix}`) — read from the bot record rather than its user, because the display name lives on the bot and comparing against the user's nickname would report drift on every run;
 4. adds it to the **team** and to every configured **channel** — a bot only
    receives messages from channels it is a member of, so this is the step
    that makes the integration work at all;
@@ -362,6 +373,8 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. |
 | `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
+| `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
+| `-decommission` | Disable managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. |
 | `-dry-run` | Print the plan; create and modify nothing. |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials

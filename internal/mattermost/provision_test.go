@@ -90,9 +90,17 @@ func TestThePlanNeedsAnEnabledIntegrationAndATeam(t *testing.T) {
 type chatServer struct {
 	mu sync.Mutex
 
-	bots    map[string]string             // username -> user id
-	tokens  map[string][]mattermost.Token // user id -> its live tokens
-	revokes int
+	bots   map[string]string             // username -> user id
+	names  map[string]string             // user id -> display name
+	off    map[string]bool               // user id -> disabled
+	tokens map[string][]mattermost.Token // user id -> its live tokens
+	// adminRoles is what /users/me reports for the operator credential.
+	// Empty means the shipped system_admin; a value is the under-privileged
+	// token the preflight exists to catch.
+	adminRoles string
+	// settings overrides the client-config booleans the preflight reads.
+	settings map[string]string
+	revokes  int
 	// identityFails makes the identity route answer 500 for a BOT's
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
@@ -182,7 +190,8 @@ func chatClientAs(t *testing.T, srv *chatServer, token string) *mattermost.Clien
 
 func newChatServer() *chatServer {
 	return &chatServer{
-		bots: map[string]string{}, tokens: map[string][]mattermost.Token{},
+		bots: map[string]string{}, names: map[string]string{}, off: map[string]bool{},
+		tokens: map[string][]mattermost.Token{}, settings: map[string]string{},
 		channelsOf: []string{"eng"},
 		teamOf:     map[string]bool{}, members: map[string]bool{},
 		channels: map[string]string{"general": "ch-general", "leadership": "ch-lead"},
@@ -228,7 +237,11 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 		if site == "" {
 			site = s.base
 		}
-		json.NewEncoder(w).Encode(map[string]string{"SiteURL": site})
+		out := map[string]string{"SiteURL": site}
+		for k, v := range s.settings {
+			out[k] = v
+		}
+		json.NewEncoder(w).Encode(out)
 
 	case r.Method == http.MethodGet && path == "/users/me":
 		if s.refuseIdentity {
@@ -248,7 +261,13 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if presented == adminToken {
-			json.NewEncoder(w).Encode(map[string]any{"id": "admin", "username": "root"})
+			roles := s.adminRoles
+			if roles == "" {
+				roles = "system_user system_admin"
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": "admin", "username": "root", "roles": roles,
+			})
 			return
 		}
 		for user, tokens := range s.tokens {
@@ -275,12 +294,33 @@ func (s *chatServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": id, "username": username})
 
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/bots"):
+		out := []map[string]any{}
+		for username, id := range s.bots {
+			out = append(out, map[string]any{
+				"user_id": id, "username": username, "display_name": s.names[id],
+			})
+		}
+		json.NewEncoder(w).Encode(out)
+
+	case r.Method == http.MethodPut && strings.HasPrefix(path, "/bots/"):
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		s.names[strings.TrimPrefix(path, "/bots/")] = body["display_name"]
+		w.Write([]byte(`{}`))
+
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/disable") &&
+		strings.HasPrefix(path, "/bots/"):
+		s.off[strings.TrimSuffix(strings.TrimPrefix(path, "/bots/"), "/disable")] = true
+		w.Write([]byte(`{}`))
+
 	case r.Method == http.MethodPost && path == "/bots":
 		var body map[string]string
 		json.NewDecoder(r.Body).Decode(&body)
 		s.next++
 		id := fmt.Sprintf("user-%d", s.next)
 		s.bots[body["username"]] = id
+		s.names[id] = body["display_name"]
 		json.NewEncoder(w).Encode(map[string]any{
 			"user_id": id, "username": body["username"],
 		})
@@ -837,5 +877,218 @@ func TestAnUnverifiableBotTokenIsLeftAloneWithANote(t *testing.T) {
 	}
 	if srv.revoked() != 0 {
 		t.Errorf("%d tokens were revoked on an unverifiable seat", srv.revoked())
+	}
+}
+
+// THE FOUR THINGS THE PORT DROPPED.
+//
+// GitLab and Plane kept `-decommission`; Slack kept `-handles`; the previous
+// engine kept a bot's display name current and ran a preflight before its
+// first write. Mattermost lost all four in the rewrite, and each is invisible
+// until an operator needs it: a departed seat's bot keeps posting, a renamed
+// role never reaches the roster, and a token without system_admin fails on
+// the first bot creation with a 403 naming an endpoint rather than the role.
+
+// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile, and a
+// create-only display name lets the Mattermost roster drift from the org
+// chart it mirrors with no way back but editing every bot by hand.
+func TestARenamedRoleUpdatesTheBotsDisplayName(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	if _, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+	}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// THE HANDLE IS PINNED, so this is the same seat under a new title —
+	// which is the real drift case. A rename that also changes a DERIVED
+	// handle is a different seat, and gets its own bot correctly.
+	renamed := chatSeat("Chief Executive", "${MM_TOKEN_CEO}", "leadership")
+	renamed.DeclaredHandle = "ceo"
+	res, err := reconcileChat(t, srv, newChatSink(), []*org.Role{renamed})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	srv.mu.Lock()
+	got := srv.names[srv.bots["agent-ceo"]]
+	srv.mu.Unlock()
+	if !strings.Contains(got, "Chief Executive") {
+		t.Errorf("display name = %q, want the renamed role — the roster drifts "+
+			"from the org chart otherwise", got)
+	}
+	if len(res.Renamed) != 1 {
+		t.Errorf("Renamed = %v, want the rename reported", res.Renamed)
+	}
+}
+
+// AND AN UNCHANGED NAME IS NOT REWRITTEN, or every re-run would report work
+// it did not do — the same silence-vs-noise rule Kept exists for.
+func TestAnUnchangedDisplayNameIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	seats := []*org.Role{chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership")}
+	if _, err := reconcileChat(t, srv, newChatSink(), seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	res, err := reconcileChat(t, srv, newChatSink(), seats)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Renamed) != 0 {
+		t.Errorf("Renamed = %v on an unchanged company", res.Renamed)
+	}
+}
+
+// A DEPARTED SEAT'S BOT IS DISABLED, not deleted: a deleted bot takes its
+// posts with it, silently rewriting the history of every channel it spoke in.
+func TestDecommissionDisablesADepartedSeatsBot(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	if _, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
+	}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	res, err := reconcileChatWith(t, srv, newChatSink(),
+		[]*org.Role{chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership")},
+		func(o *mattermost.Options) { o.Decommission = true })
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Decommissioned) != 1 || !strings.Contains(res.Decommissioned[0], "cto") {
+		t.Fatalf("Decommissioned = %v, want the departed seat", res.Decommissioned)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if !srv.off[srv.bots["agent-cto"]] {
+		t.Error("the departed bot was reported disabled and is still enabled")
+	}
+	if srv.off[srv.bots["agent-ceo"]] {
+		t.Error("a seat still in the company was disabled")
+	}
+}
+
+// WITHOUT THE FLAG NOTHING IS DISABLED. Decommissioning is destructive enough
+// that it must never be what a plain re-run does.
+func TestARerunWithoutDecommissionDisablesNothing(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	if _, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
+	}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	res, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+	})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Decommissioned) != 0 {
+		t.Errorf("Decommissioned = %v without the flag", res.Decommissioned)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.off[srv.bots["agent-cto"]] {
+		t.Error("a plain re-run disabled a bot")
+	}
+}
+
+// -handles NARROWS THE PROVISIONING LOOP AND NOT THE KEEP-SET.
+//
+// This is the footgun the flag has to avoid: filtering the plan itself is the
+// obvious implementation, and `-handles ceo -decommission` would then read
+// every other seat as departed and disable the whole company.
+func TestHandlesNarrowsProvisioningWithoutWideningDecommission(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	seats := []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
+	}
+	if _, err := reconcileChat(t, srv, newChatSink(), seats); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	res, err := reconcileChatWith(t, srv, newChatSink(), seats,
+		func(o *mattermost.Options) {
+			o.Only, o.Decommission, o.Rotate = []string{"ceo"}, true, true
+		})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Rotated) != 1 || res.Rotated[0] != "ceo" {
+		t.Errorf("Rotated = %v, want only the named handle", res.Rotated)
+	}
+	if len(res.Decommissioned) != 0 {
+		t.Fatalf("Decommissioned = %v — a narrowed run must not read the "+
+			"seats it skipped as departed", res.Decommissioned)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.off[srv.bots["agent-cto"]] {
+		t.Error("-handles ceo -decommission disabled the seat it merely skipped")
+	}
+}
+
+// THE PREFLIGHT NAMES WHAT WOULD FAIL, before the first write.
+//
+// Each of these otherwise surfaces as a 403 on bot creation — after the team
+// lookup succeeded, so the run looks like it was working — with a message
+// naming an endpoint rather than the setting an administrator must change.
+func TestThePreflightNamesWhatWouldFail(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		tune func(*chatServer)
+		want string
+	}{
+		"not a system administrator": {
+			tune: func(s *chatServer) { s.adminRoles = "system_user" },
+			want: "system administrator",
+		},
+		"bot creation disabled": {
+			tune: func(s *chatServer) { s.settings["EnableBotAccountCreation"] = "false" },
+			want: "EnableBotAccountCreation",
+		},
+		"access tokens disabled": {
+			tune: func(s *chatServer) { s.settings["EnableUserAccessTokens"] = "false" },
+			want: "EnableUserAccessTokens",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newChatServer()
+			tc.tune(srv)
+			res, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
+				chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+			})
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if !strings.Contains(strings.Join(res.Notes, "\n"), tc.want) {
+				t.Errorf("notes did not name %q:\n%s", tc.want,
+					strings.Join(res.Notes, "\n"))
+			}
+		})
+	}
+}
+
+// A HEALTHY INSTANCE GETS NO PREFLIGHT NOISE, or the notes stop being read.
+func TestAHealthyInstanceRaisesNoPreflightNote(t *testing.T) {
+	t.Parallel()
+	res, err := reconcileChat(t, newChatServer(), newChatSink(), []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	for _, note := range res.Notes {
+		if strings.Contains(note, "system administrator") ||
+			strings.Contains(note, "EnableBot") || strings.Contains(note, "EnableUser") {
+			t.Errorf("healthy instance produced a preflight note: %q", note)
+		}
 	}
 }

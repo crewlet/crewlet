@@ -165,8 +165,14 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 // from the store would imply it may be kept there — which is how the most
 // powerful credential in the deployment ends up in the shared table beside
 // the seat tokens it exists to mint.
-func operatorCredential(name string) string {
-	return strings.TrimSpace(config.EnvOnly().Lookup(name))
+func operatorCredential(names ...string) string {
+	env := config.EnvOnly()
+	for _, name := range names {
+		if v := strings.TrimSpace(env.Lookup(name)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // runGitLabProvision is `crewlet gitlab provision`.
@@ -177,7 +183,8 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	adminToken := fs.String("admin-token", "",
-		"a GitLab token permitted to create service accounts; empty reads GITLAB_ADMIN_TOKEN")
+		"a GitLab token permitted to create service accounts; empty reads "+
+			"GITLAB_ADMIN_TOKEN, then GITLAB_PROVISION_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook")
 	rotate := fs.Bool("rotate", false,
@@ -272,13 +279,15 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("GITLAB_ADMIN_TOKEN")
+		token = operatorCredential("GITLAB_ADMIN_TOKEN", "GITLAB_PROVISION_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
 			"no administrator token: pass -admin-token or export " +
-				"GITLAB_ADMIN_TOKEN. The seats' own tokens are what this run " +
-				"MINTS, so it cannot bootstrap itself from them")
+				"GITLAB_ADMIN_TOKEN (GITLAB_PROVISION_TOKEN is also read, for " +
+				"configs written against the previous engine). The seats' own " +
+				"tokens are what this run MINTS, so it cannot bootstrap itself " +
+				"from them")
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: token,
@@ -507,6 +516,10 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	rotate := fs.Bool("rotate", false,
 		"mint a fresh token for every bot, including bots whose current "+
 			"one still works (the engine has to be restarted after)")
+	only := fs.String("handles", "",
+		"provision only these seat handles, comma-separated; empty does all")
+	decommission := fs.Bool("decommission", false,
+		"disable managed bot accounts whose seats have left the config")
 	dryRun := fs.Bool("dry-run", false,
 		"print what the run would do and touch nothing")
 	if err := fs.Parse(args); err != nil {
@@ -519,7 +532,8 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	if companyPath == "" || len(tail) > 0 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost provision <company.yaml> "+
-				"[-secret-store|-env-file PATH|-print] [-rotate] [-dry-run]")
+				"[-secret-store|-env-file PATH|-print] [-handles a,b] "+
+				"[-rotate] [-decommission] [-dry-run]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -578,7 +592,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 
 	res, err := mattermost.Reconcile(ctx, mattermost.Options{
 		Client: client, Config: cfg, Org: organization, Plan: plan, Sink: sink,
-		Rotate: *rotate,
+		Rotate: *rotate, Decommission: *decommission, Only: splitHandles(*only),
 	})
 	if err != nil {
 		return err
@@ -594,9 +608,17 @@ func printChatResult(w io.Writer, res *mattermost.Result, where string) {
 		fmt.Fprintf(w, "Created %d bot(s): %s\n",
 			len(res.Created), strings.Join(res.Created, ", "))
 	}
+	if len(res.Renamed) > 0 {
+		fmt.Fprintf(w, "Renamed %d bot(s) to match the company document: %s\n",
+			len(res.Renamed), strings.Join(res.Renamed, ", "))
+	}
 	if len(res.Rotated) > 0 {
 		fmt.Fprintf(w, "Minted a token for %d bot(s): %s\n",
 			len(res.Rotated), strings.Join(res.Rotated, ", "))
+	}
+	if len(res.Decommissioned) > 0 {
+		fmt.Fprintf(w, "Disabled %d departed bot(s): %s\n",
+			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
 	}
 	printKept(w, res.Kept)
 	// THE CHANNELS ARE THE PART TO CHECK. A bot receives only what its
@@ -626,7 +648,8 @@ func runPlaneProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	adminToken := fs.String("admin-token", "",
-		"a Plane API key for a workspace administrator; empty reads PLANE_ADMIN_TOKEN")
+		"a Plane API key for a workspace administrator; empty reads "+
+			"PLANE_ADMIN_TOKEN, then PLANE_PROVISION_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the workspace webhook")
 	rotate := fs.Bool("rotate", false,
@@ -713,11 +736,13 @@ func runPlaneProvision(args []string, stdout, stderr io.Writer) error {
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("PLANE_ADMIN_TOKEN")
+		token = operatorCredential("PLANE_ADMIN_TOKEN", "PLANE_PROVISION_TOKEN")
 	}
 	if token == "" {
 		return errors.New(
-			"no administrator key: pass -admin-token or export PLANE_ADMIN_TOKEN. " +
+			"no administrator key: pass -admin-token or export PLANE_ADMIN_TOKEN " +
+				"(PLANE_PROVISION_TOKEN is also read, for configs written against " +
+				"the previous engine). " +
 				"The seats' own keys are what this run MINTS, so it cannot " +
 				"bootstrap itself from them")
 	}
