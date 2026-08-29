@@ -70,6 +70,22 @@ services:
       # ``delete_when_subscriptions_caught_up``: it will not delete a
       # topic whose subscriptions still hold a backlog.
       PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled: "false"
+      # Force namespace deletion, for the conformance suite alone -- and it
+      # is what makes the run above a rehearsal of CI rather than something
+      # subtly different. Each queue under test gets its OWN namespace
+      # (parallel subtests share subject names), and the suite deliberately
+      # leaves subscriptions and backlogs behind, because that is what
+      # several cases assert about. Its cleanup therefore deletes with
+      # ``?force=true``, which the broker refuses unless this is set.
+      #
+      # The refusal is silent by design: the cleanup logs and moves on
+      # rather than failing a green run over a leaked namespace
+      # (internal/queue/pulsar/conformance_test.go). So without this every
+      # local run leaves its namespaces, topics and subscriptions on the
+      # broker for the next one to accumulate behind -- with nothing but a
+      # t.Logf, on a run that passed, to say so. The CI job that certifies
+      # this backend sets it for the same reason.
+      PULSAR_PREFIX_forceDeleteNamespaceAllowed: "true"
       # Token auth (off by default for local dev). Uncomment to require
       # JWTs and confine the engine to its own namespace via grants --
       # full recipe (key/token generation, grants, engine + Dekaf config,
