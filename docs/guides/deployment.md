@@ -66,7 +66,7 @@ docker compose --profile pulsar up -d
 
 | Service | Port | Details |
 |---------|------|---------|
-| Apache Pulsar | 6650 / 8080 | `apachepulsar/pulsar:4.0.6` standalone — 6650 binary protocol (the engine connects here), 8080 admin/REST (the engine needs BOTH: subscription lifecycle runs over admin REST) |
+| Apache Pulsar | 6650 / 8080 | `apachepulsar/pulsar:4.2.4` standalone — 6650 binary protocol (the engine connects here), 8080 admin/REST (the engine needs BOTH: subscription lifecycle runs over admin REST) |
 | Dekaf (Pulsar UI) | 8090 | Pulsar web UI — topics, subscriptions, backlog, message browse |
 
 The Pulsar web UI is [Dekaf](https://pulsar.apache.org/docs/next/administration-dekaf-ui/) (the UI the Pulsar docs recommend — Apache-2.0, no account/license), auto-wired to the broker. The CLI works too, e.g. `docker compose exec pulsar bin/pulsar-admin topics list public/default`. Dekaf is just a UI; remove the `dekaf` service from `docker-compose.yml` if you don't want it.

@@ -190,7 +190,7 @@ jobs:
         run: |
           docker run -d --name pulsar \
             -p 6650:6650 -p 8080:8080 \
-            apachepulsar/pulsar:4.0.6 \
+            apachepulsar/pulsar:4.2.4 \
             sh -c "{ echo; printf '%s\n' \
                        brokerDeleteInactiveTopicsEnabled=false \
                        subscriptionExpirationTimeMinutes=0 \

@@ -30,7 +30,7 @@ services:
     # version to bump, which is a service watched by nothing that looks
     # exactly like a service with nothing to update. internal/version asserts
     # this tag and the workflow's are the same.
-    image: apachepulsar/pulsar:4.0.6
+    image: apachepulsar/pulsar:4.2.4
     profiles: [pulsar]
     # Standalone runs broker + metadata + BookKeeper in one container.
     # Functions worker and stream storage are unused by crewlet, so disable
