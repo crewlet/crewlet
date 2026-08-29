@@ -146,9 +146,16 @@ consequences worth knowing before you script against it:
   than an intent to add a seat, and adding through this route would grow the
   company without you ever seeing the document you changed. Add through
   `PUT /config`.
-- **The path is the identity.** `PUT /config/roles/ceo` replaces whatever is
-  at `ceo`; a body carrying a different handle does not move it. Renaming is a
-  full-document edit.
+- **The path is the identity, and a `PUT` never renames.** `PUT
+  /config/roles/ceo` replaces whatever is at `ceo`; a body carrying a
+  different handle is `400 identity_mismatch` rather than a move. The handle
+  is effectively permanent — the seat's durable id derives from it, so a
+  rename orphans that seat's diary, its onboarding marker and its counterparty
+  profiles — and nothing that references the old name travels with the splice.
+  The check is on the **derived** handle, so `{"name": "Chief Executive"}`
+  with no `handle` is refused too: an omitted handle is derived from the name,
+  which makes a display-name edit a rename by accident. Keep `handle` in the
+  body and change whatever else you like. Renaming is a full-document edit.
 - **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
   answers `405`. Removal is a full-document edit for the same reason creation
   is, only more so — deleting a seat also strands its mailbox and its in-flight

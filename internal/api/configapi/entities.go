@@ -45,6 +45,30 @@ var ErrUnknownEntityKind = errors.New("configapi: unknown entity kind")
 // ErrNoSuchEntity reports an id nothing in the active revision carries.
 var ErrNoSuchEntity = errors.New("configapi: no such entity")
 
+// ErrIdentityMismatch reports a body whose own identity disagrees with the id
+// in the path — a rename, arriving dressed as a replacement.
+//
+// Refused rather than applied, because an identity here is not a label. A
+// seat's durable id is a UUIDv5 over (company name, handle), so a handle that
+// changes under an operator strands that seat's diary, its onboarding marker
+// and its counterparty profiles behind an id nothing derives any more, and
+// its inbox subject with them. A unit's name and an MCP server's name are
+// referenced by every `manages:`, `lead:`, `unit:` and per-seat credential
+// block that names them. None of that moves with a splice, and the URL is
+// left naming something that no longer exists.
+var ErrIdentityMismatch = errors.New("configapi: identity mismatch")
+
+// identityMismatch names both halves, because the caller has to be able to
+// see which one they meant.
+func identityMismatch(field, pathID, bodyID string) error {
+	if bodyID == "" {
+		return fmt.Errorf("%w: this path addresses %q, and the body carries no %s",
+			ErrIdentityMismatch, pathID, field)
+	}
+	return fmt.Errorf("%w: this path addresses %q, but the body's %s is %q",
+		ErrIdentityMismatch, pathID, field, bodyID)
+}
+
 // entityAccess is how one collection is listed, read and replaced.
 //
 // Typed rather than a JSON path grammar, deliberately: a path grammar would
@@ -58,7 +82,9 @@ type entityAccess struct {
 	// replace splices a decoded entity in under an id, or reports why not.
 	// It never CREATES: an id that is not already there is refused, because
 	// "PUT the entity called X" arriving for an X nobody has is far more
-	// often a typo than an intent to add one.
+	// often a typo than an intent to add one. It never RENAMES either: a
+	// body whose own identity disagrees with the id is ErrIdentityMismatch,
+	// for the reasons on that sentinel.
 	replace func(*config.Company, string, []byte) error
 }
 
@@ -88,16 +114,24 @@ var entityKinds = map[string]entityAccess{
 			if err := json.Unmarshal(raw, &incoming); err != nil {
 				return fmt.Errorf("decode role: %w", err)
 			}
+			// THE IDENTITY IS THE ADDRESS, so a body that renames the
+			// seat is refused rather than silently moved: the caller asked
+			// to replace the entity at this id, and honouring a rename here
+			// would leave the URL naming something that no longer exists.
+			//
+			// Compared on the DERIVED handle rather than the declared one,
+			// because a body that leaves `handle` out derives it from
+			// `name` — so editing a seat's display name alone is the shape
+			// this rename arrives in most often, and the one an operator is
+			// least expecting to be a rename at all.
+			if got := roleID(&incoming); got != id {
+				return identityMismatch("handle", id, got)
+			}
 			var done bool
 			eachRole(c, func(r *config.Role) {
 				if done || roleID(r) != id {
 					return
 				}
-				// THE IDENTITY IS THE ADDRESS, so a body that renames the
-				// seat is refused rather than silently moved: the caller
-				// asked to replace the entity at this id, and honouring a
-				// rename here would leave the URL naming something that no
-				// longer exists.
 				*r = incoming
 				done = true
 			})
@@ -129,6 +163,12 @@ var entityKinds = map[string]entityAccess{
 			var incoming config.Unit
 			if err := json.Unmarshal(raw, &incoming); err != nil {
 				return fmt.Errorf("decode unit: %w", err)
+			}
+			// The same rule as a seat, and a unit's name is referenced from
+			// further away: every `manages:` entry that expands to it and
+			// every root-level seat whose `unit:` names it.
+			if incoming.Name != id {
+				return identityMismatch("name", id, incoming.Name)
 			}
 			var done bool
 			eachUnit(c, func(u *config.Unit) {
@@ -188,13 +228,19 @@ var entityKinds = map[string]entityAccess{
 			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
+			var incoming config.MCPServer
+			if err := json.Unmarshal(raw, &incoming); err != nil {
+				return fmt.Errorf("decode mcp server: %w", err)
+			}
+			// The name is the key a seat declares this server's credentials
+			// under and the prefix its tools carry, so a rename here
+			// silently unhooks every seat that named it.
+			if incoming.Name != id {
+				return identityMismatch("name", id, incoming.Name)
+			}
 			for i := range c.MCPServers {
 				if c.MCPServers[i].Name != id {
 					continue
-				}
-				var incoming config.MCPServer
-				if err := json.Unmarshal(raw, &incoming); err != nil {
-					return fmt.Errorf("decode mcp server: %w", err)
 				}
 				c.MCPServers[i] = incoming
 				return nil
@@ -332,6 +378,20 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 				"error": "no_such_entity",
 				"hint": "no " + kind + " called " + id + " in the active revision; " +
 					"add one through PUT /config, which shows the whole document",
+			})
+			return
+		case errors.Is(err, ErrIdentityMismatch):
+			// A RENAME, REFUSED. Not coerced back to the path's id either:
+			// silently keeping the old identity would land every other edit
+			// in the body and leave the caller believing the rename took,
+			// which is the same surprise one revision later.
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "identity_mismatch", "detail": err.Error(),
+				"hint": "the path is the address — send " + kind + "/" + id +
+					" back under the id it already has. Renaming is a " +
+					"full-document edit: a seat's durable id derives from its " +
+					"handle, so a rename also has to move what references it, " +
+					"and PUT /config is where that is visible",
 			})
 			return
 		case err != nil:

@@ -277,3 +277,163 @@ func TestAnEntityPathRefusesEveryVerbButPut(t *testing.T) {
 		}
 	}
 }
+
+// nestedDoc is companyDoc with the shapes the flat fixture cannot exercise:
+// seats inside units, a unit inside a unit, and an MCP server. The entity
+// surface's whole claim is that a seat is reachable by handle "wherever it
+// lives", and a fixture with no units leaves that claim untested.
+const nestedDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-literal"]
+mcp_servers:
+  - name: tracker
+    transport: http
+    url: https://mcp.example.com
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+units:
+  - name: engineering
+    lead: cto
+    roles:
+      - name: CTO
+        handle: cto
+        llm: zulu
+    children:
+      - name: platform
+        roles:
+          - name: Staff Engineer
+            handle: staff-eng
+            llm: zulu
+`
+
+// A SEAT INSIDE A UNIT IS A SEAT, at any depth. An operator editing "the
+// staff engineer" does not think about which list it happens to live in, and
+// a surface that only reached root-level roles would make every real org
+// chart's seats unaddressable.
+func TestAnEntityWriteReachesASeatNestedInAUnit(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, nestedDoc, nil)
+
+	ids, err := s.service().Entities(t.Context(), configapi.EntityRoles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ids, ","); got != "ceo,cto,staff-eng" {
+		t.Fatalf("roles = %v, want the root seat and both nested ones", ids)
+	}
+
+	role := entityOf(t, s, configapi.EntityRoles, "staff-eng")
+	role["goal"] = "own the build"
+	body, err := json.Marshal(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := s.do(t, http.MethodPut, "/config/roles/staff-eng", string(body),
+		map[string]string{"X-Summary": "give the staff engineer a goal"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("PUT a twice-nested seat = %d: %s", res.Code, res.Body.String())
+	}
+	if got := entityOf(t, s, configapi.EntityRoles, "staff-eng")["goal"]; got != "own the build" {
+		t.Errorf("the edit did not reach the nested seat: goal = %v", got)
+	}
+}
+
+// A WRITE NEVER RENAMES. The path is the address, and a body carrying a
+// different identity is a rename wearing a replacement's clothes.
+//
+// Refused rather than applied, because none of what points at the old
+// identity moves with the splice: a seat's durable id is a UUIDv5 over
+// (company name, handle), so a silent rename strands its diary, its
+// onboarding marker and its counterparty profiles behind an id nothing
+// derives any more — and leaves the URL naming a seat that is gone.
+func TestAnEntityWriteNeverRenames(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, kind, id, body string
+	}{
+		{
+			name: "a seat", kind: configapi.EntityRoles, id: "ceo",
+			body: `{"name":"CEO","handle":"chief","llm":"zulu"}`,
+		},
+		{
+			// THE ONE THAT ARRIVES BY ACCIDENT: no handle in the body at
+			// all, just a new display name — which derives a new handle,
+			// and renames the seat without the word ever being used.
+			name: "a seat renamed by its display name alone",
+			kind: configapi.EntityRoles, id: "ceo",
+			body: `{"name":"Chief Executive","llm":"zulu"}`,
+		},
+		{
+			name: "a unit", kind: configapi.EntityUnits, id: "engineering",
+			body: `{"name":"eng","lead":"cto"}`,
+		},
+		{
+			name: "an mcp server", kind: configapi.EntityMCPServers, id: "tracker",
+			body: `{"name":"issues","transport":"http","url":"https://mcp.example.com"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			s.seed(t, nestedDoc, nil)
+			before := s.activeDocument(t)
+
+			path := "/config/" + tc.kind + "/" + tc.id
+			res := s.do(t, http.MethodPut, path, tc.body,
+				map[string]string{"X-Summary": "rename it sideways"})
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("PUT %s renaming the entity = %d, want 400: %s",
+					path, res.Code, res.Body.String())
+			}
+			if !strings.Contains(res.Body.String(), "identity_mismatch") {
+				t.Errorf("the refusal does not say it was a rename: %s", res.Body.String())
+			}
+			// The refusal names the id the caller has to send back, so it
+			// is actionable without reading the docs.
+			if !strings.Contains(res.Body.String(), tc.id) {
+				t.Errorf("the refusal does not name %q: %s", tc.id, res.Body.String())
+			}
+			// AND NOTHING WAS WRITTEN. A refused write that still stored a
+			// revision would be the same rename, one indirection away.
+			if after := s.activeDocument(t); after != before {
+				t.Errorf("a refused rename changed the active document:\n%s", after)
+			}
+			ids, err := s.service().Entities(t.Context(), tc.kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(ids, ","), tc.id) {
+				t.Errorf("%s/%s is gone after a refused rename: %v", tc.kind, tc.id, ids)
+			}
+		})
+	}
+}
+
+// AND AN EDIT THAT KEEPS THE IDENTITY STILL LANDS. The guard above must
+// refuse renames, not name changes: a seat whose display name changes while
+// its handle is sent back unchanged is an ordinary edit, and refusing it
+// would make the surface useless for the thing it is most used for.
+func TestAnEntityWriteAcceptsANameChangeThatKeepsTheHandle(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, nestedDoc, nil)
+
+	res := s.do(t, http.MethodPut, "/config/roles/ceo",
+		`{"name":"Chief Executive","handle":"ceo","llm":"zulu"}`,
+		map[string]string{"X-Summary": "spell the CEO's title out"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("PUT a renamed-but-same-handle seat = %d, want 201: %s",
+			res.Code, res.Body.String())
+	}
+	if got := entityOf(t, s, configapi.EntityRoles, "ceo")["name"]; got != "Chief Executive" {
+		t.Errorf("the name change did not land: name = %v", got)
+	}
+}
