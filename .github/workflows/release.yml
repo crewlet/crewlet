@@ -136,7 +136,7 @@ jobs:
       # GHCR, with the run's own token. No second account and no stored
       # credential — which is the property Trusted Publishing gave the
       # pipeline this replaces.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
