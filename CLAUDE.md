@@ -21,7 +21,7 @@ See `docs/index.md` for the full documentation index.
 - **Turso** (`turso.tech/database/tursogo`) — the embedded store, with `modernc.org/sqlite` as the certified fallback driver. Both pure Go, both run the same schema, both certified by the same suite. Turso is pure Go in the sense that matters — no cgo, no C toolchain — but it is not self-contained: its engine ships as a ~20 MB native library embedded in the driver and extracted at runtime into a shared per-user cache, which `internal/store/turso.go` prepares under a lock because upstream writes it non-atomically and PANICS on what a concurrent reader sees
 - **Embedded NATS JetStream** (`github.com/nats-io/nats-server`) — the default event stream, running *in the engine's own process*. Apache Pulsar is the external alternative for a fleet
 - **`github.com/modelcontextprotocol/go-sdk`** — MCP client and server
-- **Official vendor SDKs** where one exists; a thin typed client where one does not (Plane, Mattermost, GitLab)
+- **Official vendor SDKs** where one exists; a thin typed client where one does not (Mattermost, GitLab, Confluence)
 - **YAML** (`gopkg.in/yaml.v3`) — config parsing
 - **`testing`** — the standard library's, with no assertion framework. Table tests where the cases vary, named tests where the reasoning does
 
@@ -133,8 +133,8 @@ Rules:
 
 ```
 cmd/crewlet/          # The one binary. run / validate / schema / migrate /
-                      #   budgets / secrets / config, and the seven vendor CLIs
-                      #   (gitlab, github, plane, jira, slack, confluence,
+                      #   budgets / secrets / config, and the six vendor CLIs
+                      #   (gitlab, github, jira, slack, confluence,
                       #   mattermost).
                       #   Every command the switch dispatches must appear in
                       #   usage() — nothing connects them, and a test asserts it
@@ -205,7 +205,7 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 | `api/stream` | The `/ws/stream` socket: pushes, plus a request/response query channel that is a thin adapter over the SAME function each REST route calls |
 | `observe` | The observability edge, and the two routes are deliberately different: the STORE is written by a publish listener inline on the publishing node (no consumer group, so no two nodes can write one row); the PROJECTION is fed by an ephemeral per-caller broadcast |
 | `notify` | The backend-neutral notification spine — conversation keys, digest coalescing, party resolution, the rate valve. Built before any vendor sat on it, because a spine built after its first vendor has that vendor welded into it |
-| `mattermost`, `slack`, `plane`, `gitlab`, `github`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and why its reconcile and GitHub's report rather than mint (neither vendor issues a credential on a provisioner's behalf) |
+| `mattermost`, `slack`, `gitlab`, `github`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and why its reconcile and GitHub's report rather than mint (neither vendor issues a credential on a provisioner's behalf) |
 | `fleetsecrets` | The company's credential store: this package owns the KEY, coordination owns the BYTES. Also the one-way migration off `store`'s own table, which copies before it deletes and never overwrites a name the fleet already holds |
 | `secrets`, `provision`, `envref`, `envfile`, `redact`, `workkey` | The small shared grammars. Each imports nothing from the rest of the engine, which is what lets `config` itself depend on them |
 
@@ -268,8 +268,8 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 3. **Agent Runtime** — queue-driven seats, a four-phase turn, an LLM tool loop that can suspend
 4. **Task Engine** — there is none: task state lives in the PM tool, and the engine mirrors nothing
 5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
-6. **Knowledge System** — query-time knowledge-base search for shared docs (Plane page search, or Confluence CQL — single-homed, one per company) + per-agent diary
-7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The seven vendors this build serves are Mattermost, Slack, Plane, GitLab, GitHub, Jira and Confluence (`decisions/701`, `decisions/703`); every one routes end to end, and no integration block is refused any more
+6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL — single-homed, one per company, behind a seam that keeps it swappable) + per-agent diary
+7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The six vendors this build serves are Mattermost, Slack, GitLab, GitHub, Jira and Confluence (`decisions/701`, `decisions/703`, `decisions/705`); every one routes end to end, and no integration block is refused any more
 8. **Notification Service** — queue-based spine, vendors on top
 9. **Provider Layer** — pluggable LLM and embeddings, with a credential pool and a fallback chain around them
 10. **Store** — the node's own embedded database (Turso, or mainline SQLite); coordination lives in the KV layer instead, never here

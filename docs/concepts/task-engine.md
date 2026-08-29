@@ -1,7 +1,7 @@
 # Task Engine
 
 **There is no task engine.** Task lifecycle lives entirely in an external PM
-tool — Jira, Plane, GitHub or GitLab issues — and the engine mirrors none of
+tool — Jira, GitHub or GitLab issues — and the engine mirrors none of
 it: no task table, no status field, no assignee map, no dependency graph, no
 reconciliation poller. A ticket's state is whatever the PM tool says it is,
 read live through an agent's own MCP tools.
@@ -29,7 +29,7 @@ PM-tool webhooks do **not** become dedicated task events. Every webhook is parse
 
 ```mermaid
 sequenceDiagram
-    participant PM as PM tool (Jira/Plane/GitLab)
+    participant PM as PM tool (Jira/GitLab)
     participant EN as Engine
     PM->>EN: Ticket created (webhook)
     Note over EN: NotificationService parses + routes →<br/>ExternalNotification to the project lead's inbox<br/>(fallback routing) → lead agent turn

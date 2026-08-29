@@ -139,16 +139,15 @@ running node it writes through that node's API and the minted credential is on
 every node at once, and it takes the same `-api URL` flag. Against a stopped
 one it writes the local table, which the engine migrates at its next start.
 
-`crewlet plane provision -secret-store`, `crewlet slack provision -secret-store`
-and `crewlet mattermost provision -secret-store` work identically. Slack's own
+`crewlet slack provision -secret-store` and
+`crewlet mattermost provision -secret-store` work identically. Slack's own
 app-configuration token pair is the one credential that does **not** go here:
 it is the operator's, not the company's, and it lives in the
 [app ledger](../integrations/slack.md#the-ledger-slack-appsjson) beside the company file.
 
-Where it pays off most is a credential the vendor shows **once**. Plane
-generates a webhook's secret at creation and returns it exactly once, and every
-vendor here returns a token's value once and never again — so the recorded copy
-*is* the credential. A file someone has to remember to source is a worse home
+Where it pays off most is a credential the vendor shows **once**. Every vendor
+here returns a token's value once and never again — so the recorded copy *is*
+the credential. A file someone has to remember to source is a worse home
 for that than an encrypted table the engine reads back itself.
 
 ### Propagation
@@ -261,9 +260,9 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`) | **Store, then env** | The same chain the engine resolves through. A command that saw only the environment read an empty string for every value already rotated into the store — and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the vendor. Each command takes `-config` for this |
 | Sandbox launch credential check | **Store, then env** | A seat whose token lives only in the store must not read as unresolved |
 | Tier A bootstrap (`providers.database.dsn`, `secrets.keys[].material`) | **Env/file only** | Root of trust — this is what opens and decrypts the store |
-| Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `PLANE_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is read by every node holding the keyring. Reading one from it would imply it may be kept there |
+| Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is read by every node holding the keyring. Reading one from it would imply it may be kept there |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
-| `CREWLET_TOOL_SKILLS_SPACE` / `_PROJECT` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
+| `CREWLET_TOOL_SKILLS_SPACE` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
 | MCP stdio subprocess environment | **Env only, plus declared creds** | Servers read undeclared conventional variables (`PATH`, proxy vars, vendor SDK keys), so the host env is inherited. Store values are **not** poured in — each server gets exactly the credentials its `mcp_env` declares, already resolved. Injecting the whole store would hand every seat's token to every subprocess |
 
 Nothing writes a minted value back into the process environment. **The sink is the only durability path**, and a value minted this run is read back through the sink — which is why a run must name one before it touches the vendor, and why `-print` reports itself as holding nothing rather than pretending otherwise.
@@ -298,4 +297,4 @@ activate`](../reference/cli.md#crewlet-config-activate).
 - [Configuration](configuration.md) — the two-tier split and whole-config encryption
 - [CLI reference](../reference/cli.md#crewlet-secrets) — every `crewlet secrets` subcommand
 - [Environment variables](../reference/environment-variables.md) — what still has to be in the environment
-- [GitLab](../integrations/gitlab.md#provisioning) / [Plane](../integrations/plane.md) — the provisioning CLIs and their sinks
+- [GitLab](../integrations/gitlab.md#provisioning) — the provisioning CLIs and their sinks

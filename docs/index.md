@@ -45,12 +45,12 @@ How the engine works, one subsystem per page:
 - **[Turn Engine](concepts/turn-engine.md)** — Per-agent Plan / Execute / Review loop, sub-agents, colleague-surface tools, per-phase LLM models
 - **[Subscription LLM Backends](concepts/subscription-llm-backends.md)** — Run agents on a coding CLI you already subscribe to (Claude Code, Codex, Gemini CLI, OpenCode, …) instead of a metered API key: per-seat state isolation, the in-prompt tool-call channel, `crewlet llm login`, falling back to a key when the window is spent, and the other shape — an OAuth proxy behind an ordinary HTTP entry, and what that moves onto you
 - **[Code Sandbox](concepts/code-sandbox.md)** — Sandboxed coding-agent execution: the `run_sandbox` tool, E2B cloud/self-hosted, local boxes (direct or containerised, on a subscription login), Claude Code & OpenCode runners, git-auth recipes, mid-run clarifications
-- **[Tool Skills](concepts/tool-skills.md)** — Knowledge-base-sourced prompt fragments (Confluence or Plane pages) that teach agents *how to use* each tool / MCP server
+- **[Tool Skills](concepts/tool-skills.md)** — Knowledge-base-sourced prompt fragments (Confluence pages) that teach agents *how to use* each tool / MCP server
 - **[Tool Capabilities](concepts/tool-capabilities.md)** — How the engine stays tool-stack agnostic: capability prose + MCP annotations, no hardcoded tool names
 - **[Event System](concepts/event-system.md)** — EventQueue, topics, routing, inbox batching, distributed tracing
 - **[Task Engine](concepts/task-engine.md)** — why the engine keeps no task state: the PM tool is the source of truth
 - **[Scheduling](concepts/scheduling.md)** — Role/unit-scoped cron-style recurring work (standups, audits, nightly jobs)
-- **[Knowledge System](concepts/knowledge-system.md)** — Query-time knowledge-base search behind the `knowledge.Searcher` seam (Confluence CQL or Plane page search — one backend per org) + private `agent_diary`
+- **[Knowledge System](concepts/knowledge-system.md)** — Query-time knowledge-base search behind the `knowledge.Searcher` seam (Confluence CQL — one backend per org) + private `agent_diary`
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles
 - **[Conversation Sessions](concepts/conversation-sessions.md)** — What a seat already said in one Slack thread / issue / pull request, carried into that conversation's next turn: the entry shape and its elision budgets, which turns are recorded, why the key is the conversation and the dedupe is the work key, and why this is a structured ledger rather than a transcript replay
 - **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A channels + learning loop
@@ -60,7 +60,6 @@ How the engine works, one subsystem per page:
 
 Connecting the external surfaces agents work on:
 
-- **[Plane](integrations/plane.md)** — Self-hosted tracker **and** knowledge backend in one product: webhook routing, per-role MCP tools, knowledge search, `crewlet plane import`, tool-skill sync, skill promotion, `crewlet plane provision`, and a complete local docker-compose loop
 - **[Jira](integrations/jira.md)** — Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
 - **[Confluence](integrations/confluence.md)** — Cloud or Data Center as the knowledge base: live CQL search run as the asking seat, page-change routing, tool-skill pages, and `crewlet confluence import`
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring

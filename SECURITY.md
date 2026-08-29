@@ -22,7 +22,7 @@ fix.
 A few things worth knowing when deploying Crewlet:
 
 - **Agent credentials are per-seat by design.** Each agent's external
-  identities (Plane/GitLab/Slack tokens) are separate service accounts —
+  identities (Atlassian/GitLab/Slack tokens) are separate service accounts —
   scope them minimally; the engine never needs a personal admin token at
   runtime (provisioning CLIs do need an admin credential, once).
 - **The API's read surface is open by default.** Writes and every `/config`

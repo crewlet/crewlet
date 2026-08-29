@@ -19,9 +19,9 @@ These tools are registered globally and available to all agents:
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages |
 | `a2a_ask` | Tight-loop synchronous handoff to a colleague (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
 
-Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content lives in the knowledge backend (Confluence or Plane) — written through that backend's own MCP tools and searched live at query time (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-backend pages.
+Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content lives in the knowledge backend (Confluence) — written through that backend's own MCP tools and searched live at query time (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-backend pages.
 
-Task-management tools (`create_task`, `assign_task`, `update_task`, `list_tasks`, `delegate`) are **not** registered as builtins — agents interact with the external PM tool (Jira, Plane, etc.) via MCP tools instead.
+Task-management tools (`create_task`, `assign_task`, `update_task`, `list_tasks`, `delegate`) are **not** registered as builtins — agents interact with the external PM tool (Jira, GitLab issues, etc.) via MCP tools instead.
 
 ### Per-Role MCP Servers (GitHub)
 
@@ -66,10 +66,9 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a vendor contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The seven this build serves are
+  That is a pull request, not a config entry. The six this build serves are
   [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
-  [Plane](../integrations/plane.md), [Jira](../integrations/jira.md),
-  [Confluence](../integrations/confluence.md),
+  [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
   [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
   every one of them routes end to end (see
   [d-703](../reference/design-decisions.md)).

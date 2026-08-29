@@ -374,7 +374,7 @@ merge-request title — is rendered as markup. Two rules hold it together:
   renders as escaped text.
 
 An inbound webhook gets a per-source layout (Jira, Confluence, Slack,
-Mattermost, GitHub, GitLab, Plane), and the raw payload block stays
+Mattermost, GitHub, GitLab), and the raw payload block stays
 beneath every one of them: a layout can only surface the fields it knows
 about, and the field it does not know is the one an operator came for.
 
@@ -384,17 +384,15 @@ screen answers *why did this wake anyone*, not just *what arrived*:
 | Source | What the layout names |
 | --- | --- |
 | GitLab | `object_kind`.`action`; the actor (`user.username`, or the flattened `user_username` a push hook sends instead of a user object); `project.path_with_namespace`; the MR, issue, pipeline or branch the event hangs off — a sibling key on a `note` or `pipeline` hook, `object_attributes` on the others; `state` and the MR's source → target branches; the `changes.{assignees,reviewers}` `previous → current` diff the parser routes on; `object_attributes.url` |
-| Plane | `event`.`action`; `activity.actor` (a bare UUID or an expanded user); `workspace_slug`; the project identifier; the work item as `{identifier}-{sequence_id}`, or the page; `activity.field` with `old_value → new_value`; `data.assignees`; the `<mention-component>` ids a comment carries |
 
-Two of those are load-bearing for an operator reading a failure.
+One of those is load-bearing for an operator reading a failure.
 `pipeline.failed` is the one GitLab event routed back to the *actor*
 rather than to the thread — the agent whose push broke the build owns the
 fix — so its status renders as a failure badge and the failing jobs are
-named rather than left in the payload. And on a Plane work item,
-`data.id` is the work item on an `issue` event but the comment or intake
-row on the others, where the work item is `data.issue`; the screen draws
-that distinction exactly where the transport draws it, because the other
-id produces a pointer that 404s.
+named rather than left in the payload. Where a vendor's payload puts the
+same id under different keys depending on the event, the screen draws that
+distinction exactly where the transport draws it: the other id produces a
+pointer that 404s.
 
 The matching question for a *notification* is answered by
 `metadata.routed_via` (`assignee`, `assignee_added`, `mention`,

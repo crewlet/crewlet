@@ -175,8 +175,7 @@ Confluence policy — persist.
 
 The *behavioral contract* — how the report prepares, how the manager gives
 feedback, the round budget, what to capture — lives as a **knowledge-base
-page** (a Confluence page or a [Plane](../integrations/plane.md) page,
-whichever backend the org runs), not in engine prose. This is the project's
+page** ([Confluence](../integrations/confluence.md)), not in engine prose. This is the project's
 standard home for shared procedures (the same place runbooks, ADRs, and
 onboarding pages live), and it reaches both parties through the
 `## Relevant knowledge` prefetch and the backend's page-search tools. It is
@@ -187,15 +186,12 @@ is no 1:1-specific tool to key on.
 
 A ready-to-publish playbook ships at
 [`examples/nimbus-docs/LEAD/Manager 1-1.md`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-docs/LEAD/Manager%201-1.md)
-— its `LEAD/` parent directory routes it to the org-wide `LEAD` container
-(the Confluence space or Plane project every agent can read) and its
-`# Manager 1:1` H1 becomes the page title. The example org runs on Plane,
-so publish it with
-`crewlet plane import <company.yaml> examples/nimbus-docs/`
-(it has no `trigger:`, so it imports as a [knowledge doc](knowledge-system.md#publishing-knowledge-docs));
-the directory conventions are identical across backends, so the same tree
-imports with `crewlet confluence import` on a Confluence org. Edit it in
-the backend's page editor thereafter — no redeploy.
+— its `LEAD/` parent directory routes it to the org-wide `LEAD` space
+every agent can read, and its `# Manager 1:1` H1 becomes the page title.
+Publish it with
+`crewlet confluence import <company.yaml> examples/nimbus-docs/`
+(it has no `trigger:`, so it imports as a [knowledge doc](knowledge-system.md#publishing-knowledge-docs)).
+Edit it in the page editor thereafter — no redeploy.
 
 ---
 

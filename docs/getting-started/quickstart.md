@@ -29,7 +29,7 @@ external address when a deployment outgrows that; see
 [Deployment](../guides/deployment.md).
 
 The compose file in a repo checkout is for the *integration* loops
-(Mattermost, Plane, GitLab) further down this page, not for the engine.
+(Mattermost, GitLab) further down this page, not for the engine.
 
 ## 1. Write the Tier A bootstrap (`crewlet.yaml`)
 
@@ -350,7 +350,7 @@ crewlet run -roles ingress -api-port 8000      # terminal 2
 
 The ingress node exposes the same REST endpoints, webhook handlers
 (`/webhooks/jira`, `/webhooks/slack/{handle}`, `/webhooks/github`,
-`/webhooks/gitlab`, `/webhooks/plane`, `/webhooks/confluence`,
+`/webhooks/gitlab`, `/webhooks/confluence`,
 `/webhooks/forge`), and the `/config/*` CRUD surface (see
 [API Endpoints](../reference/api-endpoints.md)). Mattermost is deliberately
 absent from that list — it has no usable inbound webhook, so the **engine**
@@ -405,20 +405,18 @@ each), then wire them in:
   `MATTERMOST_PUBLIC_URL` to the address your browser uses first — see
   [The Site URL](../integrations/mattermost.md#the-site-url). The engine
   needs no public URL; the Mattermost server still needs to know its own.
-- Connect a work-item tracker — self-hosted [Plane](../integrations/plane.md)
-  (also ships a full local docker-compose loop), or
-  [Jira](../integrations/jira.md)
-- Connect a knowledge backend — [Plane](../integrations/plane.md) pages or
-  [Confluence](../integrations/confluence.md) (one, not both) — so shared
-  procedures surface in the Plan-phase `## Relevant knowledge` block; publish
-  version-controlled docs with `crewlet plane import` / `crewlet confluence import`
+- Connect a work-item tracker — [Jira](../integrations/jira.md), or the issue
+  tracker of the code host you already run
+- Connect a knowledge backend — [Confluence](../integrations/confluence.md) —
+  so shared procedures surface in the Plan-phase `## Relevant knowledge`
+  block; publish version-controlled docs with `crewlet confluence import`
 - Connect a code host — [GitLab](../integrations/gitlab.md) or
   [GitHub](../integrations/github.md) — and enable the
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
   merge requests
 - Fill in the [founder seat](../concepts/humans-in-the-org.md#the-founder-seat)
   you already have at the root — add the `contact` identities for each
-  surface you connect (`mattermost_user_id`, `plane_user_id`,
+  surface you connect (`mattermost_user_id`, `atlassian_account_id`,
   `gitlab_username`, …) so escalations land in your DMs and agents recognise
   your activity
 - Encrypt your config at rest — add a Tier A keyring (`crewlet secrets keygen`)
@@ -433,6 +431,6 @@ each), then wire them in:
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the full [Nimbus example](../../examples/) — a seven-seat company
-  with Plane + GitLab + Mattermost + sandbox wired end-to-end
+  with Jira + Confluence + GitLab + Mattermost + sandbox wired end-to-end
 - Add [MCP servers](../guides/tools-and-mcp.md#extending-the-engine) so agents can reach your own systems
 - See the full [configuration reference](configuration.md) for all YAML options

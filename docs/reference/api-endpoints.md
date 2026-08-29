@@ -79,7 +79,6 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/gitlab` | Receive GitLab webhooks |
-| `POST` | `/webhooks/plane` | Receive Plane webhooks |
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
@@ -1171,10 +1170,6 @@ Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against
 ### `/webhooks/gitlab`
 
 Receives GitLab webhook payloads. **The signature is the only credential**: `webhook-signature` is verified as a Standard-Webhooks HMAC-SHA256 over `{webhook-id}.{webhook-timestamp}.{body}`, keyed on the `signing_secret`'s base64 payload, constant-time against any of the header's space-separated `v1,…` entries, with a ±5-minute timestamp tolerance. A missing or wrong signature is rejected with 401 — the plaintext `X-Gitlab-Token` is not accepted, so omitting the signature header is not a downgrade path. Answers 503 with a `Retry-After` when no `signing_secret` is configured, or when its value is not a usable `whsec_` key, so the delivery is held for retry rather than blamed on the sender. GitLab signs whenever the hook has a `signing_token` (GitLab 19.1+); see [GitLab § Verification](../integrations/gitlab.md#verification). Publishes to `crewlet.notifications.inbound`. See [GitLab Integration — Webhooks](../integrations/gitlab.md#webhooks).
-
-### `/webhooks/plane`
-
-Receives Plane webhook payloads from the [Plane fork](../integrations/plane.md). The `X-Plane-Signature` header is verified as the HMAC-SHA256 hexdigest of the raw body keyed with `integrations.plane.webhook_secret` (constant-time compare; Plane CE's only scheme). Invalid or missing signatures are rejected with 401; returns 500 if no secret is configured; malformed JSON returns 400. When the engine is unconfigured, a *verified* request is answered 200 `{"status": "dropped"}` — verification runs first so forgeries never earn a 200, while genuine deliveries don't poison Plane's five-retry auto-disable counter. Publishes to `crewlet.notifications.inbound`. See [Plane Integration — Webhooks](../integrations/plane.md#webhooks).
 
 ### `/webhooks/confluence`
 

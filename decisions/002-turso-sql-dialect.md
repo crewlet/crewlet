@@ -47,8 +47,8 @@ present and the rest is announced surface not yet reachable from Go.
    records which path is live; when Turso's ANN index reaches the Go driver, only
    that one function changes.
 
-4. **FTS is not a v1 dependency.** v1 knowledge search is the external backends
-   (Confluence CQL / Plane page search) behind `KnowledgeSearcher`, exactly as today.
+4. **FTS is not a v1 dependency.** v1 knowledge search is the external backend
+   (Confluence CQL) behind `KnowledgeSearcher`, exactly as today.
    Built-in knowledge search is post-v1 and design-gated anyway; by the time it is
    built, either Turso's FTS is reachable from Go or Bleve fills the slot behind the
    same seam.

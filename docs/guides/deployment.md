@@ -46,7 +46,6 @@ nothing at all:
 
 ```bash
 cp .env.example .env                              # first time only
-docker compose --profile plane up -d              # Plane (tracker + knowledge)
 docker compose --profile gitlab up -d             # GitLab (code host)
 docker compose --profile mattermost up -d --wait  # Mattermost (chat)
 docker compose --profile pulsar up -d             # Pulsar + Dekaf
@@ -176,19 +175,6 @@ Verified end-to-end: with the grant in place the engine completes a full publish
 
 ---
 
-## Plane (the local profile)
-
-A local [Plane](../integrations/plane.md) fork instance ships in the main `docker-compose.yml` under the **`plane` profile** — one compose file for everything, profile-gated like everything else, so a plain `docker compose up` leaves the thirteen-service stack out:
-
-```bash
-docker compose --profile plane up -d   # no --wait: the migrator is a one-shot job
-scripts/plane-dev-bootstrap.sh
-```
-
-On a **remote host**, set `PLANE_PUBLIC_URL` (e.g. `http://<server-ip>:8091`) on both commands — it feeds Plane's `WEB_URL`/CORS (where redirects and shared links come from) and is written into `.env.plane` as `${PLANE_URL}`, the reference the shipped company config resolves. The UI lands on `http://localhost:8091` otherwise; budget **~2–2.5 GB RAM** for the whole stack (no per-service `mem_limit`s — none of these small services has the multi-GB-single-process pathology the Pulsar/GitLab caps exist for). The S3 store is [RustFS](https://github.com/rustfs/rustfs) (MinIO's community image is de-facto deprecated), behind the `plane-minio` network alias the proxy's baked Caddyfile expects; RabbitMQ 4.x runs with a compose-shipped permit for the deprecated transient queues Celery's control plane still declares (without it the worker crash-loops and webhook deliveries never run). The bootstrap steps, each idempotent: **(1)** polls the API healthy (migrations included), **(2)** creates the founder (instance admin) plus their personal API token and writes `PLANE_FOUNDER_USER_ID` + `PLANE_URL` into `.env.plane`, **(3)** creates the `nimbus` workspace, **(4)** archives the workspace-named demo project Plane seeds (a decoy agents otherwise wander into), **(5–6)** with `COMPANY=` set runs `crewlet plane provision -create-projects -public-url …` then `crewlet plane import` for the example docs + tool skills, and **(7)** prints the engine next steps (the engine's [embedded API](#single-process-embedded-api--the-single-host-default) is the webhook receiver). The full walkthrough and the end-to-end webhook loop live in [Plane § Local testing](../integrations/plane.md#local-testing); it is not duplicated here.
-
----
-
 ## Running the Engine + API
 
 ### Single Process (embedded API — the single-host default)
@@ -204,7 +190,7 @@ api:
 crewlet run -config config.yaml    # engine + embedded API on :80
 ```
 
-(`-api-port 80` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses — the bundled `examples/nimbus.config.yaml` ships `api.port: 80`, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:80/webhooks/plane`). Binding 80 as a non-root process needs privileged-port access on Linux: `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or grant the binary `CAP_NET_BIND_SERVICE`. Avoid 8080 (Pulsar's admin port in the bundled `docker-compose.yml`) and make sure nothing else owns 80 — keep Plane's `PLANE_LISTEN_PORT` at its 8091 default.
+(`-api-port 80` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses — the bundled `examples/nimbus.config.yaml` ships `api.port: 80`, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:80/webhooks/gitlab`). Binding 80 as a non-root process needs privileged-port access on Linux: `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or grant the binary `CAP_NET_BIND_SERVICE`. Avoid 8080 (Pulsar's admin port in the bundled `docker-compose.yml`) and make sure nothing else owns 80.
 
 Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and kills whichever server came second.
 
@@ -255,7 +241,7 @@ observable step rather than a side effect of startup.
 Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
 - **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
-- **`-roles ingress`** serves the REST API — receives webhooks (Slack, Plane, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
+- **`-roles ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`-roles workers`** runs the company-wide duties — the scheduler tick, the retention sweeps, the sandbox waiter
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable — an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver (sandbox tokens are signed, so the node that mints and the node that verifies need no shared memory). Signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key and logs a warning.
@@ -384,7 +370,7 @@ Everything else is either:
 
 - **YAML config** — the org structure and every seat's definition
 - **In-memory** — agent runtime state, the execution tracker
-- **An external tool** — task state (Plane, GitLab issues)
+- **An external tool** — task state (Jira, GitLab issues)
 - **The event stream** — routing, with a durable per-subscription backlog
 
 ---

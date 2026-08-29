@@ -14,7 +14,7 @@ The framework models the same structures found in real companies:
 
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
-- **Task management** — integrated with external PM tools (Jira, Plane, GitHub/GitLab issues)
+- **Task management** — integrated with external PM tools (Jira, GitHub/GitLab issues)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
 - **Knowledge** — query-time knowledge-base search for shared docs + per-agent private diary (vector-indexed — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
@@ -55,7 +55,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 ```mermaid
 flowchart TD
-    EXT["<b>External surfaces</b><br/>Slack / Mattermost · Jira / Plane · GitHub / GitLab"]
+    EXT["<b>External surfaces</b><br/>Slack / Mattermost · Jira / Confluence · GitHub / GitLab"]
     subgraph proc["crewlet run — one process by default"]
         direction TB
         API["<b>API + dashboard</b><br/>webhook routes · REST · /config/* · live event stream"]
@@ -142,11 +142,10 @@ Everything else is YAML config, in-memory state, or an external tool.
 
 ```
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   budgets, secrets, config, llm, and the seven
+                          #   budgets, secrets, config, llm, and the six
                           #   vendor CLIs — gitlab/github/jira/slack
-                          #   `provision`, plane `provision|import|resync`,
-                          #   confluence `import|resync`, mattermost
-                          #   `provision|doctor`
+                          #   `provision`, confluence `import|resync`,
+                          #   mattermost `provision|doctor`
 internal/
 ├── engine/               # The wiring: which concrete thing satisfies which seam
 ├── config/               # The two config tiers → typed structs → JSON Schema
@@ -175,10 +174,10 @@ internal/
 ├── mcp/                  # MCP client and child-process supervision
 ├── tools/                # The registry, and the per-phase tool surfaces
 ├── notify/               # The backend-neutral notification spine
-├── mattermost/ slack/    # The seven vendors: client, parser, transport,
-│   plane/ jira/          #   prompt, provisioning reconcile — each
-│   confluence/           #   contributing only what is genuinely its own,
-│   gitlab/ github/       #   which is why Jira has no transport
+├── mattermost/ slack/    # The six vendors: client, parser, transport,
+│   jira/ confluence/     #   prompt, provisioning reconcile — each
+│   gitlab/ github/       #   contributing only what is genuinely its own,
+│                         #   which is why Jira has no transport
 ├── configplane/          # The activation pointer's cadence and postures
 ├── node/                 # The node's own identity, presence and drain
 ├── provision/            # The shared provisioning grammar and its sinks

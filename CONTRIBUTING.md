@@ -20,9 +20,10 @@ JetStream server) and its store is a local file it creates, so `crewlet run`
 in an empty directory is a working company — there is no broker to operate
 and nothing to point a DSN at.
 
-The Docker stack is for the **integrations**: Mattermost, Plane and GitLab,
-each behind its own compose profile with a bootstrap script that stands it up
-and provisions the example company's seats. See
+The Docker stack is for the **self-hostable integrations**: Mattermost and
+GitLab, each behind its own compose profile with a bootstrap script that
+stands it up and provisions the example company's seats. Jira and Confluence
+have no profile — Atlassian is not something a compose file can stand up. See
 [docs/integrations/](docs/integrations/).
 
 ## Running tests and lint
@@ -167,10 +168,10 @@ entry per surface on a weekly schedule, and nothing else. Each pull request is
 reviewed on its own merits, and CI runs on it. Three things are worth knowing:
 
 - **Some Compose images are pinned on purpose**, with the reason in a comment
-  beside each — `plane-db` holds postgres on its major to match Plane's own
-  compose file and to keep an existing volume readable. Closing that pull
-  request is the right answer; Dependabot does not reopen one for a version
-  you have already turned down.
+  beside each — a database image holds its major to keep an existing volume
+  readable, and Dekaf publishes no floating tag. Closing that pull request is
+  the right answer; Dependabot does not reopen one for a version you have
+  already turned down.
 - **`docker` and `docker-compose` are two ecosystems, not one.** The first
   reads `Dockerfile`s and the second reads Compose files; neither sees the
   other's manifests, so a repository with both needs both entries.
@@ -248,7 +249,7 @@ Required, and drawn from this set:
 
 The scope names the **component** the change lands in. For code that is the
 package directory under `internal/` — `agent`, `api`, `coord`, `engine`,
-`gitlab`, `knowledge`, `mattermost`, `mcp`, `notify`, `plane`, `queue`,
+`gitlab`, `knowledge`, `mattermost`, `mcp`, `notify`, `queue`,
 `sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
 reader can go from a subject line to a directory without guessing. Two scopes
 name a component by the name people use rather than by its import path:
@@ -281,7 +282,7 @@ own.
 
 ```
 feat(sandbox): reuse a paused box when a clarification is answered
-fix(plane): relax the page-search query when the server returns no hits
+fix(confluence): relax the CQL query when the server returns no hits
 perf(providers): cache the tool-definition prefix on Anthropic calls
 docs(secret-store): document that the keyring is required
 build: stamp the version into the binary at link time

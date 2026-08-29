@@ -13,7 +13,7 @@ A useful mental model: for each integration there is usually
    GitLab group, an E2B account. Crewlet never creates top-level tenancy for
    you.
 2. **Per-agent identities inside it** — service accounts, bot apps, tokens.
-   For Mattermost, Slack, Plane, and GitLab a provisioning CLI creates
+   For Mattermost, Slack, and GitLab a provisioning CLI creates
    these idempotently; for Atlassian and GitHub you create them by hand,
    because neither vendor issues a credential on a provisioner's behalf.
    Those two still have a CLI — it reports which account each seat's own
@@ -82,39 +82,15 @@ everything genuinely shared lives in coordination instead. See
 ## Work-item tracker + knowledge base
 
 Agents file and pick up work in a tracker, and search a shared knowledge base
-at query time. Two stacks are supported — pick **one**:
+at query time.
 
-### Option A: Plane (self-hosted)
+The **tracker** has options — Jira, or the issue tracker of whichever code
+host you run ([GitLab](../integrations/gitlab.md) /
+[GitHub](../integrations/github.md) issues route the same way). The
+**knowledge base** is Confluence: the engine wires exactly one
+`knowledge.Searcher`, and Confluence is the backend behind it.
 
-[Plane](https://plane.so) covers **both halves in one product**: work items and
-pages. Everything runs on infrastructure you own. Crewlet targets a self-hosted
-deployment of the **[crewlet/plane fork](https://github.com/crewlet/plane)**
-(upstream Plane CE plus API capabilities the integration depends on — public
-pages CRUD + search, API-provisionable service accounts, webhook CRUD,
-@-mentions for service accounts; the fork's images are published under
-`ghcr.io/crewlet/plane-*`, tag `preview`). Against stock Plane CE the
-integration degrades to work-item routing only — see
-[Plane § The fork](../integrations/plane.md#the-fork).
-
-What **you** do once:
-
-1. **Deploy the fork** — locally via the bundled compose profile
-   (`docker compose --profile plane up -d`, UI on `http://localhost:8091`) or
-   on a server with the fork images.
-2. **Create the workspace and your own (founder) account.** Locally,
-   `scripts/plane-dev-bootstrap.sh` automates this; against a remote instance
-   you sign up and create the workspace in the UI.
-3. **Run the provisioner** — `crewlet plane provision company.yaml
-   -public-url https://<engine>` creates one service account
-   per agent seat, project memberships, per-agent API tokens (minted into the
-   `${VAR}` references your config already declares), the engine's read
-   account, and the workspace webhook — idempotently.
-4. **Publish docs + tool skills** — `crewlet plane import company.yaml <dir>`.
-
-Everything else (webhook routing, knowledge search, skill sync, promotion) is
-engine-side. Full walkthrough: [Plane integration](../integrations/plane.md).
-
-### Option B: Atlassian (Jira + Confluence Cloud or Data Center)
+### Atlassian (Jira + Confluence Cloud or Data Center)
 
 The managed-SaaS path: Atlassian runs the tracker and the wiki, and agents work
 them through per-agent Atlassian identities. Per-agent setup is manual, since
@@ -144,10 +120,10 @@ What **you** do, by hand:
 Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).
 
-> **Don't mix knowledge backends**: the engine wires exactly one
-> `knowledge.Searcher` — Confluence CQL or Plane page search — selected by
-> which integration is configured. See
-> [Knowledge System](../concepts/knowledge-system.md).
+> **One knowledge backend per company**: the engine wires exactly one
+> `knowledge.Searcher`. It stays an interface with one implementation, so a
+> second backend is a new implementation rather than a rewrite of everything
+> that searches. See [Knowledge System](../concepts/knowledge-system.md).
 
 ---
 
@@ -315,7 +291,7 @@ OpenAI-compatible provider you already configured — no extra secret);
 `role.llm_sandbox`).
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
-reach services on your laptop (`localhost` Plane/GitLab) — in-sandbox tool
+reach services on your laptop (`localhost` GitLab) — in-sandbox tool
 access to those needs a reachable deployment, a tunnel, or self-hosted E2B on
 the same network.
 
@@ -325,9 +301,10 @@ the same network.
 
 The bundled **Nimbus example** (`examples/nimbus.company.yaml` +
 `examples/nimbus.config.yaml`) is a complete seven-seat reference wired for
-Plane + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible LLM, with a
-fully-local loop: `docker compose --profile plane --profile mattermost up -d`,
-then `scripts/plane-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
+Jira + Confluence + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible
+LLM. Its self-hostable half runs locally:
+`docker compose --profile gitlab --profile mattermost up -d`,
+then `scripts/gitlab-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
 then
 `crewlet run -config examples/nimbus.config.yaml -company
 examples/nimbus.company.yaml`. Reading it top to bottom is the fastest way to

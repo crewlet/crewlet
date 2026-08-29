@@ -38,7 +38,6 @@ units:
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
           github_login: sarahchen
           gitlab_username: sarahchen
-          plane_user_id: 9c41be2f-...          # Plane workspace-member user UUID
         availability: "CET business hours; replies within ~4h"
       - name: Engineer            # AI agent, unchanged
         goal: "Implement features and ship quality code"
@@ -54,7 +53,6 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID — Jira assignments, Confluence `<ri:user>` mentions, webhook sender attribution |
 | `contact.github_login` | one identity | GitHub username — review requests, sender attribution |
 | `contact.gitlab_username` | one identity | GitLab username — assignment / review / mention routing + sender attribution |
-| `contact.plane_user_id` | one identity | [Plane](../integrations/plane.md) workspace-member user UUID (the member table [`crewlet plane provision`](../integrations/plane.md#provisioning--crewlet-plane-provision) prints exists to fill this in, or `GET /api/v1/workspaces/{slug}/members/`; normalized to lowercase) — assignment, subscriber, and `<mention-component>` mention routing + sender attribution |
 | `email` | no | Informational only — rendered in `lookup_colleague`; **not** a delivery channel (no agent has an email tool by default) |
 | `availability` | no | Free text rendered into rosters and `lookup_colleague` results (timezone, hours, response expectations) |
 
@@ -65,13 +63,13 @@ chart but unreachable), so it's rejected at validation.
 
 Every `contact` field accepts either a literal ID or exactly one
 whole-value `${VAR}` environment reference — e.g.
-`plane_user_id: "${PLANE_FOUNDER_USER_ID}"` in a shipped example config,
-where the real UUID is instance-specific. Values are whitespace-stripped
+`atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"` in a shipped
+example config, where the real id is instance-specific. Values are whitespace-stripped
 at validation; references are stored verbatim (never case-mangled) and
 resolved from the process environment wherever the identity is consumed:
 contact registration, roster / identity prompts, and `lookup_colleague`.
-For the case-normalized fields (`github_login`, `gitlab_username`,
-`plane_user_id`) the *resolved* value is lowercased. A reference whose
+For the case-normalized fields (`github_login`, `gitlab_username`) the
+*resolved* value is lowercased. A reference whose
 variable is unset counts as a declared identity for validation, but is
 omitted from registration and prompts (with a debug log) until the
 variable is exported — the raw `${VAR}` text is never emitted. A value
@@ -214,7 +212,6 @@ roles:
       atlassian_account_id: 5b10ac8d-...
       github_login: janedoe
       gitlab_username: janedoe
-      plane_user_id: 9c41be2f-...
 ```
 
 What this buys, with no further config:

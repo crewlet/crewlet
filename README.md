@@ -154,8 +154,8 @@ The dashboard and webhook API come up with the engine. The full
 first turn with no integrations at all, then wiring in the real ones.
 
 > **Want the full picture first?** `examples/nimbus.company.yaml` is a complete
-> seven-seat reference company — Plane, GitLab, Mattermost, and a code sandbox wired
-> end-to-end, with the reasoning for every setting in comments.
+> seven-seat reference company — Jira, Confluence, GitLab, Mattermost, and a code
+> sandbox wired end-to-end, with the reasoning for every setting in comments.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see
@@ -174,17 +174,18 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 | | Options |
 |---|---|
 | **LLM** | [Anthropic](docs/getting-started/quickstart.md#llm-options), OpenAI, or **any OpenAI-compatible endpoint** — including your own vLLM / LiteLLM gateway |
-| **Tracker** | [Plane](docs/integrations/plane.md) — self-hosted, tracker and knowledge base in one — or [Jira](docs/integrations/jira.md), Cloud or Data Center |
-| **Knowledge base** | [Plane](docs/integrations/plane.md) pages, or [Confluence](docs/integrations/confluence.md) — the search behind every Plan phase, run as the asking seat |
+| **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
+| **Knowledge base** | [Confluence](docs/integrations/confluence.md) — the search behind every Plan phase, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
 | **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent — or [Slack](docs/integrations/slack.md), one app per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
 
-The knowledge base is **single-homed** — Plane or Confluence, never both, because two
-searchers would make an agent's answer to "what do we already know about this" depend
-on which one was asked. Everything else composes: a company can run Jira beside Plane,
-GitHub beside GitLab, or Slack beside Mattermost, which is what a migration and an
-open-source presence both look like.
+The knowledge base is **single-homed** — one searcher per company, because two would
+make an agent's answer to "what do we already know about this" depend on which one was
+asked. It sits behind the backend-neutral `knowledge.Searcher` seam, so a second
+backend is a new implementation rather than a rewrite of everything that searches.
+Everything else composes: a company can run GitHub beside GitLab, or Slack beside
+Mattermost, which is what a migration and an open-source presence both look like.
 
 One command provisions the whole fleet — a bot or
 service account per seat, memberships, per-agent tokens minted into your config's own
@@ -192,17 +193,16 @@ service account per seat, memberships, per-agent tokens minted into your config'
 
 ```bash
 crewlet mattermost provision company.yaml
-crewlet plane      provision company.yaml
 crewlet gitlab     provision company.yaml -public-url <url>
 crewlet jira       provision company.yaml -public-url <url> -env-file .env
 crewlet slack      provision company.yaml -public-url <url> -env-file .env
 crewlet github     provision company.yaml -public-url <url> -env-file .env
 ```
 
-What each command can actually do differs by what the vendor allows: Mattermost,
-Plane and GitLab create an account per seat and mint its token; Jira and GitHub
-issue no credential on a provisioner's behalf, so those runs report which account
-each seat's own credential authenticates as and register the webhooks.
+What each command can actually do differs by what the vendor allows: Mattermost and
+GitLab create an account per seat and mint its token; Jira and GitHub issue no
+credential on a provisioner's behalf, so those runs report which account each seat's
+own credential authenticates as and register the webhooks.
 
 Mattermost takes no URL because nothing has to reach the engine: it holds one
 outbound websocket per agent seat instead of receiving webhooks, so that loop
@@ -218,7 +218,7 @@ no env file to source, no shell to be in.
 
 ```mermaid
 flowchart LR
-    EXT["<b>External surfaces</b><br/>Mattermost / Slack · Jira / Plane<br/>GitHub / GitLab"]
+    EXT["<b>External surfaces</b><br/>Mattermost / Slack · Jira / Confluence<br/>GitHub / GitLab"]
     API["<b>REST API + dashboard</b><br/><i>embedded, or its<br/>own process</i>"]
     Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>or Pulsar for a fleet</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
@@ -252,7 +252,7 @@ crewlet config import | show | export | revisions | diff | activate
 crewlet secrets keygen                        # a keyring key — installing it seals the config
 crewlet secrets set LLM_API_KEY               # a secret the engine reads ${VAR} from
 
-crewlet plane import company.yaml docs/       # publish knowledge docs + tool skills
+crewlet confluence import company.yaml docs/  # publish knowledge docs + tool skills
 crewlet gitlab provision company.yaml         # reconcile the company's seats into GitLab
 ```
 

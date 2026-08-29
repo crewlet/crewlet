@@ -36,9 +36,6 @@ subcommand below is served by it.
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
 | `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
-| `crewlet plane import <company.yaml> <directory>` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) — `trigger:` ⇒ skill in the Tool Skills project, otherwise ⇒ doc in its parent-directory project. Idempotent by `external_id`; `-prune` removes orphaned skill pages. |
-| `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
-| `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
 | `crewlet confluence import <company.yaml> <directory>` | Publish a directory of authored markdown into [Confluence](../integrations/confluence.md) spaces — one space per directory, plus the tool skills the files themselves declare. Every target space is checked before a single page is written |
 | `crewlet confluence resync <company.yaml>` | Re-run the engine's own tool-skill walk of the Confluence skills space against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
@@ -103,7 +100,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 
 The three overrides are the fields whose right value depends on *where the process is running* rather than on what the company is. Everything else in Tier A belongs in the file, where it can be reviewed.
 
-Publishing knowledge and tool skills is its own command rather than a flag on `run`: an engine that published on every boot would rewrite a company's knowledge base from whatever tree the deploying machine happened to have. Use [`crewlet plane import`](#crewlet-plane-import), and [`crewlet config import`](#crewlet-config-import) to load the first company revision.
+Publishing knowledge and tool skills is its own command rather than a flag on `run`: an engine that published on every boot would rewrite a company's knowledge base from whatever tree the deploying machine happened to have. Use [`crewlet confluence import`](#crewlet-confluence-import), and [`crewlet config import`](#crewlet-config-import) to load the first company revision.
 
 Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
@@ -313,7 +310,7 @@ never opened.
 
 Validation is **deep** — it builds the `Organization`, so unknown unit
 leads, bad cron expressions, invalid timezones, human seats missing a
-contact identity, and the Confluence-XOR-Plane rule all fail here rather
+contact identity, and a knowledge scope with no backend behind it all fail here rather
 than at run time. It reads **no environment**: Tier B keeps `${VAR}`
 references verbatim, so a config validates fully before any secret
 exists.
@@ -592,78 +589,6 @@ Read-only. Exits non-zero when any check fails, so it drops into a deploy script
 
 ---
 
-## `crewlet plane import`
-
-```
-crewlet plane import <company.yaml> <directory> [-token KEY] [-config PATH]
-                                               [-prune] [-dry-run]
-```
-
-The unified publisher. The first positional is the **Tier B company YAML** — the Plane credentials come from its `integrations.plane` block — and the second is the directory to walk. Every `.md` beneath it is routed **by what the file declares**:
-
-- `trigger:` ⇒ a [Tool Skill](../concepts/tool-skills.md) page (a leading YAML code block the engine parses back out) in the Tool Skills project, `integrations.plane.skills_project`. **Its directory is ignored**: a skill is what it declares, and publishing one as prose would put an instruction meant for one phase of one turn into a planner's context.
-- otherwise ⇒ a [knowledge doc](../concepts/knowledge-system.md#publishing-knowledge-docs) as clean prose, in the project named by its **parent directory**, titled by its first `# H1`.
-
-The title comes from the H1 rather than the filename because it is the page name *and* half the idempotency key — a rename would orphan the published page and leave a second one beside it. Frontmatter may override the title (`title:`) and the container (`project:` / `space:`), and nothing else — **Plane pages have no parent chain and no labels**, so a `parent:` or `labels:` written for the other backend is reported once per run naming the files, and the pages are published at the project root without them. A note rather than a refusal: the content is right and the pages belong in the workspace; only their position and their labels are lost. A file with no determinable title, or two files that would publish as one page, **stop the walk** naming the fix: both are things an operator corrects in their editor, and a run that skipped them would report success with a skill silently unpublished.
-
-**Idempotency is the fork's `external_id` contract**: every published page is stamped `external_source="crewlet"` and `external_id="skill:<key>"` / `"doc:<title>"`, so re-runs match by identity and retitling a page in Plane never orphans it. A re-import always writes — this is a publisher, and skipping existing pages would mean an edited file never reaching the workspace. A page created by hand under the same title is adopted and stamped, but **only** if it carries no external identity at all: one that does belongs to whoever set it. Where two unclaimed pages share a title the lowest page id wins, because Plane guarantees no enumeration order and the alternative is a coin flip.
-
-Every distinct target project must already exist; a missing one fails the run **before any page is written**, naming what the workspace has. The importer never creates projects — that is [`crewlet plane provision -create-projects`](#crewlet-plane-provision). Page-write failures are isolated per page: the rest of the run publishes, then the command **exits non-zero naming the failures**.
-
-| Flag | Description |
-|------|-------------|
-| `-token KEY` | A Plane API key that may write the target projects. Empty reads `$PLANE_TOKEN`, then `integrations.plane.token`. The account must be a member of every target project. |
-| `-project ID` | Publish tool skills into this project instead of `integrations.plane.skills_project`. Empty reads `$CREWLET_TOOL_SKILLS_PROJECT`, then the config field. Skill files only — a knowledge doc takes its project from its parent directory. A company that has turned tool skills off (`skills_project: ""`) and has a skill file in the tree **stops the walk** naming both the setting and this flag. |
-| `-prune` | Delete import-managed **skill** pages whose key no local file publishes. Positive-marker predicate — `external_source="crewlet"` **and** a `skill:` external id — so unmarked pages, `doc:` pages and knowledge docs are structurally out of reach: a doc absent from this run is far more likely to have moved than to be dead. Deletion follows the fork's archive-then-delete precondition, per page. When the archive lands and the delete is refused (deletion is owner-or-project-admin only), the archive is **rolled back**: left archived, the page is invisible to every agent while its external id keeps 409ing every future republish of that skill. A failed prune has to be a no-op, not a half-removal. |
-| `-dry-run` | Print the routed plan and write nothing. It is the **same** plan the run uses. |
-
----
-
-## `crewlet plane resync`
-
-```
-crewlet plane resync <company.yaml> [-token KEY] [-project ID] [-config PATH]
-```
-
-The read-only diagnostic. It runs the **same** walk and the **same** admission the engine's boot sync runs — one strict enumeration of the Tool Skills project — against a throwaway registry, and prints the keys that loaded plus any page that declares a trigger and does not parse. That last case is the one worth printing: somebody wrote a trigger and got the rest wrong, and the only other symptom is guidance that never appears, so the command exits non-zero when it finds one.
-
-It does **not** reach into a running engine: a live engine receives Plane page webhooks directly (create / content update / delete), so this answers "why is this skill not being applied", not "make it apply". Restart the engine, or wait for the next webhook, to change what it holds. `-project` targets a project other than the configured one, for checking a container before pointing the company at it.
-
----
-
-## `crewlet plane provision`
-
-```
-crewlet plane provision <company.yaml> [-admin-token TOKEN]
-                                       [-secret-store | -env-file PATH | -print]
-                                       [-public-url URL]
-                                       [-rotate] [-decommission]
-                                       [-create-projects] [-recreate-webhook]
-                                       [-token-expiry-days N] [-dry-run]
-```
-
-Idempotent reconcile from company config to Plane state — the [`crewlet gitlab provision`](#crewlet-gitlab-provision) analog, targeting the [crewlet/plane fork](../integrations/plane.md#the-fork). For each **agent** seat whose `mcp_env.plane.PLANE_API_KEY` is a whole `${VAR}` reference it ensures a [service account](../integrations/plane.md#provisioning--crewlet-plane-provision) exists (username `<username_prefix><handle>`, display name = role name, explicit workspace role), adds it to every `provisioning.projects` project, and mints that seat's API key into the variable the config already points at. When `integrations.plane.token` is a `${VAR}` reference it also provisions the engine's own `crewlet-engine` read account — always workspace role `member`, whatever the company chose for its agents, because a guest cannot read the subscriber and member lists routing is built on and the engine writes nothing. With `-public-url` it registers the one workspace webhook and **captures Plane's server-generated secret** into the `${VAR}` behind `integrations.plane.webhook_secret`, which must therefore be a reference rather than a literal. Human seats are validated, never created, and the report ends with the workspace member table so founders can fill `contact.plane_user_id`.
-
-**A plain re-run does not rotate a working credential.** Plane serves a token's value once, so a provisioner cannot verify that what it recorded last time still matches — and minting every run is an outage, because the engine is running with the *old* value: an operator adding a tenth seat would revoke the nine credentials the other agents are authenticating with. So a seat is left alone when the variable holding its key still has a value **and** the account still has a usable token under this tool's label, and both halves are checked because either alone is wrong (a recorded value whose token was revoked leaves an agent 401ing for ever; a live token nobody wrote down cannot be deployed). Everything else is minted, and a seat whose token was live but unrecorded is reported as needing an engine restart. `-rotate` mints for every seat regardless — the operator asking, having planned the restart.
-
-| Flag | Description |
-|------|-------------|
-| `-admin-token` | Operator credential — a **workspace-admin** API key, never stored in config. Falls back to `$PLANE_ADMIN_TOKEN`. The seats' own keys are what this run mints, so it cannot bootstrap itself from them. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the vendor and prints none of them. See [the secret store](../concepts/secret-store.md). `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
-| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/plane`. Omitted, no webhook is registered and the report says so — a hook pointing at the wrong host is worse than none, because the workspace then reports a healthy integration. |
-| `-rotate` | Mint a fresh credential for every seat, including seats whose current one still works. **Restart the engine afterwards** — the old values are revoked. |
-| `-decommission` | Delete managed service accounts whose seats have left the config. Scoped by `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) and to service accounts only; a person whose name matches the prefix is left alone and reported. The instance's delete cascades tokens, memberships and the account. |
-| `-create-projects` | Create configured `provisioning.projects` the workspace does not have, named after the identifier (rename in the Plane UI at will). Without it an unknown identifier aborts the run *before* anything is created, naming what the workspace does have. |
-| `-recreate-webhook` | Delete and remake the workspace webhook to mint a fresh secret — the only recovery when the existing secret was never recorded, because Plane will not serve it again. Destructive: it invalidates the secret every other deployment of this company holds. |
-| `-token-expiry-days` | Override `provisioning.token_expiry_days` for this run. `0` omits `expired_at`, which in Plane means the token **never expires** (not GitLab's "instance default applies"), and never-expires is also the default: nothing in Crewlet renews a credential on a schedule, so an expiry nobody renews is an outage with a date on it. A company whose policy requires one sets the field and owns the re-run. |
-| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses, not a second derivation that could disagree with it. |
-
-A pre-mutation **capability preflight** decides what the instance supports before anything is written, because a run that found out halfway would leave some accounts created, some tokens live, and an operator working out which. It opens with `GET /users/me/` — a credential that does not authenticate is named as such, and without that first call every later 403 is unreadable — then probes the workspace slug (a non-admin route, so a mistyped `workspace:` is told apart from a permission problem) and each capability with a request the route is expected to *refuse*: a `GET` against the POST-only service-accounts route, a `PATCH` against a token collection under the zero UUID. **404 is the only absence**; a 405 is the route rejecting the method and a 403 is its permission class refusing this credential, and both prove the route is there. Stock Plane Community (no service-accounts API), a non-admin credential, an unresolvable workspace and a missing webhook API each abort naming the remedy. An instance with service accounts but **no token-lifecycle API** runs in a degraded mode: new seats still work (an account's creation mints its first token), and a seat that already has an account is named as un-rotatable. A workspace whose member rows carry no `username` aborts — an account created for a seat could never be found again, so every run would create another.
-
-Every mutation is undone when the run cannot finish: minted tokens are revoked, accounts this run created are deleted, a webhook it registered is removed, and the sink is cleared — through a detached context, because the failure is often the cancellation itself. The original error is reported with the cleanup's own problems appended, never replaced by them.
-
----
-
 ## `crewlet gitlab provision`
 
 ```
@@ -850,9 +775,9 @@ crewlet confluence resync <company.yaml> [-space KEY] [-config PATH]
 
 Runs the engine's **own** [tool-skill](../concepts/tool-skills.md) walk of the
 Confluence skills space against a throwaway registry and prints what admitted,
-so you can see what the next boot will see. The counterpart of
-[`crewlet plane resync`](#crewlet-plane-resync), and it exists for the same
-reason: the registry is populated by one walk at boot, so a page that fails to
+so you can see what the next boot will see. The read-only diagnostic beside
+the importer, and it exists because the registry is populated by one walk at
+boot, so a page that fails to
 admit is **invisible** — the only symptom is guidance that never appears in a
 Plan prompt.
 
