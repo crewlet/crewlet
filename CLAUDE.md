@@ -127,7 +127,7 @@ Rules:
 - Event names are short, machine-parsable snake_case strings (not sentences)
 - All dynamic data goes in key/value pairs, never in the message
 - Never `slog.Info(...)` on the package-level default, and never `log.Printf`
-- The process configures itself once via `logging.Configure(level, format, w)` in `cmd/crewlet`
+- The process configures itself once via `logging.Configure(level, format, w)` in `cmd/crewlet` — and `Configure` is the ONLY way to set the destination. A command changes how loud it is with `logging.SetVerbosity(level, format)`, which keeps the sink already installed. Installing a writer a function was HANDED makes the global depend on its caller: `run` takes `stderr` so it can be tested, and installing that argument gave 29 parallel tests a global pointing at whichever buffer was configured last — a data race, and one test's log lines in another's output
 
 ## Package Layout
 

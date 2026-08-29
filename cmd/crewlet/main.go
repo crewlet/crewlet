@@ -48,6 +48,17 @@ import (
 )
 
 func main() {
+	// WHERE THIS PROCESS'S LOGS GO, decided by the one function that owns
+	// the process. Everything below adjusts only the level and the format
+	// (logging.SetVerbosity), because a command that installed a
+	// destination would be installing whatever writer its caller handed
+	// it — which under `go test` is one test's buffer, shared with every
+	// other test in the binary.
+	//
+	// Not redundant with logging's own init default: this is the
+	// statement of intent, and an init that changed would otherwise
+	// change the CLI silently.
+	logging.Configure(slog.LevelInfo, logging.FormatText, os.Stderr)
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
@@ -88,7 +99,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 	// of them — a CI step exports it once and every command it runs
 	// answers.
 	if cmd != "run" {
-		logging.Configure(operatorLogLevel(), logging.FormatText, stderr)
+		// THE LEVEL, NOT THE DESTINATION. This used to install `stderr`
+		// as the process-wide sink, which is wrong twice over: `run`
+		// takes that writer so it can be TESTED, and a function that
+		// mutates process state out of one of its own arguments cannot
+		// be called twice concurrently. Under `go test` it was 29
+		// parallel tests pointing the global at their own buffers — a
+		// data race, and one test's log lines landing in another's
+		// output. See [logging.Configure].
+		logging.SetVerbosity(operatorLogLevel(), logging.FormatText)
 	}
 
 	switch cmd {
@@ -579,7 +598,10 @@ func runEngine(args []string, stderr io.Writer) error {
 		// for debug in the loudest way available to them.
 		level = slog.LevelDebug
 	}
-	logging.Configure(level, logging.ParseFormat(*logFormat), stderr)
+	// The level and format this invocation asked for, on the process's own
+	// sink — see the note in [run] for why the writer is not this
+	// command's to install.
+	logging.SetVerbosity(level, logging.ParseFormat(*logFormat))
 	log := logging.Get("cli")
 
 	boot, company, err := cfg.load()

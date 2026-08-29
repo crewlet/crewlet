@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // What these cases protect: a container box is one directory shared by two
@@ -37,7 +41,43 @@ exit %d
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	waitExecutable(t, path)
 	return path
+}
+
+// waitExecutable blocks until a just-written script can actually be exec'd.
+//
+// # A FRESHLY WRITTEN EXECUTABLE CAN BE ETXTBSY, and this file execs one
+//
+// os.WriteFile closes its own descriptor, but any goroutine that forked
+// while it was open inherited it, and Linux refuses to exec a file that any
+// process holds open for writing. The child closes it at its own exec — Go
+// opens with O_CLOEXEC — so the window is short. This package forks
+// constantly, and under -race on a loaded runner it is wide enough to hit:
+// measured at 17 failures in 200 execs of a just-written script with eight
+// goroutines forking alongside.
+//
+// The symptom was not an error anyone could read. runHost reported a start
+// failure, runtimeIsRootless turned that into "not rootless", and the
+// rootless subtest failed asserting on an argv that carried --user — a
+// result indistinguishable from the detection genuinely being wrong.
+//
+// Waiting here is enough rather than a retry at every call site: nothing
+// reopens the file for writing afterwards, so once one exec gets through,
+// every later one does.
+func waitExecutable(t *testing.T, path string) {
+	t.Helper()
+	for attempt := range 100 {
+		err := exec.Command(path).Run() //nolint:noctx // a local probe of one script
+		if !errors.Is(err, syscall.ETXTBSY) {
+			return
+		}
+		// A few milliseconds is a fork/exec, which is what this waits
+		// out; 100 attempts is half a second of a window measured in
+		// microseconds.
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
+	t.Fatalf("%s stayed ETXTBSY: something is holding it open for writing", path)
 }
 
 // The template each runtime answers. Docker carries the flag among its
@@ -320,5 +360,61 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 	}
 	if box.Home() != DefaultHome {
 		t.Fatalf("home = %q, want %q", box.Home(), DefaultHome)
+	}
+}
+
+// THE FAKE RUNTIME IS EXECUTABLE BY THE TIME fakeRuntime RETURNS.
+//
+// The guard for [waitExecutable]. Without it this package's own rootless
+// probe intermittently could not START the script it had just written —
+// Linux refuses to exec a file another process holds open for writing, and a
+// goroutine that forks while os.WriteFile has it open inherits exactly that.
+// runHost reported a start failure, runtimeIsRootless read that as "not
+// rootless", and TestTheContainerRunsAsWhoeverCanManageTheMount failed on an
+// argv carrying --user — a result indistinguishable from the detection being
+// wrong, which is what makes it worth a test of its own.
+//
+// The forkers are the point: this reproduces at ~8% without them being
+// goroutines of THIS process, and not at all with load applied from outside
+// it, because the inherited descriptor is what does the refusing.
+func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
+	t.Parallel()
+	stop := make(chan struct{})
+	var forkers sync.WaitGroup
+	for range 8 {
+		forkers.Add(1)
+		go func() {
+			defer forkers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = exec.Command("/bin/true").Run() //nolint:noctx // a fork, not a subject
+				}
+			}
+		}()
+	}
+	t.Cleanup(func() { close(stop); forkers.Wait() })
+
+	var probes sync.WaitGroup
+	failures := make(chan string, 64)
+	for range 64 {
+		probes.Add(1)
+		go func() {
+			defer probes.Done()
+			runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
+				`[name=rootless name=seccomp,profile=builtin]`, 0)
+			if !runtimeIsRootless(t.Context(), runtime) {
+				failures <- runtime
+			}
+		}()
+	}
+	probes.Wait()
+	close(failures)
+	if n := len(failures); n > 0 {
+		t.Fatalf("%d of 64 rootless probes could not run the runtime they "+
+			"were just handed; every one of them reads downstream as a "+
+			"rootful runtime and adds --user", n)
 	}
 }

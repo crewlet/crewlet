@@ -38,13 +38,57 @@ const (
 // already grabbed a logger) reaches loggers handed out earlier.
 var root atomic.Pointer[slog.Logger]
 
+// sink is where the process writes its logs, held so [SetVerbosity] can
+// rebuild the handler over the SAME writer.
+var sink atomic.Pointer[io.Writer]
+
 func init() {
 	Configure(slog.LevelInfo, FormatText, os.Stderr)
 }
 
-// Configure installs the process-wide logging settings. It is called once
-// from the CLI entry point, before the engine starts.
+// Configure installs the process-wide logging settings, DESTINATION INCLUDED.
+//
+// # The writer is a property of the PROCESS, and this is the only way to set it
+//
+// Which is why the level and format have [SetVerbosity] of their own. A
+// command decides how loud it should be from its own flags; it does not
+// decide where a process's logs go, and one that installed a writer it had
+// been handed made the global depend on its caller.
+//
+// That is not a hypothetical tidiness argument. `crewlet`'s own `run` took
+// `stderr` as an argument — so it could be tested — and then installed that
+// argument as the process-wide sink, which under `go test` meant 29 parallel
+// tests each pointing the global at their own bytes.Buffer. Every test's log
+// lines went to whichever buffer was installed last, racing that test's own
+// writes to it. Under -race it was a hard failure; without it, one test
+// asserting on another's output.
+//
+// Called once from the CLI entry point — and from a TestMain, which is the
+// other legitimate owner of a process.
 func Configure(level slog.Level, format Format, w io.Writer) {
+	sink.Store(&w)
+	install(level, format, w)
+}
+
+// SetVerbosity changes how much is logged and in what shape, on the
+// destination already installed.
+//
+// FORMAT TRAVELS WITH LEVEL because both are invocation properties: they come
+// off the same flags (`-log-level`, `-log-format`, `$CREWLET_LOG_LEVEL`) and
+// neither says anything about where the bytes go. The writer deliberately
+// cannot be changed here — see [Configure] for what that cost.
+//
+// A no-op before the first Configure, which cannot happen: this package's own
+// init installs os.Stderr.
+func SetVerbosity(level slog.Level, format Format) {
+	w := sink.Load()
+	if w == nil {
+		return
+	}
+	install(level, format, *w)
+}
+
+func install(level slog.Level, format Format, w io.Writer) {
 	opts := &slog.HandlerOptions{Level: level}
 	var h slog.Handler
 	switch format {

@@ -2,6 +2,7 @@ package logging_test
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -168,5 +169,37 @@ func TestParseLevelAndFormat(t *testing.T) {
 		if got := logging.ParseFormat(name); got != want {
 			t.Errorf("ParseFormat(%q) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// SETVERBOSITY KEEPS THE DESTINATION, which is the whole reason it exists
+// beside Configure.
+//
+// A command's flags say how loud it should be; they do not say where a
+// process's logs go. Collapsing the two let `crewlet`'s own run() install the
+// writer it had been handed as the process-wide sink — harmless with one
+// invocation per process, and under `go test` a global pointing at whichever
+// parallel test configured it last.
+func TestSetVerbosityChangesTheLevelAndNotTheDestination(t *testing.T) {
+	var installed, other bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &installed)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetVerbosity(slog.LevelDebug, logging.FormatJSON)
+	logging.Get("probe").Debug("after_set_verbosity")
+
+	if !strings.Contains(installed.String(), "after_set_verbosity") {
+		t.Fatalf("the line did not reach the installed destination: %q",
+			installed.String())
+	}
+	// THE LEVEL MOVED. Debug is below the level Configure installed, so a
+	// SetVerbosity that did nothing would have dropped the line entirely
+	// and the assertion above would be the only thing failing — which
+	// would read as a destination problem.
+	if !strings.Contains(installed.String(), `"msg"`) {
+		t.Errorf("the format did not change to JSON: %q", installed.String())
+	}
+	if other.Len() != 0 {
+		t.Errorf("something reached a writer nothing installed: %q", other.String())
 	}
 }
